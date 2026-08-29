@@ -8,7 +8,10 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
+
 let webcontainerInstance: WebContainer | null = null
+let bootPromise: Promise<WebContainer> | null = null
+
 
 import { Suspense } from 'react'
 
@@ -43,10 +46,17 @@ function SandboxContent() {
         log('Conectando ao GitHub (Buscando código seguro)...')
         const tree = await fetchGithubProjectTree(projectId!)
         
+
         if (!webcontainerInstance) {
-          log('Iniciando Máquina Virtual no Navegador...')
-          webcontainerInstance = await WebContainer.boot()
+          if (!bootPromise) {
+            log('Iniciando Máquina Virtual no Navegador...')
+            bootPromise = WebContainer.boot()
+          } else {
+            log('Aguardando inicialização prévia...')
+          }
+          webcontainerInstance = await bootPromise
         }
+
         
         log('Montando sistema de arquivos...')
         await webcontainerInstance.mount(tree)
@@ -88,7 +98,7 @@ function SandboxContent() {
   if (!projectId) return <div>ID do projeto não fornecido.</div>
   
   if (error) return (
-    <div className="flex flex-col h-full bg-red-50 text-red-600 p-8 font-mono text-sm">
+    <div className="flex flex-col h-screen bg-red-50 text-red-600 p-8 font-mono text-sm">
       <h3 className="font-bold text-lg mb-2">Erro Crítico no Motor</h3>
       <p>{error}</p>
       <div ref={terminalRef} className="mt-4 flex-1 bg-black rounded-lg overflow-hidden p-2" />
@@ -96,7 +106,7 @@ function SandboxContent() {
   )
 
   return (
-    <div className="flex flex-col h-full w-full">
+    <div className="flex flex-col h-screen w-full bg-white">
       {!url && (
         <div className="flex flex-col flex-1 items-center justify-center bg-zinc-950 text-white font-mono text-sm">
           <div className="animate-pulse mb-4 text-emerald-400">⚡ {status}</div>

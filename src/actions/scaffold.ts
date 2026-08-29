@@ -5,7 +5,7 @@ import { decryptToken } from '@/lib/crypto'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
-import { getSecurityAuditScriptContent, getCiWorkflowContent, getPackageJsonContent, getVitestConfigContent, getPlaywrightConfigContent, getVercelJsonContent } from '@/lib/templates/project-files'
+import { getSecurityAuditScriptContent, getCiWorkflowContent, getPackageJsonContent, getVitestConfigContent, getPlaywrightConfigContent, getVercelJsonContent, getTailwindConfigContent, getPostcssConfigContent, getGlobalsCssContent, getUtilsTsContent } from '@/lib/templates/project-files'
 
 const createProjectSchema = z.object({
   name: z
@@ -311,6 +311,10 @@ export async function scaffoldProject(
   const vitestConfig = getVitestConfigContent()
   const playwrightConfig = getPlaywrightConfigContent()
   const vercelJson = getVercelJsonContent()
+  const tailwindConfig = getTailwindConfigContent()
+  const postcssConfig = getPostcssConfigContent()
+  const globalsCss = getGlobalsCssContent()
+  const utilsTs = getUtilsTsContent()
 
   // 6. Criar nova tree baseada na tree inicial (substitui README.md padrão)
   const treeRes = await githubRequest(
@@ -334,7 +338,12 @@ export async function scaffoldProject(
           { path: 'playwright.config.ts', mode: '100644', type: 'blob', content: playwrightConfig },
           { path: 'vitest.setup.ts', mode: '100644', type: 'blob', content: "import '@testing-library/jest-dom'" },
           
-          { path: 'app/layout.tsx', mode: '100644', type: 'blob', content: "export default function RootLayout({ children }: { children: React.ReactNode }) { return ( <html lang='en'><body>{children}</body></html> ); }" },
+          
+          { path: 'tailwind.config.ts', mode: '100644', type: 'blob', content: tailwindConfig },
+          { path: 'postcss.config.js', mode: '100644', type: 'blob', content: postcssConfig },
+          { path: 'app/globals.css', mode: '100644', type: 'blob', content: globalsCss },
+          { path: 'lib/utils.ts', mode: '100644', type: 'blob', content: utilsTs },
+          { path: 'app/layout.tsx', mode: '100644', type: 'blob', content: "import './globals.css';\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) { return ( <html lang='en'><body>{children}</body></html> ); }" },
           { path: 'app/page.tsx', mode: '100644', type: 'blob', content: "export default function Home() { return <main><h1>Supremo App</h1></main>; }" },
           { path: '.eslintrc.json', mode: '100644', type: 'blob', content: '{ "extends": "next/core-web-vitals" }' },
           { path: 'vercel.json', mode: '100644', type: 'blob', content: vercelJson },

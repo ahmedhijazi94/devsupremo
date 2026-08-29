@@ -58,11 +58,11 @@ function SandboxContent() {
         }
 
         
-        log('Montando sistema de arquivos...')
+        log(`Montando sistema de arquivos (${Object.keys(tree).length} root items)...`)
         await webcontainerInstance.mount(tree)
         
         log('Instalando dependências (npm install)...')
-        const installProcess = await webcontainerInstance.spawn('npm', ['install'])
+        const installProcess = await webcontainerInstance.spawn('npm', ['install', '--no-package-lock', '--legacy-peer-deps'])
         
         installProcess.output.pipeTo(new WritableStream({
           write(data) {
@@ -97,20 +97,18 @@ function SandboxContent() {
 
   if (!projectId) return <div>ID do projeto não fornecido.</div>
   
-  if (error) return (
-    <div className="flex flex-col h-screen bg-red-50 text-red-600 p-8 font-mono text-sm">
-      <h3 className="font-bold text-lg mb-2">Erro Crítico no Motor</h3>
-      <p>{error}</p>
-      <div ref={terminalRef} className="mt-4 flex-1 bg-black rounded-lg overflow-hidden p-2" />
-    </div>
-  )
+
 
   return (
     <div className="flex flex-col h-screen w-full bg-white">
       {!url && (
         <div className="flex flex-col flex-1 items-center justify-center bg-zinc-950 text-white font-mono text-sm">
-          <div className="animate-pulse mb-4 text-emerald-400">⚡ {status}</div>
-          <div className="w-full max-w-2xl h-64 bg-black rounded-xl border border-zinc-800 overflow-hidden p-2" ref={terminalRef} />
+          {error ? (
+            <div className="mb-4 text-red-400 font-bold">❌ {error}</div>
+          ) : (
+            <div className="animate-pulse mb-4 text-emerald-400">⚡ {status}</div>
+          )}
+          <div className="w-full max-w-4xl h-96 bg-black rounded-xl border border-zinc-800 overflow-hidden p-2" ref={terminalRef} />
         </div>
       )}
       {url && (

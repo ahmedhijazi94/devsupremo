@@ -1,36 +1,117 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Supremo
 
-## Getting Started
+Plataforma para criar e evoluir aplicações com agentes de IA — de qualquer
+máquina, com o repositório e o banco na sua própria conta.
 
-First, run the development server:
+A diferença para as ferramentas de "app por prompt": aqui **nenhuma mudança
+entra na branch principal sem passar pelos gates**. O agente propõe em branch,
+abre pull request, espera o CI de verdade, lê o log quando falha, e só faz
+merge com tudo verde.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Como funciona
+
+```
+agente (qualquer máquina)  →  MCP remoto  →  seu GitHub + seu Supabase
+       ↑                                              ↓
+       └────────── log da falha ← gates do CI ────────┘
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+O agente nunca recebe as suas credenciais. Ele fala com o Supremo por HTTP
+autenticado com um token pessoal; o Supremo é o único que toca os provedores,
+e toda consulta é filtrada pelo dono do token.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Conectando um agente
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Gere um token em `/mcps` e rode, em qualquer computador:
 
-## Learn More
+```bash
+claude mcp add --transport http supremo https://SEU_APP/api/mcp --header "Authorization: Bearer sup_..."
+```
 
-To learn more about Next.js, take a look at the following resources:
+Clientes sem suporte a MCP remoto usam a ponte:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npx -y @supremo/cli connect --token sup_...
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Nada é instalado de forma permanente e nenhum segredo fica na máquina além do
+próprio token, que é revogável a qualquer momento.
 
-## Deploy on Vercel
+## As regras viajam com o projeto
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`get_project_context` lê `agents.md`, `CLAUDE.md` e `SECURITY.md` do seu
+repositório e devolve ao agente, junto com o estado do branch. O servidor
+também declara as regras invioláveis no handshake do MCP. O agente segue o
+projeto sem precisar de clone local.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Ferramentas expostas
+
+| Ferramenta | O que faz |
+| --- | --- |
+| `get_project_context` | Projeto ativo, regras do repositório e estado do branch |
+| `list_projects` · `switch_project` | Navegação entre projetos |
+| `read_file` · `list_files` | Leitura do repositório |
+| `propose_changes` | Branch + commit + pull request. Único caminho de escrita |
+| `get_checks` · `wait_for_checks` | Estado dos gates; a espera é real |
+| `get_failed_logs` | Saída dos jobs que falharam |
+| `merge_when_green` | Squash merge, recusado se algum gate estiver vermelho |
+| `execute_sql` | Consulta de leitura no banco do projeto |
+| `apply_migration` | Versiona a migration e aplica; recusa tabela sem RLS |
+
+## O que um projeto gerado recebe
+
+Next.js 16, React 19, TypeScript strict, Tailwind v4, Supabase com RLS. Além
+do código:
+
+- **Testes de política RLS por tabela** — provam que outro usuário não lê,
+  atualiza nem apaga a linha. É a falha número um de app Supabase, coberta
+  automaticamente.
+- CI com tipos, lint, cobertura com threshold que reprova, auditoria de
+  segurança, CodeQL, gitleaks, `npm audit` e E2E.
+- CSP e cabeçalhos de segurança verificados por teste E2E.
+- Migrations versionadas no repositório.
+- Proteção de branch aplicada no provisionamento.
+
+O template é validado no CI do próprio Supremo: um projeto é gerado a cada
+build e os gates dele rodam de verdade.
+
+## Desenvolvimento
+
+```bash
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+| Comando | O que faz |
+| --- | --- |
+| `npm run typecheck` | TypeScript, zero erros |
+| `npm run lint` | ESLint, zero erros |
+| `npm test` | Testes unitários |
+| `npm run test:coverage` | Cobertura, mínimo 85% |
+| `npm run audit:security` | Auditoria estática (`--strict` reprova) |
+| `npm run build` | Build de produção |
+
+Gerar um projeto do template localmente para inspeção:
+
+```bash
+npx tsx scripts/dev/generate-sample-project.ts /tmp/exemplo
+```
+
+## Migrations
+
+Aplique em ordem no seu Supabase:
+
+- `supabase/migrations/001_initial_schema.sql`
+- `supabase/migrations/002_mcp_tokens_and_loop.sql`
+
+## Variáveis de ambiente
+
+Veja `.env.example`. `ENCRYPTION_KEY` precisa ser 64 caracteres hex:
+
+```bash
+openssl rand -hex 32
+```
+
+Ela cifra os tokens de GitHub e Supabase em AES-256-GCM. Perder essa chave
+significa perder o acesso às contas conectadas.

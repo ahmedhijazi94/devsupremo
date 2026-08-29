@@ -4,13 +4,14 @@
 **Supremo** é uma plataforma web para gerenciar e criar apps via IA. É o "Lovable profissional" — cada prompt gera código, testes rodam automaticamente e um commit é criado após aprovação.
 
 ## Stack
-- **Framework:** Next.js 15 (App Router) + TypeScript strict
+- **Framework:** Next.js 16 (App Router) + React 19 + TypeScript strict
 - **Estilo:** Tailwind CSS + shadcn/ui
 - **Auth:** Supabase Auth (GitHub OAuth + Google OAuth)
 - **Database:** Supabase (PostgreSQL + RLS em todas as tabelas)
 - **Deploy:** Vercel
-- **Preview:** Cloudflare Pages (projetos gerados)
-- **MCP Server:** Cloudflare Worker (expõe contexto aos MCPs)
+- **Preview:** WebContainer no navegador, com sync incremental por commit
+- **MCP Server:** endpoint Streamable HTTP em `/api/mcp`, autenticado por
+  token pessoal — roda no próprio app, não em worker separado
 - **Testes:** Vitest + Playwright + React Testing Library
 
 ## Arquitetura — Regras Absolutas
@@ -43,11 +44,15 @@
 - `created_at` e `updated_at` em todas as tabelas
 
 ### Testes (obrigatórios antes de todo commit)
-- TypeScript check: `tsc --noEmit` — zero erros
-- ESLint: zero warnings
-- Unit tests: cobertura mínima 80% (Vitest)
-- E2E: fluxos críticos cobertos (Playwright)
-- Security scan: zero vulnerabilidades críticas
+- `npm run typecheck` — zero erros
+- `npm run lint` — zero erros
+- `npm run test:coverage` — cobertura mínima 85%, o threshold reprova o build
+- `npm run audit:security -- --strict` — zero achados CRITICAL ou HIGH
+- `npm run build` — build de produção
+
+A cobertura é medida sobre o código que carrega lógica de decisão. Adaptadores
+de I/O ficam de fora do denominador porque um teste unitário neles exercitaria
+o mock, não o código; a cobertura deles vem do E2E e dos testes de RLS.
 
 ## Estrutura de Diretórios
 ```
@@ -73,12 +78,34 @@ supabase/
 ```
 
 ## Funcionalidades Implementadas
-- [ ] Auth (GitHub + Google OAuth)
-- [ ] Dashboard multi-projeto
-- [ ] MCP Server (contexto de projeto)
-- [ ] Pipeline de testes automatizada
-- [ ] Gerenciamento de contas GitHub/Supabase
-- [ ] Preview Cloudflare
+- [x] Auth (GitHub + Google OAuth)
+- [x] Dashboard multi-projeto
+- [x] MCP remoto com token por usuário — conecta de qualquer máquina
+- [x] Regras do projeto servidas pelo MCP (agents.md, CLAUDE.md, SECURITY.md)
+- [x] Loop branch → PR → gates → merge, com espera real do CI
+- [x] Gerenciamento de contas GitHub/Supabase
+- [x] Scaffold com testes de RLS gerados por tabela
+- [x] Preview via WebContainer com sync incremental
+- [x] Histórico de mudanças com status de pipeline
+- [ ] Preview deploy compartilhável por PR (Vercel)
+- [ ] Erros de runtime do preview realimentando o agente
+- [ ] Workspace de três painéis (conversa · preview · diff)
+
+## Estrutura do MCP
+
+```
+src/lib/mcp/
+├── tokens.ts      # geração, hash e resolução de token → usuário
+├── repository.ts  # acesso a dados; TODA função exige userId explícito
+├── github.ts      # branch, commit, PR, checks, logs, proteção de branch
+├── sql-guard.ts   # recusa DDL em leitura e tabela sem RLS em migration
+└── server.ts      # ferramentas e as regras declaradas no handshake
+```
+
+Regra que não se quebra: o `userId` vem sempre do token resolvido, nunca do
+cliente. O cliente de dados usa service role porque não há cookie numa chamada
+de MCP — por isso o filtro por dono no repositório é a única fronteira entre
+contas, e precisa estar em toda query.
 
 ## Decisões de Arquitetura Tomadas
 - Supabase Auth ao invés de NextAuth (integração nativa com RLS)

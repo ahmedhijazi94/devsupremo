@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
 import { ScaffoldForm } from '@/components/projects/scaffold-form'
 import { PreviewPanel } from '@/components/projects/preview-panel'
+import { ActivityFeed, type ActivityItem } from '@/components/projects/activity-feed'
 import type { Project } from '@/types/database'
 
 /** Formato das relações que o select traz junto do projeto. */
@@ -34,6 +35,18 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   if (!data) notFound()
 
   const project = data as unknown as ProjectWithAccounts
+
+  // Histórico do loop: cada proposta do agente com PR e resultado dos gates.
+  const { data: activity } = await supabase
+    .from('messages')
+    .select(
+      'id, role, content, branch, pr_number, pr_url, commit_sha, ' +
+        'files_changed, pipeline_status, mcp_used, created_at'
+    )
+    .eq('project_id', id)
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(25)
 
   const isProvisioned = !!project.github_repo_full_name && !!project.supabase_project_ref
   const statusConfig = {
@@ -230,6 +243,33 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           )}
         </div>
       </div>
+
+      {/* Histórico de mudanças */}
+      <section className="border bg-card rounded-xl p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">Atividade</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Toda proposta do agente, com o pull request e o resultado dos gates.
+            </p>
+          </div>
+          {project.github_repo_full_name && (
+            <a
+              href={`https://github.com/${project.github_repo_full_name}/pulls`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Ver no GitHub
+            </a>
+          )}
+        </div>
+
+        <ActivityFeed
+          items={(activity ?? []) as unknown as ActivityItem[]}
+          repoFullName={project.github_repo_full_name}
+        />
+      </section>
     </div>
   )
 }

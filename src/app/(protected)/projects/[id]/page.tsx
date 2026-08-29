@@ -2,7 +2,6 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { GitBranch, Database, Shield, Zap, ExternalLink } from 'lucide-react'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
-import { AddSupabaseModal } from '@/components/accounts/add-supabase-modal'
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient()
@@ -99,8 +98,16 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">Conecte um Personal Access Token para gerar o banco de dados.</p>
-              <AddSupabaseModal projectId={project.id} />
+              <p className="text-sm text-muted-foreground">Conecte sua conta do Supabase para provisionar o banco de dados e as políticas RLS.</p>
+              <form action={async () => {
+                'use server'
+                const { connectSupabaseAccount } = await import('@/actions/accounts')
+                await connectSupabaseAccount(project.id)
+              }}>
+                <button type="submit" className="rounded-lg bg-[#3ECF8E] px-4 py-2 text-sm font-medium text-black hover:bg-[#3ECF8E]/90 transition-colors">
+                  Conectar Supabase
+                </button>
+              </form>
             </div>
           )}
         </div>

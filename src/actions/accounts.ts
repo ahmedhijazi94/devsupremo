@@ -188,3 +188,36 @@ export async function disconnectSupabaseAccount(
   revalidatePath('/accounts')
   return {}
 }
+
+// ─────────────────────────────────────────────────────────────
+// Conectar Supabase via OAuth
+// ─────────────────────────────────────────────────────────────
+export async function connectSupabaseAccount(projectId?: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const clientId = process.env.SUPABASE_OAUTH_CLIENT_ID
+  if (!clientId) {
+    throw new Error('SUPABASE_OAUTH_CLIENT_ID is not configured')
+  }
+
+  // Pass CSRF token and optionally projectId in the state
+  const csrfToken = crypto.randomBytes(32).toString('hex')
+  const stateObj = { csrf: csrfToken, projectId: projectId || null }
+  const state = Buffer.from(JSON.stringify(stateObj)).toString('base64')
+
+  // Salvar state no banco
+  await supabase.from('audit_logs').insert({
+    user_id: user.id,
+    action: 'supabase_oauth_state',
+    resource_type: 'oauth',
+    resource_id: csrfToken,
+  })
+
+  // URL for Supabase OAuth
+  const redirectUri = encodeURIComponent(`${process.env.NEXT_PUBLIC_APP_URL}/auth/supabase-account/callback`)
+  const authUrl = `https://api.supabase.com/v1/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${redirectUri}&state=${state}`
+
+  redirect(authUrl)
+}

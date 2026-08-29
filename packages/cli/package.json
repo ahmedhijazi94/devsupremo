@@ -1,0 +1,21 @@
+{
+  "name": "@supremo/cli",
+  "version": "1.0.0",
+  "bin": {
+    "supremo": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/index.js && esbuild src/bin.ts --bundle --platform=node --target=node18 --outfile=dist/bin.js",
+    "start": "node dist/bin.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "esbuild": "^0.20.2",
+    "typescript": "^5.4.5"
+  }
+}

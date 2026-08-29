@@ -3,8 +3,9 @@ import { notFound } from 'next/navigation'
 import { GitBranch, Database, Shield, Zap, ExternalLink } from 'lucide-react'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
 
-export default async function ProjectPage({ params }: { params: { id: string } }) {
+export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient()
+  const { id } = await params
 
   const { data: project } = await supabase
     .from('projects')
@@ -13,7 +14,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
       github_accounts ( login, avatar_url ),
       supabase_accounts ( org_name )
     `)
-    .eq('id', params.id)
+    .eq('id', id)
     .single()
 
   if (!project) notFound()

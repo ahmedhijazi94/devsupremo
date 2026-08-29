@@ -65,8 +65,8 @@ export async function activateProject(
     resource_id: parsed.data.projectId,
   })
 
-  revalidatePath('/dashboard')
-  revalidatePath('/projects')
+  revalidatePath('/', 'layout')
+
   return {}
 }
 
@@ -252,8 +252,7 @@ export async function deleteProject(projectId: string): Promise<{ error?: string
     return { error: 'Falha ao remover o projeto do banco de dados local.' }
   }
 
-  revalidatePath('/projects')
-  revalidatePath('/dashboard')
+  revalidatePath('/', 'layout')
   return {}
 }
 
@@ -280,7 +279,6 @@ export async function createEmptyProject(name: string, description?: string) {
     return { error: 'Falha ao criar o projeto.' }
   }
 
-  revalidatePath('/projects')
-  revalidatePath('/dashboard')
+  revalidatePath('/', 'layout')
   return { data }
 }

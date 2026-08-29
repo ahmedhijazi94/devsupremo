@@ -16,22 +16,25 @@ export function NewProjectForm() {
 
   const [nameError, setNameError] = useState('')
 
+  // Generate slug dynamically
+  const slug = form.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+
   function handleNameChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const val = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')
-    setForm(prev => ({ ...prev, name: val }))
+    setForm(prev => ({ ...prev, name: e.target.value }))
     setNameError('')
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
 
-    if (!form.name || form.name.length < 2) {
+    if (!form.name || form.name.trim().length < 2) {
       setNameError('O nome deve ter no mínimo 2 caracteres.')
       return
     }
 
     startTransition(async () => {
-      const { data, error } = await createEmptyProject(form.name, form.description)
+      // Create project using the slug as the internal name for repo/supabase consistency, or store both
+      const { data, error } = await createEmptyProject(slug, form.description)
       
       if (error) {
         toast.error(error)
@@ -62,11 +65,16 @@ export function NewProjectForm() {
           type="text"
           value={form.name}
           onChange={handleNameChange}
-          placeholder="meu-app"
+          placeholder="Meu Novo Projeto"
           required
-          className="w-full rounded-lg border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+          className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
         />
         {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+        {slug && (
+          <p className="text-xs text-muted-foreground mt-1">
+            Repositório será: <span className="font-mono text-foreground">{slug}</span>
+          </p>
+        )}
       </div>
 
       {/* Descrição */}

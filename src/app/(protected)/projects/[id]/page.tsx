@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { GitBranch, Database, Shield, Zap, ExternalLink } from 'lucide-react'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
 import { ScaffoldForm } from '@/components/projects/scaffold-form'
+import { PreviewPanel } from '@/components/projects/preview-panel'
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient()
@@ -115,6 +116,16 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
       </div>
 
       {/* Provision Action */}
+      {project.github_repo_full_name && project.supabase_project_ref && (
+        <div className="mt-8">
+          <div className="mb-4">
+            <h2 className="text-xl font-semibold">Live Preview</h2>
+            <p className="text-sm text-muted-foreground">O ambiente é recriado em tempo real via WebContainers conforme o Github recebe os commits.</p>
+          </div>
+          <PreviewPanel repoFullName={project.github_repo_full_name} />
+        </div>
+      )}
+
       {(!project.github_repo_full_name || !project.supabase_project_ref) && (
         <div className="border border-blue-500/20 bg-blue-500/5 rounded-xl p-6 flex flex-col items-center justify-center text-center space-y-4">
           <Zap className="w-8 h-8 text-blue-500" />

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 
 async function getDecryptedToken(encryptedHex: string) {
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing projectId or action' }, { status: 400 })
     }
 
-    const supabase = await createClient()
+    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
     const { data: project } = await supabase
       .from('projects')
       .select('*, github_accounts(*), supabase_accounts(*)')

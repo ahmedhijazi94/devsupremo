@@ -5,7 +5,7 @@ import { decryptToken } from '@/lib/crypto'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
-import { getSecurityAuditScriptContent, getCiWorkflowContent, getPackageJsonContent, getVitestConfigContent, getPlaywrightConfigContent, getVercelJsonContent, getTailwindConfigContent, getPostcssConfigContent, getGlobalsCssContent, getUtilsTsContent } from '@/lib/templates/project-files'
+import { getSecurityAuditScriptContent, getCiWorkflowContent, getPackageJsonContent, getVitestConfigContent, getPlaywrightConfigContent, getVercelJsonContent, getTailwindConfigContent, getPostcssConfigContent, getGlobalsCssContent, getUtilsTsContent, getSupabaseClientContent, getSupabaseServerContent, getSupabaseMiddlewareContent, getNextMiddlewareContent } from '@/lib/templates/project-files'
 
 const createProjectSchema = z.object({
   name: z
@@ -315,6 +315,10 @@ export async function scaffoldProject(
   const postcssConfig = getPostcssConfigContent()
   const globalsCss = getGlobalsCssContent()
   const utilsTs = getUtilsTsContent()
+  const sbClient = getSupabaseClientContent()
+  const sbServer = getSupabaseServerContent()
+  const sbMiddleware = getSupabaseMiddlewareContent()
+  const nextMiddleware = getNextMiddlewareContent()
 
   // 6. Criar nova tree baseada na tree inicial (substitui README.md padrão)
   const treeRes = await githubRequest(
@@ -343,6 +347,11 @@ export async function scaffoldProject(
           { path: 'postcss.config.js', mode: '100644', type: 'blob', content: postcssConfig },
           { path: 'app/globals.css', mode: '100644', type: 'blob', content: globalsCss },
           { path: 'lib/utils.ts', mode: '100644', type: 'blob', content: utilsTs },
+          
+          { path: 'lib/supabase/client.ts', mode: '100644', type: 'blob', content: sbClient },
+          { path: 'lib/supabase/server.ts', mode: '100644', type: 'blob', content: sbServer },
+          { path: 'lib/supabase/middleware.ts', mode: '100644', type: 'blob', content: sbMiddleware },
+          { path: 'middleware.ts', mode: '100644', type: 'blob', content: nextMiddleware },
           { path: 'app/layout.tsx', mode: '100644', type: 'blob', content: "import './globals.css';\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) { return ( <html lang='en'><body>{children}</body></html> ); }" },
           { path: 'app/page.tsx', mode: '100644', type: 'blob', content: "export default function Home() { return <main><h1>Supremo App</h1></main>; }" },
           { path: '.eslintrc.json', mode: '100644', type: 'blob', content: '{ "extends": "next/core-web-vitals" }' },

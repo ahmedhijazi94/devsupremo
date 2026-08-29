@@ -18,7 +18,18 @@ export async function POST(request: Request) {
     const body = await request.json()
     const { projectId, action, params } = body
 
-    if (!projectId || !action) {
+    
+    // Action: List Projects
+    if (action === 'supremo_list_projects') {
+      const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+      const { data: projects } = await supabase.from('projects').select('id, name, github_repo_full_name')
+      return NextResponse.json({ projects })
+    }
+
+    if (!projectId && action !== 'supremo_list_projects') {
+      return NextResponse.json({ error: 'Missing projectId' }, { status: 400 })
+    }
+    if (!action) return NextResponse.json({ error: 'Missing action' }, { status: 400 })
       return NextResponse.json({ error: 'Missing projectId or action' }, { status: 400 })
     }
 

@@ -3262,8 +3262,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path2) {
-      let input = path2;
+    function removeDotSegments(path) {
+      let input = path;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3668,8 +3668,8 @@ var require_schemes = __commonJS({
       }
       if (wsComponent.resourceName) {
         const queryIndex = wsComponent.resourceName.indexOf("?");
-        const path2 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
-        wsComponent.path = path2 && path2 !== "/" ? path2 : void 0;
+        const path = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
+        wsComponent.path = path && path !== "/" ? path : void 0;
         wsComponent.query = queryIndex === -1 ? void 0 : wsComponent.resourceName.slice(queryIndex + 1);
         wsComponent.resourceName = void 0;
       }
@@ -7175,12 +7175,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs2, exportName) {
+    function addFormats(ajv, list, fs, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs2[f]);
+        ajv.addFormat(f, fs[f]);
     }
     module2.exports = exports2 = formatsPlugin;
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -7368,10 +7368,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path2) {
-  if (!path2)
+function getElementAtPath(obj, path) {
+  if (!path)
     return obj;
-  return path2.reduce((acc, key) => acc?.[key], obj);
+  return path.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7783,11 +7783,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path2, issues) {
+function prefixIssues(path, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path2);
+    iss.path.unshift(path);
     return iss;
   });
 }
@@ -8216,16 +8216,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path2 = []) => {
+  const processError = (error3, path = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path2, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
       } else {
-        const fullpath = [...path2, ...issue2.path];
+        const fullpath = [...path, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -16728,23 +16728,11 @@ var StdioServerTransport = class {
 };
 
 // src/index.ts
-var import_fs = __toESM(require("fs"));
-var import_path = __toESM(require("path"));
 var import_https = __toESM(require("https"));
 var import_http = __toESM(require("http"));
-var cwd = process.cwd();
-var configPath = import_path.default.join(cwd, ".supremo.json");
-var projectId = "";
-try {
-  const config2 = JSON.parse(import_fs.default.readFileSync(configPath, "utf8"));
-  projectId = config2.projectId;
-} catch (e) {
-  console.error('Project not linked! Run "npx supremo link <projectId>" first.');
-  process.exit(1);
-}
 var SUPREMO_API = process.env.SUPREMO_API_URL || "http://localhost:3000/api/mcp";
-var server = new Server({ name: "supremo-mcp", version: "1.0.0" }, { capabilities: { tools: {} } });
-async function callSupremoAPI(action, params) {
+var server = new Server({ name: "supremo-mcp", version: "2.0.0" }, { capabilities: { tools: {} } });
+async function callSupremoAPI(action, params = {}, projectId) {
   const url = new URL(SUPREMO_API);
   const reqModule = url.protocol === "https:" ? import_https.default : import_http.default;
   return new Promise((resolve, reject) => {
@@ -16758,7 +16746,7 @@ async function callSupremoAPI(action, params) {
         try {
           resolve(JSON.parse(data));
         } catch (e) {
-          reject(new Error("Invalid JSON response from Supremo API: " + data));
+          reject(new Error("Invalid JSON response from Supremo API"));
         }
       });
     });
@@ -16770,17 +16758,20 @@ async function callSupremoAPI(action, params) {
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
-      name: "supremo_status",
-      description: "Check the connection status with the Supremo cloud project.",
+      name: "supremo_list_projects",
+      description: "Lista todos os projetos criados no Supremo. Retorna o ID e nome do reposit\xF3rio.",
       inputSchema: { type: "object", properties: {} }
     },
     {
       name: "supabase_execute_sql",
-      description: "Execute a SQL query directly against the linked Supabase database.",
+      description: "Execute a SQL query against the linked Supabase database.",
       inputSchema: {
         type: "object",
-        properties: { query: { type: "string" } },
-        required: ["query"]
+        properties: {
+          projectId: { type: "string" },
+          query: { type: "string" }
+        },
+        required: ["projectId", "query"]
       }
     },
     {
@@ -16788,8 +16779,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "Read a file directly from the linked GitHub repository.",
       inputSchema: {
         type: "object",
-        properties: { path: { type: "string" } },
-        required: ["path"]
+        properties: {
+          projectId: { type: "string" },
+          path: { type: "string" }
+        },
+        required: ["projectId", "path"]
       }
     },
     {
@@ -16798,35 +16792,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: "object",
         properties: {
+          projectId: { type: "string" },
           path: { type: "string" },
           content: { type: "string" },
           message: { type: "string", description: "Commit message" }
         },
-        required: ["path", "content"]
+        required: ["projectId", "path", "content"]
       }
     }
   ]
 }));
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  if (request.params.name === "supremo_status") {
-    return { content: [{ type: "text", text: `\u{1F7E2} Conectado ao Projeto Supremo: ${projectId}` }] };
-  }
-  if (["supabase_execute_sql", "github_read_file", "github_write_file"].includes(request.params.name)) {
+  const name = request.params.name;
+  const args = request.params.arguments || {};
+  if (["supremo_list_projects", "supabase_execute_sql", "github_read_file", "github_write_file"].includes(name)) {
     try {
-      const result = await callSupremoAPI(request.params.name, request.params.arguments);
+      const result = await callSupremoAPI(name, args, args.projectId);
       if (result.error) throw new Error(result.error);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (e) {
       return { content: [{ type: "text", text: `\u274C Erro: ${e.message}` }] };
     }
   }
-  throw new Error(`Tool not found: ${request.params.name}`);
+  throw new Error(`Tool not found: ${name}`);
 });
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
-main().catch((error2) => {
-  console.error("Fatal error:", error2);
-  process.exit(1);
-});
+main().catch(console.error);

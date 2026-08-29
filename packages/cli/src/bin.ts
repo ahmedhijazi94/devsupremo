@@ -15,7 +15,7 @@ program
   .command('link')
   .description('Link this folder to your Claude Desktop via MCP')
   .argument('<projectId>', 'The Supremo Project ID')
-  .action((projectId) => {
+  .action((projectId: string) => {
     const cwd = process.cwd();
     
     // Save project config locally

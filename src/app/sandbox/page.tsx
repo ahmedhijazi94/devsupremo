@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { WebContainer } from '@webcontainer/api'
 import { fetchGithubProjectTree } from '@/actions/github-tree'
+import { getLatestCommitSha, getChangedFilesContent } from '@/actions/github-sync'
 import { useSearchParams } from 'next/navigation'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -18,7 +19,11 @@ import { Suspense } from 'react'
 function SandboxContent() {
   const searchParams = useSearchParams()
   const projectId = searchParams.get('projectId')
+  
   const [url, setUrl] = useState<string | null>(null)
+  const currentSha = useRef<string | null>(null)
+  const isSyncing = useRef(false)
+
   const [status, setStatus] = useState('Inicializando Motor WebContainer...')
   const [error, setError] = useState<string | null>(null)
   
@@ -43,8 +48,11 @@ function SandboxContent() {
           terminal.current?.writeln(`\x1b[1;34m[Supremo]\x1b[0m ${msg}`)
         }
 
+
         log('Conectando ao GitHub (Buscando código seguro)...')
+        currentSha.current = await getLatestCommitSha(projectId!)
         const tree = await fetchGithubProjectTree(projectId!)
+
         
 
         if (!webcontainerInstance) {
@@ -81,10 +89,45 @@ function SandboxContent() {
           }
         }))
         
+
         webcontainerInstance.on('server-ready', (port, previewUrl) => {
-          log('✅ Servidor Online!')
+          log('✅ Servidor Online! HMR Ativado.')
           setUrl(previewUrl)
+          
+          // Iniciar HMR Polling
+          setInterval(async () => {
+            if (isSyncing.current || !currentSha.current || !webcontainerInstance) return
+            isSyncing.current = true
+            try {
+              const latestSha = await getLatestCommitSha(projectId!)
+              if (latestSha !== currentSha.current) {
+                terminal.current?.writeln('\x1b[1;33m[Supremo HMR]\x1b[0m Detectado novo commit. Sincronizando...')
+                const changedFiles = await getChangedFilesContent(projectId!, currentSha.current, latestSha)
+                
+                for (const file of changedFiles) {
+                  if (file.status === 'removed') {
+                    await webcontainerInstance.fs.rm(file.path, { force: true })
+                    terminal.current?.writeln('\x1b[1;31m[Supremo HMR]\x1b[0m Apagou ' + file.path)
+                  } else {
+                    // Make sure directory exists
+                    const dir = file.path.split('/').slice(0, -1).join('/')
+                    if (dir) {
+                      await webcontainerInstance.fs.mkdir(dir, { recursive: true })
+                    }
+                    await webcontainerInstance.fs.writeFile(file.path, file.content)
+                    terminal.current?.writeln('\x1b[1;32m[Supremo HMR]\x1b[0m Atualizou ' + file.path)
+                  }
+                }
+                currentSha.current = latestSha
+              }
+            } catch (e) {
+              console.error('HMR Sync Error:', e)
+            } finally {
+              isSyncing.current = false
+            }
+          }, 3000)
         })
+
 
       } catch (err: any) {
         console.error(err)

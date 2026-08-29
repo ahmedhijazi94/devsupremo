@@ -245,7 +245,7 @@ export async function scaffoldProject(
     body: JSON.stringify({
       name,
       description: description ?? `${name} — built with Supremo`,
-      private: false,
+      private: true,
       auto_init: true, // Cria branch main com commit inicial
     }),
   })

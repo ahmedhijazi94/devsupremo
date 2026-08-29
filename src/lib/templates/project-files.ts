@@ -278,6 +278,7 @@ export function getPackageJsonContent(projectName: string): string {
     },
     dependencies: {
       "@supabase/supabase-js": "^2.39.0",
+      "@supabase/ssr": "^0.1.0",
       "next": "15.0.0",
       "react": "^18.2.0",
       "react-dom": "^18.2.0",

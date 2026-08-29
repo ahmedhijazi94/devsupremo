@@ -1,69 +1,73 @@
-import Image from "next/image";
+import Link from 'next/link'
+import { GitBranch, Zap, Shield, Eye } from 'lucide-react'
 
-export default function Home() {
+export default function HomePage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <main className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
+      <div className="max-w-3xl w-full text-center space-y-8">
+        {/* Logo */}
+        <div className="space-y-3">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20">
+            <Zap className="w-8 h-8 text-primary" />
+          </div>
+          <h1 className="text-5xl font-bold tracking-tight">
+            Supremo
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="text-xl text-muted-foreground max-w-lg mx-auto">
+            Crie apps profissionais com segurança máxima via IA.
+            Multi-conta, multi-MCP, pipeline de testes automática.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Features */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-left">
+          <div className="rounded-xl border bg-card p-4 space-y-2">
+            <Shield className="w-5 h-5 text-green-500" />
+            <h3 className="font-semibold">Segurança Máxima</h3>
+            <p className="text-sm text-muted-foreground">
+              RLS sempre ativo. Zero validação no client. Cada projeto nasce seguro.
+            </p>
+          </div>
+          <div className="rounded-xl border bg-card p-4 space-y-2">
+            <Zap className="w-5 h-5 text-yellow-500" />
+            <h3 className="font-semibold">Pipeline de Testes</h3>
+            <p className="text-sm text-muted-foreground">
+              TypeScript, ESLint, Vitest, Playwright e security scan antes de todo commit.
+            </p>
+          </div>
+          <div className="rounded-xl border bg-card p-4 space-y-2">
+            <GitBranch className="w-5 h-5 text-blue-500" />
+            <h3 className="font-semibold">Multi-conta & Multi-MCP</h3>
+            <p className="text-sm text-muted-foreground">
+              Múltiplos GitHub e Supabase. Alterne entre Antigravity, Claude e GPT.
+            </p>
+          </div>
+          <div className="rounded-xl border bg-card p-4 space-y-2">
+            <Eye className="w-5 h-5 text-purple-500" />
+            <h3 className="font-semibold">Preview em Tempo Real</h3>
+            <p className="text-sm text-muted-foreground">
+              Cloudflare Pages. Veja o resultado de cada prompt instantaneamente.
+            </p>
+          </div>
         </div>
-      </main>
-    </div>
-  );
+
+        {/* CTA */}
+        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+          <Link
+            href="/login"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-6 py-3 text-primary-foreground font-semibold hover:bg-primary/90 transition-colors"
+          >
+            <GitBranch className="w-4 h-4" />
+            Entrar com GitHub
+          </Link>
+          <Link
+            href="/login"
+            className="inline-flex items-center justify-center gap-2 rounded-lg border px-6 py-3 font-semibold hover:bg-accent transition-colors"
+          >
+            Entrar com Google
+          </Link>
+        </div>
+      </div>
+    </main>
+  )
 }

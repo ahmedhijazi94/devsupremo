@@ -14,7 +14,13 @@ async function getDecryptedToken(encryptedHex: string) {
 }
 
 export async function POST(request: Request) {
+
   try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || authHeader !== `Bearer ${process.env.SUPREMO_API_KEY}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json()
     const { projectId, action, params } = body
     const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)

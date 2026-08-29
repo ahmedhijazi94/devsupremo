@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, Suspense } from 'react'
 import { WebContainer } from '@webcontainer/api'
 import { fetchGithubProjectTree } from '@/actions/github-tree'
 import { getProjectEnvVars } from '@/actions/env-vars'
@@ -10,120 +10,152 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
-
 let webcontainerInstance: WebContainer | null = null
 let bootPromise: Promise<WebContainer> | null = null
 
+type Stage = 'init' | 'fetching' | 'booting' | 'installing' | 'starting' | 'ready' | 'error'
 
-import { Suspense } from 'react'
+const STAGE_LABELS: Record<Stage, string> = {
+  init: 'Inicializando...',
+  fetching: 'Buscando código no GitHub...',
+  booting: 'Iniciando Máquina Virtual...',
+  installing: 'Instalando dependências (npm install)...',
+  starting: 'Iniciando servidor Next.js...',
+  ready: '✅ Servidor online — HMR ativo',
+  error: '❌ Erro',
+}
+
+const STAGE_COLORS: Record<Stage, string> = {
+  init: 'text-zinc-400',
+  fetching: 'text-blue-400',
+  booting: 'text-violet-400',
+  installing: 'text-amber-400',
+  starting: 'text-cyan-400',
+  ready: 'text-emerald-400',
+  error: 'text-red-400',
+}
 
 function SandboxContent() {
   const searchParams = useSearchParams()
   const projectId = searchParams.get('projectId')
-  
+
   const [url, setUrl] = useState<string | null>(null)
+  const [stage, setStage] = useState<Stage>('init')
+  const [error, setError] = useState<string | null>(null)
+  const [showTerminal, setShowTerminal] = useState(true)
+
   const currentSha = useRef<string | null>(null)
   const isSyncing = useRef(false)
-
-  const [status, setStatus] = useState('Inicializando Motor WebContainer...')
-  const [error, setError] = useState<string | null>(null)
-  
   const terminalRef = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
+
+  const log = (msg: string, color = '34') => {
+    terminal.current?.writeln(`\x1b[1;${color}m[Supremo]\x1b[0m ${msg}`)
+  }
 
   useEffect(() => {
     if (!projectId) return
 
     async function boot() {
       try {
+        // Init terminal
         if (!terminal.current && terminalRef.current) {
-          terminal.current = new Terminal({ convertEol: true, fontSize: 12 })
+          terminal.current = new Terminal({
+            convertEol: true,
+            fontSize: 12,
+            fontFamily: 'JetBrains Mono, Menlo, monospace',
+            theme: {
+              background: '#09090b',
+              foreground: '#e4e4e7',
+              cursor: '#10b981',
+            },
+          })
           const fitAddon = new FitAddon()
           terminal.current.loadAddon(fitAddon)
           terminal.current.open(terminalRef.current)
           fitAddon.fit()
         }
 
-        const log = (msg: string) => {
-          setStatus(msg)
-          terminal.current?.writeln(`\x1b[1;34m[Supremo]\x1b[0m ${msg}`)
-        }
-
-
-        log('Conectando ao GitHub (Buscando código seguro)...')
+        // Step 1: Fetch code from GitHub
+        setStage('fetching')
+        log('Autenticando e buscando repositório no GitHub...')
         currentSha.current = await getLatestCommitSha(projectId!)
         const tree = await fetchGithubProjectTree(projectId!)
+        log(`Código carregado: ${Object.keys(tree).length} arquivos/pastas`, '32')
 
-        
-
-        if (!webcontainerInstance) {
-          if (!bootPromise) {
-            log('Iniciando Máquina Virtual no Navegador...')
-            bootPromise = WebContainer.boot()
-          } else {
-            log('Aguardando inicialização prévia...')
-          }
-          webcontainerInstance = await bootPromise
-        }
-
-        
-        
+        // Step 2: Inject .env.local
         const envContent = await getProjectEnvVars(projectId!)
         if (envContent) {
           tree['.env.local'] = { file: { contents: envContent } }
+          log('Variáveis de ambiente injetadas ✓', '32')
         }
-        
-        log(`Montando sistema de arquivos (${Object.keys(tree).length} root items)...`)
 
+        // Step 3: Boot WebContainer
+        setStage('booting')
+        if (!webcontainerInstance) {
+          if (!bootPromise) {
+            log('Inicializando WebContainer (sandbox no navegador)...')
+            bootPromise = WebContainer.boot()
+          }
+          webcontainerInstance = await bootPromise
+        }
+        log('Máquina virtual pronta ✓', '32')
+
+        // Step 4: Mount filesystem
+        log('Montando sistema de arquivos...')
         await webcontainerInstance.mount(tree)
-        
-        log('Instalando dependências (npm install)...')
-        const installProcess = await webcontainerInstance.spawn('npm', ['install', '--no-package-lock', '--legacy-peer-deps'])
-        
-        installProcess.output.pipeTo(new WritableStream({
-          write(data) {
-            terminal.current?.write(data)
-          }
-        }))
-        
-        const installExitCode = await installProcess.exit
-        if (installExitCode !== 0) throw new Error('Falha no npm install')
-        
-        log('Iniciando Servidor Next.js (npm run dev)...')
+
+        // Step 5: npm install (with --ignore-scripts fallback)
+        setStage('installing')
+        log('Executando npm install...')
+
+        async function runInstall(args: string[]): Promise<number> {
+          const proc = await webcontainerInstance!.spawn('npm', args)
+          proc.output.pipeTo(new WritableStream({ write(data) { terminal.current?.write(data) } }))
+          return proc.exit
+        }
+
+        let exitCode = await runInstall(['install', '--no-package-lock', '--legacy-peer-deps'])
+
+        if (exitCode !== 0) {
+          log('⚠️  npm install falhou. Tentando com --ignore-scripts...', '33')
+          exitCode = await runInstall(['install', '--no-package-lock', '--legacy-peer-deps', '--ignore-scripts'])
+        }
+
+        if (exitCode !== 0) throw new Error('npm install falhou mesmo com --ignore-scripts. Verifique o package.json do projeto.')
+
+        log('Dependências instaladas ✓', '32')
+
+        // Step 6: npm run dev
+        setStage('starting')
+        log('Iniciando servidor Next.js...')
         const devProcess = await webcontainerInstance.spawn('npm', ['run', 'dev'])
-        devProcess.output.pipeTo(new WritableStream({
-          write(data) {
-            terminal.current?.write(data)
-          }
-        }))
-        
+        devProcess.output.pipeTo(new WritableStream({ write(data) { terminal.current?.write(data) } }))
 
         webcontainerInstance.on('server-ready', (port, previewUrl) => {
-          log('✅ Servidor Online! HMR Ativado.')
+          setStage('ready')
+          log('✅ Servidor online! HMR ativo — Detectando commits em tempo real.', '32')
           setUrl(previewUrl)
-          
-          // Iniciar HMR Polling
+          setShowTerminal(false)
+
+          // Start HMR polling (every 3s)
           setInterval(async () => {
             if (isSyncing.current || !currentSha.current || !webcontainerInstance) return
             isSyncing.current = true
             try {
               const latestSha = await getLatestCommitSha(projectId!)
               if (latestSha !== currentSha.current) {
-                terminal.current?.writeln('\x1b[1;33m[Supremo HMR]\x1b[0m Detectado novo commit. Sincronizando...')
+                terminal.current?.writeln('\x1b[1;33m[HMR]\x1b[0m Novo commit detectado! Sincronizando...')
                 const changedFiles = await getChangedFilesContent(projectId!, currentSha.current, latestSha)
-                
                 for (const file of changedFiles) {
                   if (file.status === 'removed') {
                     await webcontainerInstance.fs.rm(file.path, { force: true })
-                    terminal.current?.writeln('\x1b[1;31m[Supremo HMR]\x1b[0m Apagou ' + file.path)
+                    terminal.current?.writeln('\x1b[1;31m[HMR]\x1b[0m ✗ Removeu: ' + file.path)
                   } else {
-                    // Make sure directory exists
                     const dir = file.path.split('/').slice(0, -1).join('/')
-                    if (dir) {
-                      await webcontainerInstance.fs.mkdir(dir, { recursive: true })
-                    }
+                    if (dir) await webcontainerInstance.fs.mkdir(dir, { recursive: true })
                     await webcontainerInstance.fs.writeFile(file.path, file.content)
-                    terminal.current?.writeln('\x1b[1;32m[Supremo HMR]\x1b[0m Atualizou ' + file.path)
+                    terminal.current?.writeln('\x1b[1;32m[HMR]\x1b[0m ✓ Atualizou: ' + file.path)
                   }
                 }
                 currentSha.current = latestSha
@@ -136,48 +168,85 @@ function SandboxContent() {
           }, 3000)
         })
 
-
       } catch (err: any) {
         console.error(err)
+        setStage('error')
         setError(err.message)
-        terminal.current?.writeln(`\x1b[1;31m[Erro]\x1b[0m ${err.message}`)
+        log(`ERRO: ${err.message}`, '31')
       }
     }
+
     boot()
   }, [projectId])
 
-  if (!projectId) return <div>ID do projeto não fornecido.</div>
-  
-
+  if (!projectId) return (
+    <div className="flex h-screen items-center justify-center bg-zinc-950 text-zinc-400">
+      ID do projeto não fornecido.
+    </div>
+  )
 
   return (
-    <div className="flex flex-col h-screen w-full bg-white">
-      {!url && (
-        <div className="flex flex-col flex-1 items-center justify-center bg-zinc-950 text-white font-mono text-sm">
-          {error ? (
-            <div className="mb-4 text-red-400 font-bold">❌ {error}</div>
-          ) : (
-            <div className="animate-pulse mb-4 text-emerald-400">⚡ {status}</div>
+    <div className="flex flex-col h-screen w-full bg-zinc-950">
+      {/* Status bar */}
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-zinc-800 bg-zinc-900 shrink-0">
+        <div className={`flex items-center gap-2 text-xs font-mono ${STAGE_COLORS[stage]}`}>
+          {stage !== 'ready' && stage !== 'error' && (
+            <span className="inline-block w-2 h-2 rounded-full bg-current animate-pulse" />
           )}
-          <div className="w-full max-w-4xl h-96 bg-black rounded-xl border border-zinc-800 overflow-hidden p-2" ref={terminalRef} />
+          {stage === 'ready' && <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />}
+          {stage === 'error' && <span className="inline-block w-2 h-2 rounded-full bg-red-500" />}
+          {STAGE_LABELS[stage]}
         </div>
-      )}
-      {url && (
-        <iframe 
-          src={url} 
-          className="flex-1 w-full h-full border-none bg-white" 
-          allow="accelerometer; ambient-light-sensor; camera; encrypted-media; geolocation; gyroscope; hid; microphone; midi; payment; usb; vr; xr-spatial-tracking"
-          sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
-        />
-      )}
+        {url && (
+          <button
+            onClick={() => setShowTerminal(v => !v)}
+            className="ml-auto text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1 rounded border border-zinc-700 hover:border-zinc-500"
+          >
+            {showTerminal ? 'Ocultar Terminal' : 'Ver Terminal'}
+          </button>
+        )}
+      </div>
+
+      {/* Main area */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Preview iframe */}
+        {url && !showTerminal && (
+          <iframe
+            src={url}
+            className="flex-1 w-full h-full border-none bg-white"
+            allow="accelerometer; ambient-light-sensor; camera; encrypted-media; geolocation; gyroscope; hid; microphone; midi; payment; usb; vr; xr-spatial-tracking"
+            sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
+          />
+        )}
+
+        {/* Terminal */}
+        <div className={`flex flex-col bg-zinc-950 ${url && !showTerminal ? 'hidden' : 'flex-1'}`}>
+          {stage === 'error' && error && (
+            <div className="m-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-mono">
+              <p className="font-bold mb-1">❌ Erro durante o boot:</p>
+              <p>{error}</p>
+              <button
+                onClick={() => { window.location.reload() }}
+                className="mt-2 px-3 py-1 bg-red-500/20 hover:bg-red-500/30 rounded border border-red-500/40 transition-colors"
+              >
+                Tentar novamente
+              </button>
+            </div>
+          )}
+          <div ref={terminalRef} className="flex-1 p-2 overflow-hidden" />
+        </div>
+      </div>
     </div>
   )
 }
 
-
 export default function SandboxPage() {
   return (
-    <Suspense fallback={<div className="p-4">Loading Sandbox...</div>}>
+    <Suspense fallback={
+      <div className="flex h-screen items-center justify-center bg-zinc-950 text-zinc-400 text-sm font-mono">
+        Carregando sandbox...
+      </div>
+    }>
       <SandboxContent />
     </Suspense>
   )

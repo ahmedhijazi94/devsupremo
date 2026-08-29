@@ -270,35 +270,34 @@ export function getPackageJsonContent(projectName: string): string {
       build: "next build",
       start: "next start",
       lint: "next lint",
-      test: "vitest run",
-      "test:watch": "vitest",
-      "test:e2e": "playwright test",
-      "test:e2e:ui": "playwright test --ui",
       "audit:security": "node scripts/security-audit.js"
     },
     dependencies: {
       "@supabase/supabase-js": "^2.39.0",
-      "@supabase/ssr": "^0.1.0",
+      "@supabase/ssr": "^0.5.0",
+      "class-variance-authority": "^0.7.0",
+      "clsx": "^2.1.0",
+      "lucide-react": "^0.441.0",
       "next": "15.0.0",
       "react": "^18.2.0",
       "react-dom": "^18.2.0",
+      "tailwind-merge": "^2.3.0",
       "zod": "^3.22.4"
     },
     devDependencies: {
-      "@playwright/test": "^1.40.1",
-      "@testing-library/react": "^14.1.2",
       "@types/node": "^20",
       "@types/react": "^18",
       "@types/react-dom": "^18",
-      "@vitejs/plugin-react": "^4.2.1",
+      "autoprefixer": "^10.4.19",
       "eslint": "^8",
       "eslint-config-next": "15.0.0",
-      "jsdom": "^23.0.1",
-      "typescript": "^5",
-      "vitest": "^1.1.0"
+      "postcss": "^8.4.38",
+      "tailwindcss": "^3.4.1",
+      "typescript": "^5"
     }
   }, null, 2)
 }
+
 
 export function getVitestConfigContent(): string {
   return `import { defineConfig } from 'vitest/config'

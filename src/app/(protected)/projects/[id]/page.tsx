@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { GitBranch, Database, Shield, Zap, ExternalLink } from 'lucide-react'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
+import { AddSupabaseModal } from '@/components/accounts/add-supabase-modal'
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient()
@@ -99,9 +100,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           ) : (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">Conecte um Personal Access Token para gerar o banco de dados.</p>
-              <button className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent transition-colors">
-                Conectar Supabase
-              </button>
+              <AddSupabaseModal projectId={project.id} />
             </div>
           )}
         </div>
@@ -117,12 +116,19 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               Gere o repositório, banco de dados, regras RLS e policies de segurança para iniciar o desenvolvimento.
             </p>
           </div>
-          <button 
-            disabled={!project.github_accounts || !project.supabase_accounts}
-            className="rounded-lg bg-blue-500 px-6 py-2 text-sm font-bold text-white hover:bg-blue-600 transition-colors disabled:opacity-50"
-          >
-            Rodar Scaffolding
-          </button>
+          <form action={async () => {
+            'use server'
+            const { scaffoldProject } = await import('@/actions/scaffold')
+            await scaffoldProject(project.id)
+          }}>
+            <button 
+              type="submit"
+              disabled={!project.github_accounts || !project.supabase_accounts}
+              className="rounded-lg bg-blue-500 px-6 py-2 text-sm font-bold text-white hover:bg-blue-600 transition-colors disabled:opacity-50"
+            >
+              Rodar Scaffolding
+            </button>
+          </form>
           {(!project.github_accounts || !project.supabase_accounts) && (
             <p className="text-xs text-muted-foreground">Conecte as duas contas acima para habilitar o scaffolding.</p>
           )}

@@ -5,7 +5,7 @@ import { Key, X, ExternalLink, Eye, EyeOff } from 'lucide-react'
 import { addSupabaseAccount } from '@/actions/accounts'
 import { toast } from 'sonner'
 
-export function AddSupabaseModal() {
+export function AddSupabaseModal({ projectId }: { projectId?: string }) {
   const [isOpen, setIsOpen] = useState(false)
   const [token, setToken] = useState('')
   const [showToken, setShowToken] = useState(false)
@@ -14,7 +14,7 @@ export function AddSupabaseModal() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     startTransition(async () => {
-      const result = await addSupabaseAccount({ accessToken: token })
+      const result = await addSupabaseAccount({ accessToken: token, projectId })
       if (result.error) {
         toast.error(result.error)
         return

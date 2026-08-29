@@ -208,33 +208,32 @@ async function githubRequest(
   return res
 }
 
-// ─────────────────────────────────────────────────────────────
-// Main Server Action
-// ─────────────────────────────────────────────────────────────
 export async function scaffoldProject(
-  formData: z.infer<typeof createProjectSchema>
-): Promise<{ error?: string; projectId?: string }> {
-  // 1. Validar inputs
-  const parsed = createProjectSchema.safeParse(formData)
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? 'Dados inválidos.' }
-  }
+  projectId: string
+): Promise<{ error?: string }> {
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Não autorizado.' }
 
-  const { name, description, githubAccountId, supabaseAccountId, stack } = parsed.data
-
-  // 2. Buscar conta GitHub e descriptografar token
-  const { data: githubAccount } = await supabase
-    .from('github_accounts')
-    .select('*')
-    .eq('id', githubAccountId)
+  // 1. Fetch project details
+  const { data: project } = await supabase
+    .from('projects')
+    .select(`
+      *,
+      github_accounts (*),
+      supabase_accounts (*)
+    `)
+    .eq('id', projectId)
     .eq('user_id', user.id)
     .single()
 
-  if (!githubAccount) return { error: 'Conta GitHub não encontrada.' }
+  if (!project) return { error: 'Projeto não encontrado.' }
+  if (!project.github_accounts) return { error: 'Conta GitHub não vinculada.' }
+  if (project.github_repo_full_name) return { error: 'Projeto já provisionado.' }
+
+  const { name, description, github_accounts: githubAccount, supabase_account_id: supabaseAccountId } = project
+  const stack = 'nextjs'
 
   const githubToken = decryptToken(githubAccount.access_token_encrypted)
 
@@ -476,38 +475,28 @@ CREATE POLICY "audit_logs_insert_own" ON audit_logs FOR INSERT WITH CHECK (true)
     }
   }
 
-  // 10. Salvar projeto no Supremo DB
-  const { data: project, error: projectError } = await supabase
+  // 10. Atualizar projeto no Supremo DB com dados do provisionamento
+  const { error: projectError } = await supabase
     .from('projects')
-    .insert({
-      user_id: user.id,
-      name,
-      description: description ?? null,
-      github_account_id: githubAccountId,
-      supabase_account_id: supabaseAccountId ?? null,
+    .update({
       github_repo_full_name: repo.full_name,
       github_repo_id: repo.id,
       supabase_project_ref: supabaseProjectRef,
-      active_mcp: 'antigravity',
-      active_branch: 'main',
       status: 'active',
-      is_active: false,
     })
-    .select('id')
-    .single()
+    .eq('id', projectId)
+    .eq('user_id', user.id)
 
-  if (projectError ?? !project) {
-    return { error: 'Erro ao salvar projeto no banco.' }
+  if (projectError) {
+    return { error: 'Erro ao atualizar projeto no banco.' }
   }
-
-  const createdProject = project as { id: string }
 
   // 11. Log de auditoria
   await supabase.from('audit_logs').insert({
     user_id: user.id,
     action: 'project.scaffold',
     resource_type: 'project',
-    resource_id: createdProject.id,
+    resource_id: projectId,
     metadata: {
       name,
       github_repo: repo.full_name,
@@ -516,8 +505,7 @@ CREATE POLICY "audit_logs_insert_own" ON audit_logs FOR INSERT WITH CHECK (true)
     },
   })
 
-  revalidatePath('/dashboard')
-  revalidatePath('/projects')
+  revalidatePath('/', 'layout')
 
-  return { projectId: createdProject.id }
+  return {}
 }

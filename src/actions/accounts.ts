@@ -85,6 +85,7 @@ export async function disconnectGithubAccount(
 // ─────────────────────────────────────────────────────────────
 const addSupabaseSchema = z.object({
   accessToken: z.string().min(10, 'Token inválido.'),
+  projectId: z.string().uuid().optional(),
 })
 
 export async function addSupabaseAccount(
@@ -122,7 +123,7 @@ export async function addSupabaseAccount(
   const org = orgs[0]!
   const encryptedToken = encryptToken(parsed.data.accessToken)
 
-  const { error: upsertError } = await supabase
+  const { data: upsertData, error: upsertError } = await supabase
     .from('supabase_accounts')
     .upsert({
       user_id: user.id,
@@ -132,9 +133,17 @@ export async function addSupabaseAccount(
     }, {
       onConflict: 'user_id,org_slug',
     })
+    .select('id')
+    .single()
 
-  if (upsertError) {
+  if (upsertError || !upsertData) {
     return { error: 'Erro ao salvar conta Supabase.' }
+  }
+
+  // Se tivermos projectId, vinculamos na hora
+  if (parsed.data.projectId) {
+    await supabase.from('projects').update({ supabase_account_id: upsertData.id }).eq('id', parsed.data.projectId)
+    revalidatePath(`/projects/${parsed.data.projectId}`)
   }
 
   await supabase.from('audit_logs').insert({

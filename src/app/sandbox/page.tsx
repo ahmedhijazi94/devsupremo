@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { WebContainer } from '@webcontainer/api'
 import { fetchGithubProjectTree } from '@/actions/github-tree'
+import { getProjectEnvVars } from '@/actions/env-vars'
 import { getLatestCommitSha, getChangedFilesContent } from '@/actions/github-sync'
 import { useSearchParams } from 'next/navigation'
 import { Terminal } from '@xterm/xterm'
@@ -66,7 +67,14 @@ function SandboxContent() {
         }
 
         
+        
+        const envContent = await getProjectEnvVars(projectId!)
+        if (envContent) {
+          tree['.env.local'] = { file: { contents: envContent } }
+        }
+        
         log(`Montando sistema de arquivos (${Object.keys(tree).length} root items)...`)
+
         await webcontainerInstance.mount(tree)
         
         log('Instalando dependências (npm install)...')

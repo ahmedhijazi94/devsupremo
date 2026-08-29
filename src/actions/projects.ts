@@ -268,7 +268,7 @@ export async function createEmptyProject(name: string, description?: string) {
       user_id: user.id,
       name,
       description,
-      status: 'pending',
+      status: 'creating',
     })
     .select('id')
     .single()

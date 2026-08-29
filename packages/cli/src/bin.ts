@@ -1,56 +1,88 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import { Command } from 'commander'
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
 
-const program = new Command();
+const program = new Command()
 
 program
   .name('supremo')
-  .description('Supremo CLI and MCP Server for AI Agents')
-  .version('1.0.0');
+  .description('Ponte MCP do Supremo para agentes de IA')
+  .version('2.0.0')
+
+const DEFAULT_URL = 'https://supremo.app/api/mcp'
+
+interface ClaudeConfig {
+  mcpServers?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+function claudeDesktopConfigPath(): string {
+  if (process.platform === 'darwin') {
+    return path.join(
+      os.homedir(),
+      'Library',
+      'Application Support',
+      'Claude',
+      'claude_desktop_config.json'
+    )
+  }
+  if (process.platform === 'win32') {
+    return path.join(
+      process.env.APPDATA ?? os.homedir(),
+      'Claude',
+      'claude_desktop_config.json'
+    )
+  }
+  return path.join(os.homedir(), '.config', 'Claude', 'claude_desktop_config.json')
+}
 
 program
-  .command('link')
-  .description('Link this folder to your Claude Desktop via MCP')
-  .argument('<projectId>', 'The Supremo Project ID')
-  .action((projectId: string) => {
-    const cwd = process.cwd();
-    
-    // Save project config locally
-    fs.writeFileSync(path.join(cwd, '.supremo.json'), JSON.stringify({ projectId }, null, 2));
-    
-    console.log(`🔗 Project ${projectId} linked locally.`);
-
-    // Auto-configure Claude Desktop
-    const claudeConfigPath = path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
-    let config: any = { mcpServers: {} };
-    if (fs.existsSync(claudeConfigPath)) {
-      try {
-        config = JSON.parse(fs.readFileSync(claudeConfigPath, 'utf8'));
-      } catch(e) {}
+  .command('connect')
+  .description('Configura o Claude Desktop para usar o Supremo remoto')
+  .requiredOption('-t, --token <token>', 'Token gerado em /mcps')
+  .option('-u, --url <url>', 'Endpoint MCP do Supremo', DEFAULT_URL)
+  .action((options: { token: string; url: string }) => {
+    if (!options.token.startsWith('sup_')) {
+      console.error('Token inválido: deve começar com "sup_". Gere um em /mcps.')
+      process.exit(1)
     }
-    if (!config.mcpServers) config.mcpServers = {};
-    
-    // Point it to run the local package
-    config.mcpServers['supremo-mcp'] = {
-      command: "node",
-      args: [path.join(__dirname, 'index.js')]
-    };
-    
-    fs.mkdirSync(path.dirname(claudeConfigPath), { recursive: true });
-    fs.writeFileSync(claudeConfigPath, JSON.stringify(config, null, 2));
-    
-    console.log(`✅ Claude Desktop Configured! Restart your Claude Desktop app.`);
-    console.log(`🧠 Try asking Claude: "Qual o status da minha conexão com o Supremo?"`);
-  });
+
+    const configPath = claudeDesktopConfigPath()
+    let config: ClaudeConfig = {}
+
+    if (fs.existsSync(configPath)) {
+      try {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as ClaudeConfig
+      } catch {
+        console.error(
+          `${configPath} existe mas não é JSON válido. Corrija ou remova o arquivo antes de continuar.`
+        )
+        process.exit(1)
+      }
+    }
+
+    config.mcpServers = config.mcpServers ?? {}
+    config.mcpServers.supremo = {
+      command: 'npx',
+      args: ['-y', '@supremo/cli', 'mcp'],
+      env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token },
+    }
+
+    fs.mkdirSync(path.dirname(configPath), { recursive: true })
+    fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`)
+
+    console.log(`Configurado em ${configPath}`)
+    console.log(`Endpoint: ${options.url}`)
+    console.log('Reinicie o Claude Desktop para carregar a conexão.')
+  })
 
 program
-  .command('mcp')
-  .description('Run the MCP server (called automatically by Claude)')
-  .action(() => {
-    require('./index.js');
-  });
+  .command('mcp', { isDefault: true })
+  .description('Roda a ponte MCP (o cliente chama isto automaticamente)')
+  .action(async () => {
+    await import('./index.js')
+  })
 
-program.parse();
+program.parse()

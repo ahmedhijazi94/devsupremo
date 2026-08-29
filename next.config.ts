@@ -12,6 +12,12 @@ const securityHeaders = [
 ]
 
 const nextConfig: NextConfig = {
+  // O scaffold lê scripts/security-audit.js do disco para copiá-lo nos
+  // projetos gerados. Sem isto o arquivo não vai para o bundle de deploy
+  // e o projeto novo nasce sem o gate de auditoria.
+  outputFileTracingIncludes: {
+    '/**': ['./scripts/security-audit.js'],
+  },
   async headers() {
     return [
       {

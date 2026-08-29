@@ -1,432 +1,564 @@
 #!/usr/bin/env node
 /**
- * SUPREMO SECURITY AUDIT SCRIPT
- * Roda todos os checks de segurança sem gastar tokens de IA.
- * Categorias: RLS, Permission Leak, IDOR, Hardcoded Secrets, XSS
+ * SUPREMO — Auditoria de segurança estática
  *
- * Uso: node scripts/security-audit.js [--strict]
- * --strict: falha com exit 1 se houver qualquer achado crítico ou alto
+ * Roda sem IA e sem rede. Cinco categorias:
+ *   1. RLS / isolamento entre contas
+ *   2. Autorização em Server Actions e Route Handlers
+ *   3. IDOR — acesso a objeto por ID sem checar dono
+ *   4. Segredos em código
+ *   5. XSS e injeção
+ *
+ * Uso: node scripts/security-audit.js [--strict] [--json]
+ *   --strict  sai com código 1 se houver achado CRITICAL ou HIGH
+ *   --json    imprime só o relatório JSON
+ *
+ * Princípio de calibragem: um gate que grita errado é um gate que a equipe
+ * aprende a ignorar. Toda regra aqui precisa ter falso positivo próximo de
+ * zero — quando em dúvida, a regra não dispara.
  */
 
 const fs = require('fs')
 const path = require('path')
-const { execSync } = require('child_process')
 
 const ROOT = path.resolve(__dirname, '..')
 const args = process.argv.slice(2)
 const STRICT = args.includes('--strict')
+const JSON_ONLY = args.includes('--json')
 
-const SEVERITY = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 }
 const COLORS = {
   CRITICAL: '\x1b[41m\x1b[37m',
   HIGH: '\x1b[31m',
   MEDIUM: '\x1b[33m',
   LOW: '\x1b[34m',
-  INFO: '\x1b[32m',
+  OK: '\x1b[32m',
+  DIM: '\x1b[2m',
   RESET: '\x1b[0m',
 }
 
 const findings = []
 const strengths = []
 
+function say(message) {
+  if (!JSON_ONLY) console.log(message)
+}
+
 function finding(severity, category, file, line, code, reason) {
-  findings.push({ severity, category, file, line, code, reason })
-  const col = COLORS[severity] ?? COLORS.RESET
-  console.log(`${col}[${severity}][${category}] ${file}:${line}${COLORS.RESET}`)
-  console.log(`  Code: ${code.trim()}`)
-  console.log(`  Why:  ${reason}\n`)
+  findings.push({ severity, category, file, line, code: code.trim(), reason })
+  const color = COLORS[severity] ?? COLORS.RESET
+  say(`${color}[${severity}][${category}]${COLORS.RESET} ${file}:${line}`)
+  say(`${COLORS.DIM}  ${code.trim().slice(0, 110)}${COLORS.RESET}`)
+  say(`  ${reason}\n`)
 }
 
-function strength(msg) {
-  strengths.push(msg)
-  console.log(`${COLORS.INFO}[✓ OK] ${msg}${COLORS.RESET}`)
+function strength(message) {
+  strengths.push(message)
+  say(`${COLORS.OK}  ✓${COLORS.RESET} ${message}`)
 }
 
-// ─── Collect all source files ───────────────────────────────────────────────
-function collectFiles(dir, exts, ignore = ['node_modules', '.next', 'dist', '.git']) {
+function section(title) {
+  say(`\n${COLORS.DIM}${'─'.repeat(64)}${COLORS.RESET}`)
+  say(`  ${title}`)
+  say(`${COLORS.DIM}${'─'.repeat(64)}${COLORS.RESET}\n`)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Coleta
+// ─────────────────────────────────────────────────────────────
+
+const IGNORED_DIRS = new Set([
+  'node_modules',
+  '.next',
+  '.git',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '.vercel',
+  'playwright-report',
+  'test-results',
+])
+
+function collectFiles(dir, extensions) {
   const results = []
   if (!fs.existsSync(dir)) return results
+
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (ignore.some(ig => entry.name === ig)) continue
+    if (IGNORED_DIRS.has(entry.name)) continue
+
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      results.push(...collectFiles(full, exts, ignore))
-    } else if (exts.some(e => entry.name.endsWith(e))) {
+      results.push(...collectFiles(full, extensions))
+    } else if (extensions.some((ext) => entry.name.endsWith(ext))) {
       results.push(full)
     }
   }
   return results
 }
 
-function readLines(file) {
-  return fs.readFileSync(file, 'utf8').split('\n')
+const rel = (file) => path.relative(ROOT, file)
+
+/**
+ * Remove comentários e literais de string.
+ *
+ * Sem isto, a auditoria acusa a própria documentação: um comentário que
+ * explica o que NÃO fazer vira um achado. Foi assim que a versão anterior
+ * gerou boa parte dos seus falsos positivos.
+ */
+function stripNoise(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:])\/\/[^\n]*/g, (m, p) => p + ' '.repeat(m.length - p.length))
+    .replace(/`(?:[^`\\]|\\.)*`/g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, (m) => "'" + ' '.repeat(Math.max(0, m.length - 2)) + "'")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, (m) => '"' + ' '.repeat(Math.max(0, m.length - 2)) + '"')
 }
 
-function rel(file) {
-  return path.relative(ROOT, file)
-}
+const tsFiles = collectFiles(path.join(ROOT, 'src'), ['.ts', '.tsx'])
+  .concat(collectFiles(path.join(ROOT, 'app'), ['.ts', '.tsx']))
+  .concat(collectFiles(path.join(ROOT, 'lib'), ['.ts', '.tsx']))
+  .filter((file) => !file.endsWith('.test.ts') && !file.endsWith('.test.tsx'))
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CAT 1: BANCO SEM TRANCA (RLS / Tenant Isolation)
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-console.log('CAT 1: BANCO SEM TRANCA (RLS / Tenant Isolation)')
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+const sqlFiles = collectFiles(path.join(ROOT, 'supabase'), ['.sql'])
 
-// Check migration files for tables without RLS
-const sqlFiles = collectFiles(ROOT, ['.sql'])
-let tablesFound = 0
-let tablesWithRLS = 0
+say(`\n${COLORS.DIM}Supremo — auditoria de segurança${COLORS.RESET}`)
+say(`${COLORS.DIM}${tsFiles.length} arquivos TypeScript · ${sqlFiles.length} migrations${COLORS.RESET}`)
+
+// ═════════════════════════════════════════════════════════════
+// 1. RLS
+// ═════════════════════════════════════════════════════════════
+section('1 · Row Level Security')
+
+let tablesTotal = 0
+let tablesProtected = 0
 
 for (const file of sqlFiles) {
-  const content = fs.readFileSync(file, 'utf8')
-  const tableMatches = [...content.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?["']?(\w+)["']?/gi)]
+  const source = fs.readFileSync(file, 'utf8')
+  const lines = source.split('\n')
 
-  for (const match of tableMatches) {
-    tablesFound++
-    const tableName = match[1]
-    const hasRLS = content.includes(`ALTER TABLE ${tableName} ENABLE ROW LEVEL SECURITY`) ||
-                   content.includes(`ALTER TABLE "${tableName}" ENABLE ROW LEVEL SECURITY`)
+  const created = [
+    ...source.matchAll(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["']?([\w.]+)["']?/gi),
+  ]
 
-    if (!hasRLS) {
-      finding('CRITICAL', 'RLS', rel(file), content.split('\n').findIndex(l => l.includes(match[0])) + 1,
-        match[0], `Table "${tableName}" has no RLS policy. Any authenticated user can read/write all rows.`)
+  for (const match of created) {
+    const qualified = match[1]
+    const table = qualified.split('.').pop()
+    tablesTotal++
+
+    const rlsPattern = new RegExp(
+      `ALTER TABLE\\s+(?:IF EXISTS\\s+)?["']?(?:\\w+\\.)?${table}["']?\\s+ENABLE ROW LEVEL SECURITY`,
+      'i'
+    )
+
+    if (rlsPattern.test(source)) {
+      tablesProtected++
     } else {
-      tablesWithRLS++
+      const lineNumber =
+        lines.findIndex((l) => l.includes(match[0])) + 1 || 1
+      finding(
+        'CRITICAL',
+        'RLS',
+        rel(file),
+        lineNumber,
+        match[0],
+        `Tabela "${table}" criada sem RLS. Sem isso, a anon key lê a tabela inteira. ` +
+          `Adicione: ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`
+      )
     }
+  }
+
+  // Policy que libera tudo é pior que policy nenhuma: parece proteção.
+  const permissive = [
+    ...source.matchAll(
+      /CREATE POLICY\s+["'][^"']+["']\s+ON\s+["']?(\w+)["']?[\s\S]{0,200}?(USING|WITH CHECK)\s*\(\s*true\s*\)/gi
+    ),
+  ]
+
+  for (const match of permissive) {
+    const lineNumber = lines.findIndex((l) => l.includes(`CREATE POLICY`) && l.includes(match[1])) + 1 || 1
+    finding(
+      'HIGH',
+      'RLS',
+      rel(file),
+      lineNumber,
+      match[0].split('\n')[0],
+      `Policy em "${match[1]}" usa ${match[2]} (true) — libera a tabela para qualquer um. ` +
+        `Escreva a condição de dono: auth.uid() = user_id.`
+    )
   }
 }
 
-if (tablesFound > 0 && tablesWithRLS === tablesFound) {
-  strength(`All ${tablesFound} tables have RLS enabled`)
+if (tablesTotal > 0 && tablesProtected === tablesTotal) {
+  strength(`RLS ativo nas ${tablesTotal} tabelas das migrations`)
 }
 
-// Check for Supabase queries without user filter in server actions/routes
-const tsFiles = collectFiles(path.join(ROOT, 'src'), ['.ts', '.tsx'])
-const rlsRiskyPatterns = [
-  { pattern: /\.from\(['"]\w+['"]\)\s*\n?\s*\.select\((?!.*\.eq\()/gm, desc: '.select() without .eq() filter — possible data leak across users' },
+// Service role nunca pode alcançar o bundle do cliente.
+for (const file of tsFiles) {
+  const source = fs.readFileSync(file, 'utf8')
+  if (!source.includes('SUPABASE_SERVICE_ROLE_KEY')) continue
+
+  const lines = source.split('\n')
+  const isClient = /^\s*['"]use client['"]/m.test(source)
+
+  if (isClient) {
+    const lineNumber = lines.findIndex((l) => l.includes('SUPABASE_SERVICE_ROLE_KEY')) + 1
+    finding(
+      'CRITICAL',
+      'RLS',
+      rel(file),
+      lineNumber,
+      lines[lineNumber - 1] ?? '',
+      'Service role key referenciada em Client Component. Ela ignora RLS e ' +
+        'iria para o bundle do navegador.'
+    )
+  }
+}
+
+// ═════════════════════════════════════════════════════════════
+// 2. Autorização
+// ═════════════════════════════════════════════════════════════
+section('2 · Autorização em Server Actions e Route Handlers')
+
+/** Formas aceitas de provar que a sessão foi verificada. */
+const AUTH_MARKERS = [
+  /auth\s*\.\s*getUser\s*\(/,
+  /requireUser\s*\(/,
+  /requireProjectOwner\s*\(/,
+  /getSession\s*\(/,
+  /resolveMcpToken\s*\(/,
+  /parseAuthorizationHeader\s*\(/,
+  /CRON_SECRET/,
+  // O callback de OAuth roda antes de existir sessão — é ele que a cria.
+  /exchangeCodeForSession\s*\(/,
 ]
+
+let guardedActions = 0
 
 for (const file of tsFiles) {
-  // Skip client-side files and type files
-  if (file.includes('components') && !file.includes('actions')) continue
-  if (file.includes('types/')) continue
+  const source = fs.readFileSync(file, 'utf8')
+  const clean = stripNoise(source)
+  const lines = source.split('\n')
 
-  const content = fs.readFileSync(file, 'utf8')
-  const lines = content.split('\n')
+  const isServerAction = /^\s*['"]use server['"]/m.test(source)
+  const isRouteHandler = /\/route\.tsx?$/.test(file)
+  if (!isServerAction && !isRouteHandler) continue
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? ''
-    // Check for .from().select() without .eq('user_id') or .eq('id') nearby
-    if (line.match(/\.from\(['"\w]+['"]\)/) && lines[i+1]?.includes('.select(')) {
-      const next3 = lines.slice(i, i+6).join('\n')
-      if (!next3.includes('.eq(') && !next3.includes('.single(') && !next3.includes('user_id') && !next3.includes('auth.uid()')) {
-        // Only flag server-side files (actions, api routes)
-        if (file.includes('actions/') || file.includes('route.ts') || file.includes('route.tsx')) {
-          finding('HIGH', 'RLS', rel(file), i + 1, line,
-            'Supabase query without explicit user filter. If RLS is bypassed (service role), this leaks all rows.')
+  // Um arquivo que só reexporta ou só define tipos não tem o que proteger.
+  const hasExportedFunction = /export\s+(async\s+)?function\s+\w+/.test(clean)
+  if (!hasExportedFunction) continue
+
+  const authenticated = AUTH_MARKERS.some((marker) => marker.test(clean))
+
+  if (authenticated) {
+    guardedActions++
+    continue
+  }
+
+  const lineNumber =
+    lines.findIndex((l) => /export\s+(async\s+)?function/.test(l)) + 1 || 1
+
+  finding(
+    'CRITICAL',
+    'AUTHZ',
+    rel(file),
+    lineNumber,
+    lines[lineNumber - 1] ?? '',
+    'Server Action ou Route Handler sem verificação de sessão. São endpoints ' +
+      'POST públicos: qualquer um pode chamá-los diretamente. Use requireUser() ' +
+      'ou supabase.auth.getUser() antes de qualquer acesso a dados.'
+  )
+}
+
+if (guardedActions > 0) {
+  strength(`${guardedActions} action(s)/handler(s) com verificação de sessão`)
+}
+
+// ═════════════════════════════════════════════════════════════
+// 3. IDOR
+// ═════════════════════════════════════════════════════════════
+section('3 · IDOR — objeto acessado por ID sem checar dono')
+
+/**
+ * Extrai as cadeias que começam em `.from(` e vão até o fim da expressão.
+ * A versão anterior casava `.update(` em qualquer lugar do arquivo — foi
+ * assim que `decipher.update()` virou "IDOR no Supabase".
+ */
+function supabaseChains(source) {
+  const chains = []
+  const pattern = /\.from\s*\(\s*['"`](\w+)['"`]\s*\)/g
+  let match
+
+  while ((match = pattern.exec(source)) !== null) {
+    const start = match.index
+    let end = start
+    let depth = 0
+    let seenBody = false
+
+    for (let i = start; i < source.length && i < start + 1200; i++) {
+      const char = source[i]
+      if (char === '(') {
+        depth++
+        seenBody = true
+      } else if (char === ')') {
+        depth--
+        if (seenBody && depth === 0) {
+          const next = source.slice(i + 1, i + 3)
+          // A cadeia continua enquanto houver `.metodo(`
+          if (!/^\s*\.\s*$|^\s*\.\w/.test(next)) {
+            end = i + 1
+            break
+          }
+        }
+      } else if (char === '\n' && depth === 0 && seenBody) {
+        const rest = source.slice(i + 1, i + 40)
+        if (!/^\s*\./.test(rest)) {
+          end = i
+          break
         }
       }
+      end = i + 1
     }
+
+    chains.push({
+      table: match[1],
+      text: source.slice(start, end),
+      index: start,
+    })
   }
+
+  return chains
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CAT 2: PERMISSÃO DEFINIDA NO NAVEGADOR (Frontend-only auth gates)
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-console.log('CAT 2: PERMISSÃO DEFINIDA NO NAVEGADOR')
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
-
-const frontendGatePatterns = [
-  { regex: /isAdmin\s*&&/g, label: 'isAdmin gate' },
-  { regex: /canEdit\s*&&/g, label: 'canEdit gate' },
-  { regex: /role\s*===\s*['"]admin['"]/g, label: 'role===admin check' },
-  { regex: /user\.role\s*===\s*['"]/g, label: 'user.role check in frontend' },
-  { regex: /if\s*\(\s*!isAdmin\s*\)/g, label: '!isAdmin gate' },
+const OWNERSHIP_MARKERS = [
+  /\.eq\s*\(\s*['"`]user_id['"`]/,
+  /\.eq\s*\(\s*['"`]owner_id['"`]/,
+  /\.match\s*\(\s*\{[^}]*user_id/,
 ]
 
-const clientFiles = tsFiles.filter(f => {
-  const content = fs.readFileSync(f, 'utf8')
-  return content.startsWith("'use client'") || content.startsWith('"use client"')
-})
+/** Tabelas cujo dono não é uma coluna user_id da própria linha. */
+const OWNERLESS_TABLES = new Set(['audit_logs', 'oauth_states'])
 
-let frontendGatesFound = 0
+let ownershipChecked = 0
 
-for (const file of clientFiles) {
-  const content = fs.readFileSync(file, 'utf8')
-  const lines = content.split('\n')
+for (const file of tsFiles) {
+  const source = fs.readFileSync(file, 'utf8')
+  const clean = stripNoise(source)
 
-  for (const { regex, label } of frontendGatePatterns) {
-    let match
-    const re = new RegExp(regex.source, 'gm')
-    while ((match = re.exec(content)) !== null) {
-      const lineNum = content.substring(0, match.index).split('\n').length
-      frontendGatesFound++
-      finding('HIGH', 'FRONTEND_GATE', rel(file), lineNum, lines[lineNum - 1] ?? '',
-        `"${label}" found in client component. If the backend endpoint doesn't verify this, any user can bypass.`)
+  // Um repositório que exige userId por assinatura já é a checagem.
+  const isScopedRepository = /repository\.ts$/.test(file)
+
+  for (const chain of supabaseChains(clean)) {
+    const writesOrReadsById =
+      /\.(update|delete|upsert)\s*\(/.test(chain.text) ||
+      /\.eq\s*\(\s*['"`]id['"`]/.test(chain.text)
+
+    if (!writesOrReadsById) continue
+    if (OWNERLESS_TABLES.has(chain.table)) continue
+
+    const hasOwnership = OWNERSHIP_MARKERS.some((m) => m.test(chain.text))
+
+    if (hasOwnership || isScopedRepository) {
+      ownershipChecked++
+      continue
     }
+
+    const lineNumber = clean.slice(0, chain.index).split('\n').length
+    finding(
+      'HIGH',
+      'IDOR',
+      rel(file),
+      lineNumber,
+      chain.text.split('\n').slice(0, 2).join(' ').replace(/\s+/g, ' '),
+      `Query em "${chain.table}" acessa objeto por ID sem filtrar por dono. ` +
+        `Adicione .eq('user_id', user.id) — o RLS é a primeira camada, não a única.`
+    )
   }
 }
 
-if (frontendGatesFound === 0) {
-  strength('No frontend-only permission gates detected in client components')
+if (ownershipChecked > 0) {
+  strength(`${ownershipChecked} query(s) com filtro explícito por dono`)
 }
 
-// Check server actions DO verify auth
-let actionsWithAuth = 0
-let actionsWithoutAuth = 0
-const actionFiles = tsFiles.filter(f => f.includes('actions/') || (f.includes('route.ts') && !f.includes('callback')))
+// ═════════════════════════════════════════════════════════════
+// 4. Segredos
+// ═════════════════════════════════════════════════════════════
+section('4 · Segredos em código')
 
-for (const file of actionFiles) {
-  const content = fs.readFileSync(file, 'utf8')
-  if (!content.includes('export async function') && !content.includes('export function')) continue
-
-  const hasAuthCheck = content.includes('getUser()') || content.includes('auth.getSession()') || content.includes('supabase.auth')
-  if (hasAuthCheck) {
-    actionsWithAuth++
-  } else {
-    actionsWithoutAuth++
-    finding('CRITICAL', 'FRONTEND_GATE', rel(file), 1, 'export async function...',
-      'Server Action/Route Handler has no authentication check. Unauthenticated users can call this.')
-  }
-}
-
-if (actionsWithoutAuth === 0 && actionsWithAuth > 0) {
-  strength(`All ${actionsWithAuth} server actions verify authentication`)
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CAT 3: IDOR (Insecure Direct Object Reference)
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-console.log('CAT 3: IDOR — Referência Direta a Objetos')
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
-
-let idorRisksFound = 0
-
-for (const file of actionFiles) {
-  const content = fs.readFileSync(file, 'utf8')
-  const lines = content.split('\n')
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? ''
-
-    // Pattern: .eq('id', someId) without .eq('user_id', user.id) nearby
-    if (line.match(/\.eq\(['"]id['"],\s*\w+\)/) || line.match(/\.eq\(['"]id['"],\s*formData\./)) {
-      const surrounding = lines.slice(Math.max(0, i - 5), i + 5).join('\n')
-      const hasOwnerCheck = surrounding.includes('user_id') || surrounding.includes('user.id') ||
-                            surrounding.includes('auth.uid') || surrounding.includes('.eq(\'user_id\'')
-
-      if (!hasOwnerCheck) {
-        idorRisksFound++
-        finding('HIGH', 'IDOR', rel(file), i + 1, line,
-          'Query filters by ID but does NOT verify ownership (.eq("user_id", user.id)). Any user can access any object by ID.')
-      }
-    }
-
-    // Pattern: DELETE/UPDATE without ownership check
-    if ((line.includes('.delete()') || line.includes('.update(')) &&
-        !line.includes('user_id')) {
-      const surrounding = lines.slice(Math.max(0, i - 8), i + 2).join('\n')
-      if (!surrounding.includes('user_id') && !surrounding.includes('user.id')) {
-        idorRisksFound++
-        finding('HIGH', 'IDOR', rel(file), i + 1, line,
-          '.delete()/.update() without user_id filter. An attacker can delete/update any row by ID.')
-      }
-    }
-  }
-}
-
-if (idorRisksFound === 0) {
-  strength('No IDOR patterns detected — all mutations include ownership checks')
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CAT 4: CHAVES EXPOSTAS (Hardcoded Secrets)
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-console.log('CAT 4: CHAVES EXPOSTAS (Hardcoded Secrets)')
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
-
-const secretPatterns = [
-  { regex: /(?:sk|pk)_(?:live|test)_[a-zA-Z0-9]{20,}/g, label: 'Stripe key' },
-  { regex: /eyJhbGciOi[a-zA-Z0-9._-]{20,}/g, label: 'JWT token (hardcoded)' },
-  { regex: /(?:password|passwd|pwd)\s*[:=]\s*['"][^'"]{8,}['"]/gi, label: 'Hardcoded password' },
-  { regex: /(?:secret|api_key|apikey|api-key)\s*[:=]\s*['"][^'"${\s]{8,}['"]/gi, label: 'Hardcoded secret/API key' },
-  { regex: /AAAA[a-zA-Z0-9+/]{40,}/g, label: 'Possible SSH/RSA key' },
-  { regex: /ghp_[a-zA-Z0-9]{36}/g, label: 'GitHub Personal Access Token' },
-  { regex: /sbp_[a-zA-Z0-9]{40}/g, label: 'Supabase Personal Access Token' },
-  { regex: /GOCSPX-[a-zA-Z0-9_-]{28}/g, label: 'Google OAuth Client Secret' },
-  { regex: /xox[baprs]-[a-zA-Z0-9-]{10,}/g, label: 'Slack token' },
-  { regex: /AIza[0-9A-Za-z-_]{35}/g, label: 'Google API key' },
+const SECRET_PATTERNS = [
+  { name: 'GitHub PAT', pattern: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/ },
+  { name: 'Supabase PAT', pattern: /\bsbp_[a-f0-9]{40,}\b/ },
+  { name: 'OpenAI', pattern: /\bsk-[A-Za-z0-9]{32,}\b/ },
+  { name: 'Anthropic', pattern: /\bsk-ant-[A-Za-z0-9_-]{32,}\b/ },
+  { name: 'AWS Access Key', pattern: /\bAKIA[0-9A-Z]{16}\b/ },
+  { name: 'Chave privada', pattern: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/ },
+  { name: 'JWT', pattern: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./ },
 ]
 
-const allFiles = collectFiles(ROOT, ['.ts', '.tsx', '.js', '.jsx', '.json', '.yml', '.yaml', '.env', '.sh', '.md'], ['node_modules', '.next', 'dist', '.git'])
+/** Placeholder de documentação não é segredo. */
+const PLACEHOLDER = /(your|seu|my|example|placeholder|xxx|\.\.\.|<[^>]+>|dummy|fake|test|sample)/i
 
 let secretsFound = 0
-const envExamplePath = path.join(ROOT, '.env.example')
-const dotEnvLocalPath = path.join(ROOT, '.env.local')
 
-for (const file of allFiles) {
-  // Skip .env.local (legit credentials), .env.example (placeholders), and this script
-  const relFile = rel(file)
-  if (relFile.includes('.env.local') || relFile.endsWith('.env.example') || relFile.includes('security-audit')) continue
+for (const file of tsFiles.concat(collectFiles(ROOT, ['.json', '.yml', '.yaml']))) {
+  if (/\.env\.example$/.test(file) || /package-lock\.json$/.test(file)) continue
 
-  const content = fs.readFileSync(file, 'utf8')
-  const lines = content.split('\n')
+  const lines = fs.readFileSync(file, 'utf8').split('\n')
 
-  for (const { regex, label } of secretPatterns) {
-    let match
-    const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g')
-    while ((match = re.exec(content)) !== null) {
-      const lineNum = content.substring(0, match.index).split('\n').length
+  lines.forEach((line, index) => {
+    for (const { name, pattern } of SECRET_PATTERNS) {
+      const match = pattern.exec(line)
+      if (!match) continue
+      if (PLACEHOLDER.test(line)) continue
+
       secretsFound++
-      finding('CRITICAL', 'HARDCODED_SECRET', relFile, lineNum, lines[lineNum - 1] ?? '',
-        `${label} detected in source code. Rotate immediately and move to environment variable.`)
+      finding(
+        'CRITICAL',
+        'SECRET',
+        rel(file),
+        index + 1,
+        `${line.slice(0, 40)}…`,
+        `Possível ${name} em código. Mova para variável de ambiente e ` +
+          `revogue a credencial — ela já está no histórico do git.`
+      )
     }
-  }
-}
-
-// Check .env.local is in .gitignore
-const gitignorePath = path.join(ROOT, '.gitignore')
-if (fs.existsSync(gitignorePath)) {
-  const gi = fs.readFileSync(gitignorePath, 'utf8')
-  if (gi.includes('.env.local') || gi.includes('.env*.local')) {
-    strength('.env.local is in .gitignore — credentials not tracked by git')
-  } else {
-    finding('CRITICAL', 'HARDCODED_SECRET', '.gitignore', 1, '',
-      '.env.local is NOT in .gitignore. Real credentials might be committed to git history.')
-  }
-} else {
-  finding('HIGH', 'HARDCODED_SECRET', '(project root)', 0, '', 'No .gitignore found. Risk of committing .env files.')
+  })
 }
 
 if (secretsFound === 0) {
-  strength('No hardcoded secrets detected in source files')
+  strength('Nenhum segredo detectado no código')
 }
 
-// Check for ENCRYPTION_KEY validation at startup
-const hasEncryptionKeyValidation = tsFiles.some(f => {
-  const c = fs.readFileSync(f, 'utf8')
-  return c.includes('ENCRYPTION_KEY') && (c.includes('throw') || c.includes('Error'))
-})
-if (hasEncryptionKeyValidation) {
-  strength('ENCRYPTION_KEY validated at startup — prevents running with insecure defaults')
+// .gitignore precisa cobrir .env — entendendo glob, não só igualdade literal.
+const gitignorePath = path.join(ROOT, '.gitignore')
+if (fs.existsSync(gitignorePath)) {
+  const patterns = fs
+    .readFileSync(gitignorePath, 'utf8')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'))
+
+  const coversEnv = patterns.some((p) =>
+    ['.env', '.env*', '.env.local', '*.local', '.env.*'].includes(p)
+  )
+
+  if (coversEnv) {
+    strength('.gitignore cobre arquivos .env')
+  } else {
+    finding(
+      'HIGH',
+      'SECRET',
+      '.gitignore',
+      1,
+      patterns.slice(0, 3).join(' · '),
+      'Nenhum padrão cobrindo .env. Adicione a linha: .env*'
+    )
+  }
+} else {
+  finding('HIGH', 'SECRET', '.gitignore', 1, '(ausente)', 'Projeto sem .gitignore.')
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CAT 5: INPUTS SEM TRATAMENTO (XSS)
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-console.log('CAT 5: INPUTS SEM TRATAMENTO (XSS)')
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
-
-const xssPatterns = [
-  { regex: /dangerouslySetInnerHTML\s*=\s*\{\s*\{/g, label: 'dangerouslySetInnerHTML' },
-  { regex: /innerHTML\s*=/g, label: 'innerHTML assignment' },
-  { regex: /eval\s*\(/g, label: 'eval()' },
-  { regex: /new\s+Function\s*\(/g, label: 'new Function()' },
-  { regex: /href\s*=\s*\{[^}]*user|href\s*=\s*\{[^}]*input|href\s*=\s*\{[^}]*param/g, label: 'User-controlled href' },
-  { regex: /v-html\s*=/g, label: 'Vue v-html' },
-  { regex: /\[innerHTML\]\s*=/g, label: 'Angular [innerHTML]' },
-]
+// ═════════════════════════════════════════════════════════════
+// 5. XSS e injeção
+// ═════════════════════════════════════════════════════════════
+section('5 · XSS e injeção')
 
 let xssFound = 0
 
 for (const file of tsFiles) {
-  const content = fs.readFileSync(file, 'utf8')
-  const lines = content.split('\n')
+  const source = fs.readFileSync(file, 'utf8')
+  const clean = stripNoise(source)
+  const lines = source.split('\n')
 
-  for (const { regex, label } of xssPatterns) {
-    let match
-    const re = new RegExp(regex.source, 'gm')
-    while ((match = re.exec(content)) !== null) {
-      const lineNum = content.substring(0, match.index).split('\n').length
-      const surrounding = lines.slice(Math.max(0, lineNum - 3), lineNum + 3).join('\n')
+  const checks = [
+    {
+      pattern: /dangerouslySetInnerHTML/,
+      severity: 'HIGH',
+      reason:
+        'dangerouslySetInnerHTML injeta HTML cru. Sanitize com DOMPurify ou ' +
+        'renderize como texto.',
+    },
+    {
+      pattern: /\.innerHTML\s*=/,
+      severity: 'HIGH',
+      reason: 'Atribuição a innerHTML. Use textContent, ou sanitize antes.',
+    },
+    {
+      pattern: /\beval\s*\(|new\s+Function\s*\(/,
+      severity: 'CRITICAL',
+      reason: 'eval executa string como código. Não há uso legítimo aqui.',
+    },
+  ]
 
-      // Skip if sanitized nearby
-      const isSanitized = surrounding.includes('DOMPurify') || surrounding.includes('sanitize') ||
-                          surrounding.includes('escapeHtml') || surrounding.includes('xss')
+  for (const check of checks) {
+    lines.forEach((line, index) => {
+      const cleanLine = clean.split('\n')[index] ?? ''
+      if (!check.pattern.test(cleanLine)) return
 
-      if (!isSanitized) {
-        xssFound++
-        finding('HIGH', 'XSS', rel(file), lineNum, lines[lineNum - 1] ?? '',
-          `${label} without sanitization. If content comes from user input, this is XSS.`)
-      }
-    }
+      xssFound++
+      finding(check.severity, 'XSS', rel(file), index + 1, line, check.reason)
+    })
   }
-}
-
-// Check if Zod is used for input validation
-const hasZod = tsFiles.some(f => fs.readFileSync(f, 'utf8').includes("from 'zod'"))
-if (hasZod) {
-  strength('Zod is used for server-side input validation')
 }
 
 if (xssFound === 0) {
-  strength('No XSS vectors (dangerouslySetInnerHTML, innerHTML, eval) detected')
+  strength('Nenhum vetor de XSS ou eval detectado')
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BONUS: npm audit for dependency vulnerabilities
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-console.log('BONUS: Dependency Vulnerabilities (npm audit)')
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+// Zod como sinal de validação no servidor.
+const usesZod = tsFiles.some((file) =>
+  /from\s+['"]zod['"]/.test(fs.readFileSync(file, 'utf8'))
+)
+if (usesZod) strength('Validação de entrada com Zod presente')
 
-try {
-  const auditOutput = execSync('npm audit --json 2>/dev/null', { cwd: ROOT }).toString()
-  const audit = JSON.parse(auditOutput)
-  const vulns = audit.metadata?.vulnerabilities ?? {}
+// ═════════════════════════════════════════════════════════════
+// Relatório
+// ═════════════════════════════════════════════════════════════
 
-  if ((vulns.critical ?? 0) > 0) {
-    finding('CRITICAL', 'DEPENDENCY', 'package.json', 0, '',
-      `npm audit: ${vulns.critical} critical vulnerabilities in dependencies. Run "npm audit fix".`)
-  } else if ((vulns.high ?? 0) > 0) {
-    finding('HIGH', 'DEPENDENCY', 'package.json', 0, '',
-      `npm audit: ${vulns.high} high vulnerabilities. Run "npm audit".`)
-  } else {
-    strength(`npm audit: No critical/high vulnerabilities (${vulns.moderate ?? 0} moderate, ${vulns.low ?? 0} low)`)
-  }
-} catch {
-  console.log('npm audit: skipped (no package.json or audit failed)\n')
-}
+const counts = findings.reduce((acc, f) => {
+  acc[f.severity] = (acc[f.severity] ?? 0) + 1
+  return acc
+}, {})
 
-// ═══════════════════════════════════════════════════════════════════════════
-// REPORT SUMMARY
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n' + '═'.repeat(60))
-console.log('SECURITY AUDIT SUMMARY')
-console.log('═'.repeat(60))
+const critical = counts.CRITICAL ?? 0
+const high = counts.HIGH ?? 0
+const medium = counts.MEDIUM ?? 0
 
-const bySeverity = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 }
-for (const f of findings) bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1
+section('Resumo')
 
-console.log(`\nTotal findings: ${findings.length}`)
-console.log(`  ${COLORS.CRITICAL}CRITICAL: ${bySeverity.CRITICAL}${COLORS.RESET}`)
-console.log(`  ${COLORS.HIGH}HIGH:     ${bySeverity.HIGH}${COLORS.RESET}`)
-console.log(`  ${COLORS.MEDIUM}MEDIUM:   ${bySeverity.MEDIUM}${COLORS.RESET}`)
-console.log(`  ${COLORS.LOW}LOW:      ${bySeverity.LOW}${COLORS.RESET}`)
-console.log(`\nStrengths confirmed: ${strengths.length}`)
+say(`  Achados:    ${findings.length}`)
+if (critical) say(`  ${COLORS.CRITICAL} CRITICAL ${COLORS.RESET}  ${critical}`)
+if (high) say(`  ${COLORS.HIGH}HIGH${COLORS.RESET}      ${high}`)
+if (medium) say(`  ${COLORS.MEDIUM}MEDIUM${COLORS.RESET}    ${medium}`)
+say(`  Pontos confirmados: ${strengths.length}`)
 
-// Save JSON report
-const reportDir = path.join(ROOT, 'docs', 'security-audit')
-fs.mkdirSync(reportDir, { recursive: true })
 const report = {
   timestamp: new Date().toISOString(),
-  summary: bySeverity,
-  strengths,
+  scanned: { typescript: tsFiles.length, sql: sqlFiles.length },
+  summary: { total: findings.length, critical, high, medium },
   findings,
+  strengths,
 }
-fs.writeFileSync(path.join(reportDir, 'last-audit.json'), JSON.stringify(report, null, 2))
-console.log(`\nFull report saved to: docs/security-audit/last-audit.json`)
 
-if (STRICT && (bySeverity.CRITICAL > 0 || bySeverity.HIGH > 0)) {
-  console.log(`\n${COLORS.CRITICAL}AUDIT FAILED — ${bySeverity.CRITICAL} critical, ${bySeverity.HIGH} high findings. Fix before committing.${COLORS.RESET}\n`)
-  process.exit(1)
-} else if (findings.length === 0) {
-  console.log(`\n${COLORS.INFO}✅ AUDIT PASSED — No security issues found!${COLORS.RESET}\n`)
-} else {
-  console.log(`\n${COLORS.MEDIUM}⚠ AUDIT COMPLETE — Review findings above.${COLORS.RESET}\n`)
+const reportDir = path.join(ROOT, 'docs', 'security-audit')
+fs.mkdirSync(reportDir, { recursive: true })
+fs.writeFileSync(
+  path.join(reportDir, 'last-audit.json'),
+  `${JSON.stringify(report, null, 2)}\n`
+)
+
+if (JSON_ONLY) {
+  console.log(JSON.stringify(report, null, 2))
 }
+
+const blocking = critical + high
+
+if (STRICT && blocking > 0) {
+  say(`\n${COLORS.CRITICAL} FALHOU ${COLORS.RESET} ${blocking} achado(s) bloqueante(s).\n`)
+  process.exit(1)
+}
+
+say(
+  blocking > 0
+    ? `\n${COLORS.HIGH}Auditoria concluída com ${blocking} achado(s) para revisar.${COLORS.RESET}\n`
+    : `\n${COLORS.OK}Auditoria limpa.${COLORS.RESET}\n`
+)

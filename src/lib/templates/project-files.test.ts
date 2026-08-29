@@ -1,0 +1,267 @@
+import { describe, it, expect } from 'vitest'
+import { buildProjectFiles, CI_INVOKED_SCRIPTS } from './project-files'
+import { inferTablesFromMigration, generateRlsTest } from './rls-tests'
+
+/**
+ * Testes de coerência do template.
+ *
+ * Existem por causa de um bug real: o CI gerado rodava `npm run test` e
+ * `npm run test:e2e`, que não existiam no package.json gerado, e o job de
+ * build declarava `needs` nesses jobs. Todo projeto criado nascia com o CI
+ * vermelho e nunca fazia deploy — e nada apontava isso.
+ *
+ * Estas asserções são o gate que impede a regressão.
+ */
+
+const files = buildProjectFiles({
+  projectName: 'meu-app',
+  description: 'App de teste',
+})
+
+function file(path: string): string {
+  const entry = files.find((f) => f.path === path)
+  if (!entry) {
+    throw new Error(
+      `Arquivo "${path}" não está no manifesto. Gerados: ${files
+        .map((f) => f.path)
+        .join(', ')}`
+    )
+  }
+  return entry.content
+}
+
+const packageJson = JSON.parse(file('package.json')) as {
+  scripts: Record<string, string>
+  dependencies: Record<string, string>
+  devDependencies: Record<string, string>
+}
+
+describe('manifesto — integridade', () => {
+  it('não gera caminhos duplicados', () => {
+    const paths = files.map((f) => f.path)
+    expect(new Set(paths).size).toBe(paths.length)
+  })
+
+  it('nenhum arquivo sai vazio', () => {
+    const empty = files.filter((f) => f.content.trim().length === 0)
+    expect(empty.map((f) => f.path)).toEqual([])
+  })
+
+  it('todo caminho é relativo e normalizado', () => {
+    for (const entry of files) {
+      expect(entry.path).not.toMatch(/^\//)
+      expect(entry.path).not.toContain('..')
+    }
+  })
+})
+
+describe('CI — todo script invocado existe', () => {
+  const ci = file('.github/workflows/ci.yml')
+
+  it.each(CI_INVOKED_SCRIPTS)(
+    'o script "%s" está declarado no package.json',
+    (script) => {
+      expect(Object.keys(packageJson.scripts)).toContain(script)
+    }
+  )
+
+  it('todo `npm run X` do CI corresponde a um script declarado', () => {
+    const invoked = [...ci.matchAll(/npm run ([\w:]+)/g)].map((m) => m[1])
+    const declared = Object.keys(packageJson.scripts)
+
+    const missing = invoked.filter(
+      (script) => script && !declared.includes(script)
+    )
+    expect(missing).toEqual([])
+  })
+
+  it('o job de build só depende de jobs que existem', () => {
+    const jobNames = [...ci.matchAll(/^ {2}([\w-]+):$/gm)].map((m) => m[1])
+    const needs = [...ci.matchAll(/needs:\s*\[([^\]]+)\]/g)].flatMap((m) =>
+      (m[1] ?? '').split(',').map((n) => n.trim())
+    )
+
+    const dangling = needs.filter((need) => !jobNames.includes(need))
+    expect(dangling).toEqual([])
+  })
+})
+
+describe('dependências — tudo que é importado está instalado', () => {
+  const allDeps = {
+    ...packageJson.dependencies,
+    ...packageJson.devDependencies,
+  }
+
+  it.each([
+    ['vitest', 'vitest.config.ts'],
+    ['@vitejs/plugin-react', 'vitest.config.ts'],
+    ['@playwright/test', 'playwright.config.ts'],
+    ['@testing-library/jest-dom', 'vitest.setup.ts'],
+    ['@vitest/coverage-v8', 'vitest.config.ts'],
+    ['@tailwindcss/postcss', 'postcss.config.mjs'],
+  ])('%s está instalado (usado em %s)', (dependency) => {
+    expect(Object.keys(allDeps)).toContain(dependency)
+  })
+
+  it('o config de cobertura exige um provider instalado', () => {
+    expect(file('vitest.config.ts')).toContain("provider: 'v8'")
+    expect(Object.keys(allDeps)).toContain('@vitest/coverage-v8')
+  })
+
+  it('não declara dependência de Tailwind v3 junto do v4', () => {
+    expect(Object.keys(allDeps)).not.toContain('autoprefixer')
+    expect(allDeps.tailwindcss).toMatch(/^\^4/)
+  })
+})
+
+describe('cobertura — o threshold falha o build', () => {
+  it('define thresholds, não só reporter', () => {
+    const config = file('vitest.config.ts')
+    expect(config).toContain('thresholds')
+    expect(config).toMatch(/lines:\s*\d+/)
+  })
+})
+
+describe('segurança — o que o SECURITY.md promete existe', () => {
+  it('gera next.config.ts', () => {
+    expect(() => file('next.config.ts')).not.toThrow()
+  })
+
+  it('a CSP é real, não só mencionada', () => {
+    const config = file('next.config.ts')
+    expect(config).toContain('Content-Security-Policy')
+    expect(config).toContain("default-src 'self'")
+    expect(config).toContain("frame-ancestors 'none'")
+  })
+
+  it('o SECURITY.md aponta para o arquivo que de fato existe', () => {
+    const doc = file('SECURITY.md')
+    const referenced = doc.match(/`(next\.config\.[tj]s)`/)?.[1]
+    if (referenced) {
+      expect(() => file(referenced)).not.toThrow()
+    }
+  })
+
+  it('a migration inicial ativa RLS em toda tabela criada', () => {
+    const sql = file('supabase/migrations/00000000000000_init.sql')
+    const created = [
+      ...sql.matchAll(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)/gi),
+    ].map((m) => m[1])
+
+    expect(created.length).toBeGreaterThan(0)
+
+    for (const table of created) {
+      expect(sql).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`)
+    }
+  })
+
+  it('nenhuma policy usa USING (true) ou WITH CHECK (true)', () => {
+    // Comentários explicam justamente o que NÃO fazer; asserção sobre prosa
+    // acusaria a própria documentação.
+    const sql = file('supabase/migrations/00000000000000_init.sql')
+      .split('\n')
+      .map((line) => line.replace(/--.*$/, ''))
+      .join('\n')
+
+    expect(sql).not.toMatch(/USING\s*\(\s*true\s*\)/i)
+    expect(sql).not.toMatch(/WITH CHECK\s*\(\s*true\s*\)/i)
+  })
+
+  it('o .gitignore cobre .env mas preserva o exemplo', () => {
+    const ignore = file('.gitignore')
+    expect(ignore).toContain('.env*')
+    expect(ignore).toContain('!.env.example')
+  })
+
+  it('o .env.example não prefixa a service role com NEXT_PUBLIC_', () => {
+    expect(file('.env.example')).not.toMatch(/NEXT_PUBLIC_SUPABASE_SERVICE/)
+  })
+})
+
+describe('E2E — o smoke test corresponde ao app gerado', () => {
+  it('o título que o teste espera é o que o layout define', () => {
+    const layout = file('app/layout.tsx')
+    const spec = file('e2e/smoke.spec.ts')
+
+    const layoutTitle = layout.match(/title:\s*'([^']+)'/)?.[1]
+    expect(layoutTitle).toBe('meu-app')
+    expect(spec).toContain(`toHaveTitle('${layoutTitle}')`)
+  })
+
+  it('o h1 que o teste procura existe na página', () => {
+    expect(file('app/page.tsx')).toContain('meu-app')
+    expect(file('e2e/smoke.spec.ts')).toContain('level: 1')
+  })
+
+  it('não sobrou o placeholder do create-next-app', () => {
+    expect(file('e2e/smoke.spec.ts')).not.toContain('Create Next App')
+  })
+})
+
+describe('geração de teste de RLS', () => {
+  const sql = `
+    CREATE TABLE posts (
+      id UUID PRIMARY KEY,
+      user_id UUID REFERENCES auth.users(id) NOT NULL,
+      title TEXT NOT NULL
+    );
+    CREATE TABLE settings (
+      id UUID PRIMARY KEY,
+      key TEXT NOT NULL
+    );
+  `
+
+  it('detecta tabela com coluna de dono', () => {
+    const tables = inferTablesFromMigration(sql)
+    expect(tables.map((t) => t.name)).toEqual(['posts'])
+    expect(tables[0]?.ownerColumn).toBe('user_id')
+  })
+
+  it('ignora tabela sem dono — não há isolamento por linha a provar', () => {
+    expect(inferTablesFromMigration(sql).map((t) => t.name)).not.toContain(
+      'settings'
+    )
+  })
+
+  it('detecta colunas NOT NULL para semear a linha de teste', () => {
+    const [posts] = inferTablesFromMigration(sql)
+    expect(posts?.requiredColumns?.map((c) => c.name)).toContain('title')
+  })
+
+  it('o teste gerado cobre as cinco provas de isolamento', () => {
+    const generated = generateRlsTest(inferTablesFromMigration(sql))
+
+    expect(generated).toContain('o dono lê a própria linha')
+    expect(generated).toContain('outro usuário autenticado NÃO lê a linha')
+    expect(generated).toContain('a anon key NÃO lê a linha')
+    expect(generated).toContain('outro usuário NÃO consegue atualizar a linha')
+    expect(generated).toContain('outro usuário NÃO consegue deletar a linha')
+  })
+
+  it('o template já inclui o teste de RLS da tabela inicial', () => {
+    expect(file('supabase/rls.rls.test.ts')).toContain("describe('RLS · profiles'")
+  })
+
+  it('o CI tem um job que roda os testes de RLS', () => {
+    const ci = file('.github/workflows/ci.yml')
+    expect(ci).toContain('npm run test:rls')
+    expect(ci).toContain('supabase/setup-cli')
+  })
+})
+
+describe('documentação — sem promessa vazia', () => {
+  it('o README só cita comandos que existem', () => {
+    const readme = file('README.md')
+    const cited = [...readme.matchAll(/`npm run ([\w:]+)`/g)].map((m) => m[1])
+    const declared = Object.keys(packageJson.scripts)
+
+    const missing = cited.filter((script) => script && !declared.includes(script))
+    expect(missing).toEqual([])
+  })
+
+  it('gera as regras que o MCP lê remotamente', () => {
+    expect(() => file('agents.md')).not.toThrow()
+    expect(() => file('CLAUDE.md')).not.toThrow()
+    expect(() => file('SECURITY.md')).not.toThrow()
+  })
+})

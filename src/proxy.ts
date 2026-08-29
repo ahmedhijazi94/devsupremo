@@ -18,7 +18,7 @@ function rateLimit(key: string, limit: number, windowMs: number): boolean {
   return true
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(

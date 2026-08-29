@@ -67,6 +67,10 @@ export interface Database {
           preview_url: string | null
           status: 'active' | 'creating' | 'error' | 'archived'
           is_active: boolean
+          db_password_encrypted: string | null
+          vercel_project_id: string | null
+          default_branch: string
+          template_version: string | null
           created_at: string
           updated_at: string
         }
@@ -89,6 +93,11 @@ export interface Database {
           pipeline_status: 'pending' | 'running' | 'passed' | 'failed' | null
           pipeline_log: Json | null
           mcp_used: string | null
+          branch: string | null
+          pr_number: number | null
+          pr_url: string | null
+          checks_url: string | null
+          preview_url: string | null
           created_at: string
         }
         Insert: Omit<
@@ -96,6 +105,43 @@ export interface Database {
           'id' | 'created_at'
         >
         Update: Partial<Database['public']['Tables']['messages']['Insert']>
+      }
+      mcp_tokens: {
+        Row: {
+          id: string
+          user_id: string
+          name: string
+          token_hash: string
+          token_prefix: string
+          last_used_at: string | null
+          expires_at: string | null
+          revoked_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: Omit<
+          Database['public']['Tables']['mcp_tokens']['Row'],
+          'id' | 'created_at' | 'updated_at'
+        >
+        Update: Partial<Database['public']['Tables']['mcp_tokens']['Insert']>
+      }
+      oauth_states: {
+        Row: {
+          id: string
+          user_id: string
+          state: string
+          provider: 'github' | 'supabase'
+          project_id: string | null
+          redirect_to: string | null
+          consumed_at: string | null
+          expires_at: string
+          created_at: string
+        }
+        Insert: Omit<
+          Database['public']['Tables']['oauth_states']['Row'],
+          'id' | 'created_at'
+        >
+        Update: Partial<Database['public']['Tables']['oauth_states']['Insert']>
       }
       mcp_configs: {
         Row: {
@@ -148,3 +194,5 @@ export type Project = Database['public']['Tables']['projects']['Row']
 export type Message = Database['public']['Tables']['messages']['Row']
 export type McpConfig = Database['public']['Tables']['mcp_configs']['Row']
 export type AuditLog = Database['public']['Tables']['audit_logs']['Row']
+export type McpToken = Database['public']['Tables']['mcp_tokens']['Row']
+export type OAuthState = Database['public']['Tables']['oauth_states']['Row']

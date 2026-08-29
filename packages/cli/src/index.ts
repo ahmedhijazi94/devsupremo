@@ -1,107 +1,147 @@
 #!/usr/bin/env node
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import https from "https";
-import http from "http";
+/**
+ * Ponte stdio → HTTP para o MCP do Supremo.
+ *
+ * Existe só para clientes que ainda não falam MCP remoto. Ela é um proxy
+ * transparente de JSON-RPC: não conhece nenhuma ferramenta, não tem lógica
+ * de negócio, e nada sensível mora aqui. O servidor continua sendo a única
+ * fonte da verdade — inclusive da lista de ferramentas, que por isso nunca
+ * sai de sincronia com o Supremo.
+ *
+ * Configuração:
+ *   SUPREMO_URL    endpoint MCP (padrão: https://supremo.app/api/mcp)
+ *   SUPREMO_TOKEN  token pessoal gerado em /mcps
+ */
 
-const SUPREMO_API = process.env.SUPREMO_API_URL || "http://localhost:3000/api/mcp";
+import { createInterface } from 'node:readline'
 
-const server = new Server({ name: "supremo-mcp", version: "2.0.0" }, { capabilities: { tools: {} } });
+const DEFAULT_URL = 'https://supremo.app/api/mcp'
 
-async function callSupremoAPI(action: string, params: any = {}, projectId?: string) {
-  const url = new URL(SUPREMO_API);
-  const reqModule = url.protocol === 'https:' ? https : http;
-  
-  return new Promise((resolve, reject) => {
-    const req = reqModule.request(SUPREMO_API, {
+const endpoint = process.env.SUPREMO_URL ?? DEFAULT_URL
+const token = process.env.SUPREMO_TOKEN
+
+function logStderr(message: string): void {
+  process.stderr.write(`[supremo] ${message}\n`)
+}
+
+if (!token) {
+  logStderr(
+    'SUPREMO_TOKEN não definido. Gere um token em /mcps e exporte-o antes de rodar a ponte.'
+  )
+  process.exit(1)
+}
+
+/** Erro de JSON-RPC devolvido ao cliente, preservando o id da requisição. */
+function protocolError(
+  id: unknown,
+  code: number,
+  message: string
+): Record<string, unknown> {
+  return { jsonrpc: '2.0', id: id ?? null, error: { code, message } }
+}
+
+function write(payload: unknown): void {
+  process.stdout.write(`${JSON.stringify(payload)}\n`)
+}
+
+async function forward(message: Record<string, unknown>): Promise<void> {
+  const id = message.id
+
+  try {
+    const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch(e) {
-          reject(new Error('Invalid JSON response from Supremo API'));
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(message),
+    })
+
+    // Notificações não têm id e não esperam resposta.
+    if (id === undefined) return
+
+    if (response.status === 401) {
+      write(
+        protocolError(
+          id,
+          -32001,
+          'Token do Supremo inválido, revogado ou expirado. Gere outro em /mcps.'
+        )
+      )
+      return
+    }
+
+    const body = await response.text()
+
+    if (!response.ok) {
+      write(
+        protocolError(
+          id,
+          -32603,
+          `Supremo respondeu ${response.status}: ${body.slice(0, 400)}`
+        )
+      )
+      return
+    }
+
+    if (!body.trim()) return
+
+    // O endpoint pode responder JSON puro ou um frame SSE.
+    const contentType = response.headers.get('content-type') ?? ''
+    if (contentType.includes('text/event-stream')) {
+      for (const line of body.split('\n')) {
+        const trimmed = line.trim()
+        if (trimmed.startsWith('data:')) {
+          const data = trimmed.slice(5).trim()
+          if (data) process.stdout.write(`${data}\n`)
         }
-      });
-    });
-    req.on('error', reject);
-    req.write(JSON.stringify({ projectId, action, params }));
-    req.end();
-  });
-}
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "supremo_list_projects",
-      description: "Lista todos os projetos criados no Supremo. Retorna o ID e nome do repositório.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "supabase_execute_sql",
-      description: "Execute a SQL query against the linked Supabase database.",
-      inputSchema: {
-        type: "object",
-        properties: { 
-          projectId: { type: "string" },
-          query: { type: "string" } 
-        },
-        required: ["projectId", "query"],
-      },
-    },
-    {
-      name: "github_read_file",
-      description: "Read a file directly from the linked GitHub repository.",
-      inputSchema: {
-        type: "object",
-        properties: { 
-          projectId: { type: "string" },
-          path: { type: "string" } 
-        },
-        required: ["projectId", "path"],
-      },
-    },
-    {
-      name: "github_write_file",
-      description: "Create or update a file directly in the linked GitHub repository.",
-      inputSchema: {
-        type: "object",
-        properties: { 
-          projectId: { type: "string" },
-          path: { type: "string" }, 
-          content: { type: "string" },
-          message: { type: "string", description: "Commit message" }
-        },
-        required: ["projectId", "path", "content"],
-      },
+      }
+      return
     }
-  ],
-}));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const name = request.params.name;
-  const args = request.params.arguments || {};
-  
-  if (['supremo_list_projects', 'supabase_execute_sql', 'github_read_file', 'github_write_file'].includes(name)) {
-    try {
-      const result: any = await callSupremoAPI(name, args, (args as any).projectId);
-      if (result.error) throw new Error(result.error);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e: any) {
-      return { content: [{ type: "text", text: `❌ Erro: ${e.message}` }] };
-    }
+    process.stdout.write(`${body.trim()}\n`)
+  } catch (error) {
+    if (id === undefined) return
+    write(
+      protocolError(
+        id,
+        -32603,
+        `Falha ao falar com o Supremo em ${endpoint}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+    )
   }
-
-  throw new Error(`Tool not found: ${name}`);
-});
-
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
 }
 
-main().catch(console.error);
+function main(): void {
+  const rl = createInterface({ input: process.stdin, terminal: false })
+
+  // Requisições são encaminhadas em ordem de chegada; o await em série
+  // preserva a ordem das respostas, que alguns clientes assumem.
+  let queue: Promise<void> = Promise.resolve()
+
+  rl.on('line', (line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return
+
+    let message: Record<string, unknown>
+    try {
+      message = JSON.parse(trimmed) as Record<string, unknown>
+    } catch {
+      write(protocolError(null, -32700, 'JSON inválido recebido via stdin.'))
+      return
+    }
+
+    queue = queue.then(() => forward(message))
+  })
+
+  rl.on('close', () => {
+    void queue.then(() => process.exit(0))
+  })
+
+  logStderr(`ponte ativa → ${endpoint}`)
+}
+
+main()

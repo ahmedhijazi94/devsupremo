@@ -1,548 +1,512 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
-import { decryptToken } from '@/lib/crypto'
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
-import { z } from 'zod'
-import { getSecurityAuditScriptContent, getCiWorkflowContent, getPackageJsonContent, getVitestConfigContent, getPlaywrightConfigContent, getVercelJsonContent, getTailwindConfigContent, getPostcssConfigContent, getGlobalsCssContent, getUtilsTsContent, getSupabaseClientContent, getSupabaseServerContent, getSupabaseMiddlewareContent, getNextMiddlewareContent } from '@/lib/templates/project-files'
+import { randomBytes } from 'node:crypto'
+import { requireUser, toActionError } from '@/lib/auth'
+import { decryptToken, encryptToken } from '@/lib/crypto'
+import {
+  buildProjectFiles,
+  TEMPLATE_VERSION,
+  type FileEntry,
+} from '@/lib/templates/project-files'
 
-const createProjectSchema = z.object({
-  name: z
-    .string()
-    .min(2, 'Nome muito curto.')
-    .max(50, 'Nome muito longo.')
-    .regex(/^[a-z0-9-]+$/, 'Apenas letras minúsculas, números e hífens.'),
-  description: z.string().max(200).optional(),
-  githubAccountId: z.string().uuid('Selecione uma conta GitHub.'),
-  supabaseAccountId: z.string().uuid().optional(),
-  stack: z.enum(['nextjs', 'react', 'node']).default('nextjs'),
-})
+/**
+ * Provisiona um projeto: cria o repositório, escreve o template completo,
+ * cria o banco Supabase, aplica a migration inicial e protege a branch.
+ *
+ * O template é montado por `buildProjectFiles`, cujos testes garantem que o
+ * resultado compila e passa nos próprios gates que ele declara.
+ */
 
-// ─────────────────────────────────────────────────────────────
-// Gera os arquivos base do projeto (agents.md, CLAUDE.md, etc.)
-// ─────────────────────────────────────────────────────────────
-function generateAgentsMd(projectName: string, description: string, stack: string): string {
-  return `# ${projectName} — Context for AI Agents
+const GITHUB_API = 'https://api.github.com'
+const SUPABASE_API = 'https://api.supabase.com'
 
-## Project Overview
-${description || `${projectName} — built with Supremo`}
+/** Checks que precisam passar antes de qualquer merge na branch principal. */
+const REQUIRED_CHECKS = [
+  'Tipos, lint e auditoria',
+  'Testes e cobertura',
+  'Build de produção',
+]
 
-## Stack
-- **Framework:** ${stack === 'nextjs' ? 'Next.js 15 (App Router)' : stack}
-- **Language:** TypeScript (strict mode)
-- **Database:** Supabase PostgreSQL + RLS
-- **Auth:** Supabase Auth
-- **Styling:** Tailwind CSS + shadcn/ui
-
-## Architecture Rules
-- ALL validation on the server — never on the client
-- ALL database tables have RLS enabled
-- NEVER expose service role key to the client
-- NEVER trust client-provided user IDs — always use auth.uid()
-- Server Components by default — Client Components only when needed
-- Server Actions for all mutations
-
-## Security Constraints
-- No role escalation via frontend
-- No direct DB access from client
-- All admin checks via server-side auth
-- Tokens encrypted with AES-256-GCM
-
-## MCP Context
-This project is managed by Supremo. The active MCP reads this file on every session to understand the project context, rules, and current state. When implementing features, always follow the architecture rules above.
-`
+interface GithubRepo {
+  id: number
+  full_name: string
+  default_branch: string
 }
 
-function generateClaudeMd(projectName: string): string {
-  return `# CLAUDE.md — Behavioral Rules for ${projectName}
-
-## What You MUST Always Do
-- Read this file and agents.md at the start of every session
-- Implement features server-side first
-- Enable RLS on every new table you create
-- Write Zod schemas for every input validation
-- Add TypeScript types for every new DB table
-- Use Server Actions for all data mutations
-
-## What You MUST Never Do
-- Add validation logic to client components
-- Use \`any\` type without explicit comment explaining why
-- Create a table without RLS policies
-- Store tokens or secrets in plaintext
-- Trust user input without server-side validation
-- Escalate user roles via frontend logic
-
-## Commit Convention
-- feat: new feature
-- fix: bug fix
-- security: security improvement
-- refactor: code refactor
-- test: test addition/update
-- docs: documentation
-
-## Testing Requirements (before every commit)
-1. TypeScript: \`tsc --noEmit\`
-2. ESLint: \`eslint .\`
-3. Unit Tests: \`npm run test\`
-4. E2E Tests: \`npm run test:e2e\`
-5. Se algum teste falhar, você DEVE corrigi-lo antes de finalizar a resposta.
-4. Build: \`next build\`
-`
-}
-
-function generateSecurityMd(projectName: string): string {
-  return `# SECURITY.md — Security Policy for ${projectName}
-
-## RLS Policy Template
-Every table must have:
-\`\`\`sql
-ALTER TABLE table_name ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "owner_only" ON table_name
-  FOR ALL USING (auth.uid() = user_id);
-\`\`\`
-
-## Forbidden Patterns
-- \`SELECT * FROM table WHERE id = $clientProvidedId\` without auth check
-- Using \`service_role\` key client-side
-- JWT decode client-side for auth decisions
-- \`dangerouslySetInnerHTML\` without sanitization
-- Storing PII in plaintext
-
-## Security Headers
-All configured in next.config.ts:
-- Strict-Transport-Security
-- X-Frame-Options: DENY
-- X-Content-Type-Options: nosniff
-- Content-Security-Policy
-
-## Incident Response
-If a security issue is found:
-1. Do NOT commit the fix directly
-2. Create a \`security/fix-description\` branch
-3. Apply the fix
-4. Run full test pipeline
-5. Request review before merging
-`
-}
-
-function generateReadme(projectName: string, description: string, stack: string): string {
-  return `# ${projectName}
-
-${description || 'Built with Supremo — AI-powered development platform'}
-
-## Stack
-- ${stack === 'nextjs' ? 'Next.js 15 (App Router) + TypeScript' : stack}
-- Supabase (PostgreSQL + Auth + RLS)
-- Tailwind CSS + shadcn/ui
-
-## Security
-- RLS enabled on all tables
-- Server-side validation only (Zod)
-- AES-256-GCM token encryption
-- Security headers configured
-
-## Getting Started
-
-\`\`\`bash
-npm install
-cp .env.example .env.local
-# Fill in your Supabase credentials
-npm run dev
-\`\`\`
-
-## Architecture
-See [agents.md](./agents.md) for full project context and rules.
-
----
-*Created with [Supremo](https://github.com/supremo)*
-`
-}
-
-function generateEnvExample(): string {
-  return `# Supabase
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-
-# Encryption
-ENCRYPTION_KEY=your-64-char-hex-key
-
-# App
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-`
-}
-
-function generateGitignore(): string {
-  return `.env.local
-.env.*.local
-node_modules/
-.next/
-out/
-dist/
-*.log
-.DS_Store
-coverage/
-playwright-report/
-docs/security-audit/last-audit.json
-`
-}
-
-// ─────────────────────────────────────────────────────────────
-// GitHub API helpers
-// ─────────────────────────────────────────────────────────────
-
-async function githubRequest(
+async function githubFetch(
   path: string,
   token: string,
-  options: RequestInit = {}
-) {
-  const res = await fetch(`https://api.github.com${path}`, {
-    ...options,
+  init: RequestInit = {}
+): Promise<Response> {
+  return fetch(`${GITHUB_API}${path}`, {
+    ...init,
     headers: {
       Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github.v3+json',
+      Accept: 'application/vnd.github+json',
       'Content-Type': 'application/json',
       'X-GitHub-Api-Version': '2022-11-28',
-      ...(options.headers ?? {}),
+      ...(init.headers ?? {}),
     },
   })
-  return res
 }
 
 export async function scaffoldProject(
   projectId: string
-): Promise<{ error?: string }> {
+): Promise<{ error?: string; warnings?: string[] }> {
+  try {
+    return await runScaffold(projectId)
+  } catch (error) {
+    console.error('[scaffold] falhou:', error)
+    return { error: toActionError(error) }
+  }
+}
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Não autorizado.' }
+async function runScaffold(
+  projectId: string
+): Promise<{ error?: string; warnings?: string[] }> {
+  const { user, supabase } = await requireUser()
+  const warnings: string[] = []
 
-  // 1. Fetch project details
   const { data: project } = await supabase
     .from('projects')
-    .select(`
-      *,
-      github_accounts (*),
-      supabase_accounts (*)
-    `)
+    .select('*, github_accounts (*), supabase_accounts (*)')
     .eq('id', projectId)
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
 
   if (!project) return { error: 'Projeto não encontrado.' }
-  if (!project.github_accounts) return { error: 'Conta GitHub não vinculada.' }
-  if (project.github_repo_full_name) return { error: 'Projeto já provisionado.' }
+  if (project.github_repo_full_name) {
+    return { error: 'Projeto já provisionado.' }
+  }
+  if (!project.github_accounts) {
+    return { error: 'Conecte uma conta GitHub antes de provisionar.' }
+  }
 
-  const { name, description, github_accounts: githubAccount, supabase_account_id: supabaseAccountId } = project
-  const stack = 'nextjs'
+  const name = project.name as string
+  const description = (project.description as string | null) ?? ''
+  const githubToken = decryptToken(
+    (project.github_accounts as { access_token_encrypted: string })
+      .access_token_encrypted
+  )
 
-  const githubToken = decryptToken(githubAccount.access_token_encrypted)
-
-  // 3. Criar repositório no GitHub com auto_init para garantir branch main
-  const repoRes = await githubRequest('/user/repos', githubToken, {
+  // ── 1. Repositório ──────────────────────────────────────────
+  const repoResponse = await githubFetch('/user/repos', githubToken, {
     method: 'POST',
     body: JSON.stringify({
       name,
-      description: description ?? `${name} — built with Supremo`,
+      description: description || `${name} — criado com Supremo`,
       private: true,
-      auto_init: true, // Cria branch main com commit inicial
+      auto_init: true,
     }),
   })
 
-  if (!repoRes.ok) {
-    const err = await repoRes.json() as { message?: string }
-    if (repoRes.status === 422) {
-      return { error: `Repositório "${name}" já existe na sua conta GitHub.` }
+  if (!repoResponse.ok) {
+    if (repoResponse.status === 422) {
+      return { error: `O repositório "${name}" já existe na sua conta GitHub.` }
     }
-    return { error: `Erro ao criar repositório: ${err.message ?? 'Unknown error'}` }
+    const detail = (await repoResponse.json()) as { message?: string }
+    return { error: `Erro ao criar repositório: ${detail.message ?? repoResponse.status}` }
   }
 
-  const repo = await repoRes.json() as {
-    id: number
-    full_name: string
-    html_url: string
-    default_branch: string
+  const repo = (await repoResponse.json()) as GithubRepo
+  const branch = repo.default_branch || 'main'
+
+  // O GitHub leva um instante para materializar a ref do commit inicial.
+  const baseSha = await waitForBranch(repo.full_name, branch, githubToken)
+  if (!baseSha) {
+    return { error: 'O repositório foi criado mas a branch inicial não apareceu.' }
   }
 
-  // Aguardar GitHub provisionar o repo (evitar race condition)
-  await new Promise(resolve => setTimeout(resolve, 2000))
-
-  // 4. Buscar SHA do commit inicial da branch main
-  const branchRes = await githubRequest(
-    `/repos/${repo.full_name}/git/ref/heads/main`,
-    githubToken
-  )
-
-  if (!branchRes.ok) {
-    // Tentar 'master' se 'main' não existir
-    const masterRes = await githubRequest(
-      `/repos/${repo.full_name}/git/ref/heads/master`,
-      githubToken
-    )
-    if (!masterRes.ok) {
-      return { error: 'Erro ao buscar branch inicial do repositório.' }
-    }
-  }
-
-  const branchData = await branchRes.json() as { object: { sha: string } }
-  const baseSha = branchData.object.sha
-
-  // Buscar tree do commit inicial
-  const baseCommitRes = await githubRequest(
-    `/repos/${repo.full_name}/git/commits/${baseSha}`,
-    githubToken
-  )
-
-  if (!baseCommitRes.ok) {
-    return { error: 'Erro ao buscar commit inicial.' }
-  }
-
-  const baseCommit = await baseCommitRes.json() as { tree: { sha: string } }
-
-  // 5. Gerar conteúdo dos arquivos
-  const agentsMd = generateAgentsMd(name, description ?? '', stack)
-  const claudeMd = generateClaudeMd(name)
-  const securityMd = generateSecurityMd(name)
-  const readme = generateReadme(name, description ?? '', stack)
-  const envExample = generateEnvExample()
-  const gitignore = generateGitignore()
-  const securityAuditScript = getSecurityAuditScriptContent()
-  const ciWorkflow = getCiWorkflowContent(name)
-  const packageJson = getPackageJsonContent(name)
-  const vitestConfig = getVitestConfigContent()
-  const playwrightConfig = getPlaywrightConfigContent()
-  const vercelJson = getVercelJsonContent()
-  const tailwindConfig = getTailwindConfigContent()
-  const postcssConfig = getPostcssConfigContent()
-  const globalsCss = getGlobalsCssContent()
-  const utilsTs = getUtilsTsContent()
-  const sbClient = getSupabaseClientContent()
-  const sbServer = getSupabaseServerContent()
-  const sbMiddleware = getSupabaseMiddlewareContent()
-  const nextMiddleware = getNextMiddlewareContent()
-
-  // 6. Criar nova tree baseada na tree inicial (substitui README.md padrão)
-  const treeRes = await githubRequest(
-    `/repos/${repo.full_name}/git/trees`,
+  // ── 2. Template ─────────────────────────────────────────────
+  const files = buildProjectFiles({ projectName: name, description })
+  const commitSha = await commitTemplate(
+    repo.full_name,
+    branch,
+    baseSha,
     githubToken,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        base_tree: baseCommit.tree.sha,
-        tree: [
-          { path: 'README.md', mode: '100644', type: 'blob', content: readme },
-          { path: 'agents.md', mode: '100644', type: 'blob', content: agentsMd },
-          { path: 'CLAUDE.md', mode: '100644', type: 'blob', content: claudeMd },
-          { path: 'SECURITY.md', mode: '100644', type: 'blob', content: securityMd },
-          { path: '.env.example', mode: '100644', type: 'blob', content: envExample },
-          { path: '.gitignore', mode: '100644', type: 'blob', content: gitignore },
-          { path: 'scripts/security-audit.js', mode: '100755', type: 'blob', content: securityAuditScript },
-          { path: '.github/workflows/ci.yml', mode: '100644', type: 'blob', content: ciWorkflow },
-          { path: 'package.json', mode: '100644', type: 'blob', content: packageJson },
-          { path: 'vitest.config.ts', mode: '100644', type: 'blob', content: vitestConfig },
-          { path: 'playwright.config.ts', mode: '100644', type: 'blob', content: playwrightConfig },
-          { path: 'vitest.setup.ts', mode: '100644', type: 'blob', content: "import '@testing-library/jest-dom'" },
-          
-          
-          { path: 'tailwind.config.ts', mode: '100644', type: 'blob', content: tailwindConfig },
-          { path: 'postcss.config.js', mode: '100644', type: 'blob', content: postcssConfig },
-          { path: 'app/globals.css', mode: '100644', type: 'blob', content: globalsCss },
-          { path: 'lib/utils.ts', mode: '100644', type: 'blob', content: utilsTs },
-          
-          { path: 'lib/supabase/client.ts', mode: '100644', type: 'blob', content: sbClient },
-          { path: 'lib/supabase/server.ts', mode: '100644', type: 'blob', content: sbServer },
-          { path: 'lib/supabase/middleware.ts', mode: '100644', type: 'blob', content: sbMiddleware },
-          { path: 'middleware.ts', mode: '100644', type: 'blob', content: nextMiddleware },
-          { path: 'app/api/cron/route.ts', mode: '100644', type: 'blob', content: "import { NextResponse } from 'next/server'\n\nexport async function GET(request: Request) {\n  const authHeader = request.headers.get('authorization')\n  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {\n    return new NextResponse('Unauthorized', { status: 401 })\n  }\n\n  console.log('Executando tarefa de CRON...')\n  return NextResponse.json({ success: true })\n}" },
-          { path: 'app/layout.tsx', mode: '100644', type: 'blob', content: "import './globals.css';\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) { return ( <html lang='en'><body>{children}</body></html> ); }" },
-          { path: 'app/page.tsx', mode: '100644', type: 'blob', content: "export default function Home() { return <main><h1>Supremo App</h1></main>; }" },
-          { path: '.eslintrc.json', mode: '100644', type: 'blob', content: '{ "extends": "next/core-web-vitals" }' },
-          { path: 'vercel.json', mode: '100644', type: 'blob', content: vercelJson },
-          { path: 'tsconfig.json', mode: '100644', type: 'blob', content: JSON.stringify({ compilerOptions: { lib: ["dom", "dom.iterable", "esnext"], allowJs: true, skipLibCheck: true, strict: true, noEmit: true, esModuleInterop: true, module: "esnext", moduleResolution: "bundler", resolveJsonModule: true, isolatedModules: true, jsx: "preserve", incremental: true, plugins: [{ name: "next" }], paths: { "@/*": ["./*"] } }, include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"], exclude: ["node_modules"] }, null, 2) },
-
-          { path: 'e2e/example.spec.ts', mode: '100644', type: 'blob', content: "import { test, expect } from '@playwright/test';\n\ntest('has title', async ({ page }) => {\n  await page.goto('/');\n  await expect(page).toHaveTitle(/Create Next App/);\n});" },
-        ],
-      }),
-    }
+    files
   )
 
-  if (!treeRes.ok) {
-    return { error: 'Erro ao criar arquivos no repositório.' }
-  }
-
-  const tree = await treeRes.json() as { sha: string }
-
-  // 7. Criar commit com parent no commit inicial
-  const commitRes = await githubRequest(
-    `/repos/${repo.full_name}/git/commits`,
-    githubToken,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        message: 'feat: initial project setup via Supremo\n\n- agents.md: AI agent context\n- CLAUDE.md: MCP behavioral rules\n- SECURITY.md: security policies\n- .env.example: environment variables template',
-        tree: tree.sha,
-        parents: [baseSha], // Filho do commit inicial
-      }),
-    }
-  )
-
-  if (!commitRes.ok) {
-    return { error: 'Erro ao criar commit inicial.' }
-  }
-
-  const commit = await commitRes.json() as { sha: string }
-
-  // 8. Atualizar a ref da branch main para apontar pro novo commit (PATCH — branch já existe)
-  const refRes = await githubRequest(
-    `/repos/${repo.full_name}/git/refs/heads/main`,
-    githubToken,
-    {
-      method: 'PATCH',
-      body: JSON.stringify({
-        sha: commit.sha,
-        force: false,
-      }),
-    }
-  )
-
-  if (!refRes.ok) {
-    return { error: 'Erro ao atualizar branch main.' }
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // 9. Criar projeto Supabase (se conta conectada)
-  // ─────────────────────────────────────────────────────────────
+  // ── 3. Banco Supabase ───────────────────────────────────────
   let supabaseProjectRef: string | null = null
+  let dbPasswordEncrypted: string | null = null
+
+  const supabaseAccountId = project.supabase_account_id as string | null
 
   if (supabaseAccountId) {
-    const { data: sbAccount } = await supabase
-      .from('supabase_accounts')
-      .select('*')
-      .eq('id', supabaseAccountId)
-      .eq('user_id', user.id)
-      .single()
+    const provisioned = await provisionSupabase(
+      supabase,
+      user.id,
+      supabaseAccountId,
+      name,
+      files
+    )
 
-    if (sbAccount) {
-      const sbToken = decryptToken(sbAccount.access_token_encrypted)
-
-      // Buscar org_id da organização
-      const orgsRes = await fetch('https://api.supabase.com/v1/organizations', {
-        headers: { Authorization: `Bearer ${sbToken}` },
-      })
-
-      if (orgsRes.ok) {
-        const orgs = await orgsRes.json() as Array<{ id: string; slug: string }>
-        const org = orgs.find(o => o.slug === sbAccount.org_slug) ?? orgs[0]
-
-        if (org) {
-          // Gerar senha forte para o banco
-          const { randomBytes } = await import('crypto')
-          const dbPassword = randomBytes(24).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 32) + 'Aa1!'
-
-          // Criar projeto Supabase
-          const createProjRes = await fetch('https://api.supabase.com/v1/projects', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${sbToken}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              name,
-              organization_id: org.id,
-              plan: 'free',
-              region: 'us-east-1',
-              db_pass: dbPassword,
-            }),
-          })
-
-          if (createProjRes.ok) {
-            const sbProject = await createProjRes.json() as { id: string; ref: string; status: string }
-            supabaseProjectRef = sbProject.ref
-
-            // Aguardar provisionamento (polling por até 90s)
-            let attempts = 0
-            let ready = false
-            while (attempts < 18 && !ready) {
-              await new Promise(r => setTimeout(r, 5000))
-              const statusRes = await fetch(`https://api.supabase.com/v1/projects/${sbProject.ref}`, {
-                headers: { Authorization: `Bearer ${sbToken}` },
-              })
-              if (statusRes.ok) {
-                const status = await statusRes.json() as { status: string }
-                if (status.status === 'ACTIVE_HEALTHY') {
-                  ready = true
-                }
-              }
-              attempts++
-            }
-
-            // Aplicar migration inicial se provisionado
-            if (ready) {
-              const baseMigration = `
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
-CREATE TABLE IF NOT EXISTS audit_logs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID,
-  action TEXT NOT NULL,
-  resource_type TEXT NOT NULL,
-  resource_id TEXT,
-  metadata JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
-ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "audit_logs_read_own" ON audit_logs FOR SELECT USING (auth.uid()::text = user_id::text);
-CREATE POLICY "audit_logs_insert_own" ON audit_logs FOR INSERT WITH CHECK (true);
-`
-              await fetch(`https://api.supabase.com/v1/projects/${sbProject.ref}/database/query`, {
-                method: 'POST',
-                headers: {
-                  Authorization: `Bearer ${sbToken}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ query: baseMigration }),
-              })
-            }
-          }
-        }
-      }
-    }
+    supabaseProjectRef = provisioned.projectRef
+    dbPasswordEncrypted = provisioned.dbPasswordEncrypted
+    warnings.push(...provisioned.warnings)
+  } else {
+    warnings.push(
+      'Nenhuma conta Supabase vinculada — o projeto foi criado sem banco.'
+    )
   }
 
-  // 10. Atualizar projeto no Supremo DB com dados do provisionamento
-  const { error: projectError } = await supabase
+  // ── 4. Proteção de branch ───────────────────────────────────
+  const protectionError = await protectBranch(
+    repo.full_name,
+    branch,
+    githubToken
+  )
+  if (protectionError) warnings.push(protectionError)
+
+  // ── 5. Persistência ─────────────────────────────────────────
+  const { error: updateError } = await supabase
     .from('projects')
     .update({
       github_repo_full_name: repo.full_name,
       github_repo_id: repo.id,
+      default_branch: branch,
+      active_branch: branch,
       supabase_project_ref: supabaseProjectRef,
+      db_password_encrypted: dbPasswordEncrypted,
+      template_version: TEMPLATE_VERSION,
       status: 'active',
     })
     .eq('id', projectId)
     .eq('user_id', user.id)
 
-  if (projectError) {
-    return { error: 'Erro ao atualizar projeto no banco.' }
+  if (updateError) {
+    return { error: 'Projeto criado no GitHub, mas falhou ao salvar no banco.' }
   }
 
-  // 11. Log de auditoria
   await supabase.from('audit_logs').insert({
     user_id: user.id,
     action: 'project.scaffold',
     resource_type: 'project',
     resource_id: projectId,
     metadata: {
-      name,
-      github_repo: repo.full_name,
-      commit_sha: commit.sha,
+      repo: repo.full_name,
+      commit: commitSha,
       supabase_ref: supabaseProjectRef,
+      template_version: TEMPLATE_VERSION,
+      files: files.length,
     },
+    ip_address: null,
   })
 
   revalidatePath('/', 'layout')
+  return warnings.length > 0 ? { warnings } : {}
+}
 
-  return {}
+// ─────────────────────────────────────────────────────────────
+
+async function waitForBranch(
+  repoFullName: string,
+  branch: string,
+  token: string
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const response = await githubFetch(
+      `/repos/${repoFullName}/git/ref/heads/${branch}`,
+      token
+    )
+
+    if (response.ok) {
+      const data = (await response.json()) as { object: { sha: string } }
+      return data.object.sha
+    }
+
+    await sleep(1000 * (attempt + 1))
+  }
+  return null
+}
+
+async function commitTemplate(
+  repoFullName: string,
+  branch: string,
+  baseSha: string,
+  token: string,
+  files: FileEntry[]
+): Promise<string> {
+  const baseCommitResponse = await githubFetch(
+    `/repos/${repoFullName}/git/commits/${baseSha}`,
+    token
+  )
+  if (!baseCommitResponse.ok) {
+    throw new Error('Não foi possível ler o commit inicial do repositório.')
+  }
+
+  const baseCommit = (await baseCommitResponse.json()) as {
+    tree: { sha: string }
+  }
+
+  const treeResponse = await githubFetch(
+    `/repos/${repoFullName}/git/trees`,
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        base_tree: baseCommit.tree.sha,
+        tree: files.map((file) => ({
+          path: file.path,
+          mode: file.mode ?? '100644',
+          type: 'blob',
+          content: file.content,
+        })),
+      }),
+    }
+  )
+
+  if (!treeResponse.ok) {
+    const detail = await treeResponse.text()
+    throw new Error(`Erro ao escrever os arquivos: ${detail.slice(0, 200)}`)
+  }
+
+  const tree = (await treeResponse.json()) as { sha: string }
+
+  const commitResponse = await githubFetch(
+    `/repos/${repoFullName}/git/commits`,
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        message: [
+          'feat: estrutura inicial do projeto',
+          '',
+          'Gerado pelo Supremo. Inclui:',
+          '- Next.js 16 + React 19 + TypeScript strict',
+          '- Supabase com RLS e migration versionada',
+          '- Vitest, Playwright e testes de política RLS',
+          '- CI com tipos, lint, cobertura, CodeQL, gitleaks e E2E',
+          '- CSP e cabeçalhos de segurança em next.config.ts',
+        ].join('\n'),
+        tree: tree.sha,
+        parents: [baseSha],
+      }),
+    }
+  )
+
+  if (!commitResponse.ok) {
+    throw new Error('Erro ao criar o commit inicial.')
+  }
+
+  const commit = (await commitResponse.json()) as { sha: string }
+
+  const refResponse = await githubFetch(
+    `/repos/${repoFullName}/git/refs/heads/${branch}`,
+    token,
+    { method: 'PATCH', body: JSON.stringify({ sha: commit.sha, force: false }) }
+  )
+
+  if (!refResponse.ok) {
+    throw new Error(`Erro ao atualizar a branch ${branch}.`)
+  }
+
+  return commit.sha
+}
+
+interface SupabaseProvisionResult {
+  projectRef: string | null
+  dbPasswordEncrypted: string | null
+  warnings: string[]
+}
+
+async function provisionSupabase(
+  supabase: Awaited<ReturnType<typeof requireUser>>['supabase'],
+  userId: string,
+  supabaseAccountId: string,
+  name: string,
+  files: FileEntry[]
+): Promise<SupabaseProvisionResult> {
+  const warnings: string[] = []
+
+  const { data: account } = await supabase
+    .from('supabase_accounts')
+    .select('access_token_encrypted, org_slug')
+    .eq('id', supabaseAccountId)
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (!account) {
+    return {
+      projectRef: null,
+      dbPasswordEncrypted: null,
+      warnings: ['Conta Supabase não encontrada.'],
+    }
+  }
+
+  const token = decryptToken(account.access_token_encrypted as string)
+
+  const orgsResponse = await fetch(`${SUPABASE_API}/v1/organizations`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+
+  if (!orgsResponse.ok) {
+    return {
+      projectRef: null,
+      dbPasswordEncrypted: null,
+      warnings: ['Não foi possível listar as organizações do Supabase.'],
+    }
+  }
+
+  const orgs = (await orgsResponse.json()) as Array<{ id: string; slug: string }>
+  const org =
+    orgs.find((candidate) => candidate.slug === account.org_slug) ?? orgs[0]
+
+  if (!org) {
+    return {
+      projectRef: null,
+      dbPasswordEncrypted: null,
+      warnings: ['Nenhuma organização disponível no Supabase.'],
+    }
+  }
+
+  // A senha do banco é do usuário. A versão anterior gerava e descartava,
+  // deixando o dono sem acesso direto ao próprio Postgres.
+  const dbPassword = generateDbPassword()
+
+  const createResponse = await fetch(`${SUPABASE_API}/v1/projects`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name,
+      organization_id: org.id,
+      region: 'us-east-1',
+      db_pass: dbPassword,
+    }),
+  })
+
+  if (!createResponse.ok) {
+    const detail = await createResponse.text()
+    return {
+      projectRef: null,
+      dbPasswordEncrypted: null,
+      warnings: [`Falha ao criar projeto Supabase: ${detail.slice(0, 160)}`],
+    }
+  }
+
+  const created = (await createResponse.json()) as { ref: string }
+  const dbPasswordEncrypted = encryptToken(dbPassword)
+
+  const ready = await waitForSupabaseProject(created.ref, token)
+
+  if (!ready) {
+    warnings.push(
+      'O banco Supabase ainda estava provisionando. Aplique a migration inicial ' +
+        'pelo painel ou rode a ferramenta apply_migration quando ele ficar pronto.'
+    )
+    return { projectRef: created.ref, dbPasswordEncrypted, warnings }
+  }
+
+  // A mesma migration que foi versionada no repositório é a que roda aqui —
+  // repositório e banco não divergem.
+  const migration = files.find((file) =>
+    file.path.startsWith('supabase/migrations/')
+  )
+
+  if (migration) {
+    const migrationResponse = await fetch(
+      `${SUPABASE_API}/v1/projects/${created.ref}/database/query`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query: migration.content }),
+      }
+    )
+
+    if (!migrationResponse.ok) {
+      const detail = await migrationResponse.text()
+      warnings.push(
+        `A migration inicial está versionada em ${migration.path} mas o banco ` +
+          `a recusou: ${detail.slice(0, 160)}`
+      )
+    }
+  }
+
+  return { projectRef: created.ref, dbPasswordEncrypted, warnings }
+}
+
+async function waitForSupabaseProject(
+  projectRef: string,
+  token: string
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 24; attempt++) {
+    await sleep(5000)
+
+    const response = await fetch(`${SUPABASE_API}/v1/projects/${projectRef}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+
+    if (response.ok) {
+      const data = (await response.json()) as { status: string }
+      if (data.status === 'ACTIVE_HEALTHY') return true
+    }
+  }
+  return false
+}
+
+/**
+ * Protege a branch principal exigindo os gates.
+ *
+ * Sem isto o pipeline é contornável com um `git push`, e um gate que se
+ * contorna não é um gate.
+ */
+async function protectBranch(
+  repoFullName: string,
+  branch: string,
+  token: string
+): Promise<string | null> {
+  const response = await githubFetch(
+    `/repos/${repoFullName}/branches/${branch}/protection`,
+    token,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        required_status_checks: { strict: true, contexts: REQUIRED_CHECKS },
+        enforce_admins: false,
+        required_pull_request_reviews: null,
+        restrictions: null,
+        allow_force_pushes: false,
+        allow_deletions: false,
+      }),
+    }
+  )
+
+  if (response.ok) return null
+
+  // Repositório privado em plano Free não tem proteção de branch.
+  if (response.status === 403 || response.status === 404) {
+    return (
+      `A proteção da branch ${branch} não pôde ser aplicada (plano do GitHub). ` +
+      'Os gates continuam rodando no CI, mas um push direto consegue contorná-los.'
+    )
+  }
+
+  return `Não foi possível proteger a branch ${branch} (HTTP ${response.status}).`
+}
+
+function generateDbPassword(): string {
+  // Alfabeto sem ambiguidade visual e sem caracteres que quebram URL de conexão.
+  const alphabet =
+    'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+  const bytes = randomBytes(32)
+
+  let password = ''
+  for (const byte of bytes) {
+    password += alphabet[byte % alphabet.length]
+  }
+
+  // Garante as classes que o Supabase exige.
+  return `${password}Aa1-`
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

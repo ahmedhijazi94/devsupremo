@@ -4,8 +4,8 @@ import { createClient } from '@/lib/supabase/server'
 import { encryptToken } from '@/lib/crypto'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
-import crypto from 'crypto'
 import { z } from 'zod'
+import { createOAuthState } from '@/lib/oauth-state'
 
 // ─────────────────────────────────────────────────────────────
 // Iniciar conexão GitHub — gera state CSRF e redireciona
@@ -16,18 +16,7 @@ export async function connectGithubAccount(projectId?: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  // Pass CSRF token and optionally projectId in the state
-  const csrfToken = crypto.randomBytes(32).toString('hex')
-  const stateObj = { csrf: csrfToken, projectId: projectId || null }
-  const state = Buffer.from(JSON.stringify(stateObj)).toString('base64')
-
-  // Salvar state no banco para verificar no callback (TTL via created_at)
-  await supabase.from('audit_logs').insert({
-    user_id: user.id,
-    action: 'github_oauth_state',
-    resource_type: 'oauth',
-    resource_id: csrfToken, // Use csrfToken as the lookup key
-  })
+  const state = await createOAuthState(supabase, user.id, 'github', projectId)
 
   // Redirecionar para GitHub OAuth com escopos necessários para criar repos
   const params = new URLSearchParams({
@@ -202,18 +191,7 @@ export async function connectSupabaseAccount(projectId?: string) {
     throw new Error('SUPABASE_OAUTH_CLIENT_ID is not configured')
   }
 
-  // Pass CSRF token and optionally projectId in the state
-  const csrfToken = crypto.randomBytes(32).toString('hex')
-  const stateObj = { csrf: csrfToken, projectId: projectId || null }
-  const state = Buffer.from(JSON.stringify(stateObj)).toString('base64')
-
-  // Salvar state no banco
-  await supabase.from('audit_logs').insert({
-    user_id: user.id,
-    action: 'supabase_oauth_state',
-    resource_type: 'oauth',
-    resource_id: csrfToken,
-  })
+  const state = await createOAuthState(supabase, user.id, 'supabase', projectId)
 
   // URL for Supabase OAuth
   const redirectUri = encodeURIComponent(`${process.env.NEXT_PUBLIC_APP_URL}/auth/supabase-account/callback`)

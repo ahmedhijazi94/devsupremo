@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { encryptToken } from '@/lib/crypto'
+import { consumeOAuthState } from '@/lib/oauth-state'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -11,30 +12,13 @@ export async function GET(request: Request) {
     redirect('/projects?error=invalid_callback')
   }
 
-  let parsedState: { csrf: string, projectId: string | null }
-  try {
-    parsedState = JSON.parse(Buffer.from(state, 'base64').toString('utf8'))
-  } catch (e) {
-    redirect('/projects?error=invalid_state_format')
-  }
-
   const supabase = await createClient()
 
-  // Verificar autenticação
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  // Verificar state CSRF
-  const { data: sessionState } = await supabase
-    .from('audit_logs')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('action', 'supabase_oauth_state')
-    .eq('resource_id', parsedState.csrf)
-    .gte('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString())
-    .single()
-
-  if (!sessionState) {
+  const consumed = await consumeOAuthState(supabase, user.id, 'supabase', state)
+  if (!consumed) {
     redirect('/projects?error=invalid_state')
   }
 
@@ -112,9 +96,11 @@ export async function GET(request: Request) {
   }
 
   // Se recebemos projectId no state, vincular automaticamente
-  if (parsedState.projectId) {
-    await supabase.from('projects').update({ supabase_account_id: upsertData.id }).eq('id', parsedState.projectId)
-    redirect(`/projects/${parsedState.projectId}`)
+  if (consumed.projectId) {
+    await supabase.from('projects').update({ supabase_account_id: upsertData.id })
+      .eq('id', consumed.projectId)
+      .eq('user_id', user.id)
+    redirect(`/projects/${consumed.projectId}`)
   }
 
   redirect('/projects?success=supabase_connected')

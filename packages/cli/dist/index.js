@@ -3262,8 +3262,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path) {
-      let input = path;
+    function removeDotSegments(path2) {
+      let input = path2;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3668,8 +3668,8 @@ var require_schemes = __commonJS({
       }
       if (wsComponent.resourceName) {
         const queryIndex = wsComponent.resourceName.indexOf("?");
-        const path = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
-        wsComponent.path = path && path !== "/" ? path : void 0;
+        const path2 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
+        wsComponent.path = path2 && path2 !== "/" ? path2 : void 0;
         wsComponent.query = queryIndex === -1 ? void 0 : wsComponent.resourceName.slice(queryIndex + 1);
         wsComponent.resourceName = void 0;
       }
@@ -3728,7 +3728,7 @@ var require_schemes = __commonJS({
       urnComponent.nss = (uuidComponent.uuid || "").toLowerCase();
       return urnComponent;
     }
-    var http = (
+    var http2 = (
       /** @type {SchemeHandler} */
       {
         scheme: "http",
@@ -3737,11 +3737,11 @@ var require_schemes = __commonJS({
         serialize: httpSerialize
       }
     );
-    var https = (
+    var https2 = (
       /** @type {SchemeHandler} */
       {
         scheme: "https",
-        domainHost: http.domainHost,
+        domainHost: http2.domainHost,
         parse: httpParse,
         serialize: httpSerialize
       }
@@ -3785,8 +3785,8 @@ var require_schemes = __commonJS({
     var SCHEMES = (
       /** @type {Record<SchemeName, SchemeHandler>} */
       {
-        http,
-        https,
+        http: http2,
+        https: https2,
         ws,
         wss,
         urn,
@@ -7175,12 +7175,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs, exportName) {
+    function addFormats(ajv, list, fs2, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs[f]);
+        ajv.addFormat(f, fs2[f]);
     }
     module2.exports = exports2 = formatsPlugin;
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -7368,10 +7368,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path) {
-  if (!path)
+function getElementAtPath(obj, path2) {
+  if (!path2)
     return obj;
-  return path.reduce((acc, key) => acc?.[key], obj);
+  return path2.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7783,11 +7783,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path, issues) {
+function prefixIssues(path2, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path);
+    iss.path.unshift(path2);
     return iss;
   });
 }
@@ -8216,16 +8216,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path = []) => {
+  const processError = (error3, path2 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path2, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
       } else {
-        const fullpath = [...path, ...issue2.path];
+        const fullpath = [...path2, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -16728,63 +16728,103 @@ var StdioServerTransport = class {
 };
 
 // src/index.ts
-var server = new Server(
-  {
-    name: "supremo-mcp",
-    version: "1.0.0"
-  },
-  {
-    capabilities: {
-      tools: {}
-    }
-  }
-);
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: "supremo_status",
-        description: "Check the connection status with the Supremo cloud project.",
-        inputSchema: {
-          type: "object",
-          properties: {}
+var import_fs = __toESM(require("fs"));
+var import_path = __toESM(require("path"));
+var import_https = __toESM(require("https"));
+var import_http = __toESM(require("http"));
+var cwd = process.cwd();
+var configPath = import_path.default.join(cwd, ".supremo.json");
+var projectId = "";
+try {
+  const config2 = JSON.parse(import_fs.default.readFileSync(configPath, "utf8"));
+  projectId = config2.projectId;
+} catch (e) {
+  console.error('Project not linked! Run "npx supremo link <projectId>" first.');
+  process.exit(1);
+}
+var SUPREMO_API = process.env.SUPREMO_API_URL || "http://localhost:3000/api/mcp";
+var server = new Server({ name: "supremo-mcp", version: "1.0.0" }, { capabilities: { tools: {} } });
+async function callSupremoAPI(action, params) {
+  const url = new URL(SUPREMO_API);
+  const reqModule = url.protocol === "https:" ? import_https.default : import_http.default;
+  return new Promise((resolve, reject) => {
+    const req = reqModule.request(SUPREMO_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(new Error("Invalid JSON response from Supremo API: " + data));
         }
-      },
-      {
-        name: "supremo_execute_sql",
-        description: "Execute a SQL query directly against the linked Supabase database. Use this to create tables, run migrations, or inspect schema.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: {
-              type: "string",
-              description: "The SQL query to execute."
-            }
-          },
-          required: ["query"]
-        }
+      });
+    });
+    req.on("error", reject);
+    req.write(JSON.stringify({ projectId, action, params }));
+    req.end();
+  });
+}
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: "supremo_status",
+      description: "Check the connection status with the Supremo cloud project.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "supabase_execute_sql",
+      description: "Execute a SQL query directly against the linked Supabase database.",
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"]
       }
-    ]
-  };
-});
+    },
+    {
+      name: "github_read_file",
+      description: "Read a file directly from the linked GitHub repository.",
+      inputSchema: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"]
+      }
+    },
+    {
+      name: "github_write_file",
+      description: "Create or update a file directly in the linked GitHub repository.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+          message: { type: "string", description: "Commit message" }
+        },
+        required: ["path", "content"]
+      }
+    }
+  ]
+}));
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "supremo_status") {
-    return {
-      content: [{ type: "text", text: "\u{1F7E2} Supremo MCP is connected! Ready to receive SQL commands and sync with the Cloud." }]
-    };
+    return { content: [{ type: "text", text: `\u{1F7E2} Conectado ao Projeto Supremo: ${projectId}` }] };
   }
-  if (request.params.name === "supremo_execute_sql") {
-    const query = request.params.arguments?.query;
-    return {
-      content: [{ type: "text", text: `MOCK SUCCESS: Executed SQL query:\\n${query}\\n\\n(Note: Real implementation requires Supremo API integration)` }]
-    };
+  if (["supabase_execute_sql", "github_read_file", "github_write_file"].includes(request.params.name)) {
+    try {
+      const result = await callSupremoAPI(request.params.name, request.params.arguments);
+      if (result.error) throw new Error(result.error);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text", text: `\u274C Erro: ${e.message}` }] };
+    }
   }
   throw new Error(`Tool not found: ${request.params.name}`);
 });
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Supremo MCP Server is running!");
 }
 main().catch((error2) => {
   console.error("Fatal error:", error2);

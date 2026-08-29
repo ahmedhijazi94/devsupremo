@@ -222,10 +222,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path3) {
-  if (!path3)
+function getElementAtPath(obj, path4) {
+  if (!path4)
     return obj;
-  return path3.reduce((acc, key) => acc?.[key], obj);
+  return path4.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -556,11 +556,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path3, issues) {
+function prefixIssues(path4, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path3);
+    iss.path.unshift(path4);
     return iss;
   });
 }
@@ -1042,16 +1042,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path3 = []) => {
+  const processError = (error3, path4 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path3, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
       } else {
-        const fullpath = [...path3, ...issue2.path];
+        const fullpath = [...path4, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -12662,8 +12662,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path3) {
-      let input = path3;
+    function removeDotSegments(path4) {
+      let input = path4;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -13068,8 +13068,8 @@ var require_schemes = __commonJS({
       }
       if (wsComponent.resourceName) {
         const queryIndex = wsComponent.resourceName.indexOf("?");
-        const path3 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
-        wsComponent.path = path3 && path3 !== "/" ? path3 : void 0;
+        const path4 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
+        wsComponent.path = path4 && path4 !== "/" ? path4 : void 0;
         wsComponent.query = queryIndex === -1 ? void 0 : wsComponent.resourceName.slice(queryIndex + 1);
         wsComponent.resourceName = void 0;
       }
@@ -13128,7 +13128,7 @@ var require_schemes = __commonJS({
       urnComponent.nss = (uuidComponent.uuid || "").toLowerCase();
       return urnComponent;
     }
-    var http = (
+    var http2 = (
       /** @type {SchemeHandler} */
       {
         scheme: "http",
@@ -13137,11 +13137,11 @@ var require_schemes = __commonJS({
         serialize: httpSerialize
       }
     );
-    var https = (
+    var https2 = (
       /** @type {SchemeHandler} */
       {
         scheme: "https",
-        domainHost: http.domainHost,
+        domainHost: http2.domainHost,
         parse: httpParse,
         serialize: httpSerialize
       }
@@ -13185,8 +13185,8 @@ var require_schemes = __commonJS({
     var SCHEMES = (
       /** @type {Record<SchemeName, SchemeHandler>} */
       {
-        http,
-        https,
+        http: http2,
+        https: https2,
         ws,
         wss,
         urn,
@@ -16575,12 +16575,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs3, exportName) {
+    function addFormats(ajv, list, fs4, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs3[f]);
+        ajv.addFormat(f, fs4[f]);
     }
     module2.exports = exports2 = formatsPlugin;
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -17420,68 +17420,108 @@ var init_stdio2 = __esm({
 
 // src/index.ts
 var index_exports = {};
+async function callSupremoAPI(action, params) {
+  const url = new URL(SUPREMO_API);
+  const reqModule = url.protocol === "https:" ? import_https.default : import_http.default;
+  return new Promise((resolve, reject) => {
+    const req = reqModule.request(SUPREMO_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(new Error("Invalid JSON response from Supremo API: " + data));
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(JSON.stringify({ projectId, action, params }));
+    req.end();
+  });
+}
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Supremo MCP Server is running!");
 }
-var server;
+var import_fs, import_path, import_https, import_http, cwd, configPath, projectId, SUPREMO_API, server;
 var init_index = __esm({
   "src/index.ts"() {
     "use strict";
     init_server2();
     init_stdio2();
     init_types();
-    server = new Server(
-      {
-        name: "supremo-mcp",
-        version: "1.0.0"
-      },
-      {
-        capabilities: {
-          tools: {}
-        }
-      }
-    );
-    server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: [
-          {
-            name: "supremo_status",
-            description: "Check the connection status with the Supremo cloud project.",
-            inputSchema: {
-              type: "object",
-              properties: {}
-            }
-          },
-          {
-            name: "supremo_execute_sql",
-            description: "Execute a SQL query directly against the linked Supabase database. Use this to create tables, run migrations, or inspect schema.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                query: {
-                  type: "string",
-                  description: "The SQL query to execute."
-                }
-              },
-              required: ["query"]
-            }
+    import_fs = __toESM(require("fs"));
+    import_path = __toESM(require("path"));
+    import_https = __toESM(require("https"));
+    import_http = __toESM(require("http"));
+    cwd = process.cwd();
+    configPath = import_path.default.join(cwd, ".supremo.json");
+    projectId = "";
+    try {
+      const config2 = JSON.parse(import_fs.default.readFileSync(configPath, "utf8"));
+      projectId = config2.projectId;
+    } catch (e) {
+      console.error('Project not linked! Run "npx supremo link <projectId>" first.');
+      process.exit(1);
+    }
+    SUPREMO_API = process.env.SUPREMO_API_URL || "http://localhost:3000/api/mcp";
+    server = new Server({ name: "supremo-mcp", version: "1.0.0" }, { capabilities: { tools: {} } });
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [
+        {
+          name: "supremo_status",
+          description: "Check the connection status with the Supremo cloud project.",
+          inputSchema: { type: "object", properties: {} }
+        },
+        {
+          name: "supabase_execute_sql",
+          description: "Execute a SQL query directly against the linked Supabase database.",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"]
           }
-        ]
-      };
-    });
+        },
+        {
+          name: "github_read_file",
+          description: "Read a file directly from the linked GitHub repository.",
+          inputSchema: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"]
+          }
+        },
+        {
+          name: "github_write_file",
+          description: "Create or update a file directly in the linked GitHub repository.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              content: { type: "string" },
+              message: { type: "string", description: "Commit message" }
+            },
+            required: ["path", "content"]
+          }
+        }
+      ]
+    }));
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (request.params.name === "supremo_status") {
-        return {
-          content: [{ type: "text", text: "\u{1F7E2} Supremo MCP is connected! Ready to receive SQL commands and sync with the Cloud." }]
-        };
+        return { content: [{ type: "text", text: `\u{1F7E2} Conectado ao Projeto Supremo: ${projectId}` }] };
       }
-      if (request.params.name === "supremo_execute_sql") {
-        const query = request.params.arguments?.query;
-        return {
-          content: [{ type: "text", text: `MOCK SUCCESS: Executed SQL query:\\n${query}\\n\\n(Note: Real implementation requires Supremo API integration)` }]
-        };
+      if (["supabase_execute_sql", "github_read_file", "github_write_file"].includes(request.params.name)) {
+        try {
+          const result = await callSupremoAPI(request.params.name, request.params.arguments);
+          if (result.error) throw new Error(result.error);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text", text: `\u274C Erro: ${e.message}` }] };
+        }
       }
       throw new Error(`Tool not found: ${request.params.name}`);
     });
@@ -20603,9 +20643,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
    * @param {string} [path]
    * @return {(string|null|Command)}
    */
-  executableDir(path3) {
-    if (path3 === void 0) return this._executableDir;
-    this._executableDir = path3;
+  executableDir(path4) {
+    if (path4 === void 0) return this._executableDir;
+    this._executableDir = path4;
     return this;
   }
   /**
@@ -20861,30 +20901,30 @@ function useColor() {
 var program = new Command();
 
 // src/bin.ts
-var import_fs = __toESM(require("fs"));
-var import_path = __toESM(require("path"));
+var import_fs2 = __toESM(require("fs"));
+var import_path2 = __toESM(require("path"));
 var import_os = __toESM(require("os"));
 var program2 = new Command();
 program2.name("supremo").description("Supremo CLI and MCP Server for AI Agents").version("1.0.0");
-program2.command("link").description("Link this folder to your Claude Desktop via MCP").argument("<projectId>", "The Supremo Project ID").action((projectId) => {
-  const cwd = process.cwd();
-  import_fs.default.writeFileSync(import_path.default.join(cwd, ".supremo.json"), JSON.stringify({ projectId }, null, 2));
-  console.log(`\u{1F517} Project ${projectId} linked locally.`);
-  const claudeConfigPath = import_path.default.join(import_os.default.homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
+program2.command("link").description("Link this folder to your Claude Desktop via MCP").argument("<projectId>", "The Supremo Project ID").action((projectId2) => {
+  const cwd2 = process.cwd();
+  import_fs2.default.writeFileSync(import_path2.default.join(cwd2, ".supremo.json"), JSON.stringify({ projectId: projectId2 }, null, 2));
+  console.log(`\u{1F517} Project ${projectId2} linked locally.`);
+  const claudeConfigPath = import_path2.default.join(import_os.default.homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
   let config2 = { mcpServers: {} };
-  if (import_fs.default.existsSync(claudeConfigPath)) {
+  if (import_fs2.default.existsSync(claudeConfigPath)) {
     try {
-      config2 = JSON.parse(import_fs.default.readFileSync(claudeConfigPath, "utf8"));
+      config2 = JSON.parse(import_fs2.default.readFileSync(claudeConfigPath, "utf8"));
     } catch (e) {
     }
   }
   if (!config2.mcpServers) config2.mcpServers = {};
   config2.mcpServers["supremo-mcp"] = {
     command: "node",
-    args: [import_path.default.join(__dirname, "index.js")]
+    args: [import_path2.default.join(__dirname, "index.js")]
   };
-  import_fs.default.mkdirSync(import_path.default.dirname(claudeConfigPath), { recursive: true });
-  import_fs.default.writeFileSync(claudeConfigPath, JSON.stringify(config2, null, 2));
+  import_fs2.default.mkdirSync(import_path2.default.dirname(claudeConfigPath), { recursive: true });
+  import_fs2.default.writeFileSync(claudeConfigPath, JSON.stringify(config2, null, 2));
   console.log(`\u2705 Claude Desktop Configured! Restart your Claude Desktop app.`);
   console.log(`\u{1F9E0} Try asking Claude: "Qual o status da minha conex\xE3o com o Supremo?"`);
 });

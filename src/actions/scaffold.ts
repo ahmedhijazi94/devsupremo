@@ -84,7 +84,9 @@ function generateClaudeMd(projectName: string): string {
 ## Testing Requirements (before every commit)
 1. TypeScript: \`tsc --noEmit\`
 2. ESLint: \`eslint .\`
-3. Unit Tests: \`vitest run\`
+3. Unit Tests: \`npm run test\`
+4. E2E Tests: \`npm run test:e2e\`
+5. Se algum teste falhar, você DEVE corrigi-lo antes de finalizar a resposta.
 4. Build: \`next build\`
 `
 }
@@ -352,6 +354,7 @@ export async function scaffoldProject(
           { path: 'lib/supabase/server.ts', mode: '100644', type: 'blob', content: sbServer },
           { path: 'lib/supabase/middleware.ts', mode: '100644', type: 'blob', content: sbMiddleware },
           { path: 'middleware.ts', mode: '100644', type: 'blob', content: nextMiddleware },
+          { path: 'app/api/cron/route.ts', mode: '100644', type: 'blob', content: "import { NextResponse } from 'next/server'\n\nexport async function GET(request: Request) {\n  const authHeader = request.headers.get('authorization')\n  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {\n    return new NextResponse('Unauthorized', { status: 401 })\n  }\n\n  console.log('Executando tarefa de CRON...')\n  return NextResponse.json({ success: true })\n}" },
           { path: 'app/layout.tsx', mode: '100644', type: 'blob', content: "import './globals.css';\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) { return ( <html lang='en'><body>{children}</body></html> ); }" },
           { path: 'app/page.tsx', mode: '100644', type: 'blob', content: "export default function Home() { return <main><h1>Supremo App</h1></main>; }" },
           { path: '.eslintrc.json', mode: '100644', type: 'blob', content: '{ "extends": "next/core-web-vitals" }' },

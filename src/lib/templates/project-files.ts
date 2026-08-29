@@ -375,6 +375,12 @@ export function getVercelJsonContent(): string {
           }
         ]
       }
+    ],
+    "crons": [
+      {
+        "path": "/api/cron",
+        "schedule": "0 * * * *"
+      }
     ]
   }, null, 2)
 }

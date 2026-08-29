@@ -256,3 +256,31 @@ export async function deleteProject(projectId: string): Promise<{ error?: string
   revalidatePath('/dashboard')
   return {}
 }
+
+export async function createEmptyProject(name: string, description?: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Não autorizado.' }
+
+  const { data, error } = await supabase
+    .from('projects')
+    .insert({
+      user_id: user.id,
+      name,
+      description,
+      status: 'pending',
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    if (error.code === '23505') {
+      return { error: 'Você já tem um projeto com este nome.' }
+    }
+    return { error: 'Falha ao criar o projeto.' }
+  }
+
+  revalidatePath('/projects')
+  revalidatePath('/dashboard')
+  return { data }
+}

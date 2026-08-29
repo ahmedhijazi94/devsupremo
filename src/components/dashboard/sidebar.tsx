@@ -20,8 +20,7 @@ interface SidebarProps {
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/projects', label: 'Projetos', icon: FolderOpen },
-  { href: '/accounts', label: 'Contas', icon: GitBranch },
-  { href: '/mcps', label: 'MCPs', icon: Cpu },
+  { href: '/mcps', label: 'Integração MCP', icon: Cpu },
   { href: '/settings', label: 'Configurações', icon: Settings },
 ]
 

@@ -18,6 +18,13 @@ export async function GET(request: NextRequest) {
     redirect('/accounts?error=invalid_callback')
   }
 
+  let parsedState: { csrf: string, projectId: string | null }
+  try {
+    parsedState = JSON.parse(Buffer.from(state, 'base64').toString('utf8'))
+  } catch (e) {
+    redirect('/accounts?error=invalid_state_format')
+  }
+
   const supabase = await createClient()
 
   // Verificar autenticação
@@ -27,10 +34,10 @@ export async function GET(request: NextRequest) {
   // Verificar state CSRF — deve bater com o que salvamos na sessão
   const { data: sessionState } = await supabase
     .from('audit_logs')
-    .select('metadata')
+    .select('id')
     .eq('user_id', user.id)
     .eq('action', 'github_oauth_state')
-    .eq('resource_id', state)
+    .eq('resource_id', parsedState.csrf)
     .gte('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString()) // 10 min
     .single()
 
@@ -94,7 +101,7 @@ export async function GET(request: NextRequest) {
     : null
 
   // Salvar ou atualizar conta GitHub (upsert — evita duplicatas)
-  const { error: upsertError } = await supabase
+  const { data: upsertData, error: upsertError } = await supabase
     .from('github_accounts')
     .upsert({
       user_id: user.id,
@@ -108,9 +115,11 @@ export async function GET(request: NextRequest) {
     }, {
       onConflict: 'user_id,github_user_id',
     })
+    .select('id')
+    .single()
 
-  if (upsertError) {
-    console.error('[GitHub Callback] Upsert error:', upsertError.message)
+  if (upsertError || !upsertData) {
+    console.error('[GitHub Callback] Upsert error:', upsertError?.message)
     redirect('/accounts?error=save_failed')
   }
 
@@ -121,6 +130,12 @@ export async function GET(request: NextRequest) {
     resource_type: 'github_account',
     metadata: { login: githubUser.login },
   })
+
+  // Se recebemos projectId no state, vincular automaticamente
+  if (parsedState.projectId) {
+    await supabase.from('projects').update({ github_account_id: upsertData.id }).eq('id', parsedState.projectId)
+    redirect(`/projects/${parsedState.projectId}`)
+  }
 
   redirect('/accounts?success=github_connected')
 }

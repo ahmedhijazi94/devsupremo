@@ -10,21 +10,23 @@ import { z } from 'zod'
 // ─────────────────────────────────────────────────────────────
 // Iniciar conexão GitHub — gera state CSRF e redireciona
 // ─────────────────────────────────────────────────────────────
-export async function connectGithubAccount() {
+export async function connectGithubAccount(projectId?: string) {
   const supabase = await createClient()
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  // Gerar state CSRF aleatório
-  const state = crypto.randomBytes(32).toString('hex')
+  // Pass CSRF token and optionally projectId in the state
+  const csrfToken = crypto.randomBytes(32).toString('hex')
+  const stateObj = { csrf: csrfToken, projectId: projectId || null }
+  const state = Buffer.from(JSON.stringify(stateObj)).toString('base64')
 
   // Salvar state no banco para verificar no callback (TTL via created_at)
   await supabase.from('audit_logs').insert({
     user_id: user.id,
     action: 'github_oauth_state',
     resource_type: 'oauth',
-    resource_id: state,
+    resource_id: csrfToken, // Use csrfToken as the lookup key
   })
 
   // Redirecionar para GitHub OAuth com escopos necessários para criar repos

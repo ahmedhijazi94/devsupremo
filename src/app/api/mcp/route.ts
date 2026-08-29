@@ -30,8 +30,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing projectId' }, { status: 400 })
     }
     if (!action) return NextResponse.json({ error: 'Missing action' }, { status: 400 })
-      return NextResponse.json({ error: 'Missing projectId or action' }, { status: 400 })
-    }
 
     const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
     const { data: project } = await supabase

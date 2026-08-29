@@ -27,6 +27,7 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
         } else {
           toast.success('Projeto excluído com sucesso.')
           setIsOpen(false)
+          window.location.href = '/dashboard' // Force hard navigation to dashboard
         }
       } catch (err) {
         toast.error('Erro ao excluir projeto.')

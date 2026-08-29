@@ -33,7 +33,7 @@ export async function connectGithubAccount(projectId?: string) {
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID!,
     redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/auth/github-account/callback`,
-    scope: 'repo,read:user,user:email,delete_repo',
+    scope: 'repo,read:user,user:email,delete_repo,workflow',
     state,
   })
 

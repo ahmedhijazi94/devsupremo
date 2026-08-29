@@ -5,7 +5,7 @@ import { decryptToken } from '@/lib/crypto'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
-import { getSecurityAuditScriptContent, getCiWorkflowContent } from '@/lib/templates/project-files'
+import { getSecurityAuditScriptContent, getCiWorkflowContent, getPackageJsonContent, getVitestConfigContent, getPlaywrightConfigContent } from '@/lib/templates/project-files'
 
 const createProjectSchema = z.object({
   name: z
@@ -305,8 +305,11 @@ export async function scaffoldProject(
   const readme = generateReadme(name, description ?? '', stack)
   const envExample = generateEnvExample()
   const gitignore = generateGitignore()
-  const ciWorkflow = getCiWorkflowContent(name)
   const securityAuditScript = getSecurityAuditScriptContent()
+  const ciWorkflow = getCiWorkflowContent(name)
+  const packageJson = getPackageJsonContent(name)
+  const vitestConfig = getVitestConfigContent()
+  const playwrightConfig = getPlaywrightConfigContent()
 
   // 6. Criar nova tree baseada na tree inicial (substitui README.md padrão)
   const treeRes = await githubRequest(
@@ -323,8 +326,19 @@ export async function scaffoldProject(
           { path: 'SECURITY.md', mode: '100644', type: 'blob', content: securityMd },
           { path: '.env.example', mode: '100644', type: 'blob', content: envExample },
           { path: '.gitignore', mode: '100644', type: 'blob', content: gitignore },
-          { path: '.github/workflows/ci.yml', mode: '100644', type: 'blob', content: ciWorkflow },
           { path: 'scripts/security-audit.js', mode: '100755', type: 'blob', content: securityAuditScript },
+          { path: '.github/workflows/ci.yml', mode: '100644', type: 'blob', content: ciWorkflow },
+          { path: 'package.json', mode: '100644', type: 'blob', content: packageJson },
+          { path: 'vitest.config.ts', mode: '100644', type: 'blob', content: vitestConfig },
+          { path: 'playwright.config.ts', mode: '100644', type: 'blob', content: playwrightConfig },
+          { path: 'vitest.setup.ts', mode: '100644', type: 'blob', content: "import '@testing-library/jest-dom'" },
+          
+          { path: 'app/layout.tsx', mode: '100644', type: 'blob', content: "export default function RootLayout({ children }: { children: React.ReactNode }) { return ( <html lang='en'><body>{children}</body></html> ); }" },
+          { path: 'app/page.tsx', mode: '100644', type: 'blob', content: "export default function Home() { return <main><h1>Supremo App</h1></main>; }" },
+          { path: '.eslintrc.json', mode: '100644', type: 'blob', content: '{ "extends": "next/core-web-vitals" }' },
+          { path: 'tsconfig.json', mode: '100644', type: 'blob', content: JSON.stringify({ compilerOptions: { lib: ["dom", "dom.iterable", "esnext"], allowJs: true, skipLibCheck: true, strict: true, noEmit: true, esModuleInterop: true, module: "esnext", moduleResolution: "bundler", resolveJsonModule: true, isolatedModules: true, jsx: "preserve", incremental: true, plugins: [{ name: "next" }], paths: { "@/*": ["./*"] } }, include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"], exclude: ["node_modules"] }, null, 2) },
+
+          { path: 'e2e/example.spec.ts', mode: '100644', type: 'blob', content: "import { test, expect } from '@playwright/test';\n\ntest('has title', async ({ page }) => {\n  await page.goto('/');\n  await expect(page).toHaveTitle(/Create Next App/);\n});" },
         ],
       }),
     }

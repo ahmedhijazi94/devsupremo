@@ -174,13 +174,13 @@ export async function deleteProject(projectId: string): Promise<{ error?: string
   if (project.supabase_project_ref && project.supabase_account_id) {
     const { data: sbAcc } = await supabase
       .from('supabase_accounts')
-      .select('encrypted_token')
+      .select('access_token_encrypted')
       .eq('id', project.supabase_account_id)
       .single()
 
     if (sbAcc) {
       try {
-        const sbToken = decryptToken(sbAcc.encrypted_token)
+        const sbToken = decryptToken(sbAcc.access_token_encrypted)
         const sbRes = await fetch(`https://api.supabase.com/v1/projects/${project.supabase_project_ref}`, {
           method: 'DELETE',
           headers: {
@@ -205,13 +205,13 @@ export async function deleteProject(projectId: string): Promise<{ error?: string
   if (project.github_repo_full_name && project.github_account_id) {
     const { data: ghAcc } = await supabase
       .from('github_accounts')
-      .select('encrypted_token')
+      .select('access_token_encrypted')
       .eq('id', project.github_account_id)
       .single()
 
     if (ghAcc) {
       try {
-        const ghToken = decryptToken(ghAcc.encrypted_token)
+        const ghToken = decryptToken(ghAcc.access_token_encrypted)
         const ghRes = await fetch(`https://api.github.com/repos/${project.github_repo_full_name}`, {
           method: 'DELETE',
           headers: {

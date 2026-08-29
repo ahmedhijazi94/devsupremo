@@ -203,7 +203,7 @@ export function getCiWorkflowContent(projectName: string): string {
     '',
     'jobs:',
     '  security-audit:',
-    '    name: Security Audit (5 Categories — zero AI tokens)',
+    '    name: Security Audit',
     '    runs-on: ubuntu-latest',
     '    steps:',
     '      - uses: actions/checkout@v4',
@@ -212,17 +212,10 @@ export function getCiWorkflowContent(projectName: string): string {
     '          node-version: "20"',
     '          cache: npm',
     '      - run: npm ci',
-    '      - name: Run Security Audit (strict)',
-    '        run: node scripts/security-audit.js --strict',
-    '      - name: Upload report',
-    '        if: always()',
-    '        uses: actions/upload-artifact@v4',
-    '        with:',
-    '          name: security-audit',
-    '          path: docs/security-audit/last-audit.json',
+    '      - run: npm run audit:security -- --strict',
     '',
-    '  typescript:',
-    '    name: TypeScript (strict, zero errors)',
+    '  quality:',
+    '    name: Lint & Types',
     '    runs-on: ubuntu-latest',
     '    steps:',
     '      - uses: actions/checkout@v4',
@@ -230,30 +223,33 @@ export function getCiWorkflowContent(projectName: string): string {
     '        with: { node-version: "20", cache: npm }',
     '      - run: npm ci',
     '      - run: npx tsc --noEmit',
+    '      - run: npm run lint',
     '',
-    '  eslint:',
-    '    name: ESLint',
+    '  test-unit:',
+    '    name: Unit Tests (Vitest)',
     '    runs-on: ubuntu-latest',
     '    steps:',
     '      - uses: actions/checkout@v4',
     '      - uses: actions/setup-node@v4',
     '        with: { node-version: "20", cache: npm }',
     '      - run: npm ci',
-    '      - run: npm run lint',
+    '      - run: npm run test',
     '',
-    '  dependency-audit:',
-    '    name: Dependency Audit',
+    '  test-e2e:',
+    '    name: E2E Tests (Playwright)',
     '    runs-on: ubuntu-latest',
     '    steps:',
     '      - uses: actions/checkout@v4',
     '      - uses: actions/setup-node@v4',
     '        with: { node-version: "20", cache: npm }',
-    '      - run: npm audit --audit-level=high',
+    '      - run: npm ci',
+    '      - run: npx playwright install --with-deps',
+    '      - run: npm run test:e2e',
     '',
     '  build:',
     '    name: Production Build',
     '    runs-on: ubuntu-latest',
-    '    needs: [security-audit, typescript, eslint]',
+    '    needs: [security-audit, quality, test-unit, test-e2e]',
     '    steps:',
     '      - uses: actions/checkout@v4',
     '      - uses: actions/setup-node@v4',
@@ -262,4 +258,90 @@ export function getCiWorkflowContent(projectName: string): string {
     '      - run: npm run build',
   ]
   return lines.join('\n')
+}
+
+export function getPackageJsonContent(projectName: string): string {
+  return JSON.stringify({
+    name: projectName,
+    version: "0.1.0",
+    private: true,
+    scripts: {
+      dev: "next dev",
+      build: "next build",
+      start: "next start",
+      lint: "next lint",
+      test: "vitest run",
+      "test:watch": "vitest",
+      "test:e2e": "playwright test",
+      "test:e2e:ui": "playwright test --ui",
+      "audit:security": "node scripts/security-audit.js"
+    },
+    dependencies: {
+      "@supabase/supabase-js": "^2.39.0",
+      "next": "15.0.0",
+      "react": "^18.2.0",
+      "react-dom": "^18.2.0",
+      "zod": "^3.22.4"
+    },
+    devDependencies: {
+      "@playwright/test": "^1.40.1",
+      "@testing-library/react": "^14.1.2",
+      "@types/node": "^20",
+      "@types/react": "^18",
+      "@types/react-dom": "^18",
+      "@vitejs/plugin-react": "^4.2.1",
+      "eslint": "^8",
+      "eslint-config-next": "15.0.0",
+      "jsdom": "^23.0.1",
+      "typescript": "^5",
+      "vitest": "^1.1.0"
+    }
+  }, null, 2)
+}
+
+export function getVitestConfigContent(): string {
+  return `import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./vitest.setup.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+    },
+  },
+})
+`
+}
+
+export function getPlaywrightConfigContent(): string {
+  return `import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './e2e',
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  reporter: 'html',
+  use: {
+    baseURL: 'http://localhost:3000',
+    trace: 'on-first-retry',
+  },
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
+  webServer: {
+    command: 'npm run dev',
+    url: 'http://localhost:3000',
+    reuseExistingServer: !process.env.CI,
+  },
+});
+`
 }

@@ -122,7 +122,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             <h2 className="text-xl font-semibold">Live Preview</h2>
             <p className="text-sm text-muted-foreground">O ambiente é recriado em tempo real via WebContainers conforme o Github recebe os commits.</p>
           </div>
-          <PreviewPanel repoFullName={project.github_repo_full_name} />
+          <PreviewPanel repoFullName={project.github_repo_full_name} projectId={project.id} />
         </div>
       )}
 

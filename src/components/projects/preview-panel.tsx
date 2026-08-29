@@ -5,18 +5,19 @@ import { Monitor, Smartphone, Tablet, ExternalLink, RefreshCw, Code2 } from 'luc
 
 interface PreviewPanelProps {
   repoFullName: string
+  projectId: string
 }
 
 type DeviceType = 'mobile' | 'tablet' | 'desktop'
 
-export function PreviewPanel({ repoFullName }: PreviewPanelProps) {
+export function PreviewPanel({ repoFullName, projectId }: PreviewPanelProps) {
   const [device, setDevice] = useState<DeviceType>('desktop')
   const [key, setKey] = useState(0)
 
   // Use StackBlitz for immediate in-browser WebContainer preview
   // It boots up Next.js instantly by reading the GitHub repo.
-  const previewUrl = `https://stackblitz.com/github/${repoFullName}?embed=1&view=preview&hideExplorer=1&hideNavigation=1`
-  const editorUrl = `https://stackblitz.com/github/${repoFullName}?embed=1&view=editor`
+  const previewUrl = `/sandbox?projectId=${projectId}`
+  const editorUrl = `https://github.com/${repoFullName}`
 
   const deviceStyles = {
     mobile: 'w-[375px] h-[667px]',

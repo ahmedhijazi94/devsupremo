@@ -2,9 +2,10 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { Cpu, Globe, ShieldCheck, GitPullRequest } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
-import { Card, CardTitle, CardNote } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { CopyButton } from '@/components/ui/copy-button'
 import { TokenManager, type TokenRow } from '@/components/mcps/token-manager'
+import { ConnectionGenerator } from '@/components/mcps/connection-generator'
 
 export const metadata = {
   title: 'Integração MCP — Supremo',
@@ -43,36 +44,6 @@ export default async function MCPsPage() {
     .eq('user_id', user.id)
     .is('revoked_at', null)
     .order('created_at', { ascending: false })
-
-  const claudeCodeCommand = `claude mcp add --transport http supremo ${mcpUrl} --header"Authorization: Bearer SEU_TOKEN"`
-
-  const jsonConfig = JSON.stringify(
-    {
-      mcpServers: {
-        supremo: {
-          type: 'http',
-          url: mcpUrl,
-          headers: { Authorization: 'Bearer SEU_TOKEN' },
-        },
-      },
-    },
-    null,
-    2,
-  )
-
-  const bridgeConfig = JSON.stringify(
-    {
-      mcpServers: {
-        supremo: {
-          command: 'npx',
-          args: ['-y', '@supremo/cli', 'mcp'],
-          env: { SUPREMO_URL: mcpUrl, SUPREMO_TOKEN: 'SEU_TOKEN' },
-        },
-      },
-    },
-    null,
-    2,
-  )
 
   return (
     <div className="space-y-3 sm:space-y-4">
@@ -120,61 +91,44 @@ export default async function MCPsPage() {
         <TokenManager tokens={(tokens ?? []) as TokenRow[]} mcpUrl={mcpUrl} />
       </Card>
 
-      {/* Clientes */}
+      {/* Tutorial de 3 passos */}
       <Card className="space-y-4">
-        <h2 className="font-semibold">Como conectar</h2>
+        <h2 className="font-semibold">Como começar, em 3 passos</h2>
+        <ol className="space-y-3">
+          {[
+            {
+              n: 1,
+              t: 'Gere um token',
+              d: 'Um por máquina, na seção acima. Ele aparece uma vez só — copie na hora.',
+            },
+            {
+              n: 2,
+              t: 'Cole no seu agente',
+              d: 'Escolha o agente abaixo e copie o comando pronto, já com o token dentro.',
+            },
+            {
+              n: 3,
+              t: 'Peça a primeira feature',
+              d: 'Cole o "primeiro prompt" e descreva o que quer. O agente lê as regras, abre PR e só faz merge no verde.',
+            },
+          ].map((step) => (
+            <li key={step.n} className="flex gap-3">
+              <span className="bg-accent text-accent-ink flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold">
+                {step.n}
+              </span>
+              <div>
+                <p className="text-sm font-medium">{step.t}</p>
+                <p className="text-muted text-sm">{step.d}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </Card>
 
-        <div className="bg-sunken space-y-3 rounded-[var(--radius-inner)] p-5">
-          <h3 className="text-sm font-semibold">Claude Code</h3>
-          <div className="relative">
-            <pre className="bg-surface text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
-              {claudeCodeCommand}
-            </pre>
-            <CopyButton
-              value={claudeCodeCommand}
-              className="absolute top-2.5 right-2.5"
-            />
-          </div>
-        </div>
-
-        <div className="bg-sunken space-y-3 rounded-[var(--radius-inner)] p-5">
-          <h3 className="text-sm font-semibold">
-            Cursor · Windsurf · Claude Desktop · Codex
-          </h3>
-          <p className="text-muted text-sm">
-            Clientes com suporte a MCP remoto aceitam a configuração direta:
-          </p>
-          <div className="relative">
-            <pre className="bg-surface text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
-              {jsonConfig}
-            </pre>
-            <CopyButton
-              value={jsonConfig}
-              className="absolute top-2.5 right-2.5"
-            />
-          </div>
-        </div>
-
-        <div className="bg-sunken space-y-3 rounded-[var(--radius-inner)] p-5">
-          <h3 className="text-sm font-semibold">
-            Cliente sem suporte a MCP remoto
-          </h3>
-          <p className="text-muted text-sm">
-            A ponte roda via{' '}
-            <code className="bg-sunken rounded px-1 py-0.5">npx</code>, sem
-            instalação permanente. Ela só repassa as chamadas para o endpoint
-            acima — nenhum segredo mora nela.
-          </p>
-          <div className="relative">
-            <pre className="bg-surface text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
-              {bridgeConfig}
-            </pre>
-            <CopyButton
-              value={bridgeConfig}
-              className="absolute top-2.5 right-2.5"
-            />
-          </div>
-        </div>
+      {/* Gerador de conexão por agente */}
+      <Card className="space-y-4">
+        <h2 className="font-semibold">Conectar o seu agente</h2>
+        <ConnectionGenerator mcpUrl={mcpUrl} token={null} />
       </Card>
 
       {/* Como funciona */}

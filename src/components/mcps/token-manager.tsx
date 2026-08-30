@@ -11,6 +11,7 @@ import {
 import { toast } from 'sonner'
 import { createMcpToken, revokeMcpToken } from '@/actions/mcp-tokens'
 import { CopyButton } from '@/components/ui/copy-button'
+import { ConnectionGenerator } from '@/components/mcps/connection-generator'
 
 export interface TokenRow {
   id: string
@@ -84,18 +85,10 @@ export function TokenManager({ tokens, mcpUrl }: TokenManagerProps) {
               className="absolute top-2.5 right-2.5"
             />
           </div>
-          <div className="relative">
-            <p className="text-muted mb-1.5 text-xs font-medium">
-              Conecte de qualquer máquina:
-            </p>
-            <pre className="bg-surface/70 overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
-              {`claude mcp add --transport http supremo ${mcpUrl} --header"Authorization: Bearer ${freshToken}"`}
-            </pre>
-            <CopyButton
-              value={`claude mcp add --transport http supremo ${mcpUrl} --header"Authorization: Bearer ${freshToken}"`}
-              className="absolute top-8 right-2.5"
-            />
-          </div>
+
+          {/* Snippet por agente, já com o token dentro. */}
+          <ConnectionGenerator mcpUrl={mcpUrl} token={freshToken} />
+
           <button
             onClick={() => setFreshToken(null)}
             className="text-muted hover:text-ink text-xs font-medium transition-colors"

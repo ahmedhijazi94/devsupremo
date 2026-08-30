@@ -39,7 +39,7 @@ export function AddSupabaseModal({ projectId }: { projectId?: string }) {
       </button>
 
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="bg-ink/25 fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-surface w-full max-w-md space-y-5 rounded-2xl p-6 shadow-2xl">
             {/* Header */}
             <div className="flex items-center justify-between">
@@ -88,7 +88,7 @@ export function AddSupabaseModal({ projectId }: { projectId?: string }) {
                     onChange={(e) => setToken(e.target.value)}
                     placeholder="sbp_..."
                     required
-                    className="bg-surface focus:ring-primary w-full rounded-[var(--radius-control)] px-3 py-2 pr-10 text-sm focus:ring-2 focus:outline-none"
+                    className="bg-sunken focus:ring-ink w-full rounded-[var(--radius-control)] px-3 py-2 pr-10 text-sm focus:ring-2 focus:outline-none"
                   />
                   <button
                     type="button"

@@ -49,7 +49,7 @@ export function ConnectVercelModal({
         <form action={() => startVercelOAuth()}>
           <button
             type="submit"
-            className="bg-foreground text-background inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90"
+            className="bg-accent text-accent-ink inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90"
           >
             <Plus className="h-4 w-4" />
             Conectar Vercel
@@ -61,7 +61,7 @@ export function ConnectVercelModal({
     return (
       <button
         onClick={() => setOpen(true)}
-        className="bg-foreground text-background inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90"
+        className="bg-accent text-accent-ink inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90"
       >
         <Plus className="h-4 w-4" />
         Conectar Vercel
@@ -70,7 +70,7 @@ export function ConnectVercelModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div className="bg-ink/25 fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
       <div className="bg-surface w-full max-w-md rounded-[var(--radius-inner)] p-5 shadow-xl">
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
@@ -113,7 +113,7 @@ export function ConnectVercelModal({
             onChange={(event) => setToken(event.target.value)}
             placeholder="Token da Vercel"
             autoComplete="off"
-            className="bg-surface focus-visible:ring-line-strong h-10 w-full rounded-[var(--radius-control)] px-3 font-mono text-sm transition-shadow outline-none focus-visible:ring-2"
+            className="bg-sunken focus-visible:ring-line-strong h-10 w-full rounded-[var(--radius-control)] px-3 font-mono text-sm transition-shadow outline-none focus-visible:ring-2"
           />
 
           <p className="text-muted text-xs">
@@ -132,7 +132,7 @@ export function ConnectVercelModal({
             <button
               type="submit"
               disabled={isPending || token.trim().length < 20}
-              className="bg-foreground text-background h-9 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="bg-accent text-accent-ink h-9 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {isPending ? 'Verificando…' : 'Conectar'}
             </button>

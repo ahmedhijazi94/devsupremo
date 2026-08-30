@@ -3,8 +3,8 @@ import { FolderPlus } from 'lucide-react'
 
 export function EmptyProjects() {
   return (
-    <div className="bg-surface flex flex-col items-center justify-center space-y-4 rounded-[var(--radius-inner)] border-dashed p-16 text-center">
-      <div className="bg-sunken border-primary/10 flex h-14 w-14 items-center justify-center rounded-2xl border">
+    <div className="bg-surface flex flex-col items-center justify-center space-y-4 rounded-[var(--radius-inner)] p-16 text-center">
+      <div className="bg-sunken flex h-14 w-14 items-center justify-center rounded-2xl">
         <FolderPlus className="text-muted h-7 w-7" />
       </div>
       <div className="space-y-1">

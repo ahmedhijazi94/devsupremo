@@ -116,7 +116,7 @@ export default async function SettingsPage() {
             <Link
               key={link.href}
               href={link.href}
-              className="group bg-surface hover:border-primary/40 hover:bg-sunken rounded-[var(--radius-inner)] p-4 transition-colors"
+              className="group bg-sunken hover:bg-line rounded-[var(--radius-inner)] p-4 transition-colors"
             >
               <div className="flex items-start gap-3">
                 <link.icon className="text-muted mt-0.5 h-4 w-4 shrink-0" />

@@ -65,7 +65,7 @@ function countFiles(filesChanged: Json | null): number {
 export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
   if (items.length === 0) {
     return (
-      <div className="rounded-[var(--radius-inner)] border-dashed p-8 text-center">
+      <div className="rounded-[var(--radius-inner)] p-8 text-center">
         <Sparkles className="text-muted mx-auto mb-3 h-6 w-6" />
         <p className="text-sm font-medium">Nenhuma mudança ainda</p>
         <p className="text-muted mx-auto mt-1 max-w-sm text-sm">

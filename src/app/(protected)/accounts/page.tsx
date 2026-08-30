@@ -101,7 +101,7 @@ export default async function AccountsPage({
       <Card className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-foreground/5 flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)]">
+            <div className="bg-sunken flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)]">
               <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
                 <path
                   fillRule="evenodd"
@@ -121,7 +121,7 @@ export default async function AccountsPage({
         </div>
 
         {githubAccounts.length === 0 ? (
-          <div className="space-y-2 rounded-[var(--radius-inner)] border-dashed p-10 text-center">
+          <div className="space-y-2 rounded-[var(--radius-inner)] p-10 text-center">
             <p className="text-sm font-medium">
               Nenhuma conta GitHub conectada
             </p>
@@ -135,7 +135,7 @@ export default async function AccountsPage({
             {githubAccounts.map((acc) => (
               <div
                 key={acc.id}
-                className="bg-surface flex items-center justify-between rounded-[var(--radius-inner)] p-4"
+                className="bg-sunken flex items-center justify-between rounded-[var(--radius-inner)] p-4"
               >
                 <div className="flex items-center gap-3">
                   {acc.avatar_url ? (
@@ -176,8 +176,6 @@ export default async function AccountsPage({
         )}
       </Card>
 
-      <div className="border-t" />
-
       {/* Supabase Accounts */}
       <Card className="space-y-4">
         <div className="flex items-center justify-between">
@@ -196,7 +194,7 @@ export default async function AccountsPage({
         </div>
 
         {supabaseAccounts.length === 0 ? (
-          <div className="space-y-2 rounded-[var(--radius-inner)] border-dashed p-10 text-center">
+          <div className="space-y-2 rounded-[var(--radius-inner)] p-10 text-center">
             <p className="text-sm font-medium">
               Nenhuma conta Supabase conectada
             </p>
@@ -210,7 +208,7 @@ export default async function AccountsPage({
             {supabaseAccounts.map((acc) => (
               <div
                 key={acc.id}
-                className="bg-surface flex items-center justify-between rounded-[var(--radius-inner)] p-4"
+                className="bg-sunken flex items-center justify-between rounded-[var(--radius-inner)] p-4"
               >
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[#3ECF8E]/20 bg-[#3ECF8E]/10">
@@ -240,7 +238,7 @@ export default async function AccountsPage({
       <Card className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-foreground/5 flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)]">
+            <div className="bg-sunken flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)]">
               <svg
                 className="h-4 w-4"
                 viewBox="0 0 76 65"
@@ -261,7 +259,7 @@ export default async function AccountsPage({
         </div>
 
         {vercelAccounts.length === 0 ? (
-          <div className="space-y-2 rounded-[var(--radius-inner)] border-dashed p-10 text-center">
+          <div className="space-y-2 rounded-[var(--radius-inner)] p-10 text-center">
             <p className="text-sm font-medium">
               Nenhuma conta Vercel conectada
             </p>
@@ -276,10 +274,10 @@ export default async function AccountsPage({
             {vercelAccounts.map((acc) => (
               <div
                 key={acc.id}
-                className="bg-surface flex items-center justify-between rounded-[var(--radius-inner)] p-4"
+                className="bg-sunken flex items-center justify-between rounded-[var(--radius-inner)] p-4"
               >
                 <div className="flex items-center gap-3">
-                  <div className="bg-foreground/5 flex h-10 w-10 items-center justify-center rounded-full">
+                  <div className="bg-sunken flex h-10 w-10 items-center justify-center rounded-full">
                     <svg
                       className="h-4 w-4"
                       viewBox="0 0 76 65"

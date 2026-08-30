@@ -13,7 +13,7 @@ export function ActiveProjectBadge({ project }: ActiveProjectBadgeProps) {
     return (
       <Link
         href="/projects"
-        className="text-muted hover:text-ink hover:border-foreground/30 flex items-center gap-2 rounded-[var(--radius-control)] border-dashed px-3 py-2 text-sm transition-colors"
+        className="text-muted hover:text-ink flex items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm transition-colors"
       >
         <Circle className="h-3 w-3" />
         <span className="truncate">Nenhum projeto ativo</span>

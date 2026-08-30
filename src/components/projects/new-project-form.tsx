@@ -62,12 +62,12 @@ export function NewProjectForm() {
   return (
     <form
       onSubmit={handleSubmit}
-      className="bg-surface space-y-6 rounded-[var(--radius-inner)] p-6"
+      className="bg-surface space-y-6 rounded-[var(--radius-card)] p-6"
     >
       {/* Nome do projeto */}
       <div className="space-y-2">
         <label className="text-sm font-medium">
-          Nome do projeto <span className="text-destructive">*</span>
+          Nome do projeto <span className="text-down-ink">*</span>
         </label>
         <input
           type="text"
@@ -75,9 +75,9 @@ export function NewProjectForm() {
           onChange={handleNameChange}
           placeholder="Meu Novo Projeto"
           required
-          className="bg-surface focus:ring-primary w-full rounded-[var(--radius-control)] px-3 py-2 text-sm focus:ring-2 focus:outline-none"
+          className="bg-sunken focus:ring-ink w-full rounded-[var(--radius-control)] px-3 py-2 text-sm focus:ring-2 focus:outline-none"
         />
-        {nameError && <p className="text-destructive text-xs">{nameError}</p>}
+        {nameError && <p className="text-down-ink text-xs">{nameError}</p>}
         {slug && (
           <p className="text-muted mt-1 text-xs">
             Repositório será: <span className="text-ink font-mono">{slug}</span>
@@ -96,7 +96,7 @@ export function NewProjectForm() {
           }
           placeholder="O que esse app vai fazer?"
           maxLength={200}
-          className="bg-surface focus:ring-primary w-full rounded-[var(--radius-control)] px-3 py-2 text-sm focus:ring-2 focus:outline-none"
+          className="bg-sunken focus:ring-ink w-full rounded-[var(--radius-control)] px-3 py-2 text-sm focus:ring-2 focus:outline-none"
         />
       </div>
 

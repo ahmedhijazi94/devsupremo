@@ -82,14 +82,14 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
           <li
             key={step.key}
             className={cn(
-              'flex items-center gap-4 rounded-[var(--radius-control)] border p-4 transition-colors',
-              step.done ? 'border-line bg-sunken' : 'bg-surface',
+              'flex items-center gap-4 rounded-[var(--radius-control)] p-4 transition-colors',
+              step.done ? 'bg-sunken' : 'bg-surface shadow-sm',
             )}
           >
             <span
               className={cn(
                 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
-                step.done ? 'bg-up text-up-ink' : 'text-muted border',
+                step.done ? 'bg-up text-up-ink' : 'bg-sunken text-muted',
               )}
             >
               {step.done ? <Check className="h-4 w-4" /> : index + 1}
@@ -112,7 +112,7 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
               <form action={step.action} className="shrink-0">
                 <button
                   type="submit"
-                  className="bg-foreground text-background inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-3 text-xs font-medium transition-opacity hover:opacity-90"
+                  className="bg-accent text-accent-ink inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-3 text-xs font-medium transition-opacity hover:opacity-90"
                 >
                   Autorizar
                   <ArrowRight className="h-3.5 w-3.5" />

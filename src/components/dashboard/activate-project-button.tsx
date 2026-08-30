@@ -36,7 +36,7 @@ export function ActivateProjectButton({
     return (
       <button
         disabled
-        className="inline-flex flex-1 cursor-default items-center justify-center gap-1.5 rounded-[var(--radius-control)] border-green-500/20 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-600"
+        className="bg-up text-up-ink inline-flex flex-1 cursor-default items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium"
       >
         <Zap className="h-3 w-3" />
         Ativo

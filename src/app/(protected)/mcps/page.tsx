@@ -124,10 +124,10 @@ export default async function MCPsPage() {
       <Card className="space-y-4">
         <h2 className="font-semibold">Como conectar</h2>
 
-        <div className="bg-surface space-y-3 rounded-[var(--radius-inner)] p-5">
+        <div className="bg-sunken space-y-3 rounded-[var(--radius-inner)] p-5">
           <h3 className="text-sm font-semibold">Claude Code</h3>
           <div className="relative">
-            <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
+            <pre className="bg-surface text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
               {claudeCodeCommand}
             </pre>
             <CopyButton
@@ -137,7 +137,7 @@ export default async function MCPsPage() {
           </div>
         </div>
 
-        <div className="bg-surface space-y-3 rounded-[var(--radius-inner)] p-5">
+        <div className="bg-sunken space-y-3 rounded-[var(--radius-inner)] p-5">
           <h3 className="text-sm font-semibold">
             Cursor · Windsurf · Claude Desktop · Codex
           </h3>
@@ -145,7 +145,7 @@ export default async function MCPsPage() {
             Clientes com suporte a MCP remoto aceitam a configuração direta:
           </p>
           <div className="relative">
-            <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
+            <pre className="bg-surface text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
               {jsonConfig}
             </pre>
             <CopyButton
@@ -155,7 +155,7 @@ export default async function MCPsPage() {
           </div>
         </div>
 
-        <div className="bg-surface space-y-3 rounded-[var(--radius-inner)] p-5">
+        <div className="bg-sunken space-y-3 rounded-[var(--radius-inner)] p-5">
           <h3 className="text-sm font-semibold">
             Cliente sem suporte a MCP remoto
           </h3>
@@ -166,7 +166,7 @@ export default async function MCPsPage() {
             acima — nenhum segredo mora nela.
           </p>
           <div className="relative">
-            <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
+            <pre className="bg-surface text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
               {bridgeConfig}
             </pre>
             <CopyButton

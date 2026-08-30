@@ -101,7 +101,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   return (
     <section className="bg-surface flex h-full flex-col overflow-hidden rounded-[var(--radius-card)]">
       {/* Barra de ferramentas */}
-      <header className="bg-sunken flex shrink-0 flex-wrap items-center gap-3 border-b px-3 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 px-3 py-2.5">
         <div className="bg-sunken flex rounded-[var(--radius-control)] p-0.5">
           {DEVICES.map((option) => (
             <button

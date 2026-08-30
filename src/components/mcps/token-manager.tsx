@@ -76,7 +76,7 @@ export function TokenManager({ tokens, mcpUrl }: TokenManagerProps) {
             você perder o token, gere outro.
           </p>
           <div className="relative">
-            <pre className="bg-surface overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
+            <pre className="bg-surface/70 overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
               {freshToken}
             </pre>
             <CopyButton
@@ -88,7 +88,7 @@ export function TokenManager({ tokens, mcpUrl }: TokenManagerProps) {
             <p className="text-muted mb-1.5 text-xs font-medium">
               Conecte de qualquer máquina:
             </p>
-            <pre className="bg-surface overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
+            <pre className="bg-surface/70 overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
               {`claude mcp add --transport http supremo ${mcpUrl} --header"Authorization: Bearer ${freshToken}"`}
             </pre>
             <CopyButton
@@ -111,7 +111,7 @@ export function TokenManager({ tokens, mcpUrl }: TokenManagerProps) {
           onChange={(event) => setName(event.target.value)}
           placeholder="Nome do token — ex: notebook do trabalho"
           maxLength={60}
-          className="bg-surface focus-visible:ring-line-strong h-10 flex-1 rounded-[var(--radius-control)] px-3 text-sm transition-shadow outline-none focus-visible:ring-2"
+          className="bg-sunken focus-visible:ring-line-strong h-10 flex-1 rounded-[var(--radius-control)] px-3 text-sm transition-shadow outline-none focus-visible:ring-2"
         />
         <button
           type="submit"
@@ -124,7 +124,7 @@ export function TokenManager({ tokens, mcpUrl }: TokenManagerProps) {
       </form>
 
       {tokens.length === 0 ? (
-        <div className="rounded-[var(--radius-inner)] border-dashed p-6 text-center">
+        <div className="rounded-[var(--radius-inner)] p-6 text-center">
           <KeyRound className="text-muted mx-auto mb-2 h-6 w-6" />
           <p className="text-muted text-sm">
             Nenhum token ainda. Gere um para conectar o seu agente de qualquer
@@ -132,7 +132,7 @@ export function TokenManager({ tokens, mcpUrl }: TokenManagerProps) {
           </p>
         </div>
       ) : (
-        <ul className="overflow-hidden rounded-[var(--radius-inner)]">
+        <ul className="space-y-2">
           {tokens.map((token) => {
             const expired =
               token.expires_at !== null &&
@@ -141,7 +141,7 @@ export function TokenManager({ tokens, mcpUrl }: TokenManagerProps) {
             return (
               <li
                 key={token.id}
-                className="bg-surface flex items-center gap-3 p-3.5"
+                className="bg-sunken flex items-center gap-3 rounded-[var(--radius-inner)] p-3.5"
               >
                 <KeyRound className="text-muted h-4 w-4 shrink-0" />
                 <div className="min-w-0 flex-1">

@@ -29,7 +29,7 @@ export function LoginForm() {
       <button
         onClick={() => handleOAuth('github')}
         disabled={loading !== null}
-        className="bg-surface hover:bg-sunken inline-flex w-full items-center justify-center gap-3 rounded-[var(--radius-control)] px-4 py-3 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        className="bg-accent text-accent-ink inline-flex w-full items-center justify-center gap-3 rounded-[var(--radius-control)] px-4 py-3 font-semibold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <GitBranch className="h-5 w-5" />
         {loading === 'github' ? 'Redirecionando...' : 'Continuar com GitHub'}
@@ -38,7 +38,7 @@ export function LoginForm() {
       <button
         onClick={() => handleOAuth('google')}
         disabled={loading !== null}
-        className="bg-surface hover:bg-sunken inline-flex w-full items-center justify-center gap-3 rounded-[var(--radius-control)] px-4 py-3 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        className="bg-sunken hover:bg-line inline-flex w-full items-center justify-center gap-3 rounded-[var(--radius-control)] px-4 py-3 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         <svg className="h-5 w-5" viewBox="0 0 24 24">
           <path

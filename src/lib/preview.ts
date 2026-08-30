@@ -2,6 +2,7 @@ import {
   createDetachedProject,
   deployFiles,
   findProjectByName,
+  makePubliclyAccessible,
   latestDeployment,
   setEnvironmentVariables,
   VercelError,
@@ -114,16 +115,27 @@ export async function publishSharedPreview(
     existing ??
     (await createDetachedProject(config.token, config.teamId, projectName))
 
+  // Projetos criados antes desta correção nasceram protegidos; garantir a
+  // cada publicação é barato e conserta os que já existem.
+  if (existing) {
+    await makePubliclyAccessible(config.token, config.teamId, project.id)
+  }
+
+  // SUPREMO_PREVIEW diz à aplicação que ela está num preview, e é o que
+  // libera abrir dentro do painel. Depender do rótulo da Vercel não serve:
+  // um deploy por envio de arquivos pode vir marcado como produção.
+  //
   // As chaves do Supabase precisam existir no build, senão a aplicação sobe
   // sem conseguir falar com o banco.
-  if (options.supabaseUrl) {
-    await setEnvironmentVariables(config.token, config.teamId, project.id, {
-      NEXT_PUBLIC_SUPABASE_URL: options.supabaseUrl,
-      ...(options.supabaseAnonKey
-        ? { NEXT_PUBLIC_SUPABASE_ANON_KEY: options.supabaseAnonKey }
-        : {}),
-    })
-  }
+  await setEnvironmentVariables(config.token, config.teamId, project.id, {
+    SUPREMO_PREVIEW: '1',
+    ...(options.supabaseUrl
+      ? { NEXT_PUBLIC_SUPABASE_URL: options.supabaseUrl }
+      : {}),
+    ...(options.supabaseAnonKey
+      ? { NEXT_PUBLIC_SUPABASE_ANON_KEY: options.supabaseAnonKey }
+      : {}),
+  })
 
   const deployment = await deployFiles(
     config.token,

@@ -278,6 +278,9 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
 
     expect(config).toContain('isFramable')
     expect(config).toContain("VERCEL_ENV === 'preview'")
+    // O deploy por envio de arquivos pode vir rotulado como produção; o
+    // sinal explícito é o que garante o enquadramento no painel.
+    expect(config).toContain("SUPREMO_PREVIEW === '1'")
     expect(config).toContain('frame-ancestors *')
 
     // X-Frame-Options não tem valor permissivo: precisa sair da lista,

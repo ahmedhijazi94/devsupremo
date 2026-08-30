@@ -235,11 +235,39 @@ export async function createDetachedProject(
   teamId: string | null,
   name: string
 ): Promise<VercelProject> {
-  return call<VercelProject>('/v11/projects', {
+  const project = await call<VercelProject>('/v11/projects', {
     token,
     teamId,
     method: 'POST',
     body: { name, framework: 'nextjs' },
+  })
+
+  await makePubliclyAccessible(token, teamId, project.id)
+  return project
+}
+
+/**
+ * Desliga a proteção de acesso do projeto.
+ *
+ * Por padrão a Vercel exige login da própria Vercel para abrir um deploy.
+ * Num preview isso derruba as duas coisas que ele existe para fazer:
+ * aparecer embutido no painel e ser mandado para outra pessoa — quem
+ * recebesse o link bateria num login que não é dele.
+ *
+ * Estes projetos são previews descartáveis, feitos para serem vistos. O
+ * site de verdade, com dados reais, vai para a conta do usuário e mantém a
+ * proteção que ele escolher.
+ */
+export async function makePubliclyAccessible(
+  token: string,
+  teamId: string | null,
+  projectId: string
+): Promise<void> {
+  await call(`/v9/projects/${projectId}`, {
+    token,
+    teamId,
+    method: 'PATCH',
+    body: { ssoProtection: null, passwordProtection: null },
   })
 }
 

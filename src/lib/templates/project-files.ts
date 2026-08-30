@@ -235,7 +235,12 @@ const isDev = process.env.NODE_ENV === 'development'
  * usuário. Em desenvolvimento e em preview deploy isso é liberado, senão o
  * preview mostra uma tela em branco.
  */
-const isFramable = isDev || process.env.VERCEL_ENV === 'preview'
+const isFramable =
+  isDev ||
+  process.env.VERCEL_ENV === 'preview' ||
+  // O Supremo publica o preview como deploy próprio, e a Vercel pode
+  // rotulá-lo como produção. Este sinal explícito não depende do rótulo.
+  process.env.SUPREMO_PREVIEW === '1'
 
 /**
  * Content-Security-Policy.

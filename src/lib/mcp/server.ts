@@ -28,8 +28,12 @@ export const SERVER_INSTRUCTIONS = `Você está conectado ao Supremo, a platafor
 REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer sessão:
 
 1. Chame get_project_context ANTES de escrever qualquer código. Ele devolve o
-   agents.md, o CLAUDE.md e o SECURITY.md do repositório. Essas são as regras
-   do projeto e têm precedência sobre os seus padrões.
+   agents.md, o CLAUDE.md e o SECURITY.md do repositório — as regras do projeto,
+   com precedência sobre os seus padrões — E o campo inFlight, com os PRs
+   abertos e o estado do gate de cada um. Se inFlight não estiver vazio, existe
+   trabalho começado por outra sessão ou outra máquina: RETOME ele antes de
+   abrir coisa nova. Cada item traz a ação certa (corrigir, esperar, ou fechar).
+   Abrir um PR paralelo para a mesma coisa duplica trabalho e conflita.
 
 2. Você não commita na branch principal. propose_changes cria uma branch e abre
    um pull request. É o único caminho de escrita, e o servidor não expõe outro.
@@ -162,6 +166,29 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 
         context.rules = rules
         context.headSha = await gh.getHeadSha(creds, project.active_branch)
+
+        // "Continuar de onde parou" vive aqui, na chamada que a regra 1 já
+        // obriga: todo agente, de qualquer máquina, recebe o trabalho em
+        // andamento com o estado do gate — junto das regras, na primeira
+        // chamada. Sem isto, um PR meio-feito ficava invisível para quem não
+        // o abriu, e o próximo agente começava do zero.
+        const openPrs = await gh.listOpenPullRequests(creds)
+        context.inFlight = await Promise.all(
+          openPrs.map(async (pr) => {
+            const checks = await gh.getChecks(creds, pr.headSha)
+            return {
+              pr: pr.number,
+              title: pr.title,
+              branch: pr.headRef,
+              url: pr.url,
+              updatedAt: pr.updatedAt,
+              isMigration: pr.isMigration,
+              gate: checks.state,
+              gateDetail: `${checks.passed}/${checks.total} verdes, ${checks.failed} vermelhos, ${checks.pending} rodando`,
+              action: resumeAction(checks.state),
+            }
+          }),
+        )
       } catch (error) {
         context.rulesError =
           error instanceof Error ? error.message : String(error)
@@ -716,6 +743,24 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 }
 
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * A ação certa para um PR em andamento, a partir do estado do gate.
+ *
+ * É o que faz "continuar de onde parou" ser acionável e não só informativo:
+ * o agente que retoma não precisa deduzir o que fazer — vermelho é corrigir,
+ * rodando é esperar, verde é fechar. Exportada para teste.
+ */
+export function resumeAction(gate: 'passed' | 'failed' | 'pending'): string {
+  switch (gate) {
+    case 'failed':
+      return 'Gate vermelho. Chame get_failed_logs, corrija no mesmo branch e proponha de novo.'
+    case 'pending':
+      return 'Gate rodando. Chame wait_for_checks antes de mexer.'
+    case 'passed':
+      return 'Verde. Chame merge_when_green para fechar.'
+  }
+}
 
 /**
  * Envolve a query de execute_sql numa transação somente-leitura.

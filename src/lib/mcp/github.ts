@@ -269,6 +269,51 @@ export async function getPullRequest(
   }
 }
 
+export interface OpenPullRequest {
+  number: number
+  title: string
+  headRef: string
+  headSha: string
+  url: string
+  updatedAt: string
+  /** É uma migration esperando o teste de RLS virar verde? Ajuda a priorizar. */
+  isMigration: boolean
+}
+
+/**
+ * PRs abertos do projeto, do mais recente ao mais antigo.
+ *
+ * É a peça que faltava para "continuar de onde parou": sem listar o que está
+ * aberto, um agente que conecta de outra máquina não tem como saber que existe
+ * trabalho pendente. Ele veria só o branch ativo — não o PR #7 com um gate
+ * vermelho esperando conserto.
+ */
+export async function listOpenPullRequests(
+  creds: GithubCredentials,
+): Promise<OpenPullRequest[]> {
+  const gh = octokitFor(creds)
+  const { data } = await gh.pulls.list({
+    owner: creds.owner,
+    repo: creds.repo,
+    state: 'open',
+    sort: 'updated',
+    direction: 'desc',
+    // Trabalho a retomar é sempre um punhado; os 10 mais recentes cobrem todo
+    // caso real e limitam o fan-out de getChecks na chamada de contexto.
+    per_page: 10,
+  })
+
+  return data.map((pr) => ({
+    number: pr.number,
+    title: pr.title,
+    headRef: pr.head.ref,
+    headSha: pr.head.sha,
+    url: pr.html_url,
+    updatedAt: pr.updated_at,
+    isMigration: pr.head.ref.startsWith('migration/'),
+  }))
+}
+
 export async function mergePullRequest(
   creds: GithubCredentials,
   prNumber: number,

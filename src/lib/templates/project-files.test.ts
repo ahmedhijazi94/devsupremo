@@ -751,3 +751,36 @@ describe('multi-tenant — o prédio nasce testado', () => {
     expect(team.some((f) => f.path === 'app/login/page.tsx')).toBe(true)
   })
 })
+
+describe('design system — apps nascem bonitos', () => {
+  const layout = file('app/layout.tsx')
+  const home = file('app/page.tsx')
+  const css = file('app/globals.css')
+
+  it('os primitivos vêm no scaffold', () => {
+    const paths = files.map((f) => f.path)
+    expect(paths).toContain('components/ui/button.tsx')
+    expect(paths).toContain('components/ui/card.tsx')
+    expect(paths).toContain('components/ui/input.tsx')
+    expect(paths).toContain('components/ui/badge.tsx')
+  })
+
+  it('a tipografia Inter é self-hosted (sem bater na CSP)', () => {
+    // next/font serve a fonte do próprio domínio — nada de fonts.googleapis
+    // em runtime, que a CSP do app bloquearia.
+    expect(layout).toContain("from 'next/font/google'")
+    expect(layout).toContain('Inter(')
+    expect(layout).toContain('inter.variable')
+  })
+
+  it('o tema tem superfícies em camadas e claro + escuro', () => {
+    expect(css).toContain('--color-surface')
+    expect(css).toContain('--color-elevated')
+    expect(css).toContain('prefers-color-scheme: dark')
+  })
+
+  it('a home usa os primitivos, não HTML cru estilizado à mão', () => {
+    expect(home).toContain("from '@/components/ui/card'")
+    expect(home).toContain('<Card>')
+  })
+})

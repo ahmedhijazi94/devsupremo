@@ -168,6 +168,15 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'app/page.tsx', content: appPage(projectName, summary, auth) },
     { path: 'app/globals.css', content: globalsCss() },
     { path: 'lib/utils.ts', content: libUtils() },
+
+    // ── Design system ─────────────────────────────────────────
+    // Primitivos prontos para o agente construir telas coerentes. Ficam em
+    // components/ui, fora do coverage unitário: são apresentação, cobertos
+    // pelo E2E através das páginas.
+    { path: 'components/ui/button.tsx', content: uiButton() },
+    { path: 'components/ui/card.tsx', content: uiCard() },
+    { path: 'components/ui/input.tsx', content: uiInput() },
+    { path: 'components/ui/badge.tsx', content: uiBadge() },
     // O proxy sempre existe pelo nonce da CSP. Com login, ele também renova
     // a sessão a cada requisição.
     { path: 'proxy.ts', content: proxyFile(auth) },
@@ -545,7 +554,16 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 function appLayout(projectName: string, description: string): string {
   return `import type { Metadata } from 'next'
 import { headers } from 'next/headers'
+import { Inter } from 'next/font/google'
 import './globals.css'
+
+// Inter, servida pelo próprio Next (self-hosted) — sem requisição externa,
+// então nada de bater na CSP. É a tipografia que dá o ar caprichado.
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+  display: 'swap',
+})
 
 export const metadata: Metadata = {
   title: '${escapeJs(projectName)}',
@@ -574,8 +592,8 @@ export default async function RootLayout({
   await headers()
 
   return (
-    <html lang="pt-BR" suppressHydrationWarning>
-      <body className="min-h-dvh bg-background text-foreground antialiased">
+    <html lang="pt-BR" className={inter.variable} suppressHydrationWarning>
+      <body className="bg-background text-foreground min-h-dvh antialiased">
         {children}
       </body>
     </html>
@@ -589,99 +607,184 @@ function appPage(
   description: string,
   auth: boolean,
 ): string {
-  const loginLink = auth
+  // Link só é importado quando há login — importação não usada quebra o lint.
+  const linkImport = auth ? `import Link from 'next/link'\n` : ''
+  const cta = auth
     ? `
-        <div>
-          <a
-            href="/login"
-            className="inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-90"
-          >
-            Entrar
-          </a>
-        </div>
+          <div className="flex flex-wrap gap-3 pt-2">
+            <Link href="/login">
+              <Button size="lg">
+                Entrar
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
+          </div>
 `
     : ''
 
-  return `import Link from 'next/link'
+  return `${linkImport}import { ArrowRight, ShieldCheck, GitPullRequest } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 
 export default function HomePage() {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center px-6 py-16">
-      <div className="space-y-6">
-        <span className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs font-medium text-muted">
-          <span className="size-1.5 rounded-full bg-accent" />
-          Criado com Supremo
-        </span>
+    <main className="relative isolate overflow-hidden">
+      {/* Brilho suave de fundo — dá profundidade sem pesar */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-40 left-1/2 -z-10 h-[36rem] w-[36rem] -translate-x-1/2 rounded-full bg-accent/15 blur-3xl"
+      />
 
-        <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
-          ${escapeJsx(projectName)}
-        </h1>
+      <div className="mx-auto flex min-h-dvh max-w-4xl flex-col justify-center px-6 py-20">
+        <div className="space-y-6">
+          <Badge>
+            <span className="size-1.5 rounded-full bg-accent" />
+            Criado com Supremo
+          </Badge>
 
-        <p className="max-w-prose text-lg text-muted">
-          ${escapeJsx(description)}
-        </p>
-${loginLink}
-        <div className="grid gap-3 pt-4 sm:grid-cols-2">
-          <div className="rounded-lg border border-border p-4">
-            <h2 className="text-sm font-medium">RLS ativo</h2>
-            <p className="mt-1 text-sm text-muted">
-              Toda tabela nasce com Row Level Security e um teste que prova o
-              isolamento entre contas.
-            </p>
-          </div>
-          <div className="rounded-lg border border-border p-4">
-            <h2 className="text-sm font-medium">Gates no CI</h2>
-            <p className="mt-1 text-sm text-muted">
-              Tipos, lint, testes, cobertura, auditoria de segurança e E2E
-              antes de qualquer merge.
-            </p>
+          <h1 className="text-4xl font-semibold sm:text-6xl">
+            ${escapeJsx(projectName)}
+          </h1>
+
+          <p className="text-muted max-w-2xl text-lg leading-relaxed sm:text-xl">
+            ${escapeJsx(description)}
+          </p>
+${cta}
+          <div className="grid gap-4 pt-8 sm:grid-cols-2">
+            <Card>
+              <ShieldCheck className="text-accent h-6 w-6" />
+              <CardTitle className="mt-3">Seguro por padrão</CardTitle>
+              <CardDescription>
+                Toda tabela nasce com Row Level Security e um teste que prova o
+                isolamento entre contas — sozinho, ninguém lê o dado do outro.
+              </CardDescription>
+            </Card>
+            <Card>
+              <GitPullRequest className="text-accent h-6 w-6" />
+              <CardTitle className="mt-3">Testado a cada mudança</CardTitle>
+              <CardDescription>
+                Tipos, lint, testes, cobertura, auditoria de segurança e E2E
+                rodam antes de qualquer merge. Nada quebrado chega na main.
+              </CardDescription>
+            </Card>
           </div>
         </div>
       </div>
     </main>
   )
 }
-
-// Link é usado só quando há login; a importação fica válida nos dois casos.
-void Link
-
 `
 }
 
 function globalsCss(): string {
   return `@import "tailwindcss";
 
+/**
+ * Sistema visual — gerado pelo Supremo.
+ *
+ * Superfícies em camadas (fundo → cartão → elevado), uma cor de ação só,
+ * tipografia Inter, cantos generosos. Claro e escuro desenhados de propósito,
+ * não invertidos no chute. Use os tokens (bg-surface, text-muted, bg-accent…)
+ * em vez de cores cruas, e a interface inteira se mantém coerente.
+ */
+
 @theme {
-  --color-background: oklch(99% 0.002 265);
-  --color-foreground: oklch(21% 0.015 265);
-  --color-muted: oklch(52% 0.018 265);
-  --color-border: oklch(91% 0.006 265);
-  --color-accent: oklch(58% 0.19 275);
+  /* Superfícies */
+  --color-background: oklch(98.5% 0.003 265);
+  --color-surface: oklch(100% 0 0);
+  --color-elevated: oklch(96.8% 0.004 265);
+
+  /* Texto */
+  --color-foreground: oklch(21% 0.02 265);
+  --color-muted: oklch(55% 0.02 265);
+
+  /* Traço */
+  --color-border: oklch(92% 0.005 265);
+  --color-border-strong: oklch(86% 0.008 265);
+
+  /* Ação */
+  --color-accent: oklch(54% 0.2 267);
+  --color-accent-hover: oklch(49% 0.2 267);
   --color-accent-foreground: oklch(99% 0 0);
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Semânticas — para estado, não decoração */
+  --color-success: oklch(92% 0.09 150);
+  --color-success-foreground: oklch(42% 0.13 150);
+  --color-warning: oklch(94% 0.09 85);
+  --color-warning-foreground: oklch(50% 0.13 70);
+  --color-danger: oklch(93% 0.06 25);
+  --color-danger-foreground: oklch(51% 0.2 27);
+
+  /* Cantos */
+  --radius-xl: 1.25rem;
+  --radius-lg: 0.875rem;
+  --radius-md: 0.625rem;
+  --radius-sm: 0.375rem;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   @theme {
-    --color-background: oklch(16% 0.012 265);
-    --color-foreground: oklch(95% 0.006 265);
-    --color-muted: oklch(68% 0.016 265);
-    --color-border: oklch(28% 0.012 265);
-    --color-accent: oklch(70% 0.16 275);
-    --color-accent-foreground: oklch(16% 0.012 265);
+    --color-background: oklch(17% 0.015 265);
+    --color-surface: oklch(21% 0.015 265);
+    --color-elevated: oklch(25% 0.016 265);
+
+    --color-foreground: oklch(96% 0.005 265);
+    --color-muted: oklch(70% 0.015 265);
+
+    --color-border: oklch(30% 0.012 265);
+    --color-border-strong: oklch(38% 0.014 265);
+
+    --color-accent: oklch(70% 0.17 270);
+    --color-accent-hover: oklch(75% 0.16 270);
+    --color-accent-foreground: oklch(17% 0.015 265);
+
+    --color-success: oklch(30% 0.08 150);
+    --color-success-foreground: oklch(85% 0.15 150);
+    --color-warning: oklch(32% 0.08 80);
+    --color-warning-foreground: oklch(88% 0.13 85);
+    --color-danger: oklch(30% 0.09 25);
+    --color-danger-foreground: oklch(84% 0.13 25);
   }
 }
 
 @layer base {
-  * {
-    border-color: var(--color-border);
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Títulos: mais apertados e equilibrados, o que dá o ar caprichado. */
+  h1, h2, h3, h4 {
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-accent-foreground);
   }
 
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-strong) transparent;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -696,16 +799,136 @@ function globalsCss(): string {
 `
 }
 
-/**
- * Proxy do Next 16 — antigo middleware.
- *
- * Existe por um motivo só: a CSP precisa de um nonce por requisição.
- *
- * Sem ele a política de scripts era `'self' 'unsafe-inline'`, e o comentário
- * ao lado dizia que em produção o script ficava restrito à própria origem.
- * Não ficava: `'unsafe-inline'` autoriza qualquer script escrito na página,
- * que é exatamente o que um XSS injeta. A CSP existia e não defendia do que
- * ela existe para defender.
+// ═════════════════════════════════════════════════════════════
+// Design system — primitivos
+// ═════════════════════════════════════════════════════════════
+
+function uiButton(): string {
+  return `import { cn } from '@/lib/utils'
+
+type Variant = 'primary' | 'secondary' | 'ghost'
+type Size = 'sm' | 'md' | 'lg'
+
+const base =
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-md)] font-medium transition-colors disabled:pointer-events-none disabled:opacity-50'
+
+const variants: Record<Variant, string> = {
+  primary: 'bg-accent text-accent-foreground hover:bg-accent-hover',
+  secondary:
+    'bg-elevated text-foreground border border-border hover:border-border-strong',
+  ghost: 'text-muted hover:bg-elevated hover:text-foreground',
+}
+
+const sizes: Record<Size, string> = {
+  sm: 'h-8 px-3 text-sm',
+  md: 'h-10 px-4 text-sm',
+  lg: 'h-12 px-6 text-base',
+}
+
+export function buttonClass(variant: Variant = 'primary', size: Size = 'md') {
+  return cn(base, variants[variant], sizes[size])
+}
+
+export function Button({
+  variant = 'primary',
+  size = 'md',
+  className,
+  ...props
+}: React.ComponentProps<'button'> & { variant?: Variant; size?: Size }) {
+  return (
+    <button className={cn(buttonClass(variant, size), className)} {...props} />
+  )
+}
+`
+}
+
+function uiCard(): string {
+  return `import { cn } from '@/lib/utils'
+
+export function Card({ className, ...props }: React.ComponentProps<'div'>) {
+  return (
+    <div
+      className={cn(
+        'bg-surface rounded-[var(--radius-xl)] border border-border p-6 shadow-sm',
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
+export function CardTitle({ className, ...props }: React.ComponentProps<'h3'>) {
+  return (
+    <h3
+      className={cn('text-base font-semibold', className)}
+      {...props}
+    />
+  )
+}
+
+export function CardDescription({
+  className,
+  ...props
+}: React.ComponentProps<'p'>) {
+  return <p className={cn('text-muted mt-1 text-sm', className)} {...props} />
+}
+`
+}
+
+function uiInput(): string {
+  return `import { cn } from '@/lib/utils'
+
+export function Input({ className, ...props }: React.ComponentProps<'input'>) {
+  return (
+    <input
+      className={cn(
+        'bg-surface border-border placeholder:text-muted h-10 w-full rounded-[var(--radius-md)] border px-3 text-sm transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-accent',
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
+export function Label({ className, ...props }: React.ComponentProps<'label'>) {
+  return (
+    <label className={cn('text-sm font-medium', className)} {...props} />
+  )
+}
+`
+}
+
+function uiBadge(): string {
+  return `import { cn } from '@/lib/utils'
+
+type Tone = 'default' | 'success' | 'warning' | 'danger'
+
+const tones: Record<Tone, string> = {
+  default: 'bg-elevated text-muted',
+  success: 'bg-success text-success-foreground',
+  warning: 'bg-warning text-warning-foreground',
+  danger: 'bg-danger text-danger-foreground',
+}
+
+export function Badge({
+  tone = 'default',
+  className,
+  ...props
+}: React.ComponentProps<'span'> & { tone?: Tone }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium',
+        tones[tone],
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+`
+}
+
 // ═════════════════════════════════════════════════════════════
 // Login — só quando o app tem usuários
 // ═════════════════════════════════════════════════════════════
@@ -713,17 +936,24 @@ function globalsCss(): string {
 /** A página de login: uma casca server que monta o formulário client. */
 function loginPage(projectName: string): string {
   return `import { LoginForm } from './login-form'
+import { Card } from '@/components/ui/card'
 
 export const metadata = { title: 'Entrar — ${escapeJs(projectName)}' }
 
 export default function LoginPage() {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center px-6 py-16">
-      <h1 className="text-2xl font-semibold tracking-tight">Entrar</h1>
-      <p className="mt-1 mb-6 text-sm text-muted">
-        Acesse a sua conta ou crie uma nova.
-      </p>
-      <LoginForm />
+    <main className="relative isolate flex min-h-dvh items-center justify-center overflow-hidden px-6 py-16">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-40 left-1/2 -z-10 h-[32rem] w-[32rem] -translate-x-1/2 rounded-full bg-accent/15 blur-3xl"
+      />
+      <Card className="w-full max-w-sm">
+        <h1 className="text-2xl font-semibold">Entrar</h1>
+        <p className="text-muted mt-1 mb-6 text-sm">
+          Acesse a sua conta ou crie uma nova.
+        </p>
+        <LoginForm />
+      </Card>
     </main>
   )
 }
@@ -744,6 +974,8 @@ function loginForm(): string {
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { Button } from '@/components/ui/button'
+import { Input, Label } from '@/components/ui/input'
 
 export function LoginForm() {
   const router = useRouter()
@@ -782,49 +1014,39 @@ export function LoginForm() {
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <div className="space-y-1">
-        <label htmlFor="email" className="text-sm font-medium">
-          Email
-        </label>
-        <input
+      <div className="space-y-1.5">
+        <Label htmlFor="email">Email</Label>
+        <Input
           id="email"
           type="email"
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent"
         />
       </div>
 
-      <div className="space-y-1">
-        <label htmlFor="password" className="text-sm font-medium">
-          Senha
-        </label>
-        <input
+      <div className="space-y-1.5">
+        <Label htmlFor="password">Senha</Label>
+        <Input
           id="password"
           type="password"
           required
           minLength={6}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent"
         />
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-danger-foreground text-sm">{error}</p>}
 
-      <button
-        type="submit"
-        disabled={busy}
-        className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
-      >
+      <Button type="submit" disabled={busy} className="w-full">
         {busy ? '...' : mode === 'signin' ? 'Entrar' : 'Criar conta'}
-      </button>
+      </Button>
 
       <button
         type="button"
         onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
-        className="w-full text-center text-sm text-muted hover:text-foreground"
+        className="text-muted hover:text-foreground w-full text-center text-sm"
       >
         {mode === 'signin'
           ? 'Não tem conta? Criar uma'
@@ -883,6 +1105,9 @@ export async function POST(request: Request) {
 function protectedPage(projectName: string): string {
   return `import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { Button } from '@/components/ui/button'
+import { Card, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 
 export default async function AppPage() {
   const supabase = await createClient()
@@ -904,25 +1129,29 @@ export default async function AppPage() {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-6 px-6 py-16">
-      <div>
-        <p className="text-sm text-muted">Área logada de ${escapeJsx(projectName)}</p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-          Olá, {user.email}
-        </h1>
+      <div className="space-y-3">
+        <Badge tone="success">Sessão ativa</Badge>
+        <div>
+          <p className="text-muted text-sm">
+            Área logada de ${escapeJsx(projectName)}
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold">Olá, {user.email}</h1>
+        </div>
       </div>
 
-      <p className="max-w-prose text-muted">
-        Esta rota só abre autenticado. Cada dado que você guardar fica isolado
-        pela sua conta — o RLS garante que ninguém mais leia a sua linha.
-      </p>
+      <Card>
+        <CardTitle>Seus dados ficam só seus</CardTitle>
+        <CardDescription>
+          Esta rota só abre autenticado, e cada linha que você guardar é
+          isolada pela sua conta. O Row Level Security garante que ninguém mais
+          leia o seu dado — provado por teste a cada mudança.
+        </CardDescription>
+      </Card>
 
       <form action="/auth/signout" method="post">
-        <button
-          type="submit"
-          className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-foreground/5"
-        >
+        <Button type="submit" variant="secondary">
           Sair
-        </button>
+        </Button>
       </form>
     </main>
   )

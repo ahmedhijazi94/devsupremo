@@ -29,10 +29,27 @@ for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
   if (match?.[1]) local.set(match[1], (match[2] ?? '').replace(/^["']|["']$/g, ''))
 }
 
-const appUrl = (local.get('NEXT_PUBLIC_APP_URL') ?? '').replace(/\/$/, '')
+// O .env.local aponta para localhost em desenvolvimento, mas a Redirect URL
+// da Integration precisa ser a de produção. Aceita override por argumento.
+const explicit = process.argv.find((arg) => arg.startsWith('https://'))
+const appUrl = (explicit ?? local.get('NEXT_PUBLIC_APP_URL') ?? '').replace(
+  /\/$/,
+  ''
+)
+
 if (!appUrl) {
-  console.error('NEXT_PUBLIC_APP_URL não está no .env.local.')
+  console.error(
+    'Informe a URL de produção:\n' +
+      '  npx tsx scripts/dev/preparar-vercel-oauth.mts https://seu-dominio\n'
+  )
   process.exit(1)
+}
+
+if (appUrl.startsWith('http://localhost')) {
+  console.log(
+    '\nAtenção: usando localhost. Para a Integration de produção, passe a URL:\n' +
+      '  npx tsx scripts/dev/preparar-vercel-oauth.mts https://seu-dominio\n'
+  )
 }
 
 const REQUIRED = [

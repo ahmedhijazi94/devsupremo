@@ -442,12 +442,37 @@ async function downloadJobLog(
         ? response.data
         : Buffer.from(response.data as ArrayBuffer).toString('utf8')
 
-    // A parte útil de um log de CI está quase sempre no fim.
-    const lines = raw.split('\n')
-    return lines.slice(-80).join('\n')
+    return extractFailureContext(raw)
   } catch {
     return '[não foi possível baixar o log deste job]'
   }
+}
+
+/**
+ * Recorta a parte do log que explica a falha.
+ *
+ * Pegar as últimas linhas parece razoável mas falha justamente nos jobs
+ * mais barulhentos: CodeQL e Playwright escrevem centenas de linhas depois
+ * do erro, e o agente recebia o rodapé em vez da causa. Aqui procuramos os
+ * marcadores de erro do Actions e devolvemos o contexto ao redor.
+ */
+function extractFailureContext(raw: string, window = 60): string {
+  const lines = raw.split('\n')
+
+  const markers = [/##\[error\]/, /^\s*Error:/, /\bnpm ERR!/, /FAIL\b/]
+  const firstError = lines.findIndex((line) =>
+    markers.some((marker) => marker.test(line))
+  )
+
+  if (firstError === -1) {
+    return lines.slice(-window).join('\n')
+  }
+
+  const start = Math.max(0, firstError - 10)
+  const end = Math.min(lines.length, firstError + window)
+  const excerpt = lines.slice(start, end).join('\n')
+
+  return start > 0 ? `[…${start} linhas antes…]\n${excerpt}` : excerpt
 }
 
 // ─────────────────────────────────────────────────────────────

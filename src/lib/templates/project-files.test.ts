@@ -174,6 +174,13 @@ describe('lockfile — sem ele o CI quebra antes de instalar', () => {
 describe('CI — actions em versão suportada', () => {
   const ci = file('.github/workflows/ci.yml')
 
+  it('não declara job de CodeQL — usa o default setup do GitHub', () => {
+    // Um job de CodeQL próprio conflita com o default setup e falha em
+    // repositório sem code scanning habilitado, pintando todo PR de
+    // vermelho por motivo de plano, não de código.
+    expect(ci).not.toMatch(/codeql-action/)
+  })
+
   it('concede as permissões que os jobs realmente usam', () => {
     // gitleaks lê /pulls/N/commits; sem pull-requests: read recebe 403 e
     // o job falha sem ter escaneado nada — falso vermelho que treina a

@@ -152,13 +152,16 @@ async function runScaffold(
     )
   }
 
-  // ── 4. Proteção de branch ───────────────────────────────────
+  // ── 4. Proteção de branch e análise estática ────────────────
   const protectionError = await protectBranch(
     repo.full_name,
     branch,
     githubToken
   )
   if (protectionError) warnings.push(protectionError)
+
+  const scanningError = await enableCodeScanning(repo.full_name, githubToken)
+  if (scanningError) warnings.push(scanningError)
 
   // ── 5. Persistência ─────────────────────────────────────────
   // O projeto recém-provisionado passa a ser o ativo: é nele que o usuário
@@ -500,6 +503,40 @@ async function protectBranch(
   }
 
   return `Não foi possível proteger a branch ${branch} (HTTP ${response.status}).`
+}
+
+/**
+ * Liga o code scanning gerenciado do GitHub.
+ *
+ * Preferido a um job de CodeQL no workflow: o default setup é mantido pela
+ * plataforma, não conflita com o workflow do projeto, e — o que mais importa
+ * — quando o plano do repositório não permite, o resultado é um aviso aqui e
+ * não um job vermelho em todo pull request. Gate que falha por motivo de
+ * plano ensina a equipe a ignorar vermelho.
+ */
+async function enableCodeScanning(
+  repoFullName: string,
+  token: string
+): Promise<string | null> {
+  const response = await githubFetch(
+    `/repos/${repoFullName}/code-scanning/default-setup`,
+    token,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ state: 'configured', query_suite: 'extended' }),
+    }
+  )
+
+  if (response.ok || response.status === 202) return null
+
+  if (response.status === 403 || response.status === 404) {
+    return (
+      'A análise estática (CodeQL) não pôde ser ativada — repositório privado ' +
+      'exige GitHub Advanced Security. Os demais gates seguem rodando.'
+    )
+  }
+
+  return `Não foi possível ativar a análise estática (HTTP ${response.status}).`
 }
 
 function generateDbPassword(): string {

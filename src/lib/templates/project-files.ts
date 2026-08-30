@@ -1009,17 +1009,6 @@ jobs:
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
 
-  codeql:
-    name: Análise estática (CodeQL)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript
-          queries: security-extended
-      - uses: github/codeql-action/analyze@v3
-
   build:
     name: Build de produção
     runs-on: ubuntu-latest
@@ -1169,6 +1158,9 @@ Todos rodam no CI a cada pull request e precisam passar antes do merge.
 | \`npm run test:rls\` | Isolamento entre contas no banco |
 | \`npm run test:e2e\` | Fluxos críticos no navegador |
 | \`npm run audit:security\` | RLS, autorização, IDOR, segredos, XSS |
+
+A análise estática (CodeQL) roda pelo code scanning gerenciado do GitHub, em
+Settings › Code security — não há job dela no workflow.
 
 Antes de abrir um PR:
 

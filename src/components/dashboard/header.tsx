@@ -1,21 +1,18 @@
-import type { User } from '@supabase/supabase-js'
-import { Bell, Moon } from 'lucide-react'
-import { SignOutButton } from '@/components/auth/sign-out-button'
+import { Bell } from 'lucide-react'
 
-interface DashboardHeaderProps {
-  user: User
-}
-
-export function DashboardHeader({ user }: DashboardHeaderProps) {
+/**
+ * Sair fica só na barra lateral, junto da identificação de quem está
+ * logado. Dois botões para a mesma ação, em cantos opostos, é ruído.
+ */
+export function DashboardHeader() {
   return (
-    <header className="h-14 border-b bg-card/50 backdrop-blur-sm flex items-center justify-between px-6 shrink-0">
-      <div />
-      <div className="flex items-center gap-2">
-        <button className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground">
-          <Bell className="w-4 h-4" />
-        </button>
-        <SignOutButton />
-      </div>
+    <header className="flex h-14 shrink-0 items-center justify-end border-b bg-card/50 px-6 backdrop-blur-sm">
+      <button
+        title="Notificações"
+        className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <Bell className="h-4 w-4" />
+      </button>
     </header>
   )
 }

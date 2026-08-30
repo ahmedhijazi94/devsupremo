@@ -76,17 +76,16 @@ export default async function ProjectPage({
   const status = STATUS[project.status] ?? STATUS.active
 
   return (
-    // Ocupa a altura toda: o preview é o conteúdo principal e encolher a
-    // janela não deve empurrá-lo para fora da vista.
-    <div className="-m-6 flex h-[calc(100vh-3.5rem)] flex-col">
+    // Tela cheia: sem barra lateral, o preview usa toda a largura.
+    <div className="flex h-screen flex-col">
       {/* Cabeçalho */}
-      <header className="flex shrink-0 items-center gap-3 border-b px-5 py-3">
+      <header className="flex shrink-0 items-center gap-4 border-b px-4 py-2.5">
         <Link
-          href="/projects"
-          className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          aria-label="Voltar"
+          href="/dashboard"
+          className="inline-flex shrink-0 items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
+          Dashboard
         </Link>
 
         <div className="min-w-0">

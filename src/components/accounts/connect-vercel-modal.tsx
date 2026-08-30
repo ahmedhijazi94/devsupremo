@@ -3,13 +3,21 @@
 import { useState, useTransition } from 'react'
 import { Plus, ExternalLink, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { connectVercelAccount } from '@/actions/vercel'
+import { connectVercelAccount, startVercelOAuth } from '@/actions/vercel'
+
+interface ConnectVercelModalProps {
+  /** Sem a Integration configurada no ambiente, só resta o token pessoal. */
+  oauthAvailable: boolean
+}
 
 /**
- * A Vercel não oferece OAuth para aplicações de terceiros criarem projetos em
- * nome do usuário, então a conexão é por token pessoal — como o Supabase.
+ * Conexão da conta Vercel.
+ *
+ * Com a Integration configurada, é um clique — mesmo fluxo do GitHub e do
+ * Supabase. Sem ela, cai no token pessoal, que funciona igual mas dá mais
+ * trabalho a quem conecta.
  */
-export function ConnectVercelModal() {
+export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) {
   const [open, setOpen] = useState(false)
   const [token, setToken] = useState('')
   const [isPending, startTransition] = useTransition()
@@ -34,6 +42,20 @@ export function ConnectVercelModal() {
   }
 
   if (!open) {
+    if (oauthAvailable) {
+      return (
+        <form action={() => startVercelOAuth()}>
+          <button
+            type="submit"
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
+          >
+            <Plus className="h-4 w-4" />
+            Conectar Vercel
+          </button>
+        </form>
+      )
+    }
+
     return (
       <button
         onClick={() => setOpen(true)}

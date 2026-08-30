@@ -4,11 +4,15 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { requireUser, requireProjectOwner, toActionError } from '@/lib/auth'
 import { decryptToken, encryptToken } from '@/lib/crypto'
+import { createOAuthState } from '@/lib/oauth-state'
 import {
   identify,
+  installationUrl,
   latestDeployment,
+  oauthConfig,
   type Deployment,
 } from '@/lib/vercel'
+import { redirect } from 'next/navigation'
 
 /**
  * Conexão da conta Vercel e leitura do estado do preview.
@@ -17,6 +21,31 @@ import {
  * não numa conta central do Supremo. É o mesmo princípio do GitHub e do
  * Supabase: o que é publicado pertence a quem publicou.
  */
+
+/** Se o OAuth está configurado, a UI oferece o clique em vez do token. */
+export async function isVercelOAuthAvailable(): Promise<boolean> {
+  return oauthConfig() !== null
+}
+
+/**
+ * Inicia a instalação da Integration da Vercel.
+ *
+ * Mesmo desenho do GitHub e do Supabase: state de uso único guardado no
+ * banco, validado e consumido no callback.
+ */
+export async function startVercelOAuth(projectId?: string): Promise<void> {
+  const config = oauthConfig()
+  if (!config) {
+    throw new Error(
+      'OAuth da Vercel não configurado neste ambiente. Use o token pessoal.'
+    )
+  }
+
+  const { user, supabase } = await requireUser()
+  const state = await createOAuthState(supabase, user.id, 'vercel', projectId)
+
+  redirect(installationUrl(config, state))
+}
 
 const connectSchema = z.object({
   token: z

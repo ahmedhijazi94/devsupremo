@@ -12,7 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 const TTL_MINUTES = 10
 
-export type OAuthProvider = 'github' | 'supabase'
+export type OAuthProvider = 'github' | 'supabase' | 'vercel'
 
 export interface StatePayload {
   csrf: string

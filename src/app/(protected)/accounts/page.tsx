@@ -5,6 +5,7 @@ import { formatRelativeTime } from '@/lib/utils'
 import { ConnectGithubButton } from '@/components/accounts/connect-github-button'
 import { AddSupabaseModal } from '@/components/accounts/add-supabase-modal'
 import { ConnectVercelModal } from '@/components/accounts/connect-vercel-modal'
+import { isVercelOAuthAvailable } from '@/actions/vercel'
 import { DisconnectVercelButton } from '@/components/accounts/disconnect-vercel-button'
 import { DisconnectAccountButton } from '@/components/accounts/disconnect-account-button'
 import { AccountsToastHandler } from '@/components/accounts/accounts-toast-handler'
@@ -29,6 +30,7 @@ export default async function AccountsPage({
   const githubAccounts = githubResponse.data ?? []
   const supabaseAccounts = supabaseResponse.data ?? []
   const vercelAccounts = vercelResponse.data ?? []
+  const vercelOAuth = await isVercelOAuthAvailable()
 
   return (
     <div className="space-y-8 max-w-4xl">
@@ -156,7 +158,7 @@ export default async function AccountsPage({
               </p>
             </div>
           </div>
-          <ConnectVercelModal />
+          <ConnectVercelModal oauthAvailable={vercelOAuth} />
         </div>
 
         {vercelAccounts.length === 0 ? (

@@ -132,7 +132,7 @@ export interface Database {
           id: string
           user_id: string
           state: string
-          provider: 'github' | 'supabase'
+          provider: 'github' | 'supabase' | 'vercel'
           project_id: string | null
           redirect_to: string | null
           consumed_at: string | null

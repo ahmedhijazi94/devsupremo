@@ -557,8 +557,8 @@ async function linkVercel(
       projectId: null,
       warnings: [
         'Sem conta Vercel conectada — o projeto ficou sem preview. ' +
-          'Conecte uma em Contas e recrie o projeto, ou ligue o repositório ' +
-          'na Vercel à mão.',
+          'Conecte uma em Contas; depois disso, o próximo projeto já nasce ' +
+          'com preview.',
       ],
     }
   }

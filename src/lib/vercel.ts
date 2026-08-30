@@ -90,6 +90,105 @@ export async function identify(token: string): Promise<VercelIdentity> {
   }
 }
 
+/**
+ * Descobre o nome da conta a partir de uma instalação de Integration.
+ *
+ * O token vindo do OAuth já sabe em que conta opera — o teamId chega na
+ * resposta da troca do código. Consultar /v2/teams aqui devolveria a lista
+ * de times do usuário, não o time da instalação.
+ */
+export async function identifyInstallation(
+  token: string,
+  teamId: string | null
+): Promise<VercelIdentity> {
+  if (teamId) {
+    const team = await call<{ name?: string; slug?: string }>(
+      `/v2/teams/${teamId}`,
+      { token }
+    )
+    return { accountName: team.name ?? team.slug ?? teamId, teamId }
+  }
+
+  const user = await call<{ user: { username: string; name?: string } }>(
+    '/v2/user',
+    { token }
+  )
+  return { accountName: user.user.name ?? user.user.username, teamId: null }
+}
+
+// ─────────────────────────────────────────────────────────────
+// OAuth de Integration
+// ─────────────────────────────────────────────────────────────
+
+export interface OAuthConfig {
+  clientId: string
+  clientSecret: string
+  integrationSlug: string
+}
+
+/** Lê a configuração do ambiente. Ausente = OAuth desligado. */
+export function oauthConfig(): OAuthConfig | null {
+  const clientId = process.env.VERCEL_CLIENT_ID
+  const clientSecret = process.env.VERCEL_CLIENT_SECRET
+  const integrationSlug = process.env.VERCEL_INTEGRATION_SLUG
+
+  if (!clientId || !clientSecret || !integrationSlug) return null
+  return { clientId, clientSecret, integrationSlug }
+}
+
+export function installationUrl(
+  config: OAuthConfig,
+  state: string
+): string {
+  const params = new URLSearchParams({ state })
+  return `https://vercel.com/integrations/${config.integrationSlug}/new?${params.toString()}`
+}
+
+export interface ExchangedToken {
+  accessToken: string
+  teamId: string | null
+  installationId: string | null
+}
+
+export async function exchangeCode(
+  config: OAuthConfig,
+  code: string,
+  redirectUri: string
+): Promise<ExchangedToken> {
+  const response = await fetch(`${API}/v2/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    }),
+  })
+
+  const text = await response.text()
+  const payload = (text ? JSON.parse(text) : {}) as {
+    access_token?: string
+    team_id?: string | null
+    installation_id?: string
+    error?: string
+    error_description?: string
+  }
+
+  if (!response.ok || !payload.access_token) {
+    throw new VercelError(
+      payload.error_description ?? payload.error ?? `HTTP ${response.status}`,
+      response.status
+    )
+  }
+
+  return {
+    accessToken: payload.access_token,
+    teamId: payload.team_id ?? null,
+    installationId: payload.installation_id ?? null,
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Projetos
 // ─────────────────────────────────────────────────────────────

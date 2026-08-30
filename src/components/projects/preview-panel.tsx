@@ -94,9 +94,9 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   const showFrame = state?.status === 'ready' && state.url
 
   return (
-    <section className="rounded-xl border bg-card overflow-hidden">
+    <section className="flex h-full flex-col overflow-hidden rounded-xl border bg-card">
       {/* Barra de ferramentas */}
-      <header className="flex flex-wrap items-center gap-3 border-b bg-muted/30 px-3 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-muted/30 px-3 py-2.5">
         <div className="flex rounded-lg border bg-background p-0.5">
           {DEVICES.map((option) => (
             <button
@@ -190,10 +190,10 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
       </header>
 
       {/* Área do preview */}
-      <div className="flex min-h-[520px] items-center justify-center bg-zinc-100 p-4 dark:bg-zinc-950/50">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-zinc-100 p-4 dark:bg-zinc-950/50">
         {showFrame ? (
           <div
-            className="h-[520px] overflow-hidden rounded-lg border bg-white shadow-lg transition-[width] duration-300"
+            className="h-full max-h-full overflow-hidden rounded-lg border bg-white shadow-lg transition-[width] duration-300"
             style={{ width: deviceConfig.width, maxWidth: '100%' }}
           >
             <iframe

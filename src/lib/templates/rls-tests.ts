@@ -52,11 +52,12 @@ if (!ANON_KEY || !SERVICE_KEY) {
       '',
       'Localmente:',
       '  supabase start',
-      '  export $(supabase status -o env | sed \'s/^/SUPABASE_/\' | xargs)',
+      '  SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=...',
+      '  (os valores saem de: supabase status)',
       '  npm run test:rls',
       '',
       'No CI isso já acontece no job "Políticas RLS".',
-    ].join('\n')
+    ].join('\\n')
   )
 }
 

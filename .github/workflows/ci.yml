@@ -67,26 +67,10 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Gerar projeto a partir do template
-        run: npx tsx scripts/dev/generate-sample-project.ts /tmp/generated
-
-      - name: Instalar dependências do projeto gerado
-        working-directory: /tmp/generated
-        # npm ci, não npm install: é o que o CI do projeto gerado roda, e
-        # exige lockfile. Usar `install` aqui escondia a ausência dele.
-        run: npm ci
-
-      - name: Gates do projeto gerado
-        working-directory: /tmp/generated
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
-        run: |
-          npm run typecheck
-          npm run lint
-          npm run test:coverage
-          npm run audit:security -- --strict
-          npm run build
+      # O mesmo script que se roda localmente — uma definição só, para o
+      # que roda aqui não divergir do que se verifica na máquina.
+      - name: Gerar projeto e rodar os gates dele
+        run: ./scripts/dev/verify-template.sh /tmp/generated
 
   dependencies:
     name: Vulnerabilidades

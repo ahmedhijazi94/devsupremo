@@ -48,6 +48,7 @@ function SandboxContent() {
   const isSyncing = useRef(false)
   const terminalRef = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
+  const syncTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const log = (msg: string, color = '34') => {
     terminal.current?.writeln(`\x1b[1;${color}m[Supremo]\x1b[0m ${msg}`)
@@ -138,8 +139,9 @@ function SandboxContent() {
           setUrl(previewUrl)
           setShowTerminal(false)
 
-          // Start HMR polling (every 3s)
-          setInterval(async () => {
+          // Polling de HMR. 3s batia na API do GitHub 1200x por hora por aba
+          // aberta; 5s continua imperceptível e cabe no rate limit.
+          syncTimer.current = setInterval(async () => {
             if (isSyncing.current || !currentSha.current || !webcontainerInstance) return
             isSyncing.current = true
             try {
@@ -151,7 +153,7 @@ function SandboxContent() {
                   if (file.status === 'removed') {
                     await webcontainerInstance.fs.rm(file.path, { force: true })
                     terminal.current?.writeln('\x1b[1;31m[HMR]\x1b[0m ✗ Removeu: ' + file.path)
-                  } else {
+                  } else if (file.content !== null) {
                     const dir = file.path.split('/').slice(0, -1).join('/')
                     if (dir) await webcontainerInstance.fs.mkdir(dir, { recursive: true })
                     await webcontainerInstance.fs.writeFile(file.path, file.content)
@@ -165,18 +167,25 @@ function SandboxContent() {
             } finally {
               isSyncing.current = false
             }
-          }, 3000)
+          }, 5000)
         })
 
-      } catch (err: any) {
-        console.error(err)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
         setStage('error')
-        setError(err.message)
-        log(`ERRO: ${err.message}`, '31')
+        setError(message)
+        log(`ERRO: ${message}`, '31')
       }
     }
 
     boot()
+
+    return () => {
+      if (syncTimer.current) {
+        clearInterval(syncTimer.current)
+        syncTimer.current = null
+      }
+    }
   }, [projectId])
 
   if (!projectId) return (

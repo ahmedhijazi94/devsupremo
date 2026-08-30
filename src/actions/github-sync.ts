@@ -1,87 +1,119 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
-import crypto from 'crypto'
+import { requireProjectOwner } from '@/lib/auth'
+import { decryptToken } from '@/lib/crypto'
 
-async function getAuthHeaders(projectId: string) {
-  const supabase = await createClient()
-  const { data: project } = await supabase
-    .from('projects')
-    .select('github_repo_full_name, github_accounts(access_token_encrypted)')
-    .eq('id', projectId)
-    .single()
+interface RepoAccess {
+  token: string
+  repoFullName: string
+  branch: string
+}
 
-  if (!project || !project.github_repo_full_name || !project.github_accounts) {
-    throw new Error('Project not found')
+interface CompareFile {
+  filename: string
+  status: string
+  sha: string
+}
+
+export interface ChangedFile {
+  path: string
+  status: string
+  content: string | null
+}
+
+async function repoAccess(projectId: string): Promise<RepoAccess> {
+  const { user, supabase, project } = await requireProjectOwner(
+    projectId,
+    'id, user_id, github_account_id, github_repo_full_name, default_branch'
+  )
+
+  const repoFullName = project.github_repo_full_name as string | null
+  const githubAccountId = project.github_account_id as string | null
+
+  if (!repoFullName || !githubAccountId) {
+    throw new Error('Projeto não está conectado a um repositório GitHub.')
   }
 
-  const acc = (Array.isArray(project.github_accounts) ? project.github_accounts[0] : project.github_accounts) as any
-  const tokenHex = acc.access_token_encrypted as string
-  const [ivHex, authTagHex, encryptedDataHex] = tokenHex.split(':')
-  
-  const iv = Buffer.from(ivHex || '', 'hex')
-  const authTag = Buffer.from(authTagHex || '', 'hex')
-  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(process.env.ENCRYPTION_KEY || '', 'hex'), iv)
-  decipher.setAuthTag(authTag)
-  let token = decipher.update(encryptedDataHex || '', 'hex', 'utf8')
-  token += decipher.final('utf8')
+  const { data: account } = await supabase
+    .from('github_accounts')
+    .select('access_token_encrypted')
+    .eq('id', githubAccountId)
+    .eq('user_id', user.id)
+    .maybeSingle()
 
-  return { 
-    token, 
-    repoFullName: project.github_repo_full_name 
+  if (!account) throw new Error('Conta GitHub não encontrada.')
+
+  return {
+    token: decryptToken(account.access_token_encrypted as string),
+    repoFullName,
+    branch: (project.default_branch as string | null) ?? 'main',
+  }
+}
+
+function githubHeaders(token: string): HeadersInit {
+  return {
+    Authorization: `Bearer ${token}`,
+    'X-GitHub-Api-Version': '2022-11-28',
+    Accept: 'application/vnd.github+json',
   }
 }
 
 export async function getLatestCommitSha(projectId: string): Promise<string> {
-  const { token, repoFullName } = await getAuthHeaders(projectId)
-  const res = await fetch(`https://api.github.com/repos/${repoFullName}/commits/main`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-    cache: 'no-store'
-  })
-  if (!res.ok) throw new Error('Failed to fetch latest commit')
-  const data = await res.json()
+  const { token, repoFullName, branch } = await repoAccess(projectId)
+
+  const response = await fetch(
+    `https://api.github.com/repos/${repoFullName}/commits/${branch}`,
+    { headers: githubHeaders(token), cache: 'no-store' }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Falha ao ler o último commit (${response.status}).`)
+  }
+
+  const data = (await response.json()) as { sha: string }
   return data.sha
 }
 
-export async function getChangedFilesContent(projectId: string, baseSha: string, headSha: string) {
-  const { token, repoFullName } = await getAuthHeaders(projectId)
-  
-  // 1. Get the diff
-  const res = await fetch(`https://api.github.com/repos/${repoFullName}/compare/${baseSha}...${headSha}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-    cache: 'no-store'
-  })
-  if (!res.ok) throw new Error('Failed to fetch diff')
-  const data = await res.json()
+export async function getChangedFilesContent(
+  projectId: string,
+  baseSha: string,
+  headSha: string
+): Promise<ChangedFile[]> {
+  const { token, repoFullName } = await repoAccess(projectId)
+  const headers = githubHeaders(token)
 
-  // 2. Fetch raw content for added/modified files
-  const files = await Promise.all(
-    (data.files || []).map(async (f: any) => {
-      if (f.status === 'removed') {
-        return { path: f.filename, status: 'removed', content: null }
+  const response = await fetch(
+    `https://api.github.com/repos/${repoFullName}/compare/${baseSha}...${headSha}`,
+    { headers, cache: 'no-store' }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Falha ao comparar commits (${response.status}).`)
+  }
+
+  const data = (await response.json()) as { files?: CompareFile[] }
+
+  return Promise.all(
+    (data.files ?? []).map(async (file): Promise<ChangedFile> => {
+      if (file.status === 'removed') {
+        return { path: file.filename, status: 'removed', content: null }
       }
-      // For added/modified, fetch the blob
-      const blobRes = await fetch(`https://api.github.com/repos/${repoFullName}/git/blobs/${f.sha}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-        cache: 'no-store'
-      })
-      const bData = await blobRes.json()
-      return { 
-        path: f.filename, 
-        status: f.status, 
-        content: Buffer.from(bData.content, 'base64').toString('utf8') 
+
+      const blobResponse = await fetch(
+        `https://api.github.com/repos/${repoFullName}/git/blobs/${file.sha}`,
+        { headers, cache: 'no-store' }
+      )
+
+      if (!blobResponse.ok) {
+        return { path: file.filename, status: file.status, content: null }
+      }
+
+      const blob = (await blobResponse.json()) as { content: string }
+      return {
+        path: file.filename,
+        status: file.status,
+        content: Buffer.from(blob.content, 'base64').toString('utf8'),
       }
     })
   )
-
-  return files
 }

@@ -65,7 +65,7 @@ export function AddSupabaseModal({ projectId }: { projectId?: string }) {
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </li>
-                <li>Clique em <strong>"Generate new token"</strong></li>
+                <li>Clique em <strong>&quot;Generate new token&quot;</strong></li>
                 <li>Copie o token gerado e cole abaixo</li>
               </ol>
             </div>

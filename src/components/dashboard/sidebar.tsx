@@ -1,10 +1,10 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import {
   LayoutDashboard,
   FolderOpen,
   Settings,
+  Link2,
   Cpu,
   Zap,
   LogOut,
@@ -22,6 +22,7 @@ interface SidebarProps {
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/projects', label: 'Projetos', icon: FolderOpen },
+  { href: '/accounts', label: 'Contas', icon: Link2 },
   { href: '/mcps', label: 'Integração MCP', icon: Cpu },
   { href: '/settings', label: 'Configurações', icon: Settings },
 ]
@@ -36,7 +37,7 @@ export async function DashboardSidebar({ user }: SidebarProps) {
     .select('id, name, active_mcp, status')
     .eq('user_id', user.id)
     .eq('is_active', true)
-    .single()
+    .maybeSingle()
 
   return (
     <aside className="w-60 border-r bg-card flex flex-col shrink-0 h-screen sticky top-0">

@@ -1,11 +1,17 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { safeRedirectPath } from '@/lib/redirects'
+
+/**
+ * Callback do OAuth de login. Roda antes de existir sessão — é justamente ele
+ * que a estabelece, trocando o code por uma sessão.
+ */
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
-  const next = searchParams.get('next') ?? '/dashboard'
+  const next = safeRedirectPath(searchParams.get('next'))
 
   if (!code) {
     return NextResponse.redirect(`${origin}/login?error=missing_code`)
@@ -15,7 +21,7 @@ export async function GET(request: NextRequest) {
   const { error } = await supabase.auth.exchangeCodeForSession(code)
 
   if (error) {
-    console.error('[Auth Callback] Error:', error.message)
+    console.error('[auth] falha ao trocar code por sessão:', error.message)
     return NextResponse.redirect(`${origin}/login?error=auth_failed`)
   }
 

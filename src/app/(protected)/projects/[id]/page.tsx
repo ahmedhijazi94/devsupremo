@@ -1,16 +1,27 @@
 import { createClient } from '@/lib/supabase/server'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { GitBranch, Database, Zap, ExternalLink, ArrowLeft, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
 import { ScaffoldForm } from '@/components/projects/scaffold-form'
 import { PreviewPanel } from '@/components/projects/preview-panel'
+import { ActivityFeed, type ActivityItem } from '@/components/projects/activity-feed'
+import type { Project } from '@/types/database'
+
+/** Formato das relações que o select traz junto do projeto. */
+interface ProjectWithAccounts extends Project {
+  github_accounts: { login: string; avatar_url: string | null } | null
+  supabase_accounts: { org_name: string } | null
+}
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient()
   const { id } = await params
 
-  const { data: project } = await supabase
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const { data } = await supabase
     .from('projects')
     .select(`
       *,
@@ -18,9 +29,24 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
       supabase_accounts ( org_name )
     `)
     .eq('id', id)
-    .single()
+    .eq('user_id', user.id)
+    .maybeSingle()
 
-  if (!project) notFound()
+  if (!data) notFound()
+
+  const project = data as unknown as ProjectWithAccounts
+
+  // Histórico do loop: cada proposta do agente com PR e resultado dos gates.
+  const { data: activity } = await supabase
+    .from('messages')
+    .select(
+      'id, role, content, branch, pr_number, pr_url, commit_sha, ' +
+        'files_changed, pipeline_status, mcp_used, created_at'
+    )
+    .eq('project_id', id)
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(25)
 
   const isProvisioned = !!project.github_repo_full_name && !!project.supabase_project_ref
   const statusConfig = {
@@ -148,12 +174,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             <div className="flex items-center gap-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={(project.github_accounts as any).avatar_url}
+                src={project.github_accounts.avatar_url ?? ''}
                 alt="GitHub"
                 className="w-8 h-8 rounded-full ring-1 ring-border"
               />
               <div>
-                <p className="text-sm font-medium">{(project.github_accounts as any).login}</p>
+                <p className="text-sm font-medium">{project.github_accounts.login}</p>
                 <p className="text-xs text-muted-foreground">
                   {project.github_repo_full_name ?? 'Repositório ainda não criado'}
                 </p>
@@ -196,7 +222,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
           {project.supabase_accounts ? (
             <div>
-              <p className="text-sm font-medium">Org: {(project.supabase_accounts as any).org_name}</p>
+              <p className="text-sm font-medium">Org: {project.supabase_accounts.org_name}</p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Ref: {project.supabase_project_ref ?? 'Projeto Supabase ainda não criado'}
               </p>
@@ -217,6 +243,33 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           )}
         </div>
       </div>
+
+      {/* Histórico de mudanças */}
+      <section className="border bg-card rounded-xl p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">Atividade</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Toda proposta do agente, com o pull request e o resultado dos gates.
+            </p>
+          </div>
+          {project.github_repo_full_name && (
+            <a
+              href={`https://github.com/${project.github_repo_full_name}/pulls`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Ver no GitHub
+            </a>
+          )}
+        </div>
+
+        <ActivityFeed
+          items={(activity ?? []) as unknown as ActivityItem[]}
+          repoFullName={project.github_repo_full_name}
+        />
+      </section>
     </div>
   )
 }

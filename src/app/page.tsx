@@ -23,30 +23,33 @@ export default function HomePage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-left">
           <div className="rounded-xl border bg-card p-4 space-y-2">
             <Shield className="w-5 h-5 text-green-500" />
-            <h3 className="font-semibold">Segurança Máxima</h3>
+            <h3 className="font-semibold">RLS testado, não prometido</h3>
             <p className="text-sm text-muted-foreground">
-              RLS sempre ativo. Zero validação no client. Cada projeto nasce seguro.
+              Toda tabela nasce com RLS e um teste que prova que outro usuário
+              não lê aquela linha.
             </p>
           </div>
           <div className="rounded-xl border bg-card p-4 space-y-2">
             <Zap className="w-5 h-5 text-yellow-500" />
-            <h3 className="font-semibold">Pipeline de Testes</h3>
+            <h3 className="font-semibold">Gate que não se contorna</h3>
             <p className="text-sm text-muted-foreground">
-              TypeScript, ESLint, Vitest, Playwright e security scan antes de todo commit.
+              Toda mudança vira pull request. Merge só com tipos, lint, testes,
+              cobertura e auditoria verdes.
             </p>
           </div>
           <div className="rounded-xl border bg-card p-4 space-y-2">
             <GitBranch className="w-5 h-5 text-blue-500" />
-            <h3 className="font-semibold">Multi-conta & Multi-MCP</h3>
+            <h3 className="font-semibold">De qualquer máquina</h3>
             <p className="text-sm text-muted-foreground">
-              Múltiplos GitHub e Supabase. Alterne entre Antigravity, Claude e GPT.
+              Claude Code, Antigravity, Codex ou Cursor — conectam por MCP remoto,
+              sem instalar nada.
             </p>
           </div>
           <div className="rounded-xl border bg-card p-4 space-y-2">
             <Eye className="w-5 h-5 text-purple-500" />
             <h3 className="font-semibold">Preview em Tempo Real</h3>
             <p className="text-sm text-muted-foreground">
-              Cloudflare Pages. Veja o resultado de cada prompt instantaneamente.
+              O app roda no navegador e sincroniza a cada commit. Sem esperar deploy.
             </p>
           </div>
         </div>

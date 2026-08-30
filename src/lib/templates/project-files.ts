@@ -1,456 +1,625 @@
-// Static content of the security audit script for new projects.
-// Stored as a regular string to avoid TypeScript template literal interpolation issues.
-// DO NOT use backtick template literals in this file for the script content.
+import fs from 'node:fs'
+import path from 'node:path'
+import { generateRlsTest } from './rls-tests'
 
-export function getSecurityAuditScriptContent(): string {
-  const lines: string[] = [
-    '#!/usr/bin/env node',
-    '// SUPREMO SECURITY AUDIT — auto-generated, do not edit manually.',
-    '// Usage: node scripts/security-audit.js [--strict]',
-    '// Audits: RLS, Frontend Gates, IDOR, Hardcoded Secrets, XSS',
-    '',
-    "const fs = require('fs')",
-    "const path = require('path')",
-    "const { execSync } = require('child_process')",
-    '',
-    'const ROOT = path.resolve(__dirname, "..")',
-    'const STRICT = process.argv.includes("--strict")',
-    'const COLORS = {',
-    '  CRITICAL: "\\x1b[41m\\x1b[37m", HIGH: "\\x1b[31m", MEDIUM: "\\x1b[33m",',
-    '  LOW: "\\x1b[34m", INFO: "\\x1b[32m", RESET: "\\x1b[0m",',
-    '}',
-    '',
-    'const findings = []',
-    'const strengths = []',
-    '',
-    'function finding(severity, category, file, line, code, reason) {',
-    '  findings.push({ severity, category, file, line, code, reason })',
-    '  const col = COLORS[severity] || COLORS.RESET',
-    '  console.log(col + "[" + severity + "][" + category + "] " + file + ":" + line + COLORS.RESET)',
-    '  console.log("  Why: " + reason + "\\n")',
-    '}',
-    '',
-    'function strength(msg) {',
-    '  strengths.push(msg)',
-    '  console.log(COLORS.INFO + "[OK] " + msg + COLORS.RESET)',
-    '}',
-    '',
-    'function collectFiles(dir, exts, ignore) {',
-    '  ignore = ignore || ["node_modules", ".next", "dist", ".git"]',
-    '  var results = []',
-    '  if (!fs.existsSync(dir)) return results',
-    '  fs.readdirSync(dir, { withFileTypes: true }).forEach(function(entry) {',
-    '    if (ignore.some(function(ig) { return entry.name === ig })) return',
-    '    var full = path.join(dir, entry.name)',
-    '    if (entry.isDirectory()) results = results.concat(collectFiles(full, exts, ignore))',
-    '    else if (exts.some(function(e) { return entry.name.endsWith(e) })) results.push(full)',
-    '  })',
-    '  return results',
-    '}',
-    '',
-    'function rel(f) { return path.relative(ROOT, f) }',
-    '',
-    'var tsFiles = collectFiles(path.join(ROOT, "src"), [".ts", ".tsx"])',
-    'var sqlFiles = collectFiles(ROOT, [".sql"])',
-    'var actionFiles = tsFiles.filter(function(f) {',
-    '  return f.includes("actions/") || (f.includes("route.ts") && !f.includes("callback"))',
-    '})',
-    '',
-    '// CAT 1: RLS',
-    'console.log("\\n=== CAT 1: BANCO SEM TRANCA (RLS) ===")',
-    'sqlFiles.forEach(function(file) {',
-    '  var content = fs.readFileSync(file, "utf8")',
-    '  var matches = content.match(/CREATE TABLE (?:IF NOT EXISTS )?(\\w+)/gi) || []',
-    '  matches.forEach(function(m) {',
-    '    var t = m.replace(/CREATE TABLE (?:IF NOT EXISTS )?/i, "")',
-    '    if (!content.includes("ALTER TABLE " + t + " ENABLE ROW LEVEL SECURITY") &&',
-    '        !content.includes(\'ALTER TABLE "\' + t + \'\" ENABLE ROW LEVEL SECURITY\'))',
-    '      finding("CRITICAL", "RLS", rel(file), 0, m, \'Table "\' + t + \'" has no RLS policy — any user can read/write all rows.\')',
-    '    else strength(\'Table "\' + t + \'" has RLS enabled\')',
-    '  })',
-    '})',
-    '',
-    '// CAT 2: Auth missing in server actions',
-    'console.log("\\n=== CAT 2: PERMISSÃO NO SERVIDOR ===")',
-    'actionFiles.forEach(function(file) {',
-    '  var c = fs.readFileSync(file, "utf8")',
-    '  if (!c.includes("export async function") && !c.includes("export function")) return',
-    '  if (!c.includes("getUser()") && !c.includes("auth.getSession") && !c.includes("supabase.auth"))',
-    '    finding("CRITICAL", "AUTH_MISSING", rel(file), 1, "export...", "No auth check in server action/route.")',
-    '  else strength(rel(file) + ": has auth check")',
-    '})',
-    '',
-    '// CAT 3: IDOR',
-    'console.log("\\n=== CAT 3: IDOR ===")',
-    'var idorFound = 0',
-    'actionFiles.forEach(function(file) {',
-    '  var lines = fs.readFileSync(file, "utf8").split("\\n")',
-    '  lines.forEach(function(line, i) {',
-    '    if (line.match(/\\.eq\\([\'"]id[\'"],/)) {',
-    '      var ctx = lines.slice(Math.max(0, i-5), i+5).join("\\n")',
-    '      if (!ctx.includes("user_id") && !ctx.includes("user.id") && !ctx.includes("auth.uid")) {',
-    '        finding("HIGH", "IDOR", rel(file), i+1, line, ".eq(\\"id\\") without ownership check.")',
-    '        idorFound++',
-    '      }',
-    '    }',
-    '  })',
-    '})',
-    'if (idorFound === 0) strength("No IDOR patterns detected")',
-    '',
-    '// CAT 4: Hardcoded Secrets',
-    'console.log("\\n=== CAT 4: CHAVES EXPOSTAS ===")',
-    'var secretPatterns = [',
-    '  { r: /eyJhbGciOi[a-zA-Z0-9._-]{20,}/g, l: "JWT hardcoded" },',
-    '  { r: /ghp_[a-zA-Z0-9]{36}/g, l: "GitHub PAT" },',
-    '  { r: /sbp_[a-zA-Z0-9]{40}/g, l: "Supabase PAT" },',
-    '  { r: /GOCSPX-[a-zA-Z0-9_-]{28}/g, l: "Google Client Secret" },',
-    '  { r: /sk_live_[a-zA-Z0-9]{20,}/g, l: "Stripe Live Key" },',
-    ']',
-    'var allFiles = collectFiles(ROOT, [".ts",".tsx",".js",".json",".yml",".yaml"])',
-    'var secretsFound = 0',
-    'allFiles.forEach(function(file) {',
-    '  var relf = rel(file)',
-    '  if (relf.includes(".env.local") || relf.endsWith(".env.example") || relf.includes("security-audit")) return',
-    '  var c = fs.readFileSync(file, "utf8")',
-    '  secretPatterns.forEach(function(sp) {',
-    '    var re = new RegExp(sp.r.source, "g")',
-    '    var m',
-    '    while ((m = re.exec(c)) !== null) {',
-    '      var ln = c.substring(0, m.index).split("\\n").length',
-    '      finding("CRITICAL", "SECRET", relf, ln, m[0], sp.l + " hardcoded. Rotate immediately.")',
-    '      secretsFound++',
-    '    }',
-    '  })',
-    '})',
-    'var gi = fs.existsSync(path.join(ROOT,".gitignore")) ? fs.readFileSync(path.join(ROOT,".gitignore"),"utf8") : ""',
-    'if (gi.includes(".env.local") || gi.includes(".env*.local")) strength(".env.local is in .gitignore")',
-    'else finding("CRITICAL","SECRET",".gitignore",1,"",".env.local not in .gitignore!")',
-    'if (secretsFound === 0) strength("No hardcoded secrets detected")',
-    '',
-    '// CAT 5: XSS',
-    'console.log("\\n=== CAT 5: INPUTS SEM TRATAMENTO (XSS) ===")',
-    'var xssFound = 0',
-    'tsFiles.forEach(function(file) {',
-    '  var c = fs.readFileSync(file, "utf8")',
-    '  var lines = c.split("\\n")',
-    '  var xssPatterns = [',
-    '    { r: /dangerouslySetInnerHTML\\s*=\\s*\\{\\s*\\{/g, l: "dangerouslySetInnerHTML" },',
-    '    { r: /innerHTML\\s*=/g, l: "innerHTML" },',
-    '    { r: /eval\\s*\\(/g, l: "eval()" },',
-    '    { r: /new\\s+Function\\s*\\(/g, l: "new Function()" },',
-    '  ]',
-    '  xssPatterns.forEach(function(xp) {',
-    '    var re = new RegExp(xp.r.source, "g")',
-    '    var m',
-    '    while ((m = re.exec(c)) !== null) {',
-    '      var ln = c.substring(0, m.index).split("\\n").length',
-    '      var ctx = lines.slice(Math.max(0,ln-3),ln+3).join("\\n")',
-    '      if (!ctx.includes("sanitize") && !ctx.includes("DOMPurify")) {',
-    '        finding("HIGH","XSS",rel(file),ln,lines[ln-1]||"",xp.l+" without sanitization.")',
-    '        xssFound++',
-    '      }',
-    '    }',
-    '  })',
-    '})',
-    'if (xssFound === 0) strength("No XSS vectors detected")',
-    'if (tsFiles.some(function(f){return fs.readFileSync(f,"utf8").includes("from \'zod\'")})) strength("Zod used for server-side validation")',
-    '',
-    '// npm audit',
-    'console.log("\\n=== BONUS: DEPENDENCY VULNERABILITIES ===")',
-    'try {',
-    '  var a = JSON.parse(execSync("npm audit --json 2>/dev/null", { cwd: ROOT }).toString())',
-    '  var v = (a.metadata || {}).vulnerabilities || {}',
-    '  if ((v.critical||0) > 0) finding("CRITICAL","DEPENDENCY","package.json",0,"",v.critical+" critical vulns. Run npm audit fix.")',
-    '  else strength("npm audit: " + (v.high||0) + " high, " + (v.moderate||0) + " moderate")',
-    '} catch(e) { console.log("npm audit skipped:", e.message) }',
-    '',
-    '// Summary',
-    'var bySev = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 }',
-    'findings.forEach(function(f) { bySev[f.severity] = (bySev[f.severity]||0)+1 })',
-    'console.log("\\n" + "=".repeat(50))',
-    'console.log("SECURITY AUDIT SUMMARY")',
-    'console.log("CRITICAL:" + bySev.CRITICAL + " | HIGH:" + bySev.HIGH + " | MEDIUM:" + bySev.MEDIUM + " | LOW:" + bySev.LOW)',
-    'console.log("Strengths: " + strengths.length)',
-    '',
-    'fs.mkdirSync(path.join(ROOT,"docs","security-audit"),{recursive:true})',
-    'fs.writeFileSync(',
-    '  path.join(ROOT,"docs","security-audit","last-audit.json"),',
-    '  JSON.stringify({timestamp:new Date().toISOString(),summary:bySev,strengths:strengths,findings:findings},null,2)',
-    ')',
-    'console.log("Report saved: docs/security-audit/last-audit.json")',
-    '',
-    'if (STRICT && (bySev.CRITICAL > 0 || bySev.HIGH > 0)) {',
-    '  console.log("\\nAUDIT FAILED — fix critical/high findings before commit.")',
-    '  process.exit(1)',
-    '} else if (findings.length === 0) {',
-    '  console.log("\\nAUDIT PASSED — no security issues found!")',
-    '} else {',
-    '  console.log("\\nAUDIT COMPLETE — review findings above.")',
-    '}',
-  ]
-  return lines.join('\n')
+/**
+ * Manifesto de arquivos de um projeto novo.
+ *
+ * A versão anterior gerava um projeto que não compilava: o CI rodava
+ * `npm run test` e `npm run test:e2e`, que não existiam no package.json, e o
+ * job de build declarava `needs` nesses jobs. Todo projeto nascia com o CI
+ * vermelho e nunca fazia deploy.
+ *
+ * A regra aqui é uma só: o que este manifesto produz precisa passar em
+ * `npm ci && npm run typecheck && npm run lint && npm test && npm run build`.
+ * O teste em `project-files.test.ts` verifica a coerência entre os scripts
+ * declarados, as dependências instaladas e os jobs do CI.
+ */
+
+export const TEMPLATE_VERSION = '2.0.0'
+
+export interface FileEntry {
+  path: string
+  content: string
+  mode?: '100644' | '100755'
 }
 
-export function getCiWorkflowContent(projectName: string): string {
-  const lines: string[] = [
-    'name: Security + Quality Gates — ' + projectName,
-    '',
-    'on:',
-    '  push:',
-    '    branches: [main, develop]',
-    '  pull_request:',
-    '    branches: [main]',
-    '',
-    'jobs:',
-    '  security-audit:',
-    '    name: Security Audit',
-    '    runs-on: ubuntu-latest',
-    '    steps:',
-    '      - uses: actions/checkout@v4',
-    '      - uses: actions/setup-node@v4',
-    '        with:',
-    '          node-version: "20"',
-    '          cache: npm',
-    '      - run: npm ci',
-    '      - run: npm run audit:security -- --strict',
-    '',
-    '  quality:',
-    '    name: Lint & Types',
-    '    runs-on: ubuntu-latest',
-    '    steps:',
-    '      - uses: actions/checkout@v4',
-    '      - uses: actions/setup-node@v4',
-    '        with: { node-version: "20", cache: npm }',
-    '      - run: npm ci',
-    '      - run: npx tsc --noEmit',
-    '      - run: npm run lint',
-    '',
-    '  test-unit:',
-    '    name: Unit Tests (Vitest)',
-    '    runs-on: ubuntu-latest',
-    '    steps:',
-    '      - uses: actions/checkout@v4',
-    '      - uses: actions/setup-node@v4',
-    '        with: { node-version: "20", cache: npm }',
-    '      - run: npm ci',
-    '      - run: npm run test',
-    '',
-    '  test-e2e:',
-    '    name: E2E Tests (Playwright)',
-    '    runs-on: ubuntu-latest',
-    '    steps:',
-    '      - uses: actions/checkout@v4',
-    '      - uses: actions/setup-node@v4',
-    '        with: { node-version: "20", cache: npm }',
-    '      - run: npm ci',
-    '      - run: npx playwright install --with-deps',
-    '      - run: npm run test:e2e',
-    '',
-    '  build:',
-    '    name: Production Build',
-    '    runs-on: ubuntu-latest',
-    '    needs: [security-audit, quality, test-unit, test-e2e]',
-    '    steps:',
-    '      - uses: actions/checkout@v4',
-    '      - uses: actions/setup-node@v4',
-    '        with: { node-version: "20", cache: npm }',
-    '      - run: npm ci',
-    '      - run: npm run build',
-  ]
-  return lines.join('\n')
+export interface TemplateOptions {
+  projectName: string
+  description: string
 }
 
-export function getPackageJsonContent(projectName: string): string {
-  return JSON.stringify({
-    name: projectName,
-    version: "0.1.0",
-    private: true,
-    scripts: {
-      dev: "next dev",
-      build: "next build",
-      start: "next start",
-      lint: "next lint",
-      "audit:security": "node scripts/security-audit.js"
+// ─────────────────────────────────────────────────────────────
+// Dependências e scripts — fonte única
+// ─────────────────────────────────────────────────────────────
+
+const DEPENDENCIES = {
+  '@supabase/ssr': '^0.12.5',
+  '@supabase/supabase-js': '^2.112.4',
+  'class-variance-authority': '^0.7.1',
+  clsx: '^2.1.1',
+  'lucide-react': '^1.35.0',
+  next: '16.3.3',
+  react: '19.2.8',
+  'react-dom': '19.2.8',
+  'tailwind-merge': '^3.6.0',
+  zod: '^4.5.2',
+} as const
+
+const DEV_DEPENDENCIES = {
+  '@playwright/test': '^1.62.1',
+  '@tailwindcss/postcss': '^4.3.3',
+  '@testing-library/dom': '^10.4.1',
+  '@testing-library/jest-dom': '^7.0.1',
+  '@testing-library/react': '^16.3.3',
+  '@types/node': '^20.19.43',
+  '@types/react': '^19.2.18',
+  '@types/react-dom': '^19.2.5',
+  '@vitejs/plugin-react': '^6.1.1',
+  '@vitest/coverage-v8': '^3.2.7',
+  eslint: '^9.39.5',
+  'eslint-config-next': '16.3.3',
+  jsdom: '^25.0.1',
+  tailwindcss: '^4.3.3',
+  typescript: '^5.9.3',
+  vitest: '^3.2.7',
+} as const
+
+const SCRIPTS = {
+  dev: 'next dev',
+  build: 'next build',
+  start: 'next start',
+  lint: 'eslint',
+  typecheck: 'tsc --noEmit',
+  test: 'vitest run --exclude "**/*.rls.test.ts"',
+  'test:watch': 'vitest',
+  'test:coverage': 'vitest run --coverage --exclude "**/*.rls.test.ts"',
+  'test:rls': 'vitest run rls.test',
+  'test:e2e': 'playwright test',
+  'audit:security': 'node scripts/security-audit.js',
+} as const
+
+/** Scripts que o CI invoca. O teste do manifesto confere que todos existem. */
+export const CI_INVOKED_SCRIPTS = [
+  'audit:security',
+  'typecheck',
+  'lint',
+  'test:coverage',
+  'test:rls',
+  'test:e2e',
+  'build',
+] as const
+
+// ─────────────────────────────────────────────────────────────
+
+export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
+  const { projectName, description } = options
+  const summary = description || `${projectName} — criado com Supremo`
+
+  return [
+    // ── Manifesto e configuração ──────────────────────────────
+    { path: 'package.json', content: packageJson(projectName) },
+    { path: 'package-lock.json', content: packageLock(projectName) },
+    { path: 'tsconfig.json', content: tsconfig() },
+    { path: 'next.config.ts', content: nextConfig() },
+    { path: 'eslint.config.mjs', content: eslintConfig() },
+    { path: 'postcss.config.mjs', content: postcssConfig() },
+    { path: 'vitest.config.ts', content: vitestConfig() },
+    { path: 'vitest.setup.ts', content: vitestSetup() },
+    { path: 'playwright.config.ts', content: playwrightConfig() },
+    { path: 'vercel.json', content: vercelJson() },
+    { path: '.gitignore', content: gitignore() },
+    { path: '.env.example', content: envExample() },
+    { path: '.nvmrc', content: '20\n' },
+
+    // ── Aplicação ─────────────────────────────────────────────
+    { path: 'app/layout.tsx', content: appLayout(projectName, summary) },
+    { path: 'app/page.tsx', content: appPage(projectName, summary) },
+    { path: 'app/globals.css', content: globalsCss() },
+    { path: 'proxy.ts', content: proxy() },
+    { path: 'lib/utils.ts', content: libUtils() },
+    { path: 'lib/supabase/client.ts', content: supabaseClient() },
+    { path: 'lib/supabase/server.ts', content: supabaseServer() },
+    { path: 'lib/supabase/middleware.ts', content: supabaseMiddleware() },
+
+    // ── Banco ─────────────────────────────────────────────────
+    { path: 'supabase/config.toml', content: supabaseConfig(projectName) },
+    {
+      path: 'supabase/migrations/00000000000000_initial_schema.sql',
+      content: initialMigration(),
     },
-    dependencies: {
-      "@supabase/supabase-js": "^2.39.0",
-      "@supabase/ssr": "^0.5.0",
-      "class-variance-authority": "^0.7.0",
-      "clsx": "^2.1.0",
-      "lucide-react": "^0.441.0",
-      "next": "15.0.0",
-      "react": "^18.2.0",
-      "react-dom": "^18.2.0",
-      "tailwind-merge": "^2.3.0",
-      "zod": "^3.22.4"
+
+    // ── Testes ────────────────────────────────────────────────
+    { path: 'lib/utils.test.ts', content: utilsTest() },
+    { path: 'app/page.test.tsx', content: pageTest(projectName) },
+    {
+      path: 'supabase/rls.rls.test.ts',
+      content: generateRlsTest([
+        {
+          name: 'profiles',
+          ownerColumn: 'user_id',
+          requiredColumns: [{ name: 'display_name', sampleValue: `'Alice'` }],
+        },
+      ]),
     },
-    devDependencies: {
-      "@types/node": "^20",
-      "@types/react": "^18",
-      "@types/react-dom": "^18",
-      "autoprefixer": "^10.4.19",
-      "eslint": "^8",
-      "eslint-config-next": "15.0.0",
-      "postcss": "^8.4.38",
-      "tailwindcss": "^3.4.1",
-      "typescript": "^5"
-    }
-  }, null, 2)
+    { path: 'e2e/smoke.spec.ts', content: e2eSmoke(projectName) },
+
+    // ── Gates ─────────────────────────────────────────────────
+    { path: '.github/workflows/ci.yml', content: ciWorkflow(projectName) },
+    { path: '.github/dependabot.yml', content: dependabotConfig() },
+    {
+      path: 'scripts/security-audit.js',
+      content: securityAuditScript(),
+      mode: '100755',
+    },
+
+    // ── Documentação e regras ─────────────────────────────────
+    { path: 'README.md', content: readme(projectName, summary) },
+    { path: 'agents.md', content: agentsMd(projectName, summary) },
+    { path: 'CLAUDE.md', content: claudeMd(projectName) },
+    { path: 'SECURITY.md', content: securityMd(projectName) },
+  ]
 }
 
+// ═════════════════════════════════════════════════════════════
+// Configuração
+// ═════════════════════════════════════════════════════════════
 
-export function getVitestConfigContent(): string {
+function packageJson(projectName: string): string {
+  return `${JSON.stringify(
+    {
+      name: projectName,
+      version: '0.1.0',
+      private: true,
+      engines: { node: '>=20' },
+      scripts: SCRIPTS,
+      dependencies: DEPENDENCIES,
+      devDependencies: DEV_DEPENDENCIES,
+    },
+    null,
+    2
+  )}\n`
+}
+
+function tsconfig(): string {
+  return `${JSON.stringify(
+    {
+      compilerOptions: {
+        target: 'ES2022',
+        lib: ['dom', 'dom.iterable', 'esnext'],
+        allowJs: true,
+        skipLibCheck: true,
+        strict: true,
+        noUncheckedIndexedAccess: true,
+        noImplicitReturns: true,
+        noFallthroughCasesInSwitch: true,
+        noEmit: true,
+        esModuleInterop: true,
+        module: 'esnext',
+        moduleResolution: 'bundler',
+        resolveJsonModule: true,
+        isolatedModules: true,
+        jsx: 'react-jsx',
+        incremental: true,
+        plugins: [{ name: 'next' }],
+        paths: { '@/*': ['./*'] },
+      },
+      include: ['next-env.d.ts', '**/*.ts', '**/*.tsx', '.next/types/**/*.ts'],
+      exclude: ['node_modules', 'vitest.config.ts', 'playwright.config.ts'],
+    },
+    null,
+    2
+  )}\n`
+}
+
+/**
+ * CSP incluída de verdade.
+ *
+ * O SECURITY.md do template anterior afirmava que a CSP estava configurada
+ * em next.config.ts — arquivo que o scaffold nunca gerava.
+ */
+function nextConfig(): string {
+  return `import type { NextConfig } from 'next'
+
+const isDev = process.env.NODE_ENV === 'development'
+
+/**
+ * Content-Security-Policy.
+ *
+ * 'unsafe-eval' só em desenvolvimento, onde o Fast Refresh do Next precisa.
+ * Em produção o script fica restrito à própria origem.
+ */
+const csp = [
+  "default-src 'self'",
+  \`script-src 'self' 'unsafe-inline'\${isDev ? " 'unsafe-eval'" : ''}\`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https://*.supabase.co https://avatars.githubusercontent.com",
+  "font-src 'self' data:",
+  "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+  'upgrade-insecure-requests',
+].join('; ')
+
+const securityHeaders = [
+  { key: 'Content-Security-Policy', value: csp },
+  {
+    key: 'Strict-Transport-Security',
+    value: 'max-age=63072000; includeSubDomains; preload',
+  },
+  { key: 'X-Frame-Options', value: 'DENY' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+  {
+    key: 'Permissions-Policy',
+    value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()',
+  },
+  { key: 'X-DNS-Prefetch-Control', value: 'on' },
+  { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+]
+
+const nextConfig: NextConfig = {
+  poweredByHeader: false,
+  reactStrictMode: true,
+  async headers() {
+    return [{ source: '/(.*)', headers: securityHeaders }]
+  },
+}
+
+export default nextConfig
+`
+}
+
+function eslintConfig(): string {
+  return `import { defineConfig, globalIgnores } from 'eslint/config'
+import nextVitals from 'eslint-config-next/core-web-vitals'
+import nextTs from 'eslint-config-next/typescript'
+
+export default defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  globalIgnores([
+    '.next/**',
+    'out/**',
+    'build/**',
+    'coverage/**',
+    'playwright-report/**',
+    'next-env.d.ts',
+  ]),
+  {
+    files: ['scripts/**/*.js'],
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+])
+`
+}
+
+function postcssConfig(): string {
+  return `const config = {
+  plugins: ['@tailwindcss/postcss'],
+}
+
+export default config
+`
+}
+
+function vitestConfig(): string {
   return `import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import path from 'node:path'
 
 export default defineConfig({
   plugins: [react()],
+  // Runtime automático de JSX, alinhado ao jsx: "react-jsx" do tsconfig.
+  esbuild: { jsx: 'automatic' },
+  resolve: {
+    alias: { '@': path.resolve(__dirname, './') },
+  },
   test: {
     environment: 'jsdom',
+    globals: true,
     setupFiles: ['./vitest.setup.ts'],
+    include: ['**/*.test.ts', '**/*.test.tsx'],
+    exclude: ['node_modules/**', 'e2e/**', '.next/**'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      reporter: ['text', 'json-summary'],
+      include: ['lib/**/*.ts', 'app/**/*.tsx'],
+      exclude: [
+        '**/*.test.*',
+        '**/*.d.ts',
+        // Fábricas finas sobre o SDK do Supabase: um teste unitário aqui
+        // exercitaria o mock, não o código. A cobertura real delas vem do
+        // E2E e dos testes de RLS.
+        'lib/supabase/**',
+        // Shell da aplicação, sem lógica própria.
+        'app/layout.tsx',
+      ],
+      // Threshold que FALHA o build. Cobertura reportada e não exigida
+      // não é gate — é decoração. Se este número incomodar, escreva o
+      // teste; não baixe o número.
+      thresholds: {
+        lines: 80,
+        functions: 80,
+        branches: 80,
+        statements: 80,
+      },
     },
   },
 })
 `
 }
 
-export function getPlaywrightConfigContent(): string {
-  return `import { defineConfig, devices } from '@playwright/test';
+function vitestSetup(): string {
+  return `import '@testing-library/jest-dom/vitest'
+`
+}
+
+function playwrightConfig(): string {
+  return `import { defineConfig, devices } from '@playwright/test'
+
+/**
+ * Porta dedicada ao E2E.
+ *
+ * A 3000 é a porta padrão de todo app Next; com reuseExistingServer, um outro
+ * projeto rodando na máquina faz a suíte testar o app errado e falhar com
+ * mensagens sem sentido. Uma porta própria elimina a colisão.
+ */
+const E2E_PORT = Number(process.env.PLAYWRIGHT_PORT ?? 3100)
+const baseURL =
+  process.env.PLAYWRIGHT_BASE_URL ?? \`http://localhost:\${E2E_PORT}\`
 
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
-  forbidOnly: !!process.env.CI,
+  forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: 'html',
+  reporter: process.env.CI ? 'github' : 'html',
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
   },
+  // Ao adicionar um projeto aqui, instale o motor correspondente no CI
+  // (.github/workflows/ci.yml). iPhone roda em WebKit, não em Chromium.
   projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'mobile', use: { ...devices['iPhone 14'] } }, // WebKit
+  ],
+  // Sem webServer quando aponta para um preview deploy já publicado.
+  ...(process.env.PLAYWRIGHT_BASE_URL
+    ? {}
+    : {
+        webServer: {
+          command: \`npm run build && npm run start -- --port \${E2E_PORT}\`,
+          url: baseURL,
+          // Nunca reutilizar: garante que a suíte testa este projeto, e não
+          // qualquer coisa que já esteja escutando na porta.
+          reuseExistingServer: false,
+          timeout: 180_000,
+        },
+      }),
+})
+`
+}
+
+function vercelJson(): string {
+  return `${JSON.stringify(
     {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      $schema: 'https://openapi.vercel.sh/vercel.json',
+      framework: 'nextjs',
+      github: { silent: true },
     },
-  ],
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
-    reuseExistingServer: !process.env.CI,
-  },
-});
+    null,
+    2
+  )}\n`
+}
+
+function gitignore(): string {
+  return `node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+.env*
+!.env.example
+
+*.log
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+.vercel
+docs/security-audit/last-audit.json
 `
 }
 
-export function getVercelJsonContent(): string {
-  return JSON.stringify({
-    "version": 2,
-    "headers": [
-      {
-        "source": "/(.*)",
-        "headers": [
-          {
-            "key": "X-Content-Type-Options",
-            "value": "nosniff"
-          },
-          {
-            "key": "X-Frame-Options",
-            "value": "DENY"
-          },
-          {
-            "key": "X-XSS-Protection",
-            "value": "1; mode=block"
-          },
-          {
-            "key": "Referrer-Policy",
-            "value": "strict-origin-when-cross-origin"
-          },
-          {
-            "key": "Permissions-Policy",
-            "value": "camera=(), microphone=(), geolocation=()"
-          }
-        ]
-      }
-    ],
-    "crons": [
-      {
-        "path": "/api/cron",
-        "schedule": "0 * * * *"
-      }
-    ]
-  }, null, 2)
-}
+function envExample(): string {
+  return `# Supabase — chaves públicas, seguras no cliente
+NEXT_PUBLIC_SUPABASE_URL=https://seu-projeto.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=sua-anon-key
 
-export function getTailwindConfigContent(): string {
-  return `import type { Config } from 'tailwindcss'
+# Somente servidor. NUNCA prefixe com NEXT_PUBLIC_.
+SUPABASE_SERVICE_ROLE_KEY=sua-service-role-key
 
-const config: Config = {
-  content: [
-    './pages/**/*.{js,ts,jsx,tsx,mdx}',
-    './components/**/*.{js,ts,jsx,tsx,mdx}',
-    './app/**/*.{js,ts,jsx,tsx,mdx}',
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}
-export default config
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 `
 }
 
-export function getPostcssConfigContent(): string {
-  return `module.exports = {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
+// ═════════════════════════════════════════════════════════════
+// Aplicação
+// ═════════════════════════════════════════════════════════════
+
+function appLayout(projectName: string, description: string): string {
+  return `import type { Metadata } from 'next'
+import './globals.css'
+
+export const metadata: Metadata = {
+  title: '${escapeJs(projectName)}',
+  description: '${escapeJs(description)}',
+}
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <html lang="pt-BR" suppressHydrationWarning>
+      <body className="min-h-dvh bg-background text-foreground antialiased">
+        {children}
+      </body>
+    </html>
+  )
 }
 `
 }
 
-export function getGlobalsCssContent(): string {
-  return `@tailwind base;
-@tailwind components;
-@tailwind utilities;
+function appPage(projectName: string, description: string): string {
+  return `export default function HomePage() {
+  return (
+    <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center px-6 py-16">
+      <div className="space-y-6">
+        <span className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs font-medium text-muted">
+          <span className="size-1.5 rounded-full bg-accent" />
+          Criado com Supremo
+        </span>
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+        <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
+          ${escapeJsx(projectName)}
+        </h1>
+
+        <p className="max-w-prose text-lg text-muted">
+          ${escapeJsx(description)}
+        </p>
+
+        <div className="grid gap-3 pt-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-border p-4">
+            <h2 className="text-sm font-medium">RLS ativo</h2>
+            <p className="mt-1 text-sm text-muted">
+              Toda tabela nasce com Row Level Security e um teste que prova o
+              isolamento entre contas.
+            </p>
+          </div>
+          <div className="rounded-lg border border-border p-4">
+            <h2 className="text-sm font-medium">Gates no CI</h2>
+            <p className="mt-1 text-sm text-muted">
+              Tipos, lint, testes, cobertura, auditoria de segurança e E2E
+              antes de qualquer merge.
+            </p>
+          </div>
+        </div>
+      </div>
+    </main>
+  )
+}
+`
+}
+
+function globalsCss(): string {
+  return `@import "tailwindcss";
+
+@theme {
+  --color-background: oklch(99% 0.002 265);
+  --color-foreground: oklch(21% 0.015 265);
+  --color-muted: oklch(52% 0.018 265);
+  --color-border: oklch(91% 0.006 265);
+  --color-accent: oklch(58% 0.19 275);
+  --color-accent-foreground: oklch(99% 0 0);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  @theme {
+    --color-background: oklch(16% 0.012 265);
+    --color-foreground: oklch(95% 0.006 265);
+    --color-muted: oklch(68% 0.016 265);
+    --color-border: oklch(28% 0.012 265);
+    --color-accent: oklch(70% 0.16 275);
+    --color-accent-foreground: oklch(16% 0.012 265);
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 `
 }
 
-export function getUtilsTsContent(): string {
-  return `import { type ClassValue, clsx } from "clsx"
-import { twMerge } from "tailwind-merge"
+function proxy(): string {
+  return `import type { NextRequest } from 'next/server'
+import { updateSession } from '@/lib/supabase/middleware'
 
-export function cn(...inputs: ClassValue[]) {
+/**
+ * Renova a sessão do Supabase a cada requisição.
+ *
+ * No Next 16 a convenção \`middleware\` foi renomeada para \`proxy\`.
+ */
+export async function proxy(request: NextRequest) {
+  return updateSession(request)
+}
+
+export const config = {
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|.*\\\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
+}
+`
+}
+
+function libUtils(): string {
+  return `import { clsx, type ClassValue } from 'clsx'
+import { twMerge } from 'tailwind-merge'
+
+/** Junta classes do Tailwind resolvendo conflitos do último para o primeiro. */
+export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs))
 }
+
+/** Formata data em pt-BR de forma estável entre servidor e cliente. */
+export function formatDate(value: string | Date): string {
+  const date = typeof value === 'string' ? new Date(value) : value
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(date)
+}
 `
 }
 
-export function getSupabaseClientContent(): string {
+function supabaseClient(): string {
   return `import { createBrowserClient } from '@supabase/ssr'
 
+/**
+ * Cliente do navegador. Usa apenas a anon key — o RLS é quem decide o que
+ * este cliente enxerga.
+ */
 export function createClient() {
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -460,7 +629,7 @@ export function createClient() {
 `
 }
 
-export function getSupabaseServerContent(): string {
+function supabaseServer(): string {
   return `import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
@@ -477,13 +646,11 @@ export async function createClient() {
         },
         setAll(cookiesToSet) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) => {
+            cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
-            })
-          } catch (error) {
-            // The \`set\` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing
-            // user sessions.
+            )
+          } catch {
+            // Chamado de Server Component — o middleware cuida dos cookies.
           }
         },
       },
@@ -493,14 +660,12 @@ export async function createClient() {
 `
 }
 
-export function getSupabaseMiddlewareContent(): string {
+function supabaseMiddleware(): string {
   return `import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
-  })
+  let response = NextResponse.next({ request })
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -511,37 +676,668 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({
-            request,
-          })
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value)
+          )
+          response = NextResponse.next({ request })
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            response.cookies.set(name, value, options)
           )
         },
       },
     }
   )
 
+  // Necessário para renovar o token — não remova.
   await supabase.auth.getUser()
 
-  return supabaseResponse
+  return response
 }
 `
 }
 
-export function getNextMiddlewareContent(): string {
-  return `import { type NextRequest } from 'next/server'
-import { updateSession } from '@/lib/supabase/middleware'
+// ═════════════════════════════════════════════════════════════
+// Banco
+// ═════════════════════════════════════════════════════════════
 
-export async function middleware(request: NextRequest) {
-  return await updateSession(request)
-}
+function supabaseConfig(projectName: string): string {
+  return `project_id = "${projectName}"
 
-export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
-  ],
-}
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
 `
+}
+
+/**
+ * Migration inicial versionada no repositório.
+ *
+ * O template anterior aplicava o SQL direto pela API e não versionava nada,
+ * contrariando a própria regra que escrevia no agents.md.
+ */
+function initialMigration(): string {
+  return `-- ============================================================
+-- Migration inicial — criada pelo Supremo
+-- ============================================================
+
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- ------------------------------------------------------------
+-- updated_at automático
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$;
+
+-- ------------------------------------------------------------
+-- PROFILES
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  display_name TEXT NOT NULL,
+  avatar_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  UNIQUE(user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_profiles_user_id ON profiles(user_id);
+
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "profiles_select_own" ON profiles
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "profiles_insert_own" ON profiles
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "profiles_update_own" ON profiles
+  FOR UPDATE USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "profiles_delete_own" ON profiles
+  FOR DELETE USING (auth.uid() = user_id);
+
+CREATE TRIGGER profiles_updated_at
+  BEFORE UPDATE ON profiles
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- ------------------------------------------------------------
+-- AUDIT LOGS
+-- Somente leitura do próprio registro e inserção em nome próprio.
+-- WITH CHECK (true) permitiria forjar registro de auditoria alheio.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT,
+  metadata JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at
+  ON audit_logs(created_at DESC);
+
+ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "audit_logs_select_own" ON audit_logs
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "audit_logs_insert_own" ON audit_logs
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+`
+}
+
+// ═════════════════════════════════════════════════════════════
+// Testes
+// ═════════════════════════════════════════════════════════════
+
+function utilsTest(): string {
+  return `import { describe, it, expect } from 'vitest'
+import { cn, formatDate } from './utils'
+
+describe('cn', () => {
+  it('junta classes', () => {
+    expect(cn('px-2', 'py-1')).toBe('px-2 py-1')
+  })
+
+  it('resolve conflito do Tailwind mantendo a última', () => {
+    expect(cn('px-2', 'px-4')).toBe('px-4')
+  })
+
+  it('ignora valores falsos', () => {
+    expect(cn('px-2', false, null, undefined, 'py-1')).toBe('px-2 py-1')
+  })
+
+  it('aceita condicional em objeto', () => {
+    expect(cn({ 'text-red-500': true, 'text-blue-500': false })).toBe(
+      'text-red-500'
+    )
+  })
+})
+
+describe('formatDate', () => {
+  it('formata ISO em pt-BR', () => {
+    expect(formatDate('2026-03-09T00:00:00Z')).toBe('09/03/2026')
+  })
+
+  it('aceita objeto Date', () => {
+    expect(formatDate(new Date('2026-12-25T00:00:00Z'))).toBe('25/12/2026')
+  })
+})
+`
+}
+
+function pageTest(projectName: string): string {
+  return `import { describe, it, expect } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import HomePage from './page'
+
+describe('HomePage', () => {
+  it('mostra o nome do projeto como título principal', () => {
+    render(<HomePage />)
+    expect(
+      screen.getByRole('heading', { level: 1, name: '${escapeJs(projectName)}' })
+    ).toBeInTheDocument()
+  })
+
+  it('tem um único h1 — hierarquia correta para leitores de tela', () => {
+    render(<HomePage />)
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+  })
+})
+`
+}
+
+/**
+ * Smoke E2E que passa de verdade.
+ *
+ * O template anterior gerava um teste que checava o título "Create Next App"
+ * contra um layout sem título nenhum — falha garantida.
+ */
+function e2eSmoke(projectName: string): string {
+  return `import { test, expect } from '@playwright/test'
+
+test.describe('smoke', () => {
+  test('a home carrega com o título do projeto', async ({ page }) => {
+    await page.goto('/')
+    await expect(page).toHaveTitle('${escapeJs(projectName)}')
+    await expect(
+      page.getByRole('heading', { level: 1, name: '${escapeJs(projectName)}' })
+    ).toBeVisible()
+  })
+
+  test('responde com os cabeçalhos de segurança', async ({ page }) => {
+    const response = await page.goto('/')
+    const headers = response?.headers() ?? {}
+
+    expect(headers['x-content-type-options']).toBe('nosniff')
+    expect(headers['x-frame-options']).toBe('DENY')
+    expect(headers['content-security-policy']).toContain("default-src 'self'")
+  })
+
+  test('não vaza a service role key para o cliente', async ({ page }) => {
+    await page.goto('/')
+    const html = await page.content()
+
+    expect(html).not.toContain('service_role')
+    expect(html).not.toMatch(/SUPABASE_SERVICE_ROLE/)
+  })
+})
+`
+}
+
+// ═════════════════════════════════════════════════════════════
+// Gates
+// ═════════════════════════════════════════════════════════════
+
+function ciWorkflow(projectName: string): string {
+  return `name: Gates — ${projectName}
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: \${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+  # gitleaks lê os commits do PR para varrer só o que mudou; sem isto ele
+  # recebe 403 em /pulls/N/commits e o job falha sem ter escaneado nada.
+  pull-requests: read
+  actions: read
+
+jobs:
+  quality:
+    name: Tipos, lint e auditoria
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run audit:security -- --strict
+
+  test:
+    name: Testes e cobertura
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage
+
+  rls:
+    name: Políticas RLS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: supabase start
+
+      # O start sobe o banco, mas quem aplica as migrations do repositório
+      # é o db reset. Sem isto o teste falha com "Could not find the table
+      # ... in the schema cache", e o gate de RLS passa a acusar ausência de
+      # tabela em vez de falha de policy.
+      - name: Aplicar as migrations do repositório
+        run: supabase db reset --no-seed
+
+      - name: Exportar credenciais locais
+        run: |
+          echo "SUPABASE_URL=$(supabase status -o env | grep API_URL | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
+          echo "SUPABASE_ANON_KEY=$(supabase status -o env | grep ANON_KEY | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(supabase status -o env | grep SERVICE_ROLE_KEY | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
+      - run: npm ci
+      - name: Provar isolamento entre contas
+        run: npm run test:rls
+
+  dependencies:
+    name: Vulnerabilidades
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+
+  secrets:
+    name: Varredura de segredos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build de produção
+    runs-on: ubuntu-latest
+    needs: [quality, test]
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: \${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: \${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+    needs: [build]
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: \${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: \${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+`
+}
+
+function dependabotConfig(): string {
+  return `version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+`
+}
+
+/**
+ * Lockfile pré-resolvido do conjunto fixo de dependências do template.
+ *
+ * Sem ele o projeto nasce com o CI quebrado: `npm ci` e o `cache: npm` do
+ * actions/setup-node exigem lockfile, e o job falha antes de instalar nada.
+ * Como as dependências do template são fixas, o lock é resolvido uma vez e
+ * versionado aqui — o que também dá build reproduzível ao usuário.
+ *
+ * Regenerar após mudar DEPENDENCIES ou DEV_DEPENDENCIES:
+ *   npx tsx scripts/dev/regenerate-template-lock.ts
+ */
+function packageLock(projectName: string): string {
+  const lockPath = path.join(
+    process.cwd(),
+    'src',
+    'lib',
+    'templates',
+    'assets',
+    'package-lock.json'
+  )
+
+  const raw = fs.readFileSync(/* turbopackIgnore: true */ lockPath, 'utf8')
+  const lock = JSON.parse(raw) as {
+    name: string
+    packages: Record<string, { name?: string }>
+  }
+
+  // O nome no lock precisa bater com o do package.json, senão o npm avisa.
+  lock.name = projectName
+  const root = lock.packages['']
+  if (root) root.name = projectName
+
+  return `${JSON.stringify(lock, null, 2)}\n`
+}
+
+/**
+ * O script de auditoria é o mesmo que o Supremo roda em si próprio.
+ *
+ * Ele é lido do disco em vez de duplicado numa string: uma cópia paralela
+ * divergiria na primeira correção feita de um lado só.
+ */
+function securityAuditScript(): string {
+  const scriptPath = path.join(process.cwd(), 'scripts', 'security-audit.js')
+
+  try {
+    return fs.readFileSync(/* turbopackIgnore: true */ scriptPath, 'utf8')
+  } catch {
+    // Cai no stub abaixo, que falha alto em vez de passar em silêncio.
+  }
+
+  // Sem o arquivo, o gate falha alto em vez de passar em silêncio.
+  return `#!/usr/bin/env node
+console.error(
+  'Script de auditoria não foi copiado pelo scaffold. ' +
+    'Recrie o projeto ou copie scripts/security-audit.js do Supremo.'
+)
+process.exit(1)
+`
+}
+
+// ═════════════════════════════════════════════════════════════
+// Documentação
+// ═════════════════════════════════════════════════════════════
+
+function readme(projectName: string, description: string): string {
+  return `# ${projectName}
+
+${description}
+
+## Rodando localmente
+
+\`\`\`bash
+npm install
+cp .env.example .env.local   # preencha com as chaves do seu Supabase
+npm run dev
+\`\`\`
+
+## Gates
+
+Todos rodam no CI a cada pull request e precisam passar antes do merge.
+
+| Comando | O que verifica |
+| --- | --- |
+| \`npm run typecheck\` | TypeScript strict, zero erros |
+| \`npm run lint\` | ESLint, zero erros |
+| \`npm test\` | Testes unitários |
+| \`npm run test:coverage\` | Cobertura mínima de 70% |
+| \`npm run test:rls\` | Isolamento entre contas no banco |
+| \`npm run test:e2e\` | Fluxos críticos no navegador |
+| \`npm run audit:security\` | RLS, autorização, IDOR, segredos, XSS |
+
+A análise estática (CodeQL) roda pelo code scanning gerenciado do GitHub, em
+Settings › Code security — não há job dela no workflow.
+
+Antes de abrir um PR:
+
+\`\`\`bash
+npm run typecheck && npm run lint && npm test && npm run build
+\`\`\`
+
+## Banco de dados
+
+Migrations ficam versionadas em \`supabase/migrations/\`. Toda tabela nova
+precisa de RLS e do teste correspondente em \`supabase/rls.rls.test.ts\` —
+o CI reprova o PR sem isso.
+
+## Arquitetura
+
+Leia [agents.md](./agents.md) para o contexto completo e as regras que valem
+neste repositório.
+`
+}
+
+function agentsMd(projectName: string, description: string): string {
+  return `# ${projectName} — contexto para agentes de IA
+
+## O que é
+${description}
+
+## Stack
+- Next.js 16 (App Router) + React 19, TypeScript strict
+- Supabase (Postgres + Auth + RLS)
+- Tailwind CSS v4
+- Vitest + Playwright
+
+## Regras de arquitetura
+
+### Segurança
+- Toda validação acontece no servidor. Nunca no cliente.
+- RLS ativo em todas as tabelas, sem exceção.
+- Nunca expor a service role key ao bundle do cliente.
+- Nunca confiar em \`user_id\` vindo do corpo da requisição — use \`auth.uid()\`.
+- Server Actions para mutação; Route Handlers para integração externa.
+- Toda Server Action começa verificando a sessão.
+
+### Código
+- Zero \`any\`. Tipos explícitos.
+- Nenhuma lógica de negócio dentro de componente React.
+- Zod para validar toda entrada de servidor.
+- Erro tratado explicitamente — nunca \`catch\` vazio.
+
+### Banco
+- Migrations versionadas em \`supabase/migrations/\`, nunca aplicadas só por API.
+- Foreign key com \`ON DELETE\` explícito.
+- Índice em toda foreign key.
+- \`created_at\` e \`updated_at\` em toda tabela.
+- **Toda tabela nova exige um teste de RLS.** Sem ele o PR não passa.
+
+### Testes
+Escreva o teste junto com o código, não depois. Cobertura mínima de 70%,
+exigida pelo CI — não é sugestão.
+
+## Fluxo de trabalho
+1. Trabalhe em branch, nunca na \`main\`.
+2. Abra pull request.
+3. Espere os gates. Se algum falhar, leia o log e corrija.
+4. Merge só com tudo verde.
+
+Este projeto é gerenciado pelo Supremo. O MCP remoto expõe estas regras via
+\`get_project_context\` — elas valem de qualquer máquina.
+`
+}
+
+function claudeMd(projectName: string): string {
+  return `# CLAUDE.md — ${projectName}
+
+Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
+
+## Sempre
+- Ler \`agents.md\` e \`SECURITY.md\` antes de escrever código
+- Implementar do servidor para fora
+- Ativar RLS em toda tabela nova **e escrever o teste de isolamento**
+- Validar entrada com Zod no servidor
+- Rodar \`npm run typecheck && npm run lint && npm test\` antes de propor mudança
+
+## Nunca
+- \`any\` no TypeScript
+- \`console.log\` em produção
+- Lógica de negócio em componente React
+- Tabela sem RLS
+- Segredo em código
+- Validação de acesso no cliente
+- Commit direto na \`main\`
+
+## Commits
+\`feat:\` \`fix:\` \`refactor:\` \`test:\` \`security:\` \`docs:\` \`chore:\`
+
+Um commit por mudança lógica.
+
+## Quando um gate falha
+Leia o log do job, corrija a causa, proponha de novo. Não desabilite o teste,
+não use \`skip\`, não afrouxe o threshold. Se o gate está errado, corrija o
+gate num PR separado e explique por quê.
+`
+}
+
+function securityMd(projectName: string): string {
+  return `# SECURITY.md — ${projectName}
+
+## Modelo de ameaça
+Aplicação multiusuário sobre Supabase. O risco principal é vazamento entre
+contas: usuário A alcançar dado do usuário B.
+
+## Template obrigatório de tabela
+
+\`\`\`sql
+CREATE TABLE minha_tabela (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_minha_tabela_user_id ON minha_tabela(user_id);
+ALTER TABLE minha_tabela ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "minha_tabela_select_own" ON minha_tabela
+  FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "minha_tabela_insert_own" ON minha_tabela
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "minha_tabela_update_own" ON minha_tabela
+  FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "minha_tabela_delete_own" ON minha_tabela
+  FOR DELETE USING (auth.uid() = user_id);
+\`\`\`
+
+E o teste correspondente em \`supabase/rls.rls.test.ts\`.
+
+## Proibido
+- \`USING (true)\` ou \`WITH CHECK (true)\` em qualquer policy
+- \`service_role\` fora do servidor
+- Decidir autorização a partir de JWT decodificado no cliente
+- \`dangerouslySetInnerHTML\` sem sanitização
+- \`eval\` e \`new Function\`
+- Desabilitar RLS "temporariamente"
+
+## Cabeçalhos
+Configurados em \`next.config.ts\` e verificados por teste E2E:
+Content-Security-Policy, Strict-Transport-Security, X-Frame-Options,
+X-Content-Type-Options, Referrer-Policy, Permissions-Policy.
+
+## Reportando uma vulnerabilidade
+Abra issue privada de segurança no GitHub. Não abra PR público com o exploit.
+
+## Resposta a incidente
+1. Revogue a credencial exposta antes de qualquer outra coisa
+2. Crie branch \`security/descricao\`
+3. Corrija e escreva o teste que impede a regressão
+4. Rode a suíte completa
+5. Peça revisão antes do merge
+`
+}
+
+// ─────────────────────────────────────────────────────────────
+
+function escapeJs(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, ' ')
+}
+
+function escapeJsx(value: string): string {
+  return value
+    .replace(/[{}]/g, '')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }

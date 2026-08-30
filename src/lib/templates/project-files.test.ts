@@ -114,6 +114,40 @@ describe('dependências — tudo que é importado está instalado', () => {
   })
 })
 
+describe('migrations — nome que o CLI do Supabase aceita', () => {
+  const migrations = files.filter((f) =>
+    f.path.startsWith('supabase/migrations/')
+  )
+
+  it('gera ao menos uma migration', () => {
+    expect(migrations.length).toBeGreaterThan(0)
+  })
+
+  it('nenhuma usa nome reservado pelo CLI', () => {
+    // O CLI pula migrations chamadas "init" — em silêncio, com um aviso que
+    // some no meio do log:
+    //   Skipping migration ..._init.sql (replace "init" with a different name)
+    // O gate de RLS então acusava tabela inexistente, não falha de policy.
+    const RESERVED = ['init']
+
+    for (const migration of migrations) {
+      const slug = migration.path
+        .replace(/^supabase\/migrations\//, '')
+        .replace(/^\d+_/, '')
+        .replace(/\.sql$/, '')
+      expect(RESERVED).not.toContain(slug)
+    }
+  })
+
+  it('segue o padrão de nome versionado do CLI', () => {
+    for (const migration of migrations) {
+      expect(migration.path).toMatch(
+        /^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/
+      )
+    }
+  })
+})
+
 describe('lockfile — sem ele o CI quebra antes de instalar', () => {
   // Bug real encontrado em produção: o CI gerado usava `npm ci` e
   // `cache: npm`, e ambos exigem lockfile. Sem ele, todo job falhava em
@@ -225,7 +259,7 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
   })
 
   it('a migration inicial ativa RLS em toda tabela criada', () => {
-    const sql = file('supabase/migrations/00000000000000_init.sql')
+    const sql = file('supabase/migrations/00000000000000_initial_schema.sql')
     const created = [
       ...sql.matchAll(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)/gi),
     ].map((m) => m[1])
@@ -240,7 +274,7 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
   it('nenhuma policy usa USING (true) ou WITH CHECK (true)', () => {
     // Comentários explicam justamente o que NÃO fazer; asserção sobre prosa
     // acusaria a própria documentação.
-    const sql = file('supabase/migrations/00000000000000_init.sql')
+    const sql = file('supabase/migrations/00000000000000_initial_schema.sql')
       .split('\n')
       .map((line) => line.replace(/--.*$/, ''))
       .join('\n')

@@ -125,7 +125,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     // ── Banco ─────────────────────────────────────────────────
     { path: 'supabase/config.toml', content: supabaseConfig(projectName) },
     {
-      path: 'supabase/migrations/00000000000000_init.sql',
+      path: 'supabase/migrations/00000000000000_initial_schema.sql',
       content: initialMigration(),
     },
 

@@ -54,11 +54,18 @@ describe('SERVER_INSTRUCTIONS', () => {
     ['merge_when_green', 'fechar o ciclo'],
     ['ENABLE ROW LEVEL SECURITY', 'exigir RLS'],
     ['auth.uid()', 'não confiar no cliente'],
+    ['get_preview_errors', 'confirmar que a aplicação sobe'],
   ])('menciona %s (%s)', (needle) => {
     expect(SERVER_INSTRUCTIONS).toContain(needle)
   })
 
   it('deixa explícito que não se commita na branch principal', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/não commita na branch principal/i)
+  })
+
+  it('separa gate verde de aplicação que abre', () => {
+    // São coisas diferentes, e confundir as duas foi o que fez o preview
+    // ficar em branco sem ninguém perceber.
+    expect(SERVER_INSTRUCTIONS).toMatch(/não que a aplicação abre/i)
   })
 })

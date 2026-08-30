@@ -172,6 +172,7 @@ describe('ferramentas anunciadas', () => {
         'merge_when_green',
         'execute_sql',
         'apply_migration',
+        'get_preview_errors',
       ])
     )
   })

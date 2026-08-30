@@ -4,6 +4,12 @@ import * as repo from './repository'
 import * as gh from './github'
 import { assertSafeSql } from './sql-guard'
 import { mcpDataClient } from './tokens'
+import {
+  previewProjectName,
+  readPreviewFailure,
+  readSharedPreview,
+  sharedPreviewConfig,
+} from '@/lib/preview'
 
 /**
  * Servidor MCP do Supremo, ligado a um usuário.
@@ -30,6 +36,10 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
 
 4. Só merge_when_green fecha o ciclo, e ele recusa se algum gate estiver
    vermelho. Não tente contornar.
+
+4b. Gate verde diz que os testes passaram, não que a aplicação abre. Depois
+   do merge, chame get_preview_errors para confirmar que ela sobe de verdade
+   — e para ler o log quando não subir.
 
 5. Toda tabela nova precisa de RLS, foreign keys explícitas, índice nas FKs e
    um teste que prove que outro usuário não lê aquela linha. apply_migration
@@ -466,6 +476,64 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         `PR #${prNumber} mergeado em ${project.default_branch} (${merged.sha.slice(0, 7)}). ` +
           `Todos os ${checks.total} gates passaram.`
       )
+    })
+  )
+
+  server.registerTool(
+    'get_preview_errors',
+    {
+      title: 'Erros do preview',
+      description:
+        'Estado do preview publicado e, quando o build falhou, o trecho do ' +
+        'log que explica a causa. Use depois de propor mudanças para ver se ' +
+        'a aplicação realmente sobe — o CI verde diz que os testes passaram, ' +
+        'não que o app abre.',
+      inputSchema: { projectId: z.string().uuid().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    guard(async ({ projectId }) => {
+      const project = await repo.resolveProject(ctx.userId, projectId)
+      const config = sharedPreviewConfig()
+
+      if (!config) {
+        return ok(
+          'O preview compartilhado não está configurado neste ambiente.'
+        )
+      }
+
+      const name =
+        project.preview_project_name ??
+        previewProjectName(project.name, project.id)
+
+      const failure = await readPreviewFailure(config, name)
+
+      if (failure) {
+        return json({
+          state: failure.state,
+          inspectorUrl: failure.inspectorUrl,
+          log: failure.log,
+          next: 'Corrija a causa acima e proponha de novo.',
+        })
+      }
+
+      const deployment = await readSharedPreview(config, name)
+
+      if (!deployment) {
+        return ok(
+          'Nenhum preview publicado ainda para este projeto. Peça ao usuário ' +
+            'para publicar, ou proponha mudanças — a publicação acontece a ' +
+            'partir do painel.'
+        )
+      }
+
+      return json({
+        state: deployment.state,
+        url: deployment.url,
+        note:
+          deployment.state === 'READY'
+            ? 'A aplicação subiu. Se algo estiver errado na tela, é comportamento em execução, não falha de build.'
+            : 'Ainda publicando. Consulte de novo em alguns segundos.',
+      })
     })
   )
 

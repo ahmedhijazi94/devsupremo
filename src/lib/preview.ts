@@ -4,6 +4,8 @@ import {
   findProjectByName,
   makePubliclyAccessible,
   deleteProject as deleteVercelProject,
+  deploymentLogs,
+  extractBuildFailure,
   latestDeployment,
   setEnvironmentVariables,
   VercelError,
@@ -160,6 +162,51 @@ export async function deleteSharedPreview(
   projectName: string
 ): Promise<'deleted' | 'already_gone'> {
   return deleteVercelProject(config.token, config.teamId, projectName)
+}
+
+export interface PreviewFailure {
+  state: string
+  url: string | null
+  inspectorUrl: string | null
+  log: string
+}
+
+/**
+ * Por que o último preview falhou.
+ *
+ * O agente chama isto depois de publicar e ver que não subiu. Devolver o
+ * estado sem o log deixaria ele adivinhando.
+ */
+export async function readPreviewFailure(
+  config: SharedPreviewConfig,
+  projectName: string
+): Promise<PreviewFailure | null> {
+  const project = await findProjectByName(
+    config.token,
+    config.teamId,
+    projectName
+  )
+  if (!project) return null
+
+  const deployment = await latestDeployment(
+    config.token,
+    config.teamId,
+    project.id
+  )
+  if (!deployment) return null
+
+  if (deployment.state !== 'ERROR' && deployment.state !== 'CANCELED') {
+    return null
+  }
+
+  const lines = await deploymentLogs(config.token, config.teamId, deployment.id)
+
+  return {
+    state: deployment.state,
+    url: deployment.url,
+    inspectorUrl: deployment.inspectorUrl,
+    log: extractBuildFailure(lines),
+  }
 }
 
 /** Estado do último preview publicado, sem republicar. */

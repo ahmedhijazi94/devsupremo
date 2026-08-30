@@ -526,6 +526,61 @@ export async function latestDeployment(
   return deployments[0] ?? null
 }
 
+export interface BuildLogLine {
+  type: string
+  text: string
+  createdAt: number
+}
+
+/**
+ * Log de construção de um deploy.
+ *
+ * É o que o agente lê quando o preview falha. Sem isso ele fica adivinhando
+ * a partir de "o build falhou", que não diz nada sobre a causa.
+ */
+export async function deploymentLogs(
+  token: string,
+  teamId: string | null,
+  deploymentId: string,
+  limit = 200
+): Promise<BuildLogLine[]> {
+  const data = await call<
+    Array<{ type?: string; text?: string; payload?: { text?: string }; created?: number; date?: number }>
+  >(`/v3/deployments/${deploymentId}/events?limit=${limit}`, { token, teamId })
+
+  return (Array.isArray(data) ? data : [])
+    .map((event) => ({
+      type: event.type ?? 'stdout',
+      text: (event.text ?? event.payload?.text ?? '').replace(/\u001b\[[0-9;]*m/g, ''),
+      createdAt: event.created ?? event.date ?? 0,
+    }))
+    .filter((line) => line.text.trim().length > 0)
+}
+
+/**
+ * Recorta a parte do log que explica a falha.
+ *
+ * Devolver as últimas linhas falha nos builds barulhentos, onde o erro
+ * aparece bem antes do fim.
+ */
+export function extractBuildFailure(lines: BuildLogLine[], window = 40): string {
+  const texts = lines.map((line) => line.text)
+
+  const markers = [
+    /\berror\b/i,
+    /\bfailed\b/i,
+    /npm ERR!/,
+    /Type error:/,
+    /Module not found/,
+  ]
+
+  const at = texts.findIndex((text) => markers.some((m) => m.test(text)))
+  if (at === -1) return texts.slice(-window).join('\n')
+
+  const start = Math.max(0, at - 5)
+  return texts.slice(start, at + window).join('\n')
+}
+
 /** Texto curto de estado, para a interface. */
 export function describeState(state: DeploymentState): {
   label: string

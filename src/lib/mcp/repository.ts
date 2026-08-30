@@ -14,6 +14,7 @@ import type { Json } from '@/types/database'
  */
 
 export interface ProjectRecord {
+  preview_project_name: string | null
   id: string
   user_id: string
   name: string
@@ -33,7 +34,7 @@ export interface ProjectRecord {
 const PROJECT_COLUMNS =
   'id, user_id, name, description, github_account_id, supabase_account_id, ' +
   'github_repo_full_name, supabase_project_ref, active_branch, default_branch, ' +
-  'preview_url, status, is_active, updated_at'
+  'preview_url, preview_project_name, status, is_active, updated_at'
 
 export class NotFoundError extends Error {
   constructor(message: string) {

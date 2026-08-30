@@ -9,6 +9,12 @@ import {
   TEMPLATE_VERSION,
   type FileEntry,
 } from '@/lib/templates/project-files'
+import {
+  createProject as createVercelProject,
+  findProjectByName,
+  setEnvironmentVariables,
+  VercelError,
+} from '@/lib/vercel'
 
 /**
  * Provisiona um projeto: cria o repositório, escreve o template completo,
@@ -163,7 +169,17 @@ async function runScaffold(
   const scanningError = await enableCodeScanning(repo.full_name, githubToken)
   if (scanningError) warnings.push(scanningError)
 
-  // ── 5. Persistência ─────────────────────────────────────────
+  // ── 5. Preview na Vercel ────────────────────────────────────
+  const preview = await linkVercel(
+    supabase,
+    user.id,
+    name,
+    repo.full_name,
+    supabaseProjectRef
+  )
+  warnings.push(...preview.warnings)
+
+  // ── 6. Persistência ─────────────────────────────────────────
   // O projeto recém-provisionado passa a ser o ativo: é nele que o usuário
   // vai trabalhar, e sem isso as ferramentas do MCP falham com "nenhum
   // projeto ativo" logo depois de criar o primeiro projeto.
@@ -183,6 +199,8 @@ async function runScaffold(
       active_branch: branch,
       supabase_project_ref: supabaseProjectRef,
       db_password_encrypted: dbPasswordEncrypted,
+      vercel_account_id: preview.accountId,
+      vercel_project_id: preview.projectId,
       template_version: TEMPLATE_VERSION,
       status: 'active',
     })
@@ -503,6 +521,81 @@ async function protectBranch(
   }
 
   return `Não foi possível proteger a branch ${branch} (HTTP ${response.status}).`
+}
+
+interface VercelLinkResult {
+  accountId: string | null
+  projectId: string | null
+  warnings: string[]
+}
+
+/**
+ * Cria o projeto na Vercel ligado ao repositório.
+ *
+ * A partir daí a Vercel publica sozinha: cada branch vira um preview com URL
+ * própria, e a branch principal vira produção. É o que substituiu o preview
+ * em navegador — aquele não sobrevivia ao Next 16 e nunca gerou link que
+ * pudesse ser compartilhado.
+ */
+async function linkVercel(
+  supabase: Awaited<ReturnType<typeof requireUser>>['supabase'],
+  userId: string,
+  name: string,
+  repoFullName: string,
+  supabaseProjectRef: string | null
+): Promise<VercelLinkResult> {
+  const { data: account } = await supabase
+    .from('vercel_accounts')
+    .select('id, team_id, access_token_encrypted')
+    .eq('user_id', userId)
+    .limit(1)
+    .maybeSingle()
+
+  if (!account) {
+    return {
+      accountId: null,
+      projectId: null,
+      warnings: [
+        'Sem conta Vercel conectada — o projeto ficou sem preview. ' +
+          'Conecte uma em Contas e recrie o projeto, ou ligue o repositório ' +
+          'na Vercel à mão.',
+      ],
+    }
+  }
+
+  const token = decryptToken(account.access_token_encrypted as string)
+  const teamId = (account.team_id as string | null) ?? null
+
+  try {
+    // Nome já usado é caso comum ao recriar um projeto; reaproveitar é
+    // melhor que falhar o provisionamento inteiro por causa disso.
+    const existing = await findProjectByName(token, teamId, name)
+    const project =
+      existing ?? (await createVercelProject(token, teamId, name, repoFullName))
+
+    if (supabaseProjectRef) {
+      await setEnvironmentVariables(token, teamId, project.id, {
+        NEXT_PUBLIC_SUPABASE_URL: `https://${supabaseProjectRef}.supabase.co`,
+      })
+    }
+
+    return {
+      accountId: account.id as string,
+      projectId: project.id,
+      warnings: existing
+        ? [`Reaproveitado o projeto "${name}" que já existia na Vercel.`]
+        : [],
+    }
+  } catch (error) {
+    const detail =
+      error instanceof VercelError ? error.message : String(error)
+
+    return {
+      accountId: account.id as string,
+      projectId: null,
+      warnings: [`Não foi possível criar o projeto na Vercel: ${detail}`],
+    }
+  }
 }
 
 /**

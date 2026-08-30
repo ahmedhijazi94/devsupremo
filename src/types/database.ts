@@ -71,6 +71,8 @@ export interface Database {
           vercel_project_id: string | null
           default_branch: string
           template_version: string | null
+          vercel_account_id: string | null
+          production_url: string | null
           created_at: string
           updated_at: string
         }
@@ -143,6 +145,22 @@ export interface Database {
         >
         Update: Partial<Database['public']['Tables']['oauth_states']['Insert']>
       }
+      vercel_accounts: {
+        Row: {
+          id: string
+          user_id: string
+          account_name: string
+          team_id: string | null
+          access_token_encrypted: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: Omit<
+          Database['public']['Tables']['vercel_accounts']['Row'],
+          'id' | 'created_at' | 'updated_at'
+        >
+        Update: Partial<Database['public']['Tables']['vercel_accounts']['Insert']>
+      }
       mcp_configs: {
         Row: {
           id: string
@@ -196,3 +214,5 @@ export type McpConfig = Database['public']['Tables']['mcp_configs']['Row']
 export type AuditLog = Database['public']['Tables']['audit_logs']['Row']
 export type McpToken = Database['public']['Tables']['mcp_tokens']['Row']
 export type OAuthState = Database['public']['Tables']['oauth_states']['Row']
+export type VercelAccount =
+  Database['public']['Tables']['vercel_accounts']['Row']

@@ -122,7 +122,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               </p>
             </div>
           </div>
-          <PreviewPanel repoFullName={project.github_repo_full_name!} projectId={project.id} />
+          <PreviewPanel repoFullName={project.github_repo_full_name} projectId={project.id} />
         </div>
       ) : (
         /* Scaffold CTA */

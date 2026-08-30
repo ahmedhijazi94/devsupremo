@@ -1,109 +1,270 @@
 'use client'
 
-import { useState } from 'react'
-import { Monitor, Smartphone, Tablet, ExternalLink, RefreshCw, Code2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
+import {
+  Monitor,
+  Tablet,
+  Smartphone,
+  RefreshCw,
+  ExternalLink,
+  Code2,
+  Link2,
+  Check,
+  TriangleAlert,
+  Loader2,
+  CloudOff,
+} from 'lucide-react'
+import { getPreviewState, type PreviewState } from '@/actions/vercel'
+import { cn } from '@/lib/utils'
 
 interface PreviewPanelProps {
-  repoFullName: string
   projectId: string
+  repoFullName: string | null
 }
 
-type DeviceType = 'mobile' | 'tablet' | 'desktop'
+type Device = 'desktop' | 'tablet' | 'mobile'
 
-export function PreviewPanel({ repoFullName, projectId }: PreviewPanelProps) {
-  const [device, setDevice] = useState<DeviceType>('desktop')
-  const [key, setKey] = useState(0)
+const DEVICES: Array<{ id: Device; icon: typeof Monitor; label: string; width: string }> = [
+  { id: 'desktop', icon: Monitor, label: 'Desktop', width: '100%' },
+  { id: 'tablet', icon: Tablet, label: 'Tablet', width: '768px' },
+  { id: 'mobile', icon: Smartphone, label: 'Celular', width: '390px' },
+]
 
-  // Use StackBlitz for immediate in-browser WebContainer preview
-  // It boots up Next.js instantly by reading the GitHub repo.
-  const previewUrl = `/sandbox?projectId=${projectId}`
-  const editorUrl = `https://github.com/${repoFullName}`
+/** Enquanto publica, vale perguntar de novo; parado, não. */
+const POLL_MS = 6000
 
-  const deviceStyles = {
-    mobile: 'w-[375px] h-[667px]',
-    tablet: 'w-[768px] h-[1024px]',
-    desktop: 'w-full h-[600px]',
+export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
+  const [state, setState] = useState<PreviewState | null>(null)
+  const [device, setDevice] = useState<Device>('desktop')
+  const [frameKey, setFrameKey] = useState(0)
+  const [copied, setCopied] = useState(false)
+  const [, startTransition] = useTransition()
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const load = useCallback(() => {
+    startTransition(async () => {
+      setState(await getPreviewState(projectId))
+    })
+  }, [projectId])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Só continuamos perguntando enquanto há build em andamento.
+  useEffect(() => {
+    if (state?.status !== 'building') return
+
+    timer.current = setTimeout(load, POLL_MS)
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [state?.status, load])
+
+  async function copyLink() {
+    if (!state?.url) return
+    try {
+      await navigator.clipboard.writeText(state.url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Área de transferência bloqueada — o link segue visível no botão Abrir.
+    }
   }
 
+  const deviceConfig = DEVICES.find((d) => d.id === device) ?? DEVICES[0]!
+  const showFrame = state?.status === 'ready' && state.url
+
   return (
-    <div className="border bg-card rounded-xl overflow-hidden flex flex-col shadow-sm">
-      {/* Toolbar */}
-      <div className="h-12 border-b bg-muted/30 px-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="flex bg-background border rounded-lg p-1">
+    <section className="rounded-xl border bg-card overflow-hidden">
+      {/* Barra de ferramentas */}
+      <header className="flex flex-wrap items-center gap-3 border-b bg-muted/30 px-3 py-2.5">
+        <div className="flex rounded-lg border bg-background p-0.5">
+          {DEVICES.map((option) => (
             <button
-              onClick={() => setDevice('desktop')}
-              className={`p-1.5 rounded-md transition-colors ${device === 'desktop' ? 'bg-muted shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-              title="Desktop"
+              key={option.id}
+              onClick={() => setDevice(option.id)}
+              title={option.label}
+              aria-pressed={device === option.id}
+              className={cn(
+                'rounded-md p-1.5 transition-colors',
+                device === option.id
+                  ? 'bg-muted text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
             >
-              <Monitor className="w-4 h-4" />
+              <option.icon className="h-4 w-4" />
             </button>
-            <button
-              onClick={() => setDevice('tablet')}
-              className={`p-1.5 rounded-md transition-colors ${device === 'tablet' ? 'bg-muted shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-              title="Tablet"
-            >
-              <Tablet className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setDevice('mobile')}
-              className={`p-1.5 rounded-md transition-colors ${device === 'mobile' ? 'bg-muted shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-              title="Mobile"
-            >
-              <Smartphone className="w-4 h-4" />
-            </button>
-          </div>
-          
-          <button 
-            onClick={() => setKey(k => k + 1)}
-            className="p-1.5 ml-2 text-muted-foreground hover:text-foreground transition-colors"
-            title="Recarregar Preview"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
+          ))}
         </div>
 
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <span className="flex h-2 w-2 rounded-full bg-green-500 animate-pulse mr-2" />
-          Live Preview
-        </div>
-
-        <div className="flex items-center gap-2">
-          <a
-            href={editorUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors bg-background border rounded-md px-3 py-1.5"
-          >
-            <Code2 className="w-3.5 h-3.5" />
-            Código
-          </a>
-          <a
-            href={previewUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors bg-background border rounded-md px-3 py-1.5"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Abrir
-          </a>
-        </div>
-      </div>
-
-      {/* Preview Area */}
-      <div className="bg-zinc-100 dark:bg-zinc-950/50 p-4 flex items-center justify-center overflow-auto min-h-[400px]">
-        <div 
-          className={`bg-white transition-all duration-300 ease-in-out border shadow-lg rounded-md overflow-hidden ${deviceStyles[device]}`}
+        <button
+          onClick={() => {
+            setFrameKey((k) => k + 1)
+            load()
+          }}
+          title="Recarregar"
+          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
-          <iframe
-            key={key}
-            src={previewUrl}
-            className="w-full h-full border-0"
-            allow="cross-origin-isolated; accelerometer; ambient-light-sensor; camera; encrypted-media; geolocation; gyroscope; hid; microphone; midi; payment; usb; vr; xr-spatial-tracking"
-            sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
-          />
+          <RefreshCw className="h-4 w-4" />
+        </button>
+
+        <StatusPill state={state} />
+
+        <div className="ml-auto flex items-center gap-1.5">
+          {state?.url && (
+            <button
+              onClick={copyLink}
+              className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {copied ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  Copiado
+                </>
+              ) : (
+                <>
+                  <Link2 className="h-3.5 w-3.5" />
+                  Copiar link
+                </>
+              )}
+            </button>
+          )}
+
+          {repoFullName && (
+            <a
+              href={`https://github.com/${repoFullName}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Code2 className="h-3.5 w-3.5" />
+              Código
+            </a>
+          )}
+
+          {state?.url && (
+            <a
+              href={state.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Abrir
+            </a>
+          )}
         </div>
+      </header>
+
+      {/* Área do preview */}
+      <div className="flex min-h-[520px] items-center justify-center bg-zinc-100 p-4 dark:bg-zinc-950/50">
+        {showFrame ? (
+          <div
+            className="h-[520px] overflow-hidden rounded-lg border bg-white shadow-lg transition-[width] duration-300"
+            style={{ width: deviceConfig.width, maxWidth: '100%' }}
+          >
+            <iframe
+              key={frameKey}
+              src={state.url}
+              title="Preview do projeto"
+              className="h-full w-full border-0"
+              sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+            />
+          </div>
+        ) : (
+          <EmptyState state={state} />
+        )}
       </div>
+    </section>
+  )
+}
+
+function StatusPill({ state }: { state: PreviewState | null }) {
+  if (!state) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Verificando
+      </span>
+    )
+  }
+
+  const config = {
+    ready: { dot: 'bg-emerald-500', label: 'No ar', pulse: false },
+    building: { dot: 'bg-amber-500', label: 'Publicando', pulse: true },
+    error: { dot: 'bg-red-500', label: 'Falhou', pulse: false },
+    no_deployment: { dot: 'bg-muted-foreground', label: 'Sem deploy', pulse: false },
+    not_connected: { dot: 'bg-muted-foreground', label: 'Não conectado', pulse: false },
+  }[state.status]
+
+  return (
+    <span className="inline-flex items-center gap-2 text-xs font-medium">
+      <span
+        className={cn(
+          'h-2 w-2 rounded-full',
+          config.dot,
+          config.pulse && 'animate-pulse'
+        )}
+      />
+      {config.label}
+      {state.branch && (
+        <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+          {state.branch}
+        </code>
+      )}
+    </span>
+  )
+}
+
+function EmptyState({ state }: { state: PreviewState | null }) {
+  if (!state) {
+    return (
+      <div className="flex flex-col items-center gap-3 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        <p className="text-sm">Consultando a Vercel…</p>
+      </div>
+    )
+  }
+
+  const Icon =
+    state.status === 'building'
+      ? Loader2
+      : state.status === 'error'
+        ? TriangleAlert
+        : CloudOff
+
+  return (
+    <div className="mx-auto max-w-sm text-center">
+      <Icon
+        className={cn(
+          'mx-auto mb-3 h-6 w-6',
+          state.status === 'building' && 'animate-spin text-amber-500',
+          state.status === 'error' && 'text-red-500',
+          (state.status === 'not_connected' || state.status === 'no_deployment') &&
+            'text-muted-foreground'
+        )}
+      />
+      <p className="text-sm font-medium">
+        {state.status === 'building' && 'Publicando o preview'}
+        {state.status === 'error' && 'O build falhou'}
+        {state.status === 'no_deployment' && 'Nenhum deploy ainda'}
+        {state.status === 'not_connected' && 'Preview não configurado'}
+      </p>
+      {state.message && (
+        <p className="mt-1.5 text-sm text-muted-foreground">{state.message}</p>
+      )}
+      {state.inspectorUrl && (
+        <a
+          href={state.inspectorUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+        >
+          Ver logs na Vercel
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      )}
     </div>
   )
 }

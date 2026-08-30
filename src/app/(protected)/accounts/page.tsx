@@ -4,6 +4,8 @@ import { Database } from 'lucide-react'
 import { formatRelativeTime } from '@/lib/utils'
 import { ConnectGithubButton } from '@/components/accounts/connect-github-button'
 import { AddSupabaseModal } from '@/components/accounts/add-supabase-modal'
+import { ConnectVercelModal } from '@/components/accounts/connect-vercel-modal'
+import { DisconnectVercelButton } from '@/components/accounts/disconnect-vercel-button'
 import { DisconnectAccountButton } from '@/components/accounts/disconnect-account-button'
 import { AccountsToastHandler } from '@/components/accounts/accounts-toast-handler'
 
@@ -18,13 +20,15 @@ export default async function AccountsPage({
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [githubResponse, supabaseResponse] = await Promise.all([
+  const [githubResponse, supabaseResponse, vercelResponse] = await Promise.all([
     supabase.from('github_accounts').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
     supabase.from('supabase_accounts').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+    supabase.from('vercel_accounts').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
   ])
 
   const githubAccounts = githubResponse.data ?? []
   const supabaseAccounts = supabaseResponse.data ?? []
+  const vercelAccounts = vercelResponse.data ?? []
 
   return (
     <div className="space-y-8 max-w-4xl">
@@ -130,6 +134,59 @@ export default async function AccountsPage({
                   </div>
                 </div>
                 <DisconnectAccountButton type="supabase" accountId={acc.id} />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Vercel */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-foreground/5 border flex items-center justify-center">
+              <svg className="w-4 h-4" viewBox="0 0 76 65" fill="currentColor" aria-hidden>
+                <path d="M37.59.25l36.95 64H.64l36.95-64z" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-base font-semibold">Vercel</h2>
+              <p className="text-xs text-muted-foreground">
+                Para publicar o preview de cada mudança
+              </p>
+            </div>
+          </div>
+          <ConnectVercelModal />
+        </div>
+
+        {vercelAccounts.length === 0 ? (
+          <div className="rounded-xl border border-dashed p-10 text-center space-y-2">
+            <p className="text-sm font-medium">Nenhuma conta Vercel conectada</p>
+            <p className="text-xs text-muted-foreground max-w-sm mx-auto">
+              Sem ela os projetos ficam sem preview publicado — você continua
+              vendo o código, mas não tem link para abrir o app nem para mandar
+              para outra pessoa.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {vercelAccounts.map((acc) => (
+              <div key={acc.id} className="flex items-center justify-between p-4 rounded-xl border bg-card">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-foreground/5 border flex items-center justify-center">
+                    <svg className="w-4 h-4" viewBox="0 0 76 65" fill="currentColor" aria-hidden>
+                      <path d="M37.59.25l36.95 64H.64l36.95-64z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">{acc.account_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {acc.team_id ? 'Time' : 'Conta pessoal'} · conectada{' '}
+                      {formatRelativeTime(acc.created_at)}
+                    </p>
+                  </div>
+                </div>
+                <DisconnectVercelButton accountId={acc.id} />
               </div>
             ))}
           </div>

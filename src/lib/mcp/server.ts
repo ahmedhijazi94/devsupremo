@@ -67,12 +67,15 @@ function json(value: unknown): TextResult {
 
 function fail(error: unknown): TextResult {
   const message = error instanceof Error ? error.message : String(error)
-  return { content: [{ type: 'text', text: `Erro: ${message}` }], isError: true }
+  return {
+    content: [{ type: 'text', text: `Erro: ${message}` }],
+    isError: true,
+  }
 }
 
 /** Envolve o handler para que nenhuma exceção vaze como erro de protocolo. */
 function guard<A>(
-  handler: (args: A) => Promise<TextResult>
+  handler: (args: A) => Promise<TextResult>,
 ): (args: A) => Promise<TextResult> {
   return async (args: A) => {
     try {
@@ -91,7 +94,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
     {
       capabilities: { tools: {}, resources: {} },
       instructions: SERVER_INSTRUCTIONS,
-    }
+    },
   )
 
   // ───────────────────────────────────────────────────────────
@@ -155,7 +158,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 
       context.reminder = SERVER_INSTRUCTIONS
       return json(context)
-    })
+    }),
   )
 
   server.registerTool(
@@ -176,9 +179,9 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
           branch: p.active_branch,
           isActive: p.is_active,
           status: p.status,
-        }))
+        })),
       )
-    })
+    }),
   )
 
   server.registerTool(
@@ -194,10 +197,10 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         ctx.userId,
         'mcp.switch_project',
         'project',
-        projectId
+        projectId,
       )
       return ok(`Projeto ativo agora é "${project.name}".`)
-    })
+    }),
   )
 
   // ───────────────────────────────────────────────────────────
@@ -211,7 +214,10 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       description: 'Lê um arquivo do repositório do projeto.',
       inputSchema: {
         path: z.string().min(1).describe('Caminho, ex: src/app/page.tsx'),
-        ref: z.string().optional().describe('Branch ou SHA. Padrão: branch ativo.'),
+        ref: z
+          .string()
+          .optional()
+          .describe('Branch ou SHA. Padrão: branch ativo.'),
         projectId: z.string().uuid().optional(),
       },
       annotations: { readOnlyHint: true },
@@ -220,7 +226,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const project = await repo.resolveProject(ctx.userId, projectId)
       const creds = await repo.getGithubCredentials(ctx.userId, project)
       return ok(await gh.readFile(creds, path, ref))
-    })
+    }),
   )
 
   server.registerTool(
@@ -239,7 +245,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const creds = await repo.getGithubCredentials(ctx.userId, project)
       const files = await gh.listTree(creds, ref)
       return ok(files.map((f) => f.path).join('\n'))
-    })
+    }),
   )
 
   // ───────────────────────────────────────────────────────────
@@ -266,8 +272,10 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
               content: z
                 .string()
                 .nullable()
-                .describe('Conteúdo completo do arquivo. null remove o arquivo.'),
-            })
+                .describe(
+                  'Conteúdo completo do arquivo. null remove o arquivo.',
+                ),
+            }),
           )
           .min(1),
         body: z.string().optional().describe('Descrição do PR.'),
@@ -294,7 +302,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         body ??
           `Proposto via Supremo MCP.\n\nArquivos alterados:\n` +
             files.map((f) => `- \`${f.path}\``).join('\n'),
-        project.default_branch
+        project.default_branch,
       )
 
       await repo.updateProject(ctx.userId, project.id, {
@@ -318,11 +326,17 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         mcpUsed: 'supremo-remote',
       })
 
-      await repo.logAudit(ctx.userId, 'mcp.propose_changes', 'project', project.id, {
-        branch: branchName,
-        pr: pr.number,
-        files: files.length,
-      })
+      await repo.logAudit(
+        ctx.userId,
+        'mcp.propose_changes',
+        'project',
+        project.id,
+        {
+          branch: branchName,
+          pr: pr.number,
+          files: files.length,
+        },
+      )
 
       return json({
         branch: branchName,
@@ -331,7 +345,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         messageId,
         next: 'Chame wait_for_checks com este prNumber.',
       })
-    })
+    }),
   )
 
   // ───────────────────────────────────────────────────────────
@@ -354,7 +368,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const creds = await repo.getGithubCredentials(ctx.userId, project)
       const pr = await gh.getPullRequest(creds, prNumber)
       return json(await gh.getChecks(creds, pr.headSha))
-    })
+    }),
   )
 
   server.registerTool(
@@ -409,7 +423,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
             ? 'Todos os gates verdes. Chame merge_when_green.'
             : 'Gate vermelho. Chame get_failed_logs, corrija e proponha de novo.',
       })
-    })
+    }),
   )
 
   server.registerTool(
@@ -430,7 +444,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const creds = await repo.getGithubCredentials(ctx.userId, project)
       const pr = await gh.getPullRequest(creds, prNumber)
       return ok(await gh.getFailedJobLogs(creds, pr.headSha))
-    })
+    }),
   )
 
   server.registerTool(
@@ -455,7 +469,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         return fail(
           `Merge recusado: ${checks.failed} gate(s) vermelho(s), ` +
             `${checks.pending} ainda rodando. ` +
-            `Corrija antes de tentar de novo.`
+            `Corrija antes de tentar de novo.`,
         )
       }
 
@@ -474,9 +488,9 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 
       return ok(
         `PR #${prNumber} mergeado em ${project.default_branch} (${merged.sha.slice(0, 7)}). ` +
-          `Todos os ${checks.total} gates passaram.`
+          `Todos os ${checks.total} gates passaram.`,
       )
-    })
+    }),
   )
 
   server.registerTool(
@@ -497,7 +511,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 
       if (!config) {
         return ok(
-          'O preview compartilhado não está configurado neste ambiente.'
+          'O preview compartilhado não está configurado neste ambiente.',
         )
       }
 
@@ -522,7 +536,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         return ok(
           'Nenhum preview publicado ainda para este projeto. Peça ao usuário ' +
             'para publicar, ou proponha mudanças — a publicação acontece a ' +
-            'partir do painel.'
+            'partir do painel.',
         )
       }
 
@@ -534,7 +548,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
             ? 'A aplicação subiu. Se algo estiver errado na tela, é comportamento em execução, não falha de build.'
             : 'Ainda publicando. Consulte de novo em alguns segundos.',
       })
-    })
+    }),
   )
 
   // ───────────────────────────────────────────────────────────
@@ -568,7 +582,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ query }),
-        }
+        },
       )
 
       const payload: unknown = await response.json()
@@ -578,7 +592,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 
       await repo.logAudit(ctx.userId, 'mcp.execute_sql', 'project', project.id)
       return json(payload)
-    })
+    }),
   )
 
   server.registerTool(
@@ -599,15 +613,15 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
     },
     guard(async ({ name, sql, projectId }) => {
       const project = await repo.resolveProject(ctx.userId, projectId)
-      const supabaseCreds = await repo.getSupabaseCredentials(ctx.userId, project)
+      const supabaseCreds = await repo.getSupabaseCredentials(
+        ctx.userId,
+        project,
+      )
       const ghCreds = await repo.getGithubCredentials(ctx.userId, project)
 
       assertSafeSql(sql, { allowDdl: true })
 
-      const stamp = new Date()
-        .toISOString()
-        .replace(/[-:T]/g, '')
-        .slice(0, 14)
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
       const path = `supabase/migrations/${stamp}_${name}.sql`
       const branchName = `migration/${name}`
 
@@ -620,7 +634,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         branchName,
         `feat(db): ${name}`,
         `Migration versionada em \`${path}\`.\n\nAplicada no banco no momento da criação deste PR.`,
-        project.default_branch
+        project.default_branch,
       )
 
       const response = await fetch(
@@ -632,20 +646,26 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ query: sql }),
-        }
+        },
       )
 
       const payload: unknown = await response.json()
       if (!response.ok) {
         return fail(
           `Migration versionada em ${path} (PR #${pr.number}), mas o banco ` +
-            `recusou: ${JSON.stringify(payload)}`
+            `recusou: ${JSON.stringify(payload)}`,
         )
       }
 
-      await repo.logAudit(ctx.userId, 'mcp.apply_migration', 'project', project.id, {
-        migration: path,
-      })
+      await repo.logAudit(
+        ctx.userId,
+        'mcp.apply_migration',
+        'project',
+        project.id,
+        {
+          migration: path,
+        },
+      )
 
       return json({
         migration: path,
@@ -653,7 +673,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         applied: true,
         next: 'Escreva os testes de RLS desta tabela e proponha no mesmo PR.',
       })
-    })
+    }),
   )
 
   return server
@@ -670,7 +690,10 @@ export function slugToBranch(summary: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/^(feat|fix|chore|refactor|test|docs|security)(\([^)]*\))?:\s*/, '')
+    .replace(
+      /^(feat|fix|chore|refactor|test|docs|security)(\([^)]*\))?:\s*/,
+      '',
+    )
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
@@ -689,7 +712,7 @@ async function markPipelineStatus(
   projectId: string,
   prNumber: number,
   status: 'pending' | 'running' | 'passed' | 'failed',
-  extra?: Record<string, unknown>
+  extra?: Record<string, unknown>,
 ): Promise<void> {
   // A mensagem do PR é a linha mais recente com este pr_number.
   const { error } = await mcpDataClient()

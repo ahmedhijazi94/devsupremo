@@ -15,14 +15,14 @@ export async function createClient() {
         setAll(cookiesToSet) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
+              cookieStore.set(name, value, options),
             )
           } catch {
             // Called from Server Component — cookies set in middleware
           }
         },
       },
-    }
+    },
   )
 }
 
@@ -40,11 +40,11 @@ export async function createAdminClient() {
         setAll(cookiesToSet) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
+              cookieStore.set(name, value, options),
             )
           } catch {}
         },
       },
-    }
+    },
   )
 }

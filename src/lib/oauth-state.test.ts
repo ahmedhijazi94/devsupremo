@@ -31,7 +31,10 @@ describe('decodeState — entrada hostil', () => {
     ['JSON sem csrf', encode({ projectId: 'abc' })],
     ['csrf de tipo errado', encode({ csrf: 12345, projectId: null })],
     ['csrf curto demais', encode({ csrf: 'abc', projectId: null })],
-    ['csrf fora do alfabeto hex', encode({ csrf: 'z'.repeat(64), projectId: null })],
+    [
+      'csrf fora do alfabeto hex',
+      encode({ csrf: 'z'.repeat(64), projectId: null }),
+    ],
     ['array em vez de objeto', encode([validCsrf])],
     ['null', encode(null)],
     ['string vazia', ''],
@@ -40,7 +43,11 @@ describe('decodeState — entrada hostil', () => {
   })
 
   it('rejeita csrf com tamanho quase certo', () => {
-    expect(decodeState(encode({ csrf: 'a'.repeat(63), projectId: null }))).toBeNull()
-    expect(decodeState(encode({ csrf: 'a'.repeat(65), projectId: null }))).toBeNull()
+    expect(
+      decodeState(encode({ csrf: 'a'.repeat(63), projectId: null })),
+    ).toBeNull()
+    expect(
+      decodeState(encode({ csrf: 'a'.repeat(65), projectId: null })),
+    ).toBeNull()
   })
 })

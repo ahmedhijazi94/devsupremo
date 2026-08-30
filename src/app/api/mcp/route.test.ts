@@ -11,9 +11,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const resolveMcpToken = vi.fn()
 
 vi.mock('@/lib/mcp/tokens', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/mcp/tokens')>(
-    '@/lib/mcp/tokens'
-  )
+  const actual =
+    await vi.importActual<typeof import('@/lib/mcp/tokens')>('@/lib/mcp/tokens')
   return {
     ...actual,
     resolveMcpToken: (token: string) => resolveMcpToken(token),
@@ -69,7 +68,7 @@ describe('autenticação', () => {
 
   it('recusa token que não é do Supremo sem consultar o banco', async () => {
     const response = await POST(
-      request(INITIALIZE, { Authorization: 'Bearer ghp_doGithub' })
+      request(INITIALIZE, { Authorization: 'Bearer ghp_doGithub' }),
     )
 
     expect(response.status).toBe(401)
@@ -118,14 +117,14 @@ describe('protocolo MCP', () => {
 
   it('entrega as regras invioláveis já no handshake', async () => {
     const response = await POST(request(INITIALIZE, authorized))
-    const body = (await response.json()) as { result: { instructions: string } }
+    const body = (await response.json()) as {
+      result: { instructions: string }
+    }
 
     // É isto que faz as regras valerem em qualquer máquina, antes da
     // primeira chamada de ferramenta.
     expect(body.result.instructions).toContain('get_project_context')
-    expect(body.result.instructions).toMatch(
-      /não commita na branch principal/i
-    )
+    expect(body.result.instructions).toMatch(/não commita na branch principal/i)
     expect(body.result.instructions).toContain('merge_when_green')
   })
 
@@ -145,8 +144,8 @@ describe('ferramentas anunciadas', () => {
           method: 'tools/list',
           params: {},
         },
-        authorized
-      )
+        authorized,
+      ),
     )
 
     const body = (await response.json()) as {
@@ -173,7 +172,7 @@ describe('ferramentas anunciadas', () => {
         'execute_sql',
         'apply_migration',
         'get_preview_errors',
-      ])
+      ]),
     )
   })
 
@@ -192,13 +191,15 @@ describe('ferramentas anunciadas', () => {
     const response = await POST(
       request(
         { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} },
-        authorized
-      )
+        authorized,
+      ),
     )
 
     const body = (await response.json()) as {
       result?: {
-        tools: Array<{ inputSchema?: { properties?: Record<string, unknown> } }>
+        tools: Array<{
+          inputSchema?: { properties?: Record<string, unknown> }
+        }>
       }
     }
 

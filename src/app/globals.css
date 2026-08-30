@@ -3,43 +3,44 @@
 /**
  * Sistema visual do Supremo.
  *
- * Superfícies claras sobre um fundo levemente frio, cantos generosos e
- * números grandes como âncora de cada cartão. O preto é a cor de ação —
- * botões, barras, ênfase — e a cor viva aparece só onde carrega informação:
- * variação para cima, para baixo, estado de um gate.
+ * Um tema só, claro. Não é omissão: a interface é feita de superfícies
+ * brancas flutuando sobre um fundo levemente frio, e a separação entre elas
+ * vem do contraste — não de linhas. Esse desenho não sobrevive invertido:
+ * no escuro as superfícies colapsam umas nas outras e a interface precisa
+ * de traços para se explicar, que é exatamente o que ela evita.
  *
- * Os tons neutros têm um viés frio de propósito. Cinza puro sobre branco
- * puro parece descuido; este conjunto parece escolhido.
+ * O preto é a cor de ação. A cor viva aparece só onde carrega informação:
+ * variação para cima, para baixo, estado de um gate.
  */
 
 @theme {
-  /* Fundo da aplicação e superfícies */
-  --color-canvas: oklch(96.5% 0.003 255);
+  /* Superfícies — do mais distante ao mais próximo */
+  --color-canvas: oklch(96.2% 0.004 255);
   --color-surface: oklch(100% 0 0);
-  --color-sunken: oklch(97.6% 0.003 255);
+  --color-sunken: oklch(97.4% 0.003 255);
 
   /* Texto */
-  --color-ink: oklch(18% 0.012 255);
-  --color-ink-soft: oklch(38% 0.012 255);
-  --color-muted: oklch(55% 0.014 255);
+  --color-ink: oklch(17% 0.014 255);
+  --color-ink-soft: oklch(40% 0.012 255);
+  --color-muted: oklch(58% 0.012 255);
 
-  /* Traços */
-  --color-line: oklch(92.5% 0.004 255);
-  --color-line-strong: oklch(87% 0.006 255);
+  /* Traço — reservado a campos e ao que precisa de contorno real */
+  --color-line: oklch(93% 0.004 255);
+  --color-line-strong: oklch(88% 0.006 255);
 
-  /* Ação: preto, como no topo e nas barras */
-  --color-accent: oklch(18% 0.012 255);
+  /* Ação */
+  --color-accent: oklch(17% 0.014 255);
   --color-accent-ink: oklch(100% 0 0);
 
   /* Semânticas — separadas da cor de ação de propósito */
-  --color-up: oklch(88% 0.17 135);
-  --color-up-ink: oklch(32% 0.11 135);
-  --color-down: oklch(88% 0.09 25);
-  --color-down-ink: oklch(45% 0.16 25);
-  --color-wait: oklch(91% 0.09 85);
-  --color-wait-ink: oklch(45% 0.12 75);
-  --color-info: oklch(90% 0.06 250);
-  --color-info-ink: oklch(45% 0.15 250);
+  --color-up: oklch(90% 0.16 133);
+  --color-up-ink: oklch(38% 0.13 140);
+  --color-down: oklch(92% 0.06 25);
+  --color-down-ink: oklch(50% 0.19 27);
+  --color-wait: oklch(94% 0.08 85);
+  --color-wait-ink: oklch(50% 0.13 70);
+  --color-info: oklch(93% 0.05 255);
+  --color-info-ink: oklch(48% 0.16 258);
 
   /* Cantos: generosos por fora, menores por dentro */
   --radius-card: 1.5rem;
@@ -50,43 +51,11 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-/**
- * Tema escuro.
- *
- * Não é a inversão do claro: os papéis se mantêm — o fundo continua sendo o
- * plano mais distante e o cartão o mais próximo — mas as cores de ação
- * clareiam, porque preto sobre preto não é ação nenhuma.
- */
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-canvas: oklch(14% 0.008 255);
-    --color-surface: oklch(18.5% 0.01 255);
-    --color-sunken: oklch(21% 0.01 255);
-
-    --color-ink: oklch(96% 0.004 255);
-    --color-ink-soft: oklch(80% 0.008 255);
-    --color-muted: oklch(64% 0.012 255);
-
-    --color-line: oklch(26% 0.01 255);
-    --color-line-strong: oklch(33% 0.012 255);
-
-    --color-accent: oklch(96% 0.004 255);
-    --color-accent-ink: oklch(16% 0.01 255);
-
-    --color-up: oklch(38% 0.11 140);
-    --color-up-ink: oklch(88% 0.16 140);
-    --color-down: oklch(34% 0.1 25);
-    --color-down-ink: oklch(84% 0.13 25);
-    --color-wait: oklch(36% 0.08 80);
-    --color-wait-ink: oklch(88% 0.13 85);
-    --color-info: oklch(32% 0.07 250);
-    --color-info-ink: oklch(85% 0.1 250);
-  }
-}
-
 @layer base {
   html {
-    color-scheme: light dark;
+    /* Um tema só: sem isto o navegador pinta campos e barras no escuro
+       enquanto a página fica clara. */
+    color-scheme: light;
   }
 
   body {
@@ -112,6 +81,12 @@
     color: var(--color-surface);
   }
 
+  /* Barra de rolagem discreta: dentro dos cartões ela é parte do desenho. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -119,25 +94,5 @@
       animation-duration: 0.01ms !important;
       transition-duration: 0.01ms !important;
     }
-  }
-}
-
-@layer utilities {
-  /* Cartão: a unidade de composição da interface inteira. */
-  .card {
-    background: var(--color-surface);
-    border-radius: var(--radius-card);
-    padding: 1.5rem;
-  }
-
-  /* Cartão dentro de cartão: um degrau mais fundo, canto menor. */
-  .card-inner {
-    background: var(--color-sunken);
-    border-radius: var(--radius-inner);
-    padding: 1.25rem;
-  }
-
-  .hairline {
-    border: 1px solid var(--color-line);
   }
 }

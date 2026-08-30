@@ -52,7 +52,7 @@ export interface OwnedProject {
  */
 export async function requireProjectOwner(
   projectId: string,
-  columns = '*'
+  columns = '*',
 ): Promise<OwnedProject> {
   const { user, supabase } = await requireUser()
 

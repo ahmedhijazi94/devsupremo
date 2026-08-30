@@ -1,6 +1,13 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Settings, User, KeyRound, GitBranch, Database, ArrowRight } from 'lucide-react'
+import {
+  Settings,
+  User,
+  KeyRound,
+  GitBranch,
+  Database,
+  ArrowRight,
+} from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Card, CardTitle, CardNote } from '@/components/ui/card'
 
@@ -15,22 +22,25 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [{ count: githubCount }, { count: supabaseCount }, { count: tokenCount }] =
-    await Promise.all([
-      supabase
-        .from('github_accounts')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id),
-      supabase
-        .from('supabase_accounts')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id),
-      supabase
-        .from('mcp_tokens')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .is('revoked_at', null),
-    ])
+  const [
+    { count: githubCount },
+    { count: supabaseCount },
+    { count: tokenCount },
+  ] = await Promise.all([
+    supabase
+      .from('github_accounts')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id),
+    supabase
+      .from('supabase_accounts')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id),
+    supabase
+      .from('mcp_tokens')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .is('revoked_at', null),
+  ])
 
   const links = [
     {
@@ -50,48 +60,46 @@ export default async function SettingsPage() {
   return (
     <div className="space-y-3 sm:space-y-4">
       <Card>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Settings className="w-6 h-6 text-ink" />
+        <h1 className="flex items-center gap-2 text-2xl font-bold">
+          <Settings className="text-ink h-6 w-6" />
           Configurações
         </h1>
-        <p className="text-muted mt-1.5">
-          Sua conta, integrações e acessos.
-        </p>
+        <p className="text-muted mt-1.5">Sua conta, integrações e acessos.</p>
       </Card>
 
       <Card className="space-y-4">
         <div className="flex items-center gap-2">
-          <User className="w-4 h-4 text-ink" />
+          <User className="text-ink h-4 w-4" />
           <h2 className="font-semibold">Perfil</h2>
         </div>
         <dl className="grid gap-3 sm:grid-cols-2">
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted">
+            <dt className="text-muted text-xs font-medium tracking-wide uppercase">
               Nome
             </dt>
-            <dd className="text-sm mt-0.5">
+            <dd className="mt-0.5 text-sm">
               {(user.user_metadata?.name as string | undefined) ?? '—'}
             </dd>
           </div>
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted">
+            <dt className="text-muted text-xs font-medium tracking-wide uppercase">
               E-mail
             </dt>
-            <dd className="text-sm mt-0.5 break-all">{user.email}</dd>
+            <dd className="mt-0.5 text-sm break-all">{user.email}</dd>
           </div>
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted">
+            <dt className="text-muted text-xs font-medium tracking-wide uppercase">
               Conta criada
             </dt>
-            <dd className="text-sm mt-0.5">
+            <dd className="mt-0.5 text-sm">
               {new Date(user.created_at).toLocaleDateString('pt-BR')}
             </dd>
           </div>
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted">
+            <dt className="text-muted text-xs font-medium tracking-wide uppercase">
               Provedor
             </dt>
-            <dd className="text-sm mt-0.5 capitalize">
+            <dd className="mt-0.5 text-sm capitalize">
               {user.app_metadata?.provider ?? '—'}
             </dd>
           </div>
@@ -100,7 +108,7 @@ export default async function SettingsPage() {
 
       <Card className="space-y-3">
         <div className="flex items-center gap-2">
-          <Database className="w-4 h-4 text-ink" />
+          <Database className="text-ink h-4 w-4" />
           <h2 className="font-semibold">Integrações</h2>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -108,28 +116,26 @@ export default async function SettingsPage() {
             <Link
               key={link.href}
               href={link.href}
-              className="group rounded-xl border border-line bg-surface p-4 hover:border-primary/40 hover:bg-sunken transition-colors"
+              className="group bg-surface hover:border-primary/40 hover:bg-sunken rounded-[var(--radius-inner)] p-4 transition-colors"
             >
               <div className="flex items-start gap-3">
-                <link.icon className="w-4 h-4 text-muted mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
+                <link.icon className="text-muted mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">{link.title}</p>
-                  <p className="text-xs text-muted mt-0.5">
+                  <p className="text-muted mt-0.5 text-xs">
                     {link.description}
                   </p>
                 </div>
-                <ArrowRight className="w-4 h-4 text-muted opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                <ArrowRight className="text-muted h-4 w-4 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
               </div>
             </Link>
           ))}
         </div>
       </Card>
 
-      <Card className="rounded-xl border border-down bg-down/30 p-5 space-y-3">
-        <h2 className="font-semibold text-down-ink">
-          Encerrar sessão
-        </h2>
-        <p className="text-sm text-muted">
+      <Card className="border-down bg-down/30 space-y-3 rounded-[var(--radius-inner)] border p-5">
+        <h2 className="text-down-ink font-semibold">Encerrar sessão</h2>
+        <p className="text-muted text-sm">
           Sai apenas deste navegador. Os tokens de MCP continuam válidos —
           revogue-os em{' '}
           <Link href="/mcps" className="underline underline-offset-2">
@@ -140,7 +146,7 @@ export default async function SettingsPage() {
         <form action="/auth/logout" method="POST">
           <button
             type="submit"
-            className="h-9 inline-flex items-center rounded-lg border border-down bg-surface px-4 text-sm font-medium text-down-ink hover:bg-red-500/10 transition-colors"
+            className="border-down bg-surface text-down-ink inline-flex h-9 items-center rounded-[var(--radius-control)] border px-4 text-sm font-medium transition-colors hover:bg-red-500/10"
           >
             Sair
           </button>

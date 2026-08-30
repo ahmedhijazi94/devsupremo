@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
         team_id: teamId,
         access_token_encrypted: encryptToken(accessToken),
       },
-      { onConflict: 'user_id,team_id' }
+      { onConflict: 'user_id,team_id' },
     )
     .select('id')
     .single()

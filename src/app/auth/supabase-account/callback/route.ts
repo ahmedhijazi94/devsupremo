@@ -14,7 +14,9 @@ export async function GET(request: Request) {
 
   const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
   const consumed = await consumeOAuthState(supabase, user.id, 'supabase', state)
@@ -28,14 +30,16 @@ export async function GET(request: Request) {
 
   // Trocar o código pelo access_token usando Basic Auth headers
   const tokenUrl = 'https://api.supabase.com/v1/oauth/token'
-  
-  const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
-  
+
+  const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString(
+    'base64',
+  )
+
   const tokenRes = await fetch(tokenUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': `Basic ${authHeader}`
+      Authorization: `Basic ${authHeader}`,
     },
     body: new URLSearchParams({
       grant_type: 'authorization_code',
@@ -56,18 +60,18 @@ export async function GET(request: Request) {
 
   // Agora vamos buscar as orgs que o usuário tem acesso com esse token
   const orgRes = await fetch('https://api.supabase.com/v1/organizations', {
-    headers: { 'Authorization': `Bearer ${accessToken}` }
+    headers: { Authorization: `Bearer ${accessToken}` },
   })
-  
+
   if (!orgRes.ok) {
     redirect('/projects?error=org_fetch_failed')
   }
-  
+
   const orgs = await orgRes.json()
   if (!orgs || orgs.length === 0) {
     redirect('/projects?error=no_orgs_found')
   }
-  
+
   // Para simplificar, pegamos a primeira organização ou deixamos o usuário escolher no futuro.
   // Como OAuth concede permissão para a org inteira que ele escolheu no fluxo, a org logada deve estar aqui.
   const org = orgs[0]
@@ -78,15 +82,18 @@ export async function GET(request: Request) {
   // Salvar no BD
   const { data: upsertData, error: upsertError } = await supabase
     .from('supabase_accounts')
-    .upsert({
-      user_id: user.id,
-      org_name: org.name,
-      org_slug: org.id, // Supabase Management API uses id as slug often, but let's stick to id/name.
-      access_token_encrypted: encryptedToken,
-      refresh_token_encrypted: encryptedRefresh,
-    }, {
-      onConflict: 'user_id,org_slug',
-    })
+    .upsert(
+      {
+        user_id: user.id,
+        org_name: org.name,
+        org_slug: org.id, // Supabase Management API uses id as slug often, but let's stick to id/name.
+        access_token_encrypted: encryptedToken,
+        refresh_token_encrypted: encryptedRefresh,
+      },
+      {
+        onConflict: 'user_id,org_slug',
+      },
+    )
     .select('id')
     .single()
 
@@ -97,7 +104,9 @@ export async function GET(request: Request) {
 
   // Se recebemos projectId no state, vincular automaticamente
   if (consumed.projectId) {
-    await supabase.from('projects').update({ supabase_account_id: upsertData.id })
+    await supabase
+      .from('projects')
+      .update({ supabase_account_id: upsertData.id })
       .eq('id', consumed.projectId)
       .eq('user_id', user.id)
     redirect(`/projects/${consumed.projectId}`)

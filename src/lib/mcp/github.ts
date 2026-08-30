@@ -43,7 +43,7 @@ export function octokitFor(creds: GithubCredentials): Octokit {
 export async function readFile(
   creds: GithubCredentials,
   path: string,
-  ref?: string
+  ref?: string,
 ): Promise<string> {
   const gh = octokitFor(creds)
 
@@ -64,7 +64,7 @@ export async function readFile(
 
 export async function listTree(
   creds: GithubCredentials,
-  ref?: string
+  ref?: string,
 ): Promise<Array<{ path: string; size: number }>> {
   const gh = octokitFor(creds)
 
@@ -82,7 +82,7 @@ export async function listTree(
 
 export async function getHeadSha(
   creds: GithubCredentials,
-  branch: string
+  branch: string,
 ): Promise<string> {
   const gh = octokitFor(creds)
   const { data } = await gh.git.getRef({
@@ -100,7 +100,7 @@ export async function getHeadSha(
 export async function ensureBranch(
   creds: GithubCredentials,
   branch: string,
-  fromBranch?: string
+  fromBranch?: string,
 ): Promise<{ created: boolean; sha: string }> {
   const gh = octokitFor(creds)
 
@@ -131,7 +131,7 @@ export async function commitFiles(
   creds: GithubCredentials,
   branch: string,
   message: string,
-  files: FileChange[]
+  files: FileChange[],
 ): Promise<{ sha: string; url: string }> {
   if (files.length === 0) {
     throw new Error('Nenhum arquivo para commitar.')
@@ -159,7 +159,7 @@ export async function commitFiles(
           mode: '100644' as const,
           type: 'blob' as const,
           content: file.content,
-        }
+        },
   )
 
   const { data: newTree } = await gh.git.createTree({
@@ -205,7 +205,7 @@ export async function openOrUpdatePullRequest(
   head: string,
   title: string,
   body: string,
-  base?: string
+  base?: string,
 ): Promise<PullRequestInfo> {
   const gh = octokitFor(creds)
   const baseBranch = base ?? creds.defaultBranch
@@ -250,7 +250,7 @@ export async function openOrUpdatePullRequest(
 
 export async function getPullRequest(
   creds: GithubCredentials,
-  prNumber: number
+  prNumber: number,
 ): Promise<PullRequestInfo> {
   const gh = octokitFor(creds)
   const { data } = await gh.pulls.get({
@@ -272,7 +272,7 @@ export async function getPullRequest(
 export async function mergePullRequest(
   creds: GithubCredentials,
   prNumber: number,
-  commitTitle?: string
+  commitTitle?: string,
 ): Promise<{ sha: string }> {
   const gh = octokitFor(creds)
   const { data } = await gh.pulls.merge({
@@ -296,7 +296,7 @@ export async function mergePullRequest(
 
 export async function getChecks(
   creds: GithubCredentials,
-  ref: string
+  ref: string,
 ): Promise<ChecksResult> {
   const gh = octokitFor(creds)
 
@@ -316,13 +316,13 @@ export async function getChecks(
   }))
 
   const passed = checks.filter(
-    (c) => c.conclusion === 'success' || c.conclusion === 'skipped'
+    (c) => c.conclusion === 'success' || c.conclusion === 'skipped',
   ).length
   const failed = checks.filter(
     (c) =>
       c.conclusion === 'failure' ||
       c.conclusion === 'timed_out' ||
-      c.conclusion === 'cancelled'
+      c.conclusion === 'cancelled',
   ).length
   const pending = checks.filter((c) => c.status !== 'completed').length
 
@@ -354,7 +354,7 @@ function extractRunId(url: string | null): number | null {
 export async function getFailedJobLogs(
   creds: GithubCredentials,
   ref: string,
-  maxChars = 12_000
+  maxChars = 12_000,
 ): Promise<string> {
   const gh = octokitFor(creds)
 
@@ -389,7 +389,7 @@ export async function getFailedJobLogs(
       (job) =>
         job.conclusion === 'failure' ||
         job.conclusion === 'timed_out' ||
-        job.conclusion === 'cancelled'
+        job.conclusion === 'cancelled',
     )
 
     if (failedJobs.length === 0) continue
@@ -405,14 +405,14 @@ export async function getFailedJobLogs(
         `### ${run.name} › ${job.name} (${job.conclusion})\n` +
           (failedSteps ? `Passo que falhou: ${failedSteps}\n` : '') +
           `${job.html_url}\n\n` +
-          (await downloadJobLog(gh, creds, job.id))
+          (await downloadJobLog(gh, creds, job.id)),
       )
     }
   }
 
   if (sections.length === 0) {
     const stillRunning = runs.workflow_runs.some(
-      (run) => run.status !== 'completed'
+      (run) => run.status !== 'completed',
     )
     return stillRunning
       ? 'Nenhum job falhou ainda — o CI segue rodando. Chame wait_for_checks.'
@@ -428,7 +428,7 @@ export async function getFailedJobLogs(
 async function downloadJobLog(
   gh: Octokit,
   creds: GithubCredentials,
-  jobId: number
+  jobId: number,
 ): Promise<string> {
   try {
     const response = await gh.actions.downloadJobLogsForWorkflowRun({
@@ -461,7 +461,7 @@ function extractFailureContext(raw: string, window = 60): string {
 
   const markers = [/##\[error\]/, /^\s*Error:/, /\bnpm ERR!/, /FAIL\b/]
   const firstError = lines.findIndex((line) =>
-    markers.some((marker) => marker.test(line))
+    markers.some((marker) => marker.test(line)),
   )
 
   if (firstError === -1) {
@@ -482,7 +482,7 @@ function extractFailureContext(raw: string, window = 60): string {
 export async function enableBranchProtection(
   creds: GithubCredentials,
   branch: string,
-  requiredChecks: string[]
+  requiredChecks: string[],
 ): Promise<void> {
   const gh = octokitFor(creds)
 

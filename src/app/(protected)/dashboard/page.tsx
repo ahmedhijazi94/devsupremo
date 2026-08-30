@@ -120,11 +120,16 @@ export default async function DashboardPage() {
           label="Mudanças propostas"
           value={changeList.length}
           {...(green > 0
-            ? { delta: { value: `${green} verde${green > 1 ? 's' : ''}`, direction: 'up' as const } }
+            ? {
+                delta: {
+                  value: `${green} verde${green > 1 ? 's' : ''}`,
+                  direction: 'up' as const,
+                },
+              }
             : {})}
           icon={<GitPullRequest className="h-5 w-5" />}
           footer={
-            <p className="text-sm text-muted">
+            <p className="text-muted text-sm">
               Cada uma passou por pull request e gates.
             </p>
           }
@@ -163,7 +168,7 @@ export default async function DashboardPage() {
             {projectList.length > 0 && (
               <Link
                 href="/projects"
-                className="shrink-0 text-sm font-medium text-muted transition-colors hover:text-ink"
+                className="text-muted hover:text-ink shrink-0 text-sm font-medium transition-colors"
               >
                 Ver todos
               </Link>
@@ -171,7 +176,7 @@ export default async function DashboardPage() {
           </div>
 
           {projectList.length === 0 ? (
-            <div className="rounded-[var(--radius-inner)] bg-sunken px-6 py-12 text-center">
+            <div className="bg-sunken rounded-[var(--radius-inner)] px-6 py-12 text-center">
               <p className="font-medium">Nenhum projeto ainda</p>
               <CardNote className="mx-auto mt-1.5 max-w-sm">
                 Um projeto novo já nasce com repositório, banco com RLS, gates
@@ -198,7 +203,7 @@ export default async function DashboardPage() {
           </CardNote>
 
           {changeList.length === 0 ? (
-            <div className="rounded-[var(--radius-inner)] bg-sunken px-5 py-10 text-center">
+            <div className="bg-sunken rounded-[var(--radius-inner)] px-5 py-10 text-center">
               <CardNote>
                 Conecte um agente em{' '}
                 <Link href="/mcps" className="underline underline-offset-2">
@@ -212,13 +217,13 @@ export default async function DashboardPage() {
               {changeList.map((change) => (
                 <li
                   key={change.id}
-                  className="flex items-start gap-3 rounded-[var(--radius-inner)] bg-sunken p-3.5"
+                  className="bg-sunken flex items-start gap-3 rounded-[var(--radius-inner)] p-3.5"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">
                       {change.content}
                     </p>
-                    <p className="mt-0.5 text-xs text-muted">
+                    <p className="text-muted mt-0.5 text-xs">
                       {change.pr_number ? `PR #${change.pr_number} · ` : ''}
                       {formatRelativeTime(change.created_at)}
                     </p>

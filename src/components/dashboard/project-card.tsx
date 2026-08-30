@@ -21,24 +21,36 @@ export function ProjectCard({ project }: { project: Project }) {
   const status = STATUS[project.status] ?? STATUS.active
 
   const pieces = [
-    { icon: GitBranch, on: Boolean(project.github_repo_full_name), label: 'Repositório' },
-    { icon: Database, on: Boolean(project.supabase_project_ref), label: 'Banco' },
-    { icon: Globe, on: Boolean(project.preview_project_name), label: 'Preview' },
+    {
+      icon: GitBranch,
+      on: Boolean(project.github_repo_full_name),
+      label: 'Repositório',
+    },
+    {
+      icon: Database,
+      on: Boolean(project.supabase_project_ref),
+      label: 'Banco',
+    },
+    {
+      icon: Globe,
+      on: Boolean(project.preview_project_name),
+      label: 'Preview',
+    },
   ]
 
   return (
     <Link
       href={`/projects/${project.id}`}
-      className="group rounded-[var(--radius-inner)] bg-sunken p-4 transition-colors hover:bg-line/40"
+      className="group bg-sunken hover:bg-line/40 rounded-[var(--radius-inner)] p-4 transition-colors"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-medium">{project.name}</p>
-          <p className="mt-0.5 truncate text-xs text-muted">
+          <p className="text-muted mt-0.5 truncate text-xs">
             {project.github_repo_full_name ?? 'Ainda não provisionado'}
           </p>
         </div>
-        <ArrowUpRight className="h-4 w-4 shrink-0 text-muted transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+        <ArrowUpRight className="text-muted h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3">
@@ -49,8 +61,8 @@ export function ProjectCard({ project }: { project: Project }) {
               title={`${piece.label}: ${piece.on ? 'pronto' : 'pendente'}`}
               className={
                 piece.on
-                  ? 'flex h-7 w-7 items-center justify-center rounded-full bg-surface text-ink'
-                  : 'flex h-7 w-7 items-center justify-center rounded-full text-muted/40'
+                  ? 'bg-surface text-ink flex h-7 w-7 items-center justify-center rounded-full'
+                  : 'text-muted/40 flex h-7 w-7 items-center justify-center rounded-full'
               }
             >
               <piece.icon className="h-3.5 w-3.5" />
@@ -59,7 +71,7 @@ export function ProjectCard({ project }: { project: Project }) {
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted">
+          <span className="text-muted text-xs">
             {formatRelativeTime(project.updated_at)}
           </span>
           <Pill tone={status.tone}>{status.label}</Pill>

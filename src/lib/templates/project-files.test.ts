@@ -24,7 +24,7 @@ function file(path: string): string {
     throw new Error(
       `Arquivo "${path}" não está no manifesto. Gerados: ${files
         .map((f) => f.path)
-        .join(', ')}`
+        .join(', ')}`,
     )
   }
   return entry.content
@@ -62,7 +62,7 @@ describe('CI — todo script invocado existe', () => {
     'o script "%s" está declarado no package.json',
     (script) => {
       expect(Object.keys(packageJson.scripts)).toContain(script)
-    }
+    },
   )
 
   it('todo `npm run X` do CI corresponde a um script declarado', () => {
@@ -70,7 +70,7 @@ describe('CI — todo script invocado existe', () => {
     const declared = Object.keys(packageJson.scripts)
 
     const missing = invoked.filter(
-      (script) => script && !declared.includes(script)
+      (script) => script && !declared.includes(script),
     )
     expect(missing).toEqual([])
   })
@@ -78,7 +78,7 @@ describe('CI — todo script invocado existe', () => {
   it('o job de build só depende de jobs que existem', () => {
     const jobNames = [...ci.matchAll(/^ {2}([\w-]+):$/gm)].map((m) => m[1])
     const needs = [...ci.matchAll(/needs:\s*\[([^\]]+)\]/g)].flatMap((m) =>
-      (m[1] ?? '').split(',').map((n) => n.trim())
+      (m[1] ?? '').split(',').map((n) => n.trim()),
     )
 
     const dangling = needs.filter((need) => !jobNames.includes(need))
@@ -116,7 +116,7 @@ describe('dependências — tudo que é importado está instalado', () => {
 
 describe('migrations — nome que o CLI do Supabase aceita', () => {
   const migrations = files.filter((f) =>
-    f.path.startsWith('supabase/migrations/')
+    f.path.startsWith('supabase/migrations/'),
   )
 
   it('gera ao menos uma migration', () => {
@@ -142,7 +142,7 @@ describe('migrations — nome que o CLI do Supabase aceita', () => {
   it('segue o padrão de nome versionado do CLI', () => {
     for (const migration of migrations) {
       expect(migration.path).toMatch(
-        /^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/
+        /^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/,
       )
     }
   })
@@ -159,7 +159,7 @@ describe('dependabot — não propõe salto que quebra o projeto novo', () => {
     (dependency) => {
       const block = config.slice(config.indexOf('ignore:'))
       expect(block).toContain(`dependency-name: ${dependency}`)
-    }
+    },
   )
 
   it('continua propondo correções de patch e minor', () => {
@@ -202,7 +202,7 @@ describe('lockfile — sem ele o CI quebra antes de instalar', () => {
     }
 
     const missing = Object.keys(declared).filter(
-      (name) => !(`node_modules/${name}` in lock.packages)
+      (name) => !(`node_modules/${name}` in lock.packages),
     )
     expect(missing).toEqual([])
   })
@@ -389,7 +389,7 @@ describe('E2E — o CI instala os motores que a suíte usa', () => {
   }
 
   const declaredDevices = [...config.matchAll(/devices\['([^']+)'\]/g)].map(
-    (m) => m[1] as string
+    (m) => m[1] as string,
   )
 
   it('declara ao menos um projeto de teste', () => {
@@ -402,11 +402,11 @@ describe('E2E — o CI instala os motores que a suíte usa', () => {
     const required = new Set(
       declaredDevices
         .map((device) => ENGINE_BY_DEVICE[device])
-        .filter((engine): engine is string => Boolean(engine))
+        .filter((engine): engine is string => Boolean(engine)),
     )
 
     const missing = [...required].filter(
-      (engine) => !installLine.includes(engine)
+      (engine) => !installLine.includes(engine),
     )
     expect(missing).toEqual([])
   })
@@ -453,7 +453,7 @@ describe('test:rls — o filtro casa com o arquivo gerado', () => {
     for (const rls of rlsFiles) {
       expect(
         rls.path.includes(filter),
-        `"${filter}" não casa com "${rls.path}"`
+        `"${filter}" não casa com "${rls.path}"`,
       ).toBe(true)
     }
   })
@@ -492,7 +492,7 @@ describe('geração de teste de RLS', () => {
 
   it('ignora tabela sem dono — não há isolamento por linha a provar', () => {
     expect(inferTablesFromMigration(sql).map((t) => t.name)).not.toContain(
-      'settings'
+      'settings',
     )
   })
 
@@ -512,7 +512,9 @@ describe('geração de teste de RLS', () => {
   })
 
   it('o template já inclui o teste de RLS da tabela inicial', () => {
-    expect(file('supabase/rls.rls.test.ts')).toContain("describe('RLS · profiles'")
+    expect(file('supabase/rls.rls.test.ts')).toContain(
+      "describe('RLS · profiles'",
+    )
   })
 
   it('o CI tem um job que roda os testes de RLS', () => {
@@ -528,7 +530,9 @@ describe('documentação — sem promessa vazia', () => {
     const cited = [...readme.matchAll(/`npm run ([\w:]+)`/g)].map((m) => m[1])
     const declared = Object.keys(packageJson.scripts)
 
-    const missing = cited.filter((script) => script && !declared.includes(script))
+    const missing = cited.filter(
+      (script) => script && !declared.includes(script),
+    )
     expect(missing).toEqual([])
   })
 

@@ -32,7 +32,7 @@ export function ConnectSupabaseButton({
       <button
         onClick={() => setShowToken((value) => !value)}
         title="Usar token pessoal em vez de autorizar"
-        className="rounded-lg p-2 text-muted transition-colors hover:bg-sunken hover:text-ink"
+        className="text-muted hover:bg-sunken hover:text-ink rounded-[var(--radius-control)] p-2 transition-colors"
       >
         <KeyRound className="h-4 w-4" />
       </button>
@@ -40,7 +40,7 @@ export function ConnectSupabaseButton({
       <form action={() => connectSupabaseAccount()}>
         <button
           type="submit"
-          className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#3ECF8E] px-3.5 text-sm font-medium text-black transition-opacity hover:opacity-90"
+          className="inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] bg-[#3ECF8E] px-3.5 text-sm font-medium text-black transition-opacity hover:opacity-90"
         >
           <Plus className="h-4 w-4" />
           Conectar Supabase

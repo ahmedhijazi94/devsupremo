@@ -22,9 +22,9 @@ export function ConnectGithubButton() {
     <button
       onClick={handleConnect}
       disabled={isPending}
-      className="inline-flex items-center gap-2 rounded-lg bg-sunken px-3 py-1.5 text-sm font-medium hover:bg-sunken transition-colors disabled:opacity-50"
+      className="bg-sunken hover:bg-sunken inline-flex items-center gap-2 rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50"
     >
-      <GitBranch className="w-4 h-4" />
+      <GitBranch className="h-4 w-4" />
       {isPending ? 'Redirecionando...' : 'Conectar GitHub'}
     </button>
   )

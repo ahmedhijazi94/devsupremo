@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { previewProjectName, isDeployable, sharedPreviewConfig } from './preview'
+import {
+  previewProjectName,
+  isDeployable,
+  sharedPreviewConfig,
+} from './preview'
 
 describe('previewProjectName', () => {
   const id = '6a738536-572f-4c6c-a420-47fc76144574'
@@ -10,7 +14,7 @@ describe('previewProjectName', () => {
 
   it('normaliza acentos e espaços', () => {
     expect(previewProjectName('Configuração Rápida', id)).toBe(
-      'sp-configuracao-rapida-6a738536'
+      'sp-configuracao-rapida-6a738536',
     )
   })
 
@@ -34,7 +38,7 @@ describe('previewProjectName', () => {
   it('projetos diferentes não colidem', () => {
     const outro = '11111111-2222-3333-4444-555555555555'
     expect(previewProjectName('mesmo-nome', id)).not.toBe(
-      previewProjectName('mesmo-nome', outro)
+      previewProjectName('mesmo-nome', outro),
     )
   })
 })

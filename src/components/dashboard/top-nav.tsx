@@ -38,10 +38,10 @@ export async function TopNav({ user }: { user: User }) {
   const avatar = user.user_metadata?.avatar_url as string | undefined
 
   return (
-    <nav className="flex h-16 shrink-0 items-center gap-6 rounded-[var(--radius-card)] bg-surface px-5">
+    <nav className="bg-surface flex h-16 shrink-0 items-center gap-6 rounded-[var(--radius-card)] px-5">
       <Link href="/dashboard" className="flex shrink-0 items-center gap-2.5">
-        <span className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] bg-accent">
-          <Zap className="h-4 w-4 text-accent-ink" />
+        <span className="bg-accent flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)]">
+          <Zap className="text-accent-ink h-4 w-4" />
         </span>
         <span className="text-lg font-semibold tracking-tight">Supremo</span>
       </Link>
@@ -60,7 +60,7 @@ export async function TopNav({ user }: { user: User }) {
                   'relative flex items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors',
                   active
                     ? 'text-ink'
-                    : 'text-muted hover:bg-sunken hover:text-ink'
+                    : 'text-muted hover:bg-sunken hover:text-ink',
                 )}
               >
                 <item.icon className="h-4 w-4" />
@@ -68,7 +68,7 @@ export async function TopNav({ user }: { user: User }) {
                 {active && (
                   <span
                     aria-hidden
-                    className="absolute inset-x-3 -bottom-[13px] h-0.5 rounded-full bg-accent"
+                    className="bg-accent absolute inset-x-3 -bottom-[13px] h-0.5 rounded-full"
                   />
                 )}
               </Link>
@@ -78,7 +78,7 @@ export async function TopNav({ user }: { user: User }) {
       </ul>
 
       <div className="ml-auto flex shrink-0 items-center gap-2 md:ml-0">
-        <div className="flex items-center gap-2.5 rounded-full bg-sunken py-1 pl-1 pr-3">
+        <div className="bg-sunken flex items-center gap-2.5 rounded-full py-1 pr-3 pl-1">
           {avatar ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -87,7 +87,7 @@ export async function TopNav({ user }: { user: User }) {
               className="h-7 w-7 rounded-full object-cover"
             />
           ) : (
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-ink">
+            <span className="bg-accent text-accent-ink flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold">
               {name[0]?.toUpperCase()}
             </span>
           )}
@@ -100,7 +100,7 @@ export async function TopNav({ user }: { user: User }) {
           <button
             type="submit"
             title="Sair"
-            className="flex h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:bg-sunken hover:text-ink"
+            className="text-muted hover:bg-sunken hover:text-ink flex h-9 w-9 items-center justify-center rounded-full transition-colors"
           >
             <LogOut className="h-4 w-4" />
           </button>
@@ -116,7 +116,7 @@ export async function MobileNav() {
   const pathname = headersList.get('x-pathname') ?? ''
 
   return (
-    <nav className="flex items-center gap-1 overflow-x-auto rounded-[var(--radius-card)] bg-surface px-2 py-2 md:hidden">
+    <nav className="bg-surface flex items-center gap-1 overflow-x-auto rounded-[var(--radius-card)] px-2 py-2 md:hidden">
       {NAV.map((item) => {
         const active =
           pathname === item.href || pathname.startsWith(`${item.href}/`)
@@ -128,7 +128,7 @@ export async function MobileNav() {
             aria-current={active ? 'page' : undefined}
             className={cn(
               'flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors',
-              active ? 'bg-accent text-accent-ink' : 'text-muted'
+              active ? 'bg-accent text-accent-ink' : 'text-muted',
             )}
           >
             <item.icon className="h-4 w-4" />

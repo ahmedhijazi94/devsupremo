@@ -3,7 +3,10 @@
 import { useTransition } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { connectGithubAccount, connectSupabaseAccount } from '@/actions/accounts'
+import {
+  connectGithubAccount,
+  connectSupabaseAccount,
+} from '@/actions/accounts'
 
 interface ReconnectButtonProps {
   provider: 'github' | 'supabase'
@@ -35,7 +38,7 @@ export function ReconnectButton({ provider, label }: ReconnectButtonProps) {
       }
       disabled={isPending}
       title={`Renovar a autorização de ${label}`}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:text-ink disabled:opacity-50"
+      className="text-muted hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
     >
       <RefreshCw className={`h-3.5 w-3.5 ${isPending ? 'animate-spin' : ''}`} />
       Reconectar

@@ -55,7 +55,8 @@ const ALWAYS_FORBIDDEN: Array<{ pattern: RegExp; reason: string }> = [
     reason: 'Alterar tabelas dos schemas auth ou storage não é permitido.',
   },
   {
-    pattern: /\b(grant|alter\s+default\s+privileges)\b[^;]*\bto\s+(anon|public)\b/i,
+    pattern:
+      /\b(grant|alter\s+default\s+privileges)\b[^;]*\bto\s+(anon|public)\b/i,
     reason:
       'Conceder privilégio direto a anon ou public não é permitido. Use RLS policies.',
   },
@@ -71,7 +72,8 @@ const ALWAYS_FORBIDDEN: Array<{ pattern: RegExp; reason: string }> = [
       'INSERT com WITH CHECK (true) permite forjar linha em nome de outro usuário.',
   },
   {
-    pattern: /\bpg_read_(server_)?file\b|\bpg_ls_dir\b|\bcopy\b[^;]*\bfrom\s+program\b/i,
+    pattern:
+      /\bpg_read_(server_)?file\b|\bpg_ls_dir\b|\bcopy\b[^;]*\bfrom\s+program\b/i,
     reason: 'Leitura do sistema de arquivos do banco não é permitida.',
   },
 ]
@@ -103,13 +105,13 @@ export function assertSafeSql(sql: string, options: SqlGuardOptions): void {
       if (DDL_KEYWORDS.test(statement)) {
         throw new UnsafeSqlError(
           'execute_sql é só para leitura. Use apply_migration para mudar o schema — ' +
-            'ela versiona a migration no repositório antes de aplicar.'
+            'ela versiona a migration no repositório antes de aplicar.',
         )
       }
       if (DML_WRITE_KEYWORDS.test(statement)) {
         throw new UnsafeSqlError(
           'execute_sql não escreve dados. Faça a escrita pela aplicação, ' +
-            'onde o RLS e a validação do servidor se aplicam.'
+            'onde o RLS e a validação do servidor se aplicam.',
         )
       }
     }
@@ -127,8 +129,7 @@ export function assertSafeSql(sql: string, options: SqlGuardOptions): void {
 function assertRlsOnNewTables(normalized: string): void {
   const createdTables = new Set<string>()
 
-  const createRe =
-    /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?([\w."]+)/gi
+  const createRe = /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?([\w."]+)/gi
   let match: RegExpExecArray | null
 
   while ((match = createRe.exec(normalized)) !== null) {
@@ -163,10 +164,10 @@ function assertRlsOnNewTables(normalized: string): void {
           .map(
             (t) =>
               `  ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;\n` +
-              `  CREATE POLICY "${t}_owner_only" ON ${t} FOR ALL USING (auth.uid() = user_id);`
+              `  CREATE POLICY "${t}_owner_only" ON ${t} FOR ALL USING (auth.uid() = user_id);`,
           )
           .join('\n') +
-        `\nInclua também o teste que prova que outro usuário não lê essas linhas.`
+        `\nInclua também o teste que prova que outro usuário não lê essas linhas.`,
     )
   }
 }

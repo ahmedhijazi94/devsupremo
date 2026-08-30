@@ -64,7 +64,7 @@ describe('decryptToken — integridade', () => {
 
   it('recusa formato inválido', () => {
     expect(() => decryptToken('sem-os-dois-pontos')).toThrow(
-      /Invalid encrypted text format/
+      /Invalid encrypted text format/,
     )
     expect(() => decryptToken('so:duas')).toThrow()
   })

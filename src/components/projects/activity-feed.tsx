@@ -47,7 +47,7 @@ const PIPELINE_STATES = {
   running: {
     icon: Loader2,
     label: 'Rodando',
-    className: 'text-amber-600 dark:text-amber-400',
+    className: 'text-amber-600',
     dot: 'bg-amber-500',
   },
   pending: {
@@ -65,10 +65,10 @@ function countFiles(filesChanged: Json | null): number {
 export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
   if (items.length === 0) {
     return (
-      <div className="rounded-xl border border-line border-dashed p-8 text-center">
-        <Sparkles className="mx-auto mb-3 h-6 w-6 text-muted" />
+      <div className="rounded-[var(--radius-inner)] border-dashed p-8 text-center">
+        <Sparkles className="text-muted mx-auto mb-3 h-6 w-6" />
         <p className="text-sm font-medium">Nenhuma mudança ainda</p>
-        <p className="mx-auto mt-1 max-w-sm text-sm text-muted">
+        <p className="text-muted mx-auto mt-1 max-w-sm text-sm">
           Conecte um agente em{' '}
           <Link href="/mcps" className="underline underline-offset-2">
             Integração MCP
@@ -95,31 +95,31 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
             {!isLast && (
               <span
                 aria-hidden
-                className="absolute left-[7px] top-5 h-full w-px bg-border border-line"
+                className="bg-line-strong absolute top-5 left-[7px] h-full w-px"
               />
             )}
 
             <span
               aria-hidden
-              className={`relative mt-1.5 h-[15px] w-[15px] shrink-0 rounded-full border-2 border-background ring-1 ring-line ${
+              className={`border-surface ring-line-strong relative mt-1.5 h-[15px] w-[15px] shrink-0 rounded-full border-2 ring-1 ${
                 state?.dot ?? 'bg-sunken-foreground'
               }`}
             />
 
             <div className="min-w-0 flex-1 space-y-1.5">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                <p className="text-sm font-medium leading-snug">
+                <p className="text-sm leading-snug font-medium">
                   {truncate(item.content, 120)}
                 </p>
                 <time
                   dateTime={item.created_at}
-                  className="shrink-0 text-xs text-muted tabular-nums"
+                  className="text-muted shrink-0 text-xs tabular-nums"
                 >
                   {formatRelativeTime(item.created_at)}
                 </time>
               </div>
 
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted">
+              <div className="text-muted flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
                 {state && (
                   <span
                     className={`inline-flex items-center gap-1 font-medium ${state.className}`}
@@ -138,7 +138,7 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
                     href={item.pr_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 hover:text-ink transition-colors"
+                    className="hover:text-ink inline-flex items-center gap-1 transition-colors"
                   >
                     <GitPullRequest className="h-3.5 w-3.5" />#{item.pr_number}
                   </a>
@@ -149,7 +149,7 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
                     href={`https://github.com/${repoFullName}/commit/${item.commit_sha}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 font-mono hover:text-ink transition-colors"
+                    className="hover:text-ink inline-flex items-center gap-1 font-mono transition-colors"
                   >
                     <GitCommit className="h-3.5 w-3.5" />
                     {item.commit_sha.slice(0, 7)}
@@ -164,7 +164,7 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
                 )}
 
                 {item.branch && (
-                  <code className="rounded bg-sunken px-1.5 py-0.5 font-mono text-[11px]">
+                  <code className="bg-sunken rounded px-1.5 py-0.5 font-mono text-[11px]">
                     {item.branch}
                   </code>
                 )}

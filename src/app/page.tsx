@@ -1,5 +1,11 @@
 import Link from 'next/link'
-import { Zap, ShieldCheck, GitPullRequest, Globe, ArrowRight } from 'lucide-react'
+import {
+  Zap,
+  ShieldCheck,
+  GitPullRequest,
+  Globe,
+  ArrowRight,
+} from 'lucide-react'
 import { Card, CardTitle, CardNote } from '@/components/ui/card'
 import { ButtonLink } from '@/components/ui/button'
 
@@ -30,12 +36,14 @@ export default function HomePage() {
   return (
     <div className="min-h-screen p-3 sm:p-4">
       <div className="mx-auto flex max-w-5xl flex-col gap-3 sm:gap-4">
-        <nav className="flex h-16 items-center justify-between rounded-[var(--radius-card)] bg-surface px-5">
+        <nav className="bg-surface flex h-16 items-center justify-between rounded-[var(--radius-card)] px-5">
           <span className="flex items-center gap-2.5">
-            <span className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] bg-accent">
-              <Zap className="h-4 w-4 text-accent-ink" />
+            <span className="bg-accent flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)]">
+              <Zap className="text-accent-ink h-4 w-4" />
             </span>
-            <span className="text-lg font-semibold tracking-tight">Supremo</span>
+            <span className="text-lg font-semibold tracking-tight">
+              Supremo
+            </span>
           </span>
 
           <ButtonLink href="/login" size="sm">
@@ -45,7 +53,7 @@ export default function HomePage() {
         </nav>
 
         <Card className="px-6 py-14 text-center sm:px-12 sm:py-20">
-          <h1 className="mx-auto max-w-2xl text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
+          <h1 className="mx-auto max-w-2xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
             Apps criados por IA, com a engenharia que eles normalmente não têm
           </h1>
           <CardNote className="mx-auto mt-5 max-w-xl text-base">
@@ -62,7 +70,7 @@ export default function HomePage() {
         <div className="grid gap-3 sm:gap-4 md:grid-cols-2">
           {PILLARS.map((pillar) => (
             <Card key={pillar.title}>
-              <span className="mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-sunken">
+              <span className="bg-sunken mb-4 flex h-10 w-10 items-center justify-center rounded-full">
                 <pillar.icon className="h-5 w-5" />
               </span>
               <CardTitle>{pillar.title}</CardTitle>
@@ -74,7 +82,10 @@ export default function HomePage() {
         <Card className="text-center">
           <CardNote>
             Já tem conta?{' '}
-            <Link href="/login" className="font-medium text-ink underline underline-offset-2">
+            <Link
+              href="/login"
+              className="text-ink font-medium underline underline-offset-2"
+            >
               Entrar
             </Link>
           </CardNote>

@@ -29,18 +29,18 @@ export function LoginForm() {
       <button
         onClick={() => handleOAuth('github')}
         disabled={loading !== null}
-        className="w-full inline-flex items-center justify-center gap-3 rounded-lg border border-line bg-surface px-4 py-3 font-semibold hover:bg-sunken transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="bg-surface hover:bg-sunken inline-flex w-full items-center justify-center gap-3 rounded-[var(--radius-control)] px-4 py-3 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
-        <GitBranch className="w-5 h-5" />
+        <GitBranch className="h-5 w-5" />
         {loading === 'github' ? 'Redirecionando...' : 'Continuar com GitHub'}
       </button>
 
       <button
         onClick={() => handleOAuth('google')}
         disabled={loading !== null}
-        className="w-full inline-flex items-center justify-center gap-3 rounded-lg border border-line bg-surface px-4 py-3 font-semibold hover:bg-sunken transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="bg-surface hover:bg-sunken inline-flex w-full items-center justify-center gap-3 rounded-[var(--radius-control)] px-4 py-3 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
-        <svg className="w-5 h-5" viewBox="0 0 24 24">
+        <svg className="h-5 w-5" viewBox="0 0 24 24">
           <path
             d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
             fill="#4285F4"
@@ -61,7 +61,7 @@ export function LoginForm() {
         {loading === 'google' ? 'Redirecionando...' : 'Continuar com Google'}
       </button>
 
-      <p className="text-center text-xs text-muted pt-2">
+      <p className="text-muted pt-2 text-center text-xs">
         Ao entrar, você concorda com os termos de uso e política de privacidade.
       </p>
     </div>

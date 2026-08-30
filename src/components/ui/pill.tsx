@@ -24,7 +24,7 @@ export function Pill({
         tone === 'down' && 'bg-down text-down-ink',
         tone === 'wait' && 'bg-wait text-wait-ink',
         tone === 'info' && 'bg-info text-info-ink',
-        className
+        className,
       )}
       {...props}
     />

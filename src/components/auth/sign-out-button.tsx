@@ -22,10 +22,10 @@ export function SignOutButton() {
   return (
     <button
       onClick={handleSignOut}
-      className="p-2 rounded-lg hover:bg-sunken transition-colors text-muted hover:text-ink"
+      className="hover:bg-sunken text-muted hover:text-ink rounded-[var(--radius-control)] p-2 transition-colors"
       title="Sair"
     >
-      <LogOut className="w-4 h-4" />
+      <LogOut className="h-4 w-4" />
     </button>
   )
 }

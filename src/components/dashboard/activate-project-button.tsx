@@ -36,9 +36,9 @@ export function ActivateProjectButton({
     return (
       <button
         disabled
-        className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-green-500/10 border border-line border-green-500/20 px-3 py-1.5 text-xs font-medium text-green-600 cursor-default"
+        className="inline-flex flex-1 cursor-default items-center justify-center gap-1.5 rounded-[var(--radius-control)] border-green-500/20 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-600"
       >
-        <Zap className="w-3 h-3" />
+        <Zap className="h-3 w-3" />
         Ativo
       </button>
     )
@@ -48,9 +48,9 @@ export function ActivateProjectButton({
     <button
       onClick={handleActivate}
       disabled={isPending}
-      className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-sunken border border-line px-3 py-1.5 text-xs font-medium hover:bg-accent/10 transition-colors disabled:opacity-50"
+      className="bg-sunken hover:bg-accent/10 inline-flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
     >
-      <Zap className="w-3 h-3" />
+      <Zap className="h-3 w-3" />
       {isPending ? 'Ativando...' : 'Ativar'}
     </button>
   )

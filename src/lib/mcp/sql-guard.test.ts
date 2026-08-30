@@ -7,7 +7,7 @@ const migration = { allowDdl: true }
 describe('assertSafeSql — leitura (execute_sql)', () => {
   it('permite SELECT', () => {
     expect(() =>
-      assertSafeSql('SELECT id, name FROM posts LIMIT 10', readOnly)
+      assertSafeSql('SELECT id, name FROM posts LIMIT 10', readOnly),
     ).not.toThrow()
   })
 
@@ -15,29 +15,29 @@ describe('assertSafeSql — leitura (execute_sql)', () => {
     expect(() =>
       assertSafeSql(
         'WITH recent AS (SELECT * FROM posts) SELECT count(*) FROM recent',
-        readOnly
-      )
+        readOnly,
+      ),
     ).not.toThrow()
   })
 
   it('recusa DDL', () => {
     expect(() => assertSafeSql('CREATE TABLE x (id int)', readOnly)).toThrow(
-      UnsafeSqlError
+      UnsafeSqlError,
     )
   })
 
   it('recusa escrita de dados', () => {
     expect(() =>
-      assertSafeSql("INSERT INTO posts (title) VALUES ('x')", readOnly)
+      assertSafeSql("INSERT INTO posts (title) VALUES ('x')", readOnly),
     ).toThrow(UnsafeSqlError)
     expect(() => assertSafeSql('DELETE FROM posts', readOnly)).toThrow(
-      UnsafeSqlError
+      UnsafeSqlError,
     )
   })
 
   it('recusa DDL escondido depois de um SELECT', () => {
     expect(() =>
-      assertSafeSql('SELECT 1; DROP TABLE posts;', readOnly)
+      assertSafeSql('SELECT 1; DROP TABLE posts;', readOnly),
     ).toThrow(UnsafeSqlError)
   })
 
@@ -65,7 +65,7 @@ describe('assertSafeSql — proibições absolutas', () => {
 
   it('recusa mesmo em modo migration', () => {
     expect(() =>
-      assertSafeSql('ALTER TABLE auth.users ADD COLUMN x int', migration)
+      assertSafeSql('ALTER TABLE auth.users ADD COLUMN x int', migration),
     ).toThrow(UnsafeSqlError)
   })
 })
@@ -73,7 +73,7 @@ describe('assertSafeSql — proibições absolutas', () => {
 describe('assertSafeSql — RLS obrigatório em tabela nova', () => {
   it('recusa CREATE TABLE sem ENABLE ROW LEVEL SECURITY', () => {
     expect(() =>
-      assertSafeSql('CREATE TABLE posts (id uuid PRIMARY KEY)', migration)
+      assertSafeSql('CREATE TABLE posts (id uuid PRIMARY KEY)', migration),
     ).toThrow(/sem RLS/i)
   })
 
@@ -109,7 +109,7 @@ describe('assertSafeSql — RLS obrigatório em tabela nova', () => {
 
   it('não exige RLS fora do schema public', () => {
     expect(() =>
-      assertSafeSql('CREATE TABLE internal.cache (id int)', migration)
+      assertSafeSql('CREATE TABLE internal.cache (id int)', migration),
     ).not.toThrow()
   })
 })
@@ -117,19 +117,22 @@ describe('assertSafeSql — RLS obrigatório em tabela nova', () => {
 describe('assertSafeSql — normalização', () => {
   it('não se confunde com a palavra proibida dentro de string', () => {
     expect(() =>
-      assertSafeSql("SELECT * FROM posts WHERE body = 'drop database'", readOnly)
+      assertSafeSql(
+        "SELECT * FROM posts WHERE body = 'drop database'",
+        readOnly,
+      ),
     ).not.toThrow()
   })
 
   it('não se confunde com comentário', () => {
     expect(() =>
-      assertSafeSql('SELECT 1 -- DROP DATABASE postgres', readOnly)
+      assertSafeSql('SELECT 1 -- DROP DATABASE postgres', readOnly),
     ).not.toThrow()
   })
 
   it('enxerga DDL depois de comentário de bloco', () => {
     expect(() =>
-      assertSafeSql('/* nota */ CREATE TABLE x (id int)', readOnly)
+      assertSafeSql('/* nota */ CREATE TABLE x (id int)', readOnly),
     ).toThrow(UnsafeSqlError)
   })
 })

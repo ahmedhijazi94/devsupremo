@@ -210,7 +210,7 @@ describe('RLS · ${table.name}', () => {
   it('não é possível inserir linha em nome de outro usuário', async () => {
     const { error } = await bobClient.from('${table.name}').insert(${rowLiteral.replace(
       `${table.ownerColumn}: aliceId`,
-      `${table.ownerColumn}: aliceId`
+      `${table.ownerColumn}: aliceId`,
     )})
 
     expect(error).not.toBeNull()
@@ -243,7 +243,9 @@ export function inferTablesFromMigration(sql: string): TableSpec[] {
     // Sem coluna de dono não há o que testar por linha.
     if (!ownerColumn) continue
 
-    const requiredColumns = [...body.matchAll(/^\s*(\w+)\s+(TEXT|VARCHAR)[^,\n]*NOT NULL/gim)]
+    const requiredColumns = [
+      ...body.matchAll(/^\s*(\w+)\s+(TEXT|VARCHAR)[^,\n]*NOT NULL/gim),
+    ]
       .map((column) => column[1])
       .filter((column): column is string => Boolean(column))
       .filter((column) => column !== ownerColumn)

@@ -39,7 +39,7 @@ export async function startVercelOAuth(projectId?: string): Promise<void> {
   const config = oauthConfig()
   if (!config) {
     throw new Error(
-      'OAuth da Vercel não configurado neste ambiente. Use o token pessoal.'
+      'OAuth da Vercel não configurado neste ambiente. Use o token pessoal.',
     )
   }
 
@@ -57,7 +57,7 @@ const connectSchema = z.object({
 })
 
 export async function connectVercelAccount(
-  input: z.infer<typeof connectSchema>
+  input: z.infer<typeof connectSchema>,
 ): Promise<{ error?: string; accountName?: string }> {
   const parsed = connectSchema.safeParse(input)
   if (!parsed.success) {
@@ -78,7 +78,7 @@ export async function connectVercelAccount(
         team_id: identity.teamId,
         access_token_encrypted: encryptToken(parsed.data.token),
       },
-      { onConflict: 'user_id,team_id' }
+      { onConflict: 'user_id,team_id' },
     )
 
     if (error) return { error: 'Erro ao salvar a conta Vercel.' }
@@ -100,7 +100,7 @@ export async function connectVercelAccount(
 }
 
 export async function disconnectVercelAccount(
-  accountId: string
+  accountId: string,
 ): Promise<{ error?: string }> {
   const parsed = z.string().uuid().safeParse(accountId)
   if (!parsed.success) return { error: 'ID inválido.' }
@@ -142,7 +142,7 @@ export interface GitAccessCheck {
  * mandando procurar erro de digitação.
  */
 export async function checkVercelGitAccess(
-  githubOwner: string
+  githubOwner: string,
 ): Promise<GitAccessCheck> {
   try {
     const { user, supabase } = await requireUser()
@@ -158,11 +158,11 @@ export async function checkVercelGitAccess(
 
     const namespaces = await accessibleGitNamespaces(
       decryptToken(account.access_token_encrypted as string),
-      (account.team_id as string | null) ?? null
+      (account.team_id as string | null) ?? null,
     )
 
     const visible = namespaces.some(
-      (name) => name.toLowerCase() === githubOwner.toLowerCase()
+      (name) => name.toLowerCase() === githubOwner.toLowerCase(),
     )
 
     if (visible) return { status: 'ok' }
@@ -193,13 +193,13 @@ export interface PreviewState {
 }
 
 export async function getPreviewState(
-  projectId: string
+  projectId: string,
 ): Promise<PreviewState> {
   try {
     const { user, supabase, project } = await requireProjectOwner(
       projectId,
       'id, user_id, vercel_account_id, vercel_project_id, active_branch, ' +
-        'default_branch, preview_project_name'
+        'default_branch, preview_project_name',
     )
 
     // O preview compartilhado tem precedência: é o caminho sem configuração,
@@ -232,7 +232,10 @@ export async function getPreviewState(
       .maybeSingle()
 
     if (!account) {
-      return { status: 'not_connected', message: 'Conta Vercel não encontrada.' }
+      return {
+        status: 'not_connected',
+        message: 'Conta Vercel não encontrada.',
+      }
     }
 
     const token = decryptToken(account.access_token_encrypted as string)

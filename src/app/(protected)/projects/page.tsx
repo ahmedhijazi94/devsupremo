@@ -42,7 +42,7 @@ export default async function ProjectsPage() {
 
       <Card>
         {list.length === 0 ? (
-          <div className="rounded-[var(--radius-inner)] bg-sunken px-6 py-16 text-center">
+          <div className="bg-sunken rounded-[var(--radius-inner)] px-6 py-16 text-center">
             <p className="font-medium">Comece pelo primeiro</p>
             <CardNote className="mx-auto mt-1.5 max-w-md">
               Um projeto novo nasce com repositório no GitHub, banco com Row

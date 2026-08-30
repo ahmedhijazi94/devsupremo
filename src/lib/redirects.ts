@@ -8,7 +8,7 @@
  */
 export function safeRedirectPath(
   raw: string | null | undefined,
-  fallback = '/dashboard'
+  fallback = '/dashboard',
 ): string {
   if (!raw) return fallback
 

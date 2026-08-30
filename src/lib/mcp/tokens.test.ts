@@ -12,7 +12,7 @@ describe('generateMcpToken', () => {
 
   it('nunca repete', () => {
     const tokens = new Set(
-      Array.from({ length: 200 }, () => generateMcpToken().token)
+      Array.from({ length: 200 }, () => generateMcpToken().token),
     )
     expect(tokens.size).toBe(200)
   })
@@ -61,7 +61,7 @@ describe('parseAuthorizationHeader', () => {
 
   it('tolera espaço extra', () => {
     expect(parseAuthorizationHeader('  Bearer   sup_abc123  ')).toBe(
-      'sup_abc123'
+      'sup_abc123',
     )
   })
 

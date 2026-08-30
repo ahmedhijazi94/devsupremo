@@ -22,7 +22,7 @@ describe('cn', () => {
 
   it('aceita condicional em objeto', () => {
     expect(cn({ 'text-red-500': true, 'text-blue-500': false })).toBe(
-      'text-red-500'
+      'text-red-500',
     )
   })
 
@@ -40,13 +40,13 @@ describe('formatDate', () => {
     // Formato dd/mm/aaaa, hh:mm — o horário depende do fuso do runner,
     // então a asserção é sobre a forma, não sobre o valor da hora.
     expect(formatDate('2026-03-09T14:30:00')).toMatch(
-      /^09\/03\/2026,? \d{2}:\d{2}$/
+      /^09\/03\/2026,? \d{2}:\d{2}$/,
     )
   })
 
   it('aceita objeto Date', () => {
     expect(formatDate(new Date('2026-12-25T10:00:00'))).toMatch(
-      /^25\/12\/2026,? \d{2}:\d{2}$/
+      /^25\/12\/2026,? \d{2}:\d{2}$/,
     )
   })
 })
@@ -57,18 +57,20 @@ describe('formatRelativeTime', () => {
   })
 
   it('minutos', () => {
-    expect(formatRelativeTime(new Date(Date.now() - 5 * 60_000))).toBe('5m atrás')
+    expect(formatRelativeTime(new Date(Date.now() - 5 * 60_000))).toBe(
+      '5m atrás',
+    )
   })
 
   it('horas', () => {
     expect(formatRelativeTime(new Date(Date.now() - 3 * 3_600_000))).toBe(
-      '3h atrás'
+      '3h atrás',
     )
   })
 
   it('dias', () => {
     expect(formatRelativeTime(new Date(Date.now() - 3 * 86_400_000))).toBe(
-      '3d atrás'
+      '3d atrás',
     )
   })
 

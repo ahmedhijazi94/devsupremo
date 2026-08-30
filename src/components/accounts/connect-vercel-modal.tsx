@@ -17,7 +17,9 @@ interface ConnectVercelModalProps {
  * Supabase. Sem ela, cai no token pessoal, que funciona igual mas dá mais
  * trabalho a quem conecta.
  */
-export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) {
+export function ConnectVercelModal({
+  oauthAvailable,
+}: ConnectVercelModalProps) {
   const [open, setOpen] = useState(false)
   const [token, setToken] = useState('')
   const [isPending, startTransition] = useTransition()
@@ -47,7 +49,7 @@ export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) 
         <form action={() => startVercelOAuth()}>
           <button
             type="submit"
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
+            className="bg-foreground text-background inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90"
           >
             <Plus className="h-4 w-4" />
             Conectar Vercel
@@ -59,7 +61,7 @@ export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) 
     return (
       <button
         onClick={() => setOpen(true)}
-        className="inline-flex h-9 items-center gap-2 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
+        className="bg-foreground text-background inline-flex h-9 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90"
       >
         <Plus className="h-4 w-4" />
         Conectar Vercel
@@ -69,32 +71,32 @@ export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-md rounded-xl border border-line bg-surface p-5 shadow-xl">
+      <div className="bg-surface w-full max-w-md rounded-[var(--radius-inner)] p-5 shadow-xl">
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 className="font-semibold">Conectar conta Vercel</h2>
-            <p className="mt-1 text-sm text-muted">
-              É o que dá preview publicado aos seus projetos — um link por
-              pull request, que você pode mandar para outra pessoa.
+            <p className="text-muted mt-1 text-sm">
+              É o que dá preview publicado aos seus projetos — um link por pull
+              request, que você pode mandar para outra pessoa.
             </p>
           </div>
           <button
             onClick={() => setOpen(false)}
-            className="rounded-md p-1 text-muted transition-colors hover:text-ink"
+            className="text-muted hover:text-ink rounded-md p-1 transition-colors"
             aria-label="Fechar"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <ol className="mb-4 space-y-1.5 text-sm text-muted">
+        <ol className="text-muted mb-4 space-y-1.5 text-sm">
           <li>
             1. Abra{' '}
             <a
               href="https://vercel.com/account/tokens"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-ink hover:underline"
+              className="text-ink inline-flex items-center gap-1 hover:underline"
             >
               vercel.com/account/tokens
               <ExternalLink className="h-3 w-3" />
@@ -111,10 +113,10 @@ export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) 
             onChange={(event) => setToken(event.target.value)}
             placeholder="Token da Vercel"
             autoComplete="off"
-            className="h-10 w-full rounded-lg border border-line bg-surface px-3 font-mono text-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-line-strong"
+            className="bg-surface focus-visible:ring-line-strong h-10 w-full rounded-[var(--radius-control)] px-3 font-mono text-sm transition-shadow outline-none focus-visible:ring-2"
           />
 
-          <p className="text-xs text-muted">
+          <p className="text-muted text-xs">
             O token é guardado cifrado em AES-256-GCM e usado só para criar e
             consultar os seus projetos.
           </p>
@@ -123,14 +125,14 @@ export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) 
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="h-9 rounded-lg border border-line px-3.5 text-sm font-medium transition-colors hover:bg-sunken"
+              className="hover:bg-sunken h-9 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-colors"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={isPending || token.trim().length < 20}
-              className="h-9 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="bg-foreground text-background h-9 rounded-[var(--radius-control)] px-3.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {isPending ? 'Verificando…' : 'Conectar'}
             </button>

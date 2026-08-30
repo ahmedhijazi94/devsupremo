@@ -32,7 +32,7 @@ describe('safeRedirectPath — open redirect bloqueado', () => {
 
   it('bloqueia injeção de cabeçalho por quebra de linha', () => {
     expect(safeRedirectPath('/ok\r\nLocation: https://evil.com')).toBe(
-      '/dashboard'
+      '/dashboard',
     )
     expect(safeRedirectPath('/ok\nSet-Cookie: a=b')).toBe('/dashboard')
   })

@@ -24,7 +24,7 @@ export async function createOAuthState(
   supabase: SupabaseClient,
   userId: string,
   provider: OAuthProvider,
-  projectId?: string | null
+  projectId?: string | null,
 ): Promise<string> {
   const csrf = crypto.randomBytes(32).toString('hex')
 
@@ -43,7 +43,7 @@ export async function createOAuthState(
   }
 
   return Buffer.from(
-    JSON.stringify({ csrf, projectId: projectId ?? null })
+    JSON.stringify({ csrf, projectId: projectId ?? null }),
   ).toString('base64url')
 }
 
@@ -61,7 +61,7 @@ export async function consumeOAuthState(
   supabase: SupabaseClient,
   userId: string,
   provider: OAuthProvider,
-  rawState: string
+  rawState: string,
 ): Promise<ConsumedState | null> {
   const payload = decodeState(rawState)
   if (!payload) return null

@@ -29,7 +29,7 @@ export interface CreateTokenResult {
 }
 
 export async function createMcpToken(
-  input: z.infer<typeof createTokenSchema>
+  input: z.infer<typeof createTokenSchema>,
 ): Promise<CreateTokenResult> {
   const parsed = createTokenSchema.safeParse(input)
   if (!parsed.success) {
@@ -51,14 +51,16 @@ export async function createMcpToken(
 
   if (countError) return { error: 'Erro ao verificar tokens existentes.' }
   if ((existing?.length ?? 0) >= 20) {
-    return { error: 'Limite de 20 tokens ativos atingido. Revogue algum antes.' }
+    return {
+      error: 'Limite de 20 tokens ativos atingido. Revogue algum antes.',
+    }
   }
 
   const { token, tokenHash, tokenPrefix } = generateMcpToken()
 
   const expiresAt = parsed.data.expiresInDays
     ? new Date(
-        Date.now() + parsed.data.expiresInDays * 24 * 60 * 60 * 1000
+        Date.now() + parsed.data.expiresInDays * 24 * 60 * 60 * 1000,
       ).toISOString()
     : null
 
@@ -88,7 +90,7 @@ export async function createMcpToken(
 }
 
 export async function revokeMcpToken(
-  tokenId: string
+  tokenId: string,
 ): Promise<{ error?: string }> {
   const parsed = z.string().uuid().safeParse(tokenId)
   if (!parsed.success) return { error: 'ID inválido.' }

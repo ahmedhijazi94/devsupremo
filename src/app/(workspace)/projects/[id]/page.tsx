@@ -18,7 +18,10 @@ import {
   ActivityFeed,
   type ActivityItem,
 } from '@/components/projects/activity-feed'
-import { connectGithubAccount, connectSupabaseAccount } from '@/actions/accounts'
+import {
+  connectGithubAccount,
+  connectSupabaseAccount,
+} from '@/actions/accounts'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/database'
 
@@ -52,7 +55,7 @@ export default async function ProjectPage({
     supabase
       .from('projects')
       .select(
-        `*, github_accounts ( login, avatar_url ), supabase_accounts ( org_name )`
+        `*, github_accounts ( login, avatar_url ), supabase_accounts ( org_name )`,
       )
       .eq('id', id)
       .eq('user_id', user.id)
@@ -61,7 +64,7 @@ export default async function ProjectPage({
       .from('messages')
       .select(
         'id, role, content, branch, pr_number, pr_url, commit_sha, ' +
-          'files_changed, pipeline_status, mcp_used, created_at'
+          'files_changed, pipeline_status, mcp_used, created_at',
       )
       .eq('project_id', id)
       .eq('user_id', user.id)
@@ -82,7 +85,7 @@ export default async function ProjectPage({
       <header className="flex shrink-0 items-center gap-4 border-b px-4 py-2.5">
         <Link
           href="/dashboard"
-          className="inline-flex shrink-0 items-center gap-2 rounded-[var(--radius-control)] bg-sunken px-3 py-2 text-sm font-medium transition-colors hover:opacity-80"
+          className="bg-sunken inline-flex shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors hover:opacity-80"
         >
           <ArrowLeft className="h-4 w-4" />
           Dashboard
@@ -94,13 +97,13 @@ export default async function ProjectPage({
             <span
               className={cn(
                 'inline-flex items-center gap-1 text-xs font-medium',
-                status.tone
+                status.tone,
               )}
             >
               <status.icon
                 className={cn(
                   'h-3.5 w-3.5',
-                  project.status === 'creating' && 'animate-spin'
+                  project.status === 'creating' && 'animate-spin',
                 )}
               />
               {status.label}
@@ -111,7 +114,7 @@ export default async function ProjectPage({
               href={`https://github.com/${project.github_repo_full_name}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-muted transition-colors hover:text-ink"
+              className="text-muted hover:text-ink inline-flex items-center gap-1 text-xs transition-colors"
             >
               {project.github_repo_full_name}
               <ExternalLink className="h-3 w-3" />
@@ -130,7 +133,7 @@ export default async function ProjectPage({
       {/* Workspace */}
       <div className="flex min-h-0 flex-1 flex-col gap-3 sm:gap-4 lg:flex-row">
         {/* Painel lateral */}
-        <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto border-b p-4 lg:w-[360px] lg:border-b-0 lg:border-r">
+        <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto border-b p-4 lg:w-[360px] lg:border-r lg:border-b-0">
           {!provisioned && (
             <ProvisionCard
               projectId={project.id}
@@ -145,7 +148,8 @@ export default async function ProjectPage({
             connected={Boolean(project.github_accounts)}
             detail={
               project.github_accounts
-                ? (project.github_repo_full_name ?? project.github_accounts.login)
+                ? (project.github_repo_full_name ??
+                  project.github_accounts.login)
                 : null
             }
             action={async () => {
@@ -175,7 +179,7 @@ export default async function ProjectPage({
           <section className="min-h-0 flex-1">
             <div className="mb-3">
               <h2 className="text-sm font-semibold">Atividade</h2>
-              <p className="text-xs text-muted">
+              <p className="text-muted text-xs">
                 Cada proposta do agente, com o pull request e os gates.
               </p>
             </div>
@@ -194,11 +198,11 @@ export default async function ProjectPage({
               projectId={project.id}
             />
           ) : (
-            <div className="flex h-full items-center justify-center rounded-[var(--radius-card)] bg-surface">
+            <div className="bg-surface flex h-full items-center justify-center rounded-[var(--radius-card)]">
               <div className="max-w-sm px-6 text-center">
-                <Zap className="mx-auto mb-3 h-6 w-6 text-muted" />
+                <Zap className="text-muted mx-auto mb-3 h-6 w-6" />
                 <p className="text-sm font-medium">Nada publicado ainda</p>
-                <p className="mt-1.5 text-sm text-muted">
+                <p className="text-muted mt-1.5 text-sm">
                   Provisione a infraestrutura ao lado. Depois disso o app
                   aparece aqui, e o link pode ser mandado para qualquer pessoa.
                 </p>
@@ -221,9 +225,9 @@ function ProvisionCard({
   ready: boolean
 }) {
   return (
-    <section className="rounded-[var(--radius-inner)] bg-sunken p-4">
+    <section className="bg-sunken rounded-[var(--radius-inner)] p-4">
       <h2 className="text-sm font-semibold">Provisionar</h2>
-      <p className="mt-1 mb-3 text-xs text-muted">
+      <p className="text-muted mt-1 mb-3 text-xs">
         Cria o repositório, o banco com RLS, os gates do CI e o preview.
       </p>
 
@@ -234,7 +238,7 @@ function ProvisionCard({
       />
 
       {!ready && (
-        <p className="mt-2.5 flex items-start gap-1.5 text-xs text-wait-ink">
+        <p className="text-wait-ink mt-2.5 flex items-start gap-1.5 text-xs">
           <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           Conecte o GitHub abaixo para habilitar.
         </p>
@@ -259,34 +263,32 @@ function IntegrationCard({
   actionLabel: string
 }) {
   return (
-    <section className="rounded-[var(--radius-inner)] bg-sunken p-4">
+    <section className="bg-sunken rounded-[var(--radius-inner)] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-medium">{title}</h3>
-          <p className="text-xs text-muted">{subtitle}</p>
+          <p className="text-muted text-xs">{subtitle}</p>
         </div>
 
         {connected ? (
-          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-up-ink">
+          <span className="text-up-ink inline-flex shrink-0 items-center gap-1 text-xs font-medium">
             <CheckCircle2 className="h-3.5 w-3.5" />
             Conectado
           </span>
         ) : (
-          <Database className="h-4 w-4 shrink-0 text-muted" />
+          <Database className="text-muted h-4 w-4 shrink-0" />
         )}
       </div>
 
       {connected ? (
         detail && (
-          <p className="mt-2 truncate font-mono text-xs text-muted">
-            {detail}
-          </p>
+          <p className="text-muted mt-2 truncate font-mono text-xs">{detail}</p>
         )
       ) : (
         <form action={action} className="mt-3">
           <button
             type="submit"
-            className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium transition-colors hover:bg-sunken"
+            className="hover:bg-sunken inline-flex h-8 items-center rounded-[var(--radius-control)] px-3 text-xs font-medium transition-colors"
           >
             {actionLabel}
           </button>

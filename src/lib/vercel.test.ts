@@ -32,22 +32,37 @@ describe('listDeployments', () => {
   }
 
   it('normaliza a URL sem protocolo', async () => {
-    respond({ deployments: [{ uid: 'a', url: 'app.vercel.app', created: 1, readyState: 'READY' }] })
+    respond({
+      deployments: [
+        { uid: 'a', url: 'app.vercel.app', created: 1, readyState: 'READY' },
+      ],
+    })
     const [deployment] = await listDeployments('t', null, 'p')
     expect(deployment?.url).toBe('https://app.vercel.app')
   })
 
   it('preserva URL que já vem com protocolo', async () => {
-    respond({ deployments: [{ uid: 'a', url: 'https://app.vercel.app', created: 1, readyState: 'READY' }] })
+    respond({
+      deployments: [
+        {
+          uid: 'a',
+          url: 'https://app.vercel.app',
+          created: 1,
+          readyState: 'READY',
+        },
+      ],
+    })
     const [deployment] = await listDeployments('t', null, 'p')
     expect(deployment?.url).toBe('https://app.vercel.app')
   })
 
   it('usa readyState quando presente, senão state', async () => {
-    respond({ deployments: [
-      { uid: 'a', url: 'a.app', created: 2, readyState: 'BUILDING' },
-      { uid: 'b', url: 'b.app', created: 1, state: 'ERROR' },
-    ] })
+    respond({
+      deployments: [
+        { uid: 'a', url: 'a.app', created: 2, readyState: 'BUILDING' },
+        { uid: 'b', url: 'b.app', created: 1, state: 'ERROR' },
+      ],
+    })
     const deployments = await listDeployments('t', null, 'p')
     expect(deployments.map((d) => d.state)).toEqual(['BUILDING', 'ERROR'])
   })
@@ -59,11 +74,25 @@ describe('listDeployments', () => {
   })
 
   it('filtra por branch quando pedido', async () => {
-    respond({ deployments: [
-      { uid: 'a', url: 'a.app', created: 2, meta: { githubCommitRef: 'main' } },
-      { uid: 'b', url: 'b.app', created: 1, meta: { githubCommitRef: 'feat/x' } },
-    ] })
-    const deployments = await listDeployments('t', null, 'p', { branch: 'feat/x' })
+    respond({
+      deployments: [
+        {
+          uid: 'a',
+          url: 'a.app',
+          created: 2,
+          meta: { githubCommitRef: 'main' },
+        },
+        {
+          uid: 'b',
+          url: 'b.app',
+          created: 1,
+          meta: { githubCommitRef: 'feat/x' },
+        },
+      ],
+    })
+    const deployments = await listDeployments('t', null, 'p', {
+      branch: 'feat/x',
+    })
     expect(deployments.map((d) => d.id)).toEqual(['b'])
   })
 
@@ -87,7 +116,9 @@ describe('listDeployments', () => {
   it('erro da API vira VercelError com a mensagem da Vercel', async () => {
     respond({ error: { message: 'Not authorized' } }, false, 403)
     await expect(listDeployments('t', null, 'p')).rejects.toThrow(VercelError)
-    await expect(listDeployments('t', null, 'p')).rejects.toThrow('Not authorized')
+    await expect(listDeployments('t', null, 'p')).rejects.toThrow(
+      'Not authorized',
+    )
   })
 })
 
@@ -102,24 +133,49 @@ describe('identify', () => {
 
   it('prefere o time quando o token tem um', async () => {
     fetchMock.mockResolvedValueOnce({
-      ok: true, status: 200,
-      text: async () => JSON.stringify({ teams: [{ id: 'team_1', name: 'Ahmed' }] }),
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({ teams: [{ id: 'team_1', name: 'Ahmed' }] }),
     })
-    expect(await identify('t')).toEqual({ accountName: 'Ahmed', teamId: 'team_1' })
+    expect(await identify('t')).toEqual({
+      accountName: 'Ahmed',
+      teamId: 'team_1',
+    })
   })
 
   it('cai na conta pessoal quando não há time', async () => {
     fetchMock
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ teams: [] }) })
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ user: { username: 'ahmed', name: 'Ahmed H' } }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ teams: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ user: { username: 'ahmed', name: 'Ahmed H' } }),
+      })
 
-    expect(await identify('t')).toEqual({ accountName: 'Ahmed H', teamId: null })
+    expect(await identify('t')).toEqual({
+      accountName: 'Ahmed H',
+      teamId: null,
+    })
   })
 
   it('usa o username quando não há nome', async () => {
     fetchMock
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ teams: [] }) })
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ user: { username: 'ahmed' } }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ teams: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ user: { username: 'ahmed' } }),
+      })
 
     expect((await identify('t')).accountName).toBe('ahmed')
   })

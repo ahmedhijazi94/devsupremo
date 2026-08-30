@@ -37,24 +37,26 @@ function unauthorized(detail: string): Response {
         'WWW-Authenticate': WWW_AUTHENTICATE,
         'Cache-Control': 'no-store',
       },
-    }
+    },
   )
 }
 
 async function authenticate(
-  request: Request
+  request: Request,
 ): Promise<{ userId: string } | Response> {
   const token = parseAuthorizationHeader(request.headers.get('authorization'))
 
   if (!token) {
     return unauthorized(
-      'Envie o header Authorization: Bearer sup_… . Gere um token em /mcps.'
+      'Envie o header Authorization: Bearer sup_… . Gere um token em /mcps.',
     )
   }
 
   const identity = await resolveMcpToken(token)
   if (!identity) {
-    return unauthorized('Token inválido, revogado ou expirado. Gere outro em /mcps.')
+    return unauthorized(
+      'Token inválido, revogado ou expirado. Gere outro em /mcps.',
+    )
   }
 
   return { userId: identity.userId }
@@ -82,11 +84,13 @@ async function handle(request: Request): Promise<Response> {
         error: {
           code: -32603,
           message:
-            error instanceof Error ? error.message : 'Erro interno do servidor MCP',
+            error instanceof Error
+              ? error.message
+              : 'Erro interno do servidor MCP',
         },
         id: null,
       },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

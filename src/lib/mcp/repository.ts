@@ -71,7 +71,7 @@ export async function listProjects(userId: string): Promise<ProjectRecord[]> {
 
 export async function getProject(
   userId: string,
-  projectId: string
+  projectId: string,
 ): Promise<ProjectRecord> {
   const { data, error } = await db()
     .from('projects')
@@ -86,7 +86,7 @@ export async function getProject(
 }
 
 export async function getActiveProject(
-  userId: string
+  userId: string,
 ): Promise<ProjectRecord | null> {
   const { data, error } = await db()
     .from('projects')
@@ -105,14 +105,14 @@ export async function getActiveProject(
  */
 export async function resolveProject(
   userId: string,
-  projectId?: string
+  projectId?: string,
 ): Promise<ProjectRecord> {
   if (projectId) return getProject(userId, projectId)
 
   const active = await getActiveProject(userId)
   if (!active) {
     throw new NotFoundError(
-      'Nenhum projeto ativo. Passe projectId ou ative um projeto no painel.'
+      'Nenhum projeto ativo. Passe projectId ou ative um projeto no painel.',
     )
   }
   return active
@@ -120,7 +120,7 @@ export async function resolveProject(
 
 export async function setActiveProject(
   userId: string,
-  projectId: string
+  projectId: string,
 ): Promise<ProjectRecord> {
   // Confirma o dono antes de qualquer escrita.
   const project = await getProject(userId, projectId)
@@ -151,7 +151,7 @@ export async function setActiveProject(
 export async function updateProject(
   userId: string,
   projectId: string,
-  patch: Record<string, unknown>
+  patch: Record<string, unknown>,
 ): Promise<void> {
   const { error } = await db()
     .from('projects')
@@ -177,16 +177,16 @@ export interface GithubCredentials {
 
 export async function getGithubCredentials(
   userId: string,
-  project: ProjectRecord
+  project: ProjectRecord,
 ): Promise<GithubCredentials> {
   if (!project.github_account_id) {
     throw new NotConfiguredError(
-      'Projeto sem conta GitHub vinculada. Conecte uma em /accounts.'
+      'Projeto sem conta GitHub vinculada. Conecte uma em /accounts.',
     )
   }
   if (!project.github_repo_full_name) {
     throw new NotConfiguredError(
-      'Projeto ainda não provisionado no GitHub. Rode o scaffold primeiro.'
+      'Projeto ainda não provisionado no GitHub. Rode o scaffold primeiro.',
     )
   }
 
@@ -222,11 +222,11 @@ export interface SupabaseCredentials {
 
 export async function getSupabaseCredentials(
   userId: string,
-  project: ProjectRecord
+  project: ProjectRecord,
 ): Promise<SupabaseCredentials> {
   if (!project.supabase_account_id || !project.supabase_project_ref) {
     throw new NotConfiguredError(
-      'Projeto sem banco Supabase vinculado. Conecte uma conta em /accounts.'
+      'Projeto sem banco Supabase vinculado. Conecte uma conta em /accounts.',
     )
   }
 
@@ -269,7 +269,7 @@ export interface MessageInput {
 
 export async function recordMessage(
   userId: string,
-  input: MessageInput
+  input: MessageInput,
 ): Promise<string> {
   const { data, error } = await db()
     .from('messages')
@@ -300,7 +300,7 @@ export async function recordMessage(
 export async function updateMessage(
   userId: string,
   messageId: string,
-  patch: Record<string, unknown>
+  patch: Record<string, unknown>,
 ): Promise<void> {
   const { error } = await db()
     .from('messages')
@@ -316,15 +316,17 @@ export async function logAudit(
   action: string,
   resourceType: string,
   resourceId?: string | null,
-  metadata?: Json
+  metadata?: Json,
 ): Promise<void> {
-  const { error } = await db().from('audit_logs').insert({
-    user_id: userId,
-    action,
-    resource_type: resourceType,
-    resource_id: resourceId ?? null,
-    metadata: metadata ?? null,
-  })
+  const { error } = await db()
+    .from('audit_logs')
+    .insert({
+      user_id: userId,
+      action,
+      resource_type: resourceType,
+      resource_id: resourceId ?? null,
+      metadata: metadata ?? null,
+    })
 
   // Auditoria não pode derrubar a operação, mas a falha precisa aparecer.
   if (error) {

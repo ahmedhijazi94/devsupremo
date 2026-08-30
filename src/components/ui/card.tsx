@@ -7,18 +7,10 @@ import { cn } from '@/lib/utils'
  * vem do contraste de superfície, não de um traço. Borda só quando o cartão
  * precisa se destacar do que está atrás dele.
  */
-export function Card({
-  className,
-  bordered = false,
-  ...props
-}: React.ComponentProps<'section'> & { bordered?: boolean }) {
+export function Card({ className, ...props }: React.ComponentProps<'section'>) {
   return (
     <section
-      className={cn(
-        'rounded-[var(--radius-card)] bg-surface p-6',
-        bordered && 'border border-line',
-        className
-      )}
+      className={cn('bg-surface rounded-[var(--radius-card)] p-6', className)}
       {...props}
     />
   )
@@ -31,19 +23,13 @@ export function CardInner({
 }: React.ComponentProps<'div'>) {
   return (
     <div
-      className={cn(
-        'rounded-[var(--radius-inner)] bg-sunken p-5',
-        className
-      )}
+      className={cn('bg-sunken rounded-[var(--radius-inner)] p-5', className)}
       {...props}
     />
   )
 }
 
-export function CardTitle({
-  className,
-  ...props
-}: React.ComponentProps<'h2'>) {
+export function CardTitle({ className, ...props }: React.ComponentProps<'h2'>) {
   return (
     <h2
       className={cn('text-base font-semibold tracking-tight', className)}
@@ -53,7 +39,7 @@ export function CardTitle({
 }
 
 export function CardNote({ className, ...props }: React.ComponentProps<'p'>) {
-  return <p className={cn('text-sm text-muted', className)} {...props} />
+  return <p className={cn('text-muted text-sm', className)} {...props} />
 }
 
 /**
@@ -79,7 +65,7 @@ export function Stat({
     <Card className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 space-y-3">
-          <p className="text-sm text-muted">{label}</p>
+          <p className="text-muted text-sm">{label}</p>
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="tabular text-4xl font-semibold tracking-tight">
               {value}
@@ -89,15 +75,13 @@ export function Stat({
         </div>
 
         {icon && (
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sunken text-ink-soft">
+          <span className="bg-sunken text-ink-soft flex h-11 w-11 shrink-0 items-center justify-center rounded-full">
             {icon}
           </span>
         )}
       </div>
 
-      {footer && (
-        <div className="mt-auto border-t border-line pt-4">{footer}</div>
-      )}
+      {footer && <div className="mt-auto pt-4">{footer}</div>}
     </Card>
   )
 }
@@ -115,7 +99,7 @@ export function Delta({
         'tabular inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold',
         direction === 'up' && 'bg-up text-up-ink',
         direction === 'down' && 'bg-down text-down-ink',
-        direction === 'flat' && 'bg-sunken text-muted'
+        direction === 'flat' && 'bg-sunken text-muted',
       )}
     >
       {value}

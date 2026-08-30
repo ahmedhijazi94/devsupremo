@@ -17,10 +17,15 @@ export function NewProjectForm() {
   const [nameError, setNameError] = useState('')
 
   // Generate slug dynamically
-  const slug = form.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+  const slug = form.name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
 
   function handleNameChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setForm(prev => ({ ...prev, name: e.target.value }))
+    setForm((prev) => ({ ...prev, name: e.target.value }))
     setNameError('')
   }
 
@@ -35,7 +40,7 @@ export function NewProjectForm() {
     startTransition(async () => {
       // Create project using the slug as the internal name for repo/supabase consistency, or store both
       const { data, error } = await createEmptyProject(slug, form.description)
-      
+
       if (error) {
         toast.error(error)
       } else if (data) {
@@ -47,15 +52,18 @@ export function NewProjectForm() {
 
   if (isPending) {
     return (
-      <div className="rounded-xl border border-line p-10 text-center space-y-4">
-        <Loader2 className="w-10 h-10 mx-auto animate-spin text-ink" />
-        <p className="font-semibold text-lg">Criando projeto...</p>
+      <div className="space-y-4 rounded-[var(--radius-inner)] p-10 text-center">
+        <Loader2 className="text-ink mx-auto h-10 w-10 animate-spin" />
+        <p className="text-lg font-semibold">Criando projeto...</p>
       </div>
     )
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 rounded-xl border border-line bg-surface p-6">
+    <form
+      onSubmit={handleSubmit}
+      className="bg-surface space-y-6 rounded-[var(--radius-inner)] p-6"
+    >
       {/* Nome do projeto */}
       <div className="space-y-2">
         <label className="text-sm font-medium">
@@ -67,12 +75,12 @@ export function NewProjectForm() {
           onChange={handleNameChange}
           placeholder="Meu Novo Projeto"
           required
-          className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          className="bg-surface focus:ring-primary w-full rounded-[var(--radius-control)] px-3 py-2 text-sm focus:ring-2 focus:outline-none"
         />
-        {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+        {nameError && <p className="text-destructive text-xs">{nameError}</p>}
         {slug && (
-          <p className="text-xs text-muted mt-1">
-            Repositório será: <span className="font-mono text-ink">{slug}</span>
+          <p className="text-muted mt-1 text-xs">
+            Repositório será: <span className="text-ink font-mono">{slug}</span>
           </p>
         )}
       </div>
@@ -83,17 +91,19 @@ export function NewProjectForm() {
         <input
           type="text"
           value={form.description}
-          onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, description: e.target.value }))
+          }
           placeholder="O que esse app vai fazer?"
           maxLength={200}
-          className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          className="bg-surface focus:ring-primary w-full rounded-[var(--radius-control)] px-3 py-2 text-sm focus:ring-2 focus:outline-none"
         />
       </div>
 
       <button
         type="submit"
         disabled={!form.name || !!nameError || isPending}
-        className="w-full rounded-lg bg-accent px-4 py-3 text-sm font-semibold text-accent-ink hover:bg-accent/90 transition-colors disabled:opacity-50"
+        className="bg-accent text-accent-ink hover:bg-accent/90 w-full rounded-[var(--radius-control)] px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50"
       >
         Avançar para Configuração
       </button>

@@ -7,7 +7,8 @@ import { useRouter } from 'next/navigation'
 const successMessages: Record<string, string> = {
   github_connected: 'Conta GitHub conectada.',
   supabase_connected: 'Conta Supabase conectada.',
-  vercel_connected: 'Conta Vercel conectada. Projetos novos já nascem com preview.',
+  vercel_connected:
+    'Conta Vercel conectada. Projetos novos já nascem com preview.',
 }
 
 const errorMessages: Record<string, string> = {
@@ -28,7 +29,10 @@ interface AccountsToastHandlerProps {
   error: string | undefined
 }
 
-export function AccountsToastHandler({ success, error }: AccountsToastHandlerProps) {
+export function AccountsToastHandler({
+  success,
+  error,
+}: AccountsToastHandlerProps) {
   const router = useRouter()
 
   useEffect(() => {

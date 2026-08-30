@@ -31,7 +31,7 @@ export interface PublishPreviewResult {
 }
 
 export async function publishPreview(
-  projectId: string
+  projectId: string,
 ): Promise<PublishPreviewResult> {
   const parsed = z.string().uuid().safeParse(projectId)
   if (!parsed.success) return { error: 'ID inválido.' }
@@ -50,7 +50,7 @@ export async function publishPreview(
       parsed.data,
       'id, user_id, name, github_account_id, github_repo_full_name, ' +
         'active_branch, default_branch, supabase_project_ref, ' +
-        'supabase_account_id, preview_project_name'
+        'supabase_account_id, preview_project_name',
     )
 
     const repoFullName = project.github_repo_full_name as string | null
@@ -150,7 +150,7 @@ export async function getSharedPreviewState(projectId: string): Promise<{
   try {
     const { project } = await requireProjectOwner(
       projectId,
-      'id, user_id, preview_project_name, preview_url_shared, preview_updated_at'
+      'id, user_id, preview_project_name, preview_url_shared, preview_updated_at',
     )
 
     const name = project.preview_project_name as string | null

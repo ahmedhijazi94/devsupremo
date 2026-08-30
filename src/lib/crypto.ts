@@ -24,7 +24,7 @@ export function encryptToken(text: string): string {
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv)
   let encrypted = cipher.update(text, 'utf8', 'hex')
   encrypted += cipher.final('hex')
-  
+
   const authTag = cipher.getAuthTag()
 
   return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`
@@ -36,7 +36,7 @@ export function encryptToken(text: string): string {
  */
 export function decryptToken(encryptedText: string): string {
   if (!encryptedText) return encryptedText
-  
+
   const parts = encryptedText.split(':')
   if (parts.length !== 3) {
     throw new Error('Invalid encrypted text format')

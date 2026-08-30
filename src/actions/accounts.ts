@@ -11,7 +11,7 @@ import { createOAuthState } from '@/lib/oauth-state'
 export async function isSupabaseOAuthAvailable(): Promise<boolean> {
   return Boolean(
     process.env.SUPABASE_OAUTH_CLIENT_ID &&
-      process.env.SUPABASE_OAUTH_CLIENT_SECRET
+    process.env.SUPABASE_OAUTH_CLIENT_SECRET,
   )
 }
 
@@ -21,7 +21,9 @@ export async function isSupabaseOAuthAvailable(): Promise<boolean> {
 export async function connectGithubAccount(projectId?: string) {
   const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
   const state = await createOAuthState(supabase, user.id, 'github', projectId)
@@ -41,11 +43,13 @@ export async function connectGithubAccount(projectId?: string) {
 // Desconectar conta GitHub
 // ─────────────────────────────────────────────────────────────
 export async function disconnectGithubAccount(
-  accountId: string
+  accountId: string,
 ): Promise<{ error?: string }> {
   const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) return { error: 'Não autorizado.' }
 
   // Verificar ownership antes de deletar
@@ -86,7 +90,7 @@ const addSupabaseSchema = z.object({
 })
 
 export async function addSupabaseAccount(
-  formData: z.infer<typeof addSupabaseSchema>
+  formData: z.infer<typeof addSupabaseSchema>,
 ): Promise<{ error?: string }> {
   const parsed = addSupabaseSchema.safeParse(formData)
   if (!parsed.success) {
@@ -95,22 +99,31 @@ export async function addSupabaseAccount(
 
   const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) return { error: 'Não autorizado.' }
 
   // Validar o token buscando as organizações do usuário
   const orgResponse = await fetch('https://api.supabase.com/v1/organizations', {
     headers: {
-      'Authorization': `Bearer ${parsed.data.accessToken}`,
+      Authorization: `Bearer ${parsed.data.accessToken}`,
       'Content-Type': 'application/json',
     },
   })
 
   if (!orgResponse.ok) {
-    return { error: 'Token inválido ou sem permissões. Verifique seu Supabase Access Token.' }
+    return {
+      error:
+        'Token inválido ou sem permissões. Verifique seu Supabase Access Token.',
+    }
   }
 
-  const orgs = await orgResponse.json() as Array<{ id: string; name: string; slug: string }>
+  const orgs = (await orgResponse.json()) as Array<{
+    id: string
+    name: string
+    slug: string
+  }>
 
   if (!orgs || orgs.length === 0) {
     return { error: 'Nenhuma organização encontrada neste token.' }
@@ -122,14 +135,17 @@ export async function addSupabaseAccount(
 
   const { data: upsertData, error: upsertError } = await supabase
     .from('supabase_accounts')
-    .upsert({
-      user_id: user.id,
-      org_name: org.name,
-      org_slug: org.slug,
-      access_token_encrypted: encryptedToken,
-    }, {
-      onConflict: 'user_id,org_slug',
-    })
+    .upsert(
+      {
+        user_id: user.id,
+        org_name: org.name,
+        org_slug: org.slug,
+        access_token_encrypted: encryptedToken,
+      },
+      {
+        onConflict: 'user_id,org_slug',
+      },
+    )
     .select('id')
     .single()
 
@@ -139,7 +155,10 @@ export async function addSupabaseAccount(
 
   // Se tivermos projectId, vinculamos na hora
   if (parsed.data.projectId) {
-    await supabase.from('projects').update({ supabase_account_id: upsertData.id }).eq('id', parsed.data.projectId)
+    await supabase
+      .from('projects')
+      .update({ supabase_account_id: upsertData.id })
+      .eq('id', parsed.data.projectId)
     revalidatePath(`/projects/${parsed.data.projectId}`)
   }
 
@@ -158,11 +177,13 @@ export async function addSupabaseAccount(
 // Desconectar conta Supabase
 // ─────────────────────────────────────────────────────────────
 export async function disconnectSupabaseAccount(
-  accountId: string
+  accountId: string,
 ): Promise<{ error?: string }> {
   const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) return { error: 'Não autorizado.' }
 
   const { data: account } = await supabase
@@ -191,7 +212,9 @@ export async function disconnectSupabaseAccount(
 // ─────────────────────────────────────────────────────────────
 export async function connectSupabaseAccount(projectId?: string) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
   const clientId = process.env.SUPABASE_OAUTH_CLIENT_ID
@@ -202,7 +225,9 @@ export async function connectSupabaseAccount(projectId?: string) {
   const state = await createOAuthState(supabase, user.id, 'supabase', projectId)
 
   // URL for Supabase OAuth
-  const redirectUri = encodeURIComponent(`${process.env.NEXT_PUBLIC_APP_URL}/auth/supabase-account/callback`)
+  const redirectUri = encodeURIComponent(
+    `${process.env.NEXT_PUBLIC_APP_URL}/auth/supabase-account/callback`,
+  )
   const authUrl = `https://api.supabase.com/v1/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${redirectUri}&state=${state}`
 
   redirect(authUrl)

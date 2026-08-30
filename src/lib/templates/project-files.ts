@@ -181,7 +181,7 @@ function packageJson(projectName: string): string {
       devDependencies: DEV_DEPENDENCIES,
     },
     null,
-    2
+    2,
   )}\n`
 }
 
@@ -212,7 +212,7 @@ function tsconfig(): string {
       exclude: ['node_modules', 'vitest.config.ts', 'playwright.config.ts'],
     },
     null,
-    2
+    2,
   )}\n`
 }
 
@@ -435,7 +435,7 @@ function vercelJson(): string {
       github: { silent: true },
     },
     null,
-    2
+    2,
   )}\n`
 }
 
@@ -1157,7 +1157,7 @@ function packageLock(projectName: string): string {
     'lib',
     'templates',
     'assets',
-    'package-lock.json'
+    'package-lock.json',
   )
 
   const raw = fs.readFileSync(/* turbopackIgnore: true */ lockPath, 'utf8')
@@ -1405,8 +1405,5 @@ function escapeJs(value: string): string {
 }
 
 function escapeJsx(value: string): string {
-  return value
-    .replace(/[{}]/g, '')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  return value.replace(/[{}]/g, '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

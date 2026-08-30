@@ -15,7 +15,7 @@ const TIMEOUT_MS = 4000
 
 async function probe(
   url: string,
-  headers: Record<string, string>
+  headers: Record<string, string>,
 ): Promise<AccountHealth> {
   try {
     const response = await fetch(url, {
@@ -37,7 +37,7 @@ async function probe(
 }
 
 export async function checkGithubToken(
-  encryptedToken: string
+  encryptedToken: string,
 ): Promise<AccountHealth> {
   try {
     return await probe('https://api.github.com/user', {
@@ -53,7 +53,7 @@ export async function checkGithubToken(
 }
 
 export async function checkSupabaseToken(
-  encryptedToken: string
+  encryptedToken: string,
 ): Promise<AccountHealth> {
   try {
     return await probe('https://api.supabase.com/v1/organizations', {
@@ -66,7 +66,7 @@ export async function checkSupabaseToken(
 
 export async function checkVercelToken(
   encryptedToken: string,
-  teamId: string | null
+  teamId: string | null,
 ): Promise<AccountHealth> {
   try {
     const token = decryptToken(encryptedToken)

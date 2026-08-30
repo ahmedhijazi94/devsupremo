@@ -44,7 +44,7 @@ export default async function MCPsPage() {
     .is('revoked_at', null)
     .order('created_at', { ascending: false })
 
-  const claudeCodeCommand = `claude mcp add --transport http supremo ${mcpUrl} --header "Authorization: Bearer SEU_TOKEN"`
+  const claudeCodeCommand = `claude mcp add --transport http supremo ${mcpUrl} --header"Authorization: Bearer SEU_TOKEN"`
 
   const jsonConfig = JSON.stringify(
     {
@@ -57,7 +57,7 @@ export default async function MCPsPage() {
       },
     },
     null,
-    2
+    2,
   )
 
   const bridgeConfig = JSON.stringify(
@@ -71,14 +71,14 @@ export default async function MCPsPage() {
       },
     },
     null,
-    2
+    2,
   )
 
   return (
     <div className="space-y-3 sm:space-y-4">
       <Card>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Cpu className="w-6 h-6 text-ink" />
+        <h1 className="flex items-center gap-2 text-2xl font-bold">
+          <Cpu className="text-ink h-6 w-6" />
           Integração MCP
         </h1>
         <p className="text-muted mt-1.5">
@@ -92,16 +92,16 @@ export default async function MCPsPage() {
       {/* Endpoint */}
       <Card className="space-y-3">
         <div className="flex items-center gap-2">
-          <Globe className="w-4 h-4 text-ink" />
+          <Globe className="text-ink h-4 w-4" />
           <h2 className="font-semibold">Seu endpoint</h2>
         </div>
         <div className="relative">
-          <pre className="bg-sunken rounded-lg p-3 pr-12 text-sm font-mono overflow-x-auto text-ink">
+          <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-sm">
             {mcpUrl}
           </pre>
           <CopyButton value={mcpUrl} className="absolute top-2.5 right-2.5" />
         </div>
-        <p className="text-sm text-muted">
+        <p className="text-muted text-sm">
           O mesmo endereço funciona de qualquer lugar. O que separa as suas
           contas é o token, não a máquina.
         </p>
@@ -110,10 +110,10 @@ export default async function MCPsPage() {
       {/* Tokens */}
       <Card className="space-y-3">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-ink" />
+          <ShieldCheck className="text-ink h-4 w-4" />
           <h2 className="font-semibold">Tokens de acesso</h2>
         </div>
-        <p className="text-sm text-muted">
+        <p className="text-muted text-sm">
           Um token por máquina facilita revogar o acesso de um computador sem
           derrubar os outros.
         </p>
@@ -124,10 +124,10 @@ export default async function MCPsPage() {
       <Card className="space-y-4">
         <h2 className="font-semibold">Como conectar</h2>
 
-        <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
+        <div className="bg-surface space-y-3 rounded-[var(--radius-inner)] p-5">
           <h3 className="text-sm font-semibold">Claude Code</h3>
           <div className="relative">
-            <pre className="bg-sunken rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-ink">
+            <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
               {claudeCodeCommand}
             </pre>
             <CopyButton
@@ -137,15 +137,15 @@ export default async function MCPsPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
+        <div className="bg-surface space-y-3 rounded-[var(--radius-inner)] p-5">
           <h3 className="text-sm font-semibold">
             Cursor · Windsurf · Claude Desktop · Codex
           </h3>
-          <p className="text-sm text-muted">
+          <p className="text-muted text-sm">
             Clientes com suporte a MCP remoto aceitam a configuração direta:
           </p>
           <div className="relative">
-            <pre className="bg-sunken rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-ink">
+            <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
               {jsonConfig}
             </pre>
             <CopyButton
@@ -155,17 +155,18 @@ export default async function MCPsPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
+        <div className="bg-surface space-y-3 rounded-[var(--radius-inner)] p-5">
           <h3 className="text-sm font-semibold">
             Cliente sem suporte a MCP remoto
           </h3>
-          <p className="text-sm text-muted">
-            A ponte roda via <code className="bg-sunken px-1 py-0.5 rounded">npx</code>,
-            sem instalação permanente. Ela só repassa as chamadas para o
-            endpoint acima — nenhum segredo mora nela.
+          <p className="text-muted text-sm">
+            A ponte roda via{' '}
+            <code className="bg-sunken rounded px-1 py-0.5">npx</code>, sem
+            instalação permanente. Ela só repassa as chamadas para o endpoint
+            acima — nenhum segredo mora nela.
           </p>
           <div className="relative">
-            <pre className="bg-sunken rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-ink">
+            <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs">
               {bridgeConfig}
             </pre>
             <CopyButton
@@ -177,17 +178,19 @@ export default async function MCPsPage() {
       </Card>
 
       {/* Como funciona */}
-      <Card className="rounded-xl border border-line bg-sunken p-5 space-y-3">
-        <div className="flex items-center gap-2 text-ink">
-          <GitPullRequest className="w-4 h-4" />
-          <h2 className="font-semibold">O que o agente pode e não pode fazer</h2>
+      <Card className="bg-sunken space-y-3 rounded-[var(--radius-inner)] p-5">
+        <div className="text-ink flex items-center gap-2">
+          <GitPullRequest className="h-4 w-4" />
+          <h2 className="font-semibold">
+            O que o agente pode e não pode fazer
+          </h2>
         </div>
-        <ul className="text-sm space-y-2 text-muted">
+        <ul className="text-muted space-y-2 text-sm">
           <li>
             <strong className="text-ink">
               As regras viajam com o projeto.
             </strong>{' '}
-            <code className="bg-sunken px-1 py-0.5 rounded text-xs">
+            <code className="bg-sunken rounded px-1 py-0.5 text-xs">
               get_project_context
             </code>{' '}
             devolve o agents.md, o CLAUDE.md e o SECURITY.md lidos do seu
@@ -201,21 +204,19 @@ export default async function MCPsPage() {
           </li>
           <li>
             <strong className="text-ink">O gate é real.</strong>{' '}
-            <code className="bg-sunken px-1 py-0.5 rounded text-xs">
+            <code className="bg-sunken rounded px-1 py-0.5 text-xs">
               wait_for_checks
             </code>{' '}
             espera o CI de verdade, e{' '}
-            <code className="bg-sunken px-1 py-0.5 rounded text-xs">
+            <code className="bg-sunken rounded px-1 py-0.5 text-xs">
               merge_when_green
             </code>{' '}
             recusa se algum check estiver vermelho.
           </li>
           <li>
-            <strong className="text-ink">
-              Migration sem RLS é recusada.
-            </strong>{' '}
+            <strong className="text-ink">Migration sem RLS é recusada.</strong>{' '}
             Tabela nova sem{' '}
-            <code className="bg-sunken px-1 py-0.5 rounded text-xs">
+            <code className="bg-sunken rounded px-1 py-0.5 text-xs">
               ENABLE ROW LEVEL SECURITY
             </code>{' '}
             não passa pelo servidor.

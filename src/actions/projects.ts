@@ -11,7 +11,7 @@ const activateProjectSchema = z.object({
 })
 
 export async function activateProject(
-  projectId: string
+  projectId: string,
 ): Promise<{ error?: string }> {
   const parsed = activateProjectSchema.safeParse({ projectId })
   if (!parsed.success) {
@@ -72,16 +72,20 @@ export async function activateProject(
 }
 
 const createProjectSchema = z.object({
-  name: z.string().min(2).max(50).regex(/^[a-z0-9-]+$/, {
-    message: 'Apenas letras minúsculas, números e hífens.',
-  }),
+  name: z
+    .string()
+    .min(2)
+    .max(50)
+    .regex(/^[a-z0-9-]+$/, {
+      message: 'Apenas letras minúsculas, números e hífens.',
+    }),
   description: z.string().max(200).optional(),
   githubAccountId: z.string().uuid().optional(),
   supabaseAccountId: z.string().uuid().optional(),
 })
 
 export async function createProject(
-  formData: z.infer<typeof createProjectSchema>
+  formData: z.infer<typeof createProjectSchema>,
 ): Promise<{ error?: string; projectId?: string }> {
   const parsed = createProjectSchema.safeParse(formData)
   if (!parsed.success) {
@@ -167,7 +171,7 @@ export interface DeleteProjectResult {
  * anterior.
  */
 export async function deleteProject(
-  projectId: string
+  projectId: string,
 ): Promise<DeleteProjectResult> {
   const parsed = z.string().uuid().safeParse(projectId)
   if (!parsed.success) return { error: 'ID de projeto inválido.' }
@@ -208,7 +212,7 @@ export async function deleteProject(
             headers: {
               Authorization: `Bearer ${decryptToken(account.access_token_encrypted as string)}`,
             },
-          }
+          },
         )
 
         const detail = response.ok ? '' : await response.text()
@@ -221,7 +225,7 @@ export async function deleteProject(
           warnings.push(
             response.status === 401 || response.status === 403
               ? 'O banco no Supabase não foi excluído: a conta perdeu acesso. Reconecte-a e apague o projeto pelo painel do Supabase.'
-              : `O banco no Supabase não foi excluído (HTTP ${response.status}).`
+              : `O banco no Supabase não foi excluído (HTTP ${response.status}).`,
           )
         }
       } catch {
@@ -250,7 +254,7 @@ export async function deleteProject(
               Accept: 'application/vnd.github+json',
               'X-GitHub-Api-Version': '2022-11-28',
             },
-          }
+          },
         )
 
         if (!response.ok && response.status !== 404) {
@@ -259,7 +263,7 @@ export async function deleteProject(
               ? `O repositório ${project.github_repo_full_name} não foi excluído: o acesso à conta ${account.login} expirou. Reconecte-a em Contas.`
               : response.status === 403
                 ? `Sem permissão para excluir ${project.github_repo_full_name}. Reconecte a conta GitHub concedendo delete_repo.`
-                : `O repositório ${project.github_repo_full_name} não foi excluído (HTTP ${response.status}).`
+                : `O repositório ${project.github_repo_full_name} não foi excluído (HTTP ${response.status}).`,
           )
         }
       } catch {
@@ -279,7 +283,7 @@ export async function deleteProject(
       // Órfão na conta compartilhada é problema de quem opera a plataforma,
       // não do usuário — vira registro, não aviso na tela dele.
       console.error(
-        `[projects] preview ${previewName} não foi removido da conta compartilhada`
+        `[projects] preview ${previewName} não foi removido da conta compartilhada`,
       )
     }
   }
@@ -310,7 +314,9 @@ export async function deleteProject(
 
 export async function createEmptyProject(name: string, description?: string) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) return { error: 'Não autorizado.' }
 
   const { data, error } = await supabase

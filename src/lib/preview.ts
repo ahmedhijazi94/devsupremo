@@ -55,7 +55,7 @@ export function sharedPreviewConfig(): SharedPreviewConfig | null {
  */
 export function previewProjectName(
   projectName: string,
-  projectId: string
+  projectId: string,
 ): string {
   const slug = projectName
     .toLowerCase()
@@ -100,7 +100,11 @@ export async function publishSharedPreview(
   config: SharedPreviewConfig,
   projectName: string,
   files: DeployFile[],
-  options: { branch?: string; supabaseUrl?: string; supabaseAnonKey?: string } = {}
+  options: {
+    branch?: string
+    supabaseUrl?: string
+    supabaseAnonKey?: string
+  } = {},
 ): Promise<PublishResult> {
   const deployable = files.filter((file) => isDeployable(file.path))
 
@@ -111,7 +115,7 @@ export async function publishSharedPreview(
   const existing = await findProjectByName(
     config.token,
     config.teamId,
-    projectName
+    projectName,
   )
 
   const project =
@@ -145,7 +149,7 @@ export async function publishSharedPreview(
     config.teamId,
     projectName,
     deployable,
-    options.branch ? { supremoBranch: options.branch } : {}
+    options.branch ? { supremoBranch: options.branch } : {},
   )
 
   return { deployment, projectName }
@@ -159,7 +163,7 @@ export async function publishSharedPreview(
  */
 export async function deleteSharedPreview(
   config: SharedPreviewConfig,
-  projectName: string
+  projectName: string,
 ): Promise<'deleted' | 'already_gone'> {
   return deleteVercelProject(config.token, config.teamId, projectName)
 }
@@ -179,19 +183,19 @@ export interface PreviewFailure {
  */
 export async function readPreviewFailure(
   config: SharedPreviewConfig,
-  projectName: string
+  projectName: string,
 ): Promise<PreviewFailure | null> {
   const project = await findProjectByName(
     config.token,
     config.teamId,
-    projectName
+    projectName,
   )
   if (!project) return null
 
   const deployment = await latestDeployment(
     config.token,
     config.teamId,
-    project.id
+    project.id,
   )
   if (!deployment) return null
 
@@ -212,13 +216,13 @@ export async function readPreviewFailure(
 /** Estado do último preview publicado, sem republicar. */
 export async function readSharedPreview(
   config: SharedPreviewConfig,
-  projectName: string
+  projectName: string,
 ): Promise<Deployment | null> {
   try {
     const project = await findProjectByName(
       config.token,
       config.teamId,
-      projectName
+      projectName,
     )
     if (!project) return null
 

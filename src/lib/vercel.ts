@@ -71,7 +71,7 @@ export interface VercelIdentity {
 export async function identify(token: string): Promise<VercelIdentity> {
   const teams = await call<{ teams?: Array<{ id: string; name: string }> }>(
     '/v2/teams',
-    { token }
+    { token },
   )
 
   const team = teams.teams?.[0]
@@ -81,7 +81,7 @@ export async function identify(token: string): Promise<VercelIdentity> {
 
   const user = await call<{ user: { username: string; name?: string } }>(
     '/v2/user',
-    { token }
+    { token },
   )
 
   return {
@@ -99,19 +99,19 @@ export async function identify(token: string): Promise<VercelIdentity> {
  */
 export async function identifyInstallation(
   token: string,
-  teamId: string | null
+  teamId: string | null,
 ): Promise<VercelIdentity> {
   if (teamId) {
     const team = await call<{ name?: string; slug?: string }>(
       `/v2/teams/${teamId}`,
-      { token }
+      { token },
     )
     return { accountName: team.name ?? team.slug ?? teamId, teamId }
   }
 
   const user = await call<{ user: { username: string; name?: string } }>(
     '/v2/user',
-    { token }
+    { token },
   )
   return { accountName: user.user.name ?? user.user.username, teamId: null }
 }
@@ -136,10 +136,7 @@ export function oauthConfig(): OAuthConfig | null {
   return { clientId, clientSecret, integrationSlug }
 }
 
-export function installationUrl(
-  config: OAuthConfig,
-  state: string
-): string {
+export function installationUrl(config: OAuthConfig, state: string): string {
   const params = new URLSearchParams({ state })
   return `https://vercel.com/integrations/${config.integrationSlug}/new?${params.toString()}`
 }
@@ -153,7 +150,7 @@ export interface ExchangedToken {
 export async function exchangeCode(
   config: OAuthConfig,
   code: string,
-  redirectUri: string
+  redirectUri: string,
 ): Promise<ExchangedToken> {
   const response = await fetch(`${API}/v2/oauth/access_token`, {
     method: 'POST',
@@ -178,7 +175,7 @@ export async function exchangeCode(
   if (!response.ok || !payload.access_token) {
     throw new VercelError(
       payload.error_description ?? payload.error ?? `HTTP ${response.status}`,
-      response.status
+      response.status,
     )
   }
 
@@ -209,7 +206,7 @@ export async function createProject(
   token: string,
   teamId: string | null,
   name: string,
-  repoFullName: string
+  repoFullName: string,
 ): Promise<VercelProject> {
   return call<VercelProject>('/v11/projects', {
     token,
@@ -233,7 +230,7 @@ export async function createProject(
 export async function createDetachedProject(
   token: string,
   teamId: string | null,
-  name: string
+  name: string,
 ): Promise<VercelProject> {
   const project = await call<VercelProject>('/v11/projects', {
     token,
@@ -261,7 +258,7 @@ export async function createDetachedProject(
 export async function makePubliclyAccessible(
   token: string,
   teamId: string | null,
-  projectId: string
+  projectId: string,
 ): Promise<void> {
   await call(`/v9/projects/${projectId}`, {
     token,
@@ -281,7 +278,7 @@ export async function makePubliclyAccessible(
  */
 export async function accessibleGitNamespaces(
   token: string,
-  teamId: string | null
+  teamId: string | null,
 ): Promise<string[]> {
   const data = await call<
     Array<{ name?: string; slug?: string; provider?: string }>
@@ -295,7 +292,7 @@ export async function accessibleGitNamespaces(
 export async function findProjectByName(
   token: string,
   teamId: string | null,
-  name: string
+  name: string,
 ): Promise<VercelProject | null> {
   try {
     return await call<VercelProject>(`/v9/projects/${name}`, { token, teamId })
@@ -315,7 +312,7 @@ export async function findProjectByName(
 export async function deleteProject(
   token: string,
   teamId: string | null,
-  projectIdOrName: string
+  projectIdOrName: string,
 ): Promise<'deleted' | 'already_gone'> {
   try {
     await call(`/v9/projects/${projectIdOrName}`, {
@@ -336,7 +333,7 @@ export async function setEnvironmentVariables(
   token: string,
   teamId: string | null,
   projectId: string,
-  variables: Record<string, string>
+  variables: Record<string, string>,
 ): Promise<void> {
   for (const [key, value] of Object.entries(variables)) {
     if (!value) continue
@@ -377,7 +374,7 @@ export interface DeployFile {
 async function uploadFile(
   token: string,
   teamId: string | null,
-  content: string
+  content: string,
 ): Promise<{ sha: string; size: number }> {
   const { createHash } = await import('node:crypto')
   const buffer = Buffer.from(content, 'utf8')
@@ -400,7 +397,7 @@ async function uploadFile(
   if (!response.ok) {
     throw new VercelError(
       `Falha ao enviar arquivo (${response.status})`,
-      response.status
+      response.status,
     )
   }
 
@@ -419,13 +416,13 @@ export async function deployFiles(
   teamId: string | null,
   projectName: string,
   files: DeployFile[],
-  meta: Record<string, string> = {}
+  meta: Record<string, string> = {},
 ): Promise<Deployment> {
   const uploaded = await Promise.all(
     files.map(async (file) => {
       const { sha, size } = await uploadFile(token, teamId, file.content)
       return { file: file.path, sha, size }
-    })
+    }),
   )
 
   const raw = await call<RawDeployment>('/v13/deployments', {
@@ -450,12 +447,7 @@ export async function deployFiles(
 // ─────────────────────────────────────────────────────────────
 
 export type DeploymentState =
-  | 'BUILDING'
-  | 'ERROR'
-  | 'INITIALIZING'
-  | 'QUEUED'
-  | 'READY'
-  | 'CANCELED'
+  'BUILDING' | 'ERROR' | 'INITIALIZING' | 'QUEUED' | 'READY' | 'CANCELED'
 
 export interface Deployment {
   id: string
@@ -494,7 +486,7 @@ export async function listDeployments(
   token: string,
   teamId: string | null,
   projectId: string,
-  options: { branch?: string; limit?: number } = {}
+  options: { branch?: string; limit?: number } = {},
 ): Promise<Deployment[]> {
   const params = new URLSearchParams({
     projectId,
@@ -503,7 +495,7 @@ export async function listDeployments(
 
   const data = await call<{ deployments?: RawDeployment[] }>(
     `/v6/deployments?${params.toString()}`,
-    { token, teamId }
+    { token, teamId },
   )
 
   return (data.deployments ?? [])
@@ -516,7 +508,7 @@ export async function latestDeployment(
   token: string,
   teamId: string | null,
   projectId: string,
-  branch?: string
+  branch?: string,
 ): Promise<Deployment | null> {
   const deployments = await listDeployments(token, teamId, projectId, {
     ...(branch ? { branch } : {}),
@@ -542,16 +534,25 @@ export async function deploymentLogs(
   token: string,
   teamId: string | null,
   deploymentId: string,
-  limit = 200
+  limit = 200,
 ): Promise<BuildLogLine[]> {
   const data = await call<
-    Array<{ type?: string; text?: string; payload?: { text?: string }; created?: number; date?: number }>
+    Array<{
+      type?: string
+      text?: string
+      payload?: { text?: string }
+      created?: number
+      date?: number
+    }>
   >(`/v3/deployments/${deploymentId}/events?limit=${limit}`, { token, teamId })
 
   return (Array.isArray(data) ? data : [])
     .map((event) => ({
       type: event.type ?? 'stdout',
-      text: (event.text ?? event.payload?.text ?? '').replace(/\u001b\[[0-9;]*m/g, ''),
+      text: (event.text ?? event.payload?.text ?? '').replace(
+        /\u001b\[[0-9;]*m/g,
+        '',
+      ),
       createdAt: event.created ?? event.date ?? 0,
     }))
     .filter((line) => line.text.trim().length > 0)
@@ -563,7 +564,10 @@ export async function deploymentLogs(
  * Devolver as últimas linhas falha nos builds barulhentos, onde o erro
  * aparece bem antes do fim.
  */
-export function extractBuildFailure(lines: BuildLogLine[], window = 40): string {
+export function extractBuildFailure(
+  lines: BuildLogLine[],
+  window = 40,
+): string {
   const texts = lines.map((line) => line.text)
 
   const markers = [

@@ -21,7 +21,9 @@ export async function GET(request: NextRequest) {
 
   const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
   // Valida e consome o state na mesma operação: uso único.
@@ -31,25 +33,28 @@ export async function GET(request: NextRequest) {
   }
 
   // Trocar code por access_token via GitHub API
-  const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
+  const tokenResponse = await fetch(
+    'https://github.com/login/oauth/access_token',
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/auth/github-account/callback`,
+      }),
     },
-    body: JSON.stringify({
-      client_id: process.env.GITHUB_CLIENT_ID,
-      client_secret: process.env.GITHUB_CLIENT_SECRET,
-      code,
-      redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/auth/github-account/callback`,
-    }),
-  })
+  )
 
   if (!tokenResponse.ok) {
     redirect('/accounts?error=token_exchange_failed')
   }
 
-  const tokenData = await tokenResponse.json() as {
+  const tokenData = (await tokenResponse.json()) as {
     access_token?: string
     refresh_token?: string
     scope?: string
@@ -63,8 +68,8 @@ export async function GET(request: NextRequest) {
   // Buscar dados do usuário GitHub
   const userResponse = await fetch('https://api.github.com/user', {
     headers: {
-      'Authorization': `Bearer ${tokenData.access_token}`,
-      'Accept': 'application/vnd.github.v3+json',
+      Authorization: `Bearer ${tokenData.access_token}`,
+      Accept: 'application/vnd.github.v3+json',
     },
   })
 
@@ -72,7 +77,7 @@ export async function GET(request: NextRequest) {
     redirect('/accounts?error=github_user_fetch_failed')
   }
 
-  const githubUser = await userResponse.json() as {
+  const githubUser = (await userResponse.json()) as {
     id: number
     login: string
     name: string | null
@@ -88,18 +93,21 @@ export async function GET(request: NextRequest) {
   // Salvar ou atualizar conta GitHub (upsert — evita duplicatas)
   const { data: upsertData, error: upsertError } = await supabase
     .from('github_accounts')
-    .upsert({
-      user_id: user.id,
-      github_user_id: githubUser.id,
-      login: githubUser.login,
-      name: githubUser.name,
-      avatar_url: githubUser.avatar_url,
-      access_token_encrypted: encryptedToken,
-      refresh_token_encrypted: encryptedRefresh,
-      scopes: tokenData.scope?.split(',') ?? [],
-    }, {
-      onConflict: 'user_id,github_user_id',
-    })
+    .upsert(
+      {
+        user_id: user.id,
+        github_user_id: githubUser.id,
+        login: githubUser.login,
+        name: githubUser.name,
+        avatar_url: githubUser.avatar_url,
+        access_token_encrypted: encryptedToken,
+        refresh_token_encrypted: encryptedRefresh,
+        scopes: tokenData.scope?.split(',') ?? [],
+      },
+      {
+        onConflict: 'user_id,github_user_id',
+      },
+    )
     .select('id')
     .single()
 
@@ -118,7 +126,9 @@ export async function GET(request: NextRequest) {
 
   // Se recebemos projectId no state, vincular automaticamente
   if (consumed.projectId) {
-    await supabase.from('projects').update({ github_account_id: upsertData.id })
+    await supabase
+      .from('projects')
+      .update({ github_account_id: upsertData.id })
       .eq('id', consumed.projectId)
       .eq('user_id', user.id)
     redirect(`/projects/${consumed.projectId}`)

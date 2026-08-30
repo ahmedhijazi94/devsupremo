@@ -4,15 +4,18 @@ import { NewProjectForm } from '@/components/projects/new-project-form'
 
 export default async function NewProjectPage() {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
   return (
-    <div className="space-y-6 max-w-2xl mx-auto">
+    <div className="mx-auto max-w-2xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Novo Projeto</h1>
         <p className="text-muted mt-1">
-          Crie o registro do seu projeto. Você conectará as contas e a infraestrutura na próxima tela.
+          Crie o registro do seu projeto. Você conectará as contas e a
+          infraestrutura na próxima tela.
         </p>
       </div>
 

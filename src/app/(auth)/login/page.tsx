@@ -9,8 +9,8 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm px-7 py-9">
         <div className="mb-7 text-center">
-          <span className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-[var(--radius-control)] bg-accent">
-            <Zap className="h-5 w-5 text-accent-ink" />
+          <span className="bg-accent mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-[var(--radius-control)]">
+            <Zap className="text-accent-ink h-5 w-5" />
           </span>
           <h1 className="text-2xl font-semibold tracking-tight">Supremo</h1>
           <CardNote className="mt-1.5">

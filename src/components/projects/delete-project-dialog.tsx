@@ -11,7 +11,10 @@ interface DeleteProjectDialogProps {
   projectName: string
 }
 
-export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDialogProps) {
+export function DeleteProjectDialog({
+  projectId,
+  projectName,
+}: DeleteProjectDialogProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [confirmName, setConfirmName] = useState('')
@@ -57,29 +60,30 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
           e.preventDefault()
           setIsOpen(true)
         }}
-        className="p-1.5 rounded-lg border border-line hover:bg-destructive/10 border-destructive/20 text-destructive transition-colors ml-2"
+        className="hover:bg-destructive/10 border-destructive/20 text-destructive ml-2 rounded-[var(--radius-control)] p-1.5 transition-colors"
         title="Excluir Projeto"
       >
-        <Trash2 className="w-3.5 h-3.5" />
+        <Trash2 className="h-3.5 w-3.5" />
       </button>
     )
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface/80 backdrop-blur-sm">
-      <div className="w-full max-w-md p-6 bg-surface border border-line rounded-xl shadow-lg relative">
-        <div className="flex items-center gap-3 text-destructive mb-4">
-          <div className="p-2 bg-destructive/10 rounded-full">
-            <AlertTriangle className="w-6 h-6" />
+    <div className="bg-surface/80 fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm">
+      <div className="bg-surface relative w-full max-w-md rounded-[var(--radius-inner)] p-6 shadow-lg">
+        <div className="text-destructive mb-4 flex items-center gap-3">
+          <div className="bg-destructive/10 rounded-full p-2">
+            <AlertTriangle className="h-6 w-6" />
           </div>
           <h2 className="text-xl font-bold">DANGER ZONE</h2>
         </div>
-        
-        <p className="text-muted text-sm mb-4">
-          Você está prestes a excluir o projeto <strong>{projectName}</strong>. 
-          Isso irá deletar de forma <strong className="text-destructive">IRREVERSÍVEL</strong>:
+
+        <p className="text-muted mb-4 text-sm">
+          Você está prestes a excluir o projeto <strong>{projectName}</strong>.
+          Isso irá deletar de forma{' '}
+          <strong className="text-destructive">IRREVERSÍVEL</strong>:
         </p>
-        <ul className="list-disc pl-5 text-sm text-muted mb-6 space-y-1">
+        <ul className="text-muted mb-6 list-disc space-y-1 pl-5 text-sm">
           <li>O repositório no GitHub (e todo o código).</li>
           <li>O projeto no Supabase (banco de dados, storage, logs).</li>
           <li>Este projeto no dashboard do Supremo.</li>
@@ -87,14 +91,14 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
 
         <form onSubmit={handleDelete} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label className="mb-1 block text-sm font-medium">
               Digite <strong>{projectName}</strong> para confirmar:
             </label>
             <input
               type="text"
               value={confirmName}
               onChange={(e) => setConfirmName(e.target.value)}
-              className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-destructive"
+              className="bg-surface placeholder:text-muted focus:ring-destructive w-full rounded-md px-3 py-2 text-sm focus:ring-2 focus:outline-none"
               placeholder={projectName}
               required
             />
@@ -104,7 +108,7 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
             <button
               type="button"
               onClick={() => setIsOpen(false)}
-              className="px-4 py-2 text-sm font-medium hover:bg-sunken rounded-md transition-colors"
+              className="hover:bg-sunken rounded-md px-4 py-2 text-sm font-medium transition-colors"
               disabled={isPending}
             >
               Cancelar
@@ -112,7 +116,7 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
             <button
               type="submit"
               disabled={isPending || confirmName !== projectName}
-              className="px-4 py-2 text-sm font-medium bg-destructive text-destructive-foreground rounded-md hover:bg-destructive/90 transition-colors disabled:opacity-50"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
             >
               {isPending ? 'Excluindo...' : 'Sim, excluir tudo'}
             </button>

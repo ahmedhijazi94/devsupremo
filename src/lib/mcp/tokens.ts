@@ -79,7 +79,7 @@ function identityClient(): SupabaseClient {
  * Retorna null para token inexistente, revogado ou expirado.
  */
 export async function resolveMcpToken(
-  token: string
+  token: string,
 ): Promise<ResolvedIdentity | null> {
   const supabase = identityClient()
   const tokenHash = hashMcpToken(token)

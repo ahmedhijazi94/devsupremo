@@ -43,7 +43,7 @@ interface GithubRepo {
 async function githubFetch(
   path: string,
   token: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
 ): Promise<Response> {
   return fetch(`${GITHUB_API}${path}`, {
     ...init,
@@ -58,7 +58,7 @@ async function githubFetch(
 }
 
 export async function scaffoldProject(
-  projectId: string
+  projectId: string,
 ): Promise<{ error?: string; warnings?: string[] }> {
   try {
     return await runScaffold(projectId)
@@ -69,7 +69,7 @@ export async function scaffoldProject(
 }
 
 async function runScaffold(
-  projectId: string
+  projectId: string,
 ): Promise<{ error?: string; warnings?: string[] }> {
   const { user, supabase } = await requireUser()
   const warnings: string[] = []
@@ -93,7 +93,7 @@ async function runScaffold(
   const description = (project.description as string | null) ?? ''
   const githubToken = decryptToken(
     (project.github_accounts as { access_token_encrypted: string })
-      .access_token_encrypted
+      .access_token_encrypted,
   )
 
   // ── 1. Repositório ──────────────────────────────────────────
@@ -109,10 +109,14 @@ async function runScaffold(
 
   if (!repoResponse.ok) {
     if (repoResponse.status === 422) {
-      return { error: `O repositório "${name}" já existe na sua conta GitHub.` }
+      return {
+        error: `O repositório "${name}" já existe na sua conta GitHub.`,
+      }
     }
     const detail = (await repoResponse.json()) as { message?: string }
-    return { error: `Erro ao criar repositório: ${detail.message ?? repoResponse.status}` }
+    return {
+      error: `Erro ao criar repositório: ${detail.message ?? repoResponse.status}`,
+    }
   }
 
   const repo = (await repoResponse.json()) as GithubRepo
@@ -121,7 +125,9 @@ async function runScaffold(
   // O GitHub leva um instante para materializar a ref do commit inicial.
   const baseSha = await waitForBranch(repo.full_name, branch, githubToken)
   if (!baseSha) {
-    return { error: 'O repositório foi criado mas a branch inicial não apareceu.' }
+    return {
+      error: 'O repositório foi criado mas a branch inicial não apareceu.',
+    }
   }
 
   // ── 2. Template ─────────────────────────────────────────────
@@ -131,7 +137,7 @@ async function runScaffold(
     branch,
     baseSha,
     githubToken,
-    files
+    files,
   )
 
   // ── 3. Banco Supabase ───────────────────────────────────────
@@ -146,7 +152,7 @@ async function runScaffold(
       user.id,
       supabaseAccountId,
       name,
-      files
+      files,
     )
 
     supabaseProjectRef = provisioned.projectRef
@@ -154,7 +160,7 @@ async function runScaffold(
     warnings.push(...provisioned.warnings)
   } else {
     warnings.push(
-      'Nenhuma conta Supabase vinculada — o projeto foi criado sem banco.'
+      'Nenhuma conta Supabase vinculada — o projeto foi criado sem banco.',
     )
   }
 
@@ -162,7 +168,7 @@ async function runScaffold(
   const protectionError = await protectBranch(
     repo.full_name,
     branch,
-    githubToken
+    githubToken,
   )
   if (protectionError) warnings.push(protectionError)
 
@@ -175,7 +181,7 @@ async function runScaffold(
     user.id,
     name,
     repo.full_name,
-    supabaseProjectRef
+    supabaseProjectRef,
   )
   warnings.push(...preview.warnings)
 
@@ -208,7 +214,9 @@ async function runScaffold(
     .eq('user_id', user.id)
 
   if (updateError) {
-    return { error: 'Projeto criado no GitHub, mas falhou ao salvar no banco.' }
+    return {
+      error: 'Projeto criado no GitHub, mas falhou ao salvar no banco.',
+    }
   }
 
   await supabase.from('audit_logs').insert({
@@ -235,12 +243,12 @@ async function runScaffold(
 async function waitForBranch(
   repoFullName: string,
   branch: string,
-  token: string
+  token: string,
 ): Promise<string | null> {
   for (let attempt = 0; attempt < 6; attempt++) {
     const response = await githubFetch(
       `/repos/${repoFullName}/git/ref/heads/${branch}`,
-      token
+      token,
     )
 
     if (response.ok) {
@@ -258,11 +266,11 @@ async function commitTemplate(
   branch: string,
   baseSha: string,
   token: string,
-  files: FileEntry[]
+  files: FileEntry[],
 ): Promise<string> {
   const baseCommitResponse = await githubFetch(
     `/repos/${repoFullName}/git/commits/${baseSha}`,
-    token
+    token,
   )
   if (!baseCommitResponse.ok) {
     throw new Error('Não foi possível ler o commit inicial do repositório.')
@@ -286,7 +294,7 @@ async function commitTemplate(
           content: file.content,
         })),
       }),
-    }
+    },
   )
 
   if (!treeResponse.ok) {
@@ -315,7 +323,7 @@ async function commitTemplate(
         tree: tree.sha,
         parents: [baseSha],
       }),
-    }
+    },
   )
 
   if (!commitResponse.ok) {
@@ -327,7 +335,10 @@ async function commitTemplate(
   const refResponse = await githubFetch(
     `/repos/${repoFullName}/git/refs/heads/${branch}`,
     token,
-    { method: 'PATCH', body: JSON.stringify({ sha: commit.sha, force: false }) }
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ sha: commit.sha, force: false }),
+    },
   )
 
   if (!refResponse.ok) {
@@ -348,7 +359,7 @@ async function provisionSupabase(
   userId: string,
   supabaseAccountId: string,
   name: string,
-  files: FileEntry[]
+  files: FileEntry[],
 ): Promise<SupabaseProvisionResult> {
   const warnings: string[] = []
 
@@ -381,7 +392,10 @@ async function provisionSupabase(
     }
   }
 
-  const orgs = (await orgsResponse.json()) as Array<{ id: string; slug: string }>
+  const orgs = (await orgsResponse.json()) as Array<{
+    id: string
+    slug: string
+  }>
   const org =
     orgs.find((candidate) => candidate.slug === account.org_slug) ?? orgs[0]
 
@@ -428,7 +442,7 @@ async function provisionSupabase(
   if (!ready) {
     warnings.push(
       'O banco Supabase ainda estava provisionando. Aplique a migration inicial ' +
-        'pelo painel ou rode a ferramenta apply_migration quando ele ficar pronto.'
+        'pelo painel ou rode a ferramenta apply_migration quando ele ficar pronto.',
     )
     return { projectRef: created.ref, dbPasswordEncrypted, warnings }
   }
@@ -436,7 +450,7 @@ async function provisionSupabase(
   // A mesma migration que foi versionada no repositório é a que roda aqui —
   // repositório e banco não divergem.
   const migration = files.find((file) =>
-    file.path.startsWith('supabase/migrations/')
+    file.path.startsWith('supabase/migrations/'),
   )
 
   if (migration) {
@@ -449,14 +463,14 @@ async function provisionSupabase(
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ query: migration.content }),
-      }
+      },
     )
 
     if (!migrationResponse.ok) {
       const detail = await migrationResponse.text()
       warnings.push(
         `A migration inicial está versionada em ${migration.path} mas o banco ` +
-          `a recusou: ${detail.slice(0, 160)}`
+          `a recusou: ${detail.slice(0, 160)}`,
       )
     }
   }
@@ -466,7 +480,7 @@ async function provisionSupabase(
 
 async function waitForSupabaseProject(
   projectRef: string,
-  token: string
+  token: string,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < 24; attempt++) {
     await sleep(5000)
@@ -492,7 +506,7 @@ async function waitForSupabaseProject(
 async function protectBranch(
   repoFullName: string,
   branch: string,
-  token: string
+  token: string,
 ): Promise<string | null> {
   const response = await githubFetch(
     `/repos/${repoFullName}/branches/${branch}/protection`,
@@ -507,7 +521,7 @@ async function protectBranch(
         allow_force_pushes: false,
         allow_deletions: false,
       }),
-    }
+    },
   )
 
   if (response.ok) return null
@@ -542,7 +556,7 @@ async function linkVercel(
   userId: string,
   name: string,
   repoFullName: string,
-  supabaseProjectRef: string | null
+  supabaseProjectRef: string | null,
 ): Promise<VercelLinkResult> {
   const { data: account } = await supabase
     .from('vercel_accounts')
@@ -587,8 +601,7 @@ async function linkVercel(
         : [],
     }
   } catch (error) {
-    const detail =
-      error instanceof VercelError ? error.message : String(error)
+    const detail = error instanceof VercelError ? error.message : String(error)
 
     // "repository couldn't be found" quase nunca é erro de digitação: é a
     // Vercel sem acesso àquela conta do GitHub. A mensagem crua manda o
@@ -621,7 +634,7 @@ async function linkVercel(
  */
 async function enableCodeScanning(
   repoFullName: string,
-  token: string
+  token: string,
 ): Promise<string | null> {
   const response = await githubFetch(
     `/repos/${repoFullName}/code-scanning/default-setup`,
@@ -629,7 +642,7 @@ async function enableCodeScanning(
     {
       method: 'PUT',
       body: JSON.stringify({ state: 'configured', query_suite: 'extended' }),
-    }
+    },
   )
 
   if (response.ok || response.status === 202) return null
@@ -646,8 +659,7 @@ async function enableCodeScanning(
 
 function generateDbPassword(): string {
   // Alfabeto sem ambiguidade visual e sem caracteres que quebram URL de conexão.
-  const alphabet =
-    'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
   const bytes = randomBytes(32)
 
   let password = ''

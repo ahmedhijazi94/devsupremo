@@ -8,12 +8,14 @@ describe('slugToBranch', () => {
 
   it('remove o prefixo de commit semântico', () => {
     expect(slugToBranch('feat: adiciona login')).toContain('adiciona-login')
-    expect(slugToBranch('fix(auth): corrige sessão')).toContain('corrige-sessao')
+    expect(slugToBranch('fix(auth): corrige sessão')).toContain(
+      'corrige-sessao',
+    )
   })
 
   it('remove acentos', () => {
     expect(slugToBranch('feat: configuração de opção')).toContain(
-      'configuracao-de-opcao'
+      'configuracao-de-opcao',
     )
   })
 

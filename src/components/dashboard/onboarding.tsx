@@ -70,7 +70,7 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
         <h2 className="text-lg font-semibold">
           {ready ? 'Tudo conectado' : 'Conecte suas contas'}
         </h2>
-        <p className="mt-1 text-sm text-muted">
+        <p className="text-muted mt-1 text-sm">
           {ready
             ? 'Você já pode criar um projeto. Ele nasce com repositório, banco e preview.'
             : `Faltam ${remaining.length} de ${steps.length}. Cada uma é uma autorização — nenhuma pede token.`}
@@ -82,16 +82,14 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
           <li
             key={step.key}
             className={cn(
-              'flex items-center gap-4 rounded-lg border p-4 transition-colors',
-              step.done ? 'border-line bg-sunken' : 'bg-surface'
+              'flex items-center gap-4 rounded-[var(--radius-control)] border p-4 transition-colors',
+              step.done ? 'border-line bg-sunken' : 'bg-surface',
             )}
           >
             <span
               className={cn(
                 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
-                step.done
-                  ? 'bg-up text-up-ink'
-                  : 'border text-muted'
+                step.done ? 'bg-up text-up-ink' : 'text-muted border',
               )}
             >
               {step.done ? <Check className="h-4 w-4" /> : index + 1}
@@ -99,27 +97,22 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
 
             <div className="min-w-0 flex-1">
               <p
-                className={cn(
-                  'text-sm font-medium',
-                  step.done && 'text-muted'
-                )}
+                className={cn('text-sm font-medium', step.done && 'text-muted')}
               >
                 {step.title}
               </p>
-              <p className="text-xs text-muted">
-                {step.description}
-              </p>
+              <p className="text-muted text-xs">{step.description}</p>
             </div>
 
             {step.done ? (
-              <span className="shrink-0 text-xs font-medium text-up-ink">
+              <span className="text-up-ink shrink-0 text-xs font-medium">
                 Conectado
               </span>
             ) : step.oauth ? (
               <form action={step.action} className="shrink-0">
                 <button
                   type="submit"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-90"
+                  className="bg-foreground text-background inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-3 text-xs font-medium transition-opacity hover:opacity-90"
                 >
                   Autorizar
                   <ArrowRight className="h-3.5 w-3.5" />
@@ -128,7 +121,7 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
             ) : (
               <Link
                 href="/accounts"
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line px-3 text-xs font-medium transition-colors hover:bg-sunken"
+                className="hover:bg-sunken inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-3 text-xs font-medium transition-colors"
               >
                 Conectar
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -141,7 +134,7 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
       {ready && (
         <Link
           href="/projects/new"
-          className="mt-5 inline-flex h-10 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent/90"
+          className="bg-accent text-accent-ink hover:bg-accent/90 mt-5 inline-flex h-10 items-center gap-2 rounded-[var(--radius-control)] px-4 text-sm font-semibold transition-colors"
         >
           Criar primeiro projeto
           <ArrowRight className="h-4 w-4" />

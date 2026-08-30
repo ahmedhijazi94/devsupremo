@@ -162,7 +162,9 @@ export interface Database {
           Database['public']['Tables']['vercel_accounts']['Row'],
           'id' | 'created_at' | 'updated_at'
         >
-        Update: Partial<Database['public']['Tables']['vercel_accounts']['Insert']>
+        Update: Partial<
+          Database['public']['Tables']['vercel_accounts']['Insert']
+        >
       }
       mcp_configs: {
         Row: {

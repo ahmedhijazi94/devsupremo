@@ -21,8 +21,8 @@ export function CopyButton({ value, className, ...props }: CopyButtonProps) {
     <button
       onClick={copy}
       className={cn(
-        'inline-flex h-8 w-8 items-center justify-center rounded-md border bg-surface text-muted hover:bg-sunken hover:text-ink transition-colors',
-        className
+        'bg-surface text-muted hover:bg-sunken hover:text-ink inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors',
+        className,
       )}
       title="Copiar"
       {...props}

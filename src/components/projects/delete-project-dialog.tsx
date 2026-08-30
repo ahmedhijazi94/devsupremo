@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { Trash2, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { deleteProject } from '@/actions/projects'
@@ -14,6 +15,7 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
   const [isOpen, setIsOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [confirmName, setConfirmName] = useState('')
+  const router = useRouter()
 
   function handleDelete(e: React.FormEvent) {
     e.preventDefault()
@@ -21,14 +23,27 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
 
     startTransition(async () => {
       try {
-        const { error } = await deleteProject(projectId)
-        if (error) {
-          toast.error(error)
-        } else {
-          toast.success('Projeto excluído com sucesso.')
-          setIsOpen(false)
-          window.location.href = '/dashboard' // Force hard navigation to dashboard
+        const result = await deleteProject(projectId)
+
+        if (result.error) {
+          toast.error(result.error)
+          return
         }
+
+        // Sobra externa não impede a exclusão, mas o usuário precisa saber
+        // o que ficou para trás para limpar à mão.
+        if (result.warnings && result.warnings.length > 0) {
+          toast.warning('Projeto excluído, com sobras', {
+            description: result.warnings.join(' '),
+            duration: 20_000,
+          })
+        } else {
+          toast.success('Projeto excluído.')
+        }
+
+        setIsOpen(false)
+        router.push('/dashboard')
+        router.refresh()
       } catch (err) {
         toast.error('Erro ao excluir projeto.')
       }

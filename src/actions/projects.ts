@@ -151,109 +151,144 @@ export async function createProject(
   return { projectId: createdProject.id }
 }
 
-export async function deleteProject(projectId: string): Promise<{ error?: string }> {
+export interface DeleteProjectResult {
+  error?: string
+  /** O que não pôde ser removido lá fora e ficou para o usuário limpar. */
+  warnings?: string[]
+}
+
+/**
+ * Exclui o projeto e os recursos externos que ele criou.
+ *
+ * Regra de ouro: o pedido do usuário é remover o projeto. Se um recurso
+ * externo já sumiu, ou o token perdeu acesso, isso vira aviso — não motivo
+ * para o projeto ficar preso no painel para sempre, que era o comportamento
+ * anterior.
+ */
+export async function deleteProject(
+  projectId: string
+): Promise<DeleteProjectResult> {
+  const parsed = z.string().uuid().safeParse(projectId)
+  if (!parsed.success) return { error: 'ID de projeto inválido.' }
+
   const supabase = await createClient()
 
-  // 1. Auth check
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) return { error: 'Não autorizado.' }
 
-  // 2. Fetch project
   const { data: project } = await supabase
     .from('projects')
     .select('*')
-    .eq('id', projectId)
-    .single()
+    .eq('id', parsed.data)
+    .eq('user_id', user.id)
+    .maybeSingle()
 
   if (!project) return { error: 'Projeto não encontrado.' }
-  if (project.user_id !== user.id) return { error: 'Acesso negado.' }
 
-  const errors: string[] = []
+  const warnings: string[] = []
 
-  // 3. Delete from Supabase (if connected)
+  // ── Banco Supabase ──────────────────────────────────────────
   if (project.supabase_project_ref && project.supabase_account_id) {
-    const { data: sbAcc } = await supabase
+    const { data: account } = await supabase
       .from('supabase_accounts')
       .select('access_token_encrypted')
       .eq('id', project.supabase_account_id)
-      .single()
+      .eq('user_id', user.id)
+      .maybeSingle()
 
-    if (sbAcc) {
+    if (account) {
       try {
-        const sbToken = decryptToken(sbAcc.access_token_encrypted)
-        const sbRes = await fetch(`https://api.supabase.com/v1/projects/${project.supabase_project_ref}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${sbToken}`,
-            'Content-Type': 'application/json'
+        const response = await fetch(
+          `https://api.supabase.com/v1/projects/${project.supabase_project_ref}`,
+          {
+            method: 'DELETE',
+            headers: {
+              Authorization: `Bearer ${decryptToken(account.access_token_encrypted as string)}`,
+            },
           }
-        })
-        
-        if (!sbRes.ok && sbRes.status !== 404) {
-          const err = await sbRes.text()
-          console.error('Erro ao deletar projeto Supabase:', err)
-          errors.push('Falha ao excluir projeto no Supabase.')
+        )
+
+        const detail = response.ok ? '' : await response.text()
+
+        // Já removido não é falha: o efeito desejado já aconteceu.
+        const alreadyGone =
+          response.status === 404 || /has been removed|not found/i.test(detail)
+
+        if (!response.ok && !alreadyGone) {
+          warnings.push(
+            response.status === 401 || response.status === 403
+              ? 'O banco no Supabase não foi excluído: a conta perdeu acesso. Reconecte-a e apague o projeto pelo painel do Supabase.'
+              : `O banco no Supabase não foi excluído (HTTP ${response.status}).`
+          )
         }
-      } catch (e) {
-        console.error(e)
-        errors.push('Falha ao autenticar com a API do Supabase.')
+      } catch {
+        warnings.push('Não foi possível falar com a API do Supabase.')
       }
     }
   }
 
-  // 4. Delete from GitHub (if connected)
+  // ── Repositório GitHub ──────────────────────────────────────
   if (project.github_repo_full_name && project.github_account_id) {
-    const { data: ghAcc } = await supabase
+    const { data: account } = await supabase
       .from('github_accounts')
-      .select('access_token_encrypted')
+      .select('access_token_encrypted, login')
       .eq('id', project.github_account_id)
-      .single()
+      .eq('user_id', user.id)
+      .maybeSingle()
 
-    if (ghAcc) {
+    if (account) {
       try {
-        const ghToken = decryptToken(ghAcc.access_token_encrypted)
-        const ghRes = await fetch(`https://api.github.com/repos/${project.github_repo_full_name}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${ghToken}`,
-            'Accept': 'application/vnd.github.v3+json',
-            'X-GitHub-Api-Version': '2022-11-28'
+        const response = await fetch(
+          `https://api.github.com/repos/${project.github_repo_full_name}`,
+          {
+            method: 'DELETE',
+            headers: {
+              Authorization: `Bearer ${decryptToken(account.access_token_encrypted as string)}`,
+              Accept: 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+            },
           }
-        })
-        
-        if (!ghRes.ok && ghRes.status !== 404) {
-          const err = await ghRes.text()
-          console.error('Erro ao deletar repo GitHub:', err)
-          if (ghRes.status === 403) {
-            errors.push('Sem permissão para excluir repo no GitHub (reconecte a conta GitHub para conceder).')
-          } else {
-            errors.push('Falha ao excluir repositório no GitHub.')
-          }
+        )
+
+        if (!response.ok && response.status !== 404) {
+          warnings.push(
+            response.status === 401
+              ? `O repositório ${project.github_repo_full_name} não foi excluído: o acesso à conta ${account.login} expirou. Reconecte-a em Contas.`
+              : response.status === 403
+                ? `Sem permissão para excluir ${project.github_repo_full_name}. Reconecte a conta GitHub concedendo delete_repo.`
+                : `O repositório ${project.github_repo_full_name} não foi excluído (HTTP ${response.status}).`
+          )
         }
-      } catch (e) {
-        console.error(e)
-        errors.push('Falha ao autenticar com a API do GitHub.')
+      } catch {
+        warnings.push('Não foi possível falar com a API do GitHub.')
       }
     }
   }
 
-  if (errors.length > 0) {
-    return { error: errors.join(' ') }
-  }
-
-  // 5. Delete from Supremo Database
-  const { error: dbError } = await supabase
+  // ── Registro no Supremo ─────────────────────────────────────
+  const { error: deleteError } = await supabase
     .from('projects')
     .delete()
-    .eq('id', projectId)
+    .eq('id', parsed.data)
+    .eq('user_id', user.id)
 
-  if (dbError) {
-    console.error('Erro ao deletar do DB:', dbError)
-    return { error: 'Falha ao remover o projeto do banco de dados local.' }
+  if (deleteError) {
+    return { error: 'Falha ao remover o projeto do banco do Supremo.' }
   }
 
+  await supabase.from('audit_logs').insert({
+    user_id: user.id,
+    action: 'project.delete',
+    resource_type: 'project',
+    resource_id: parsed.data,
+    metadata: { name: project.name, leftovers: warnings.length },
+    ip_address: null,
+  })
+
   revalidatePath('/', 'layout')
-  return {}
+  return warnings.length > 0 ? { warnings } : {}
 }
 
 export async function createEmptyProject(name: string, description?: string) {

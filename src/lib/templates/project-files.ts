@@ -1069,6 +1069,23 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
+    ignore:
+      # Estas ferramentas sobem de versão maior em conjunto: o ESLint do Next
+      # precisa suportar a versão do TypeScript, e o React precisa casar com
+      # o Next. Um salto automático de uma delas quebra o CI de um projeto
+      # recém-criado — atualize as quatro de uma vez, de propósito.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
+      - dependency-name: eslint-config-next
+        update-types: [version-update:semver-major]
+      - dependency-name: next
+        update-types: [version-update:semver-major]
+      - dependency-name: react
+        update-types: [version-update:semver-major]
+      - dependency-name: react-dom
+        update-types: [version-update:semver-major]
   - package-ecosystem: github-actions
     directory: /
     schedule:

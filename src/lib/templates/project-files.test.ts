@@ -148,6 +148,27 @@ describe('migrations — nome que o CLI do Supabase aceita', () => {
   })
 })
 
+describe('dependabot — não propõe salto que quebra o projeto novo', () => {
+  const config = file('.github/dependabot.yml')
+
+  // Um projeto recém-criado recebeu na primeira semana um PR subindo o
+  // TypeScript para 7.0, que o eslint-config-next ainda não suporta. O gate
+  // barrou corretamente, mas o usuário vê um PR vermelho no dia um.
+  it.each(['typescript', 'eslint-config-next', 'next', 'react'])(
+    'ignora salto de versão maior de %s',
+    (dependency) => {
+      const block = config.slice(config.indexOf('ignore:'))
+      expect(block).toContain(`dependency-name: ${dependency}`)
+    }
+  )
+
+  it('continua propondo correções de patch e minor', () => {
+    expect(config).toContain('interval: weekly')
+    expect(config).toContain('version-update:semver-major')
+    expect(config).not.toContain('version-update:semver-patch')
+  })
+})
+
 describe('lockfile — sem ele o CI quebra antes de instalar', () => {
   // Bug real encontrado em produção: o CI gerado usava `npm ci` e
   // `cache: npm`, e ambos exigem lockfile. Sem ele, todo job falhava em

@@ -10,6 +10,13 @@ import { isSupabaseOAuthAvailable } from '@/actions/accounts'
 import { DisconnectVercelButton } from '@/components/accounts/disconnect-vercel-button'
 import { DisconnectAccountButton } from '@/components/accounts/disconnect-account-button'
 import { ReconnectButton } from '@/components/accounts/reconnect-button'
+import { HealthBadge } from '@/components/accounts/health-badge'
+import {
+  checkGithubToken,
+  checkSupabaseToken,
+  checkVercelToken,
+  type AccountHealth,
+} from '@/lib/account-health'
 import { AccountsToastHandler } from '@/components/accounts/accounts-toast-handler'
 
 export default async function AccountsPage({
@@ -35,6 +42,32 @@ export default async function AccountsPage({
   const [vercelOAuth, supabaseOAuth] = await Promise.all([
     isVercelOAuthAvailable(),
     isSupabaseOAuthAvailable(),
+  ])
+
+  // Perguntamos a cada provedor se o token ainda vale. Dizer "Conectado"
+  // com token morto faz o usuário caçar a causa em outro lugar quando algo
+  // falha. As checagens correm em paralelo e têm timeout curto.
+  const health = new Map<string, AccountHealth>()
+
+  await Promise.all([
+    ...githubAccounts.map(async (account) => {
+      health.set(
+        `github:${account.id}`,
+        await checkGithubToken(account.access_token_encrypted)
+      )
+    }),
+    ...supabaseAccounts.map(async (account) => {
+      health.set(
+        `supabase:${account.id}`,
+        await checkSupabaseToken(account.access_token_encrypted)
+      )
+    }),
+    ...vercelAccounts.map(async (account) => {
+      health.set(
+        `vercel:${account.id}`,
+        await checkVercelToken(account.access_token_encrypted, account.team_id)
+      )
+    }),
   ])
 
   return (
@@ -90,11 +123,12 @@ export default async function AccountsPage({
                       {acc.name ? <span className="text-muted-foreground font-normal ml-1">({acc.name})</span> : null}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Conectado {formatRelativeTime(acc.created_at)} · escopos: {acc.scopes?.join(', ') || 'repo'}
+                      Autorizada {formatRelativeTime(acc.created_at)} · escopos: {acc.scopes?.join(', ') || 'repo'}
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  <HealthBadge health={health.get(`github:${acc.id}`) ?? 'unknown'} />
                   <ReconnectButton provider="github" label={acc.login} />
                   <DisconnectAccountButton type="github" accountId={acc.id} />
                 </div>
@@ -143,7 +177,8 @@ export default async function AccountsPage({
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  <HealthBadge health={health.get(`supabase:${acc.id}`) ?? 'unknown'} />
                   <ReconnectButton provider="supabase" label={acc.org_name} />
                   <DisconnectAccountButton type="supabase" accountId={acc.id} />
                 </div>
@@ -199,7 +234,10 @@ export default async function AccountsPage({
                     </p>
                   </div>
                 </div>
-                <DisconnectVercelButton accountId={acc.id} />
+                <div className="flex items-center gap-3">
+                  <HealthBadge health={health.get(`vercel:${acc.id}`) ?? 'unknown'} />
+                  <DisconnectVercelButton accountId={acc.id} />
+                </div>
               </div>
             ))}
           </div>

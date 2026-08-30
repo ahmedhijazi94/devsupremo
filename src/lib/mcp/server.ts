@@ -56,6 +56,13 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
    isolamento é gerado por ela e vai no mesmo PR — você não precisa escrevê-lo,
    mas precisa ver o gate "Políticas RLS" ficar verde.
 
+5c. Se o app é multi-tenant (organização/time/workspace), o recurso pertence
+   ao tenant, não ao usuário: a policy filtra por membership, algo como
+   EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = tabela.org_id AND
+   m.user_id = auth.uid()). E a PRÓPRIA tabela de sócios precisa de uma policy
+   de SELECT (user_id = auth.uid()) — sem ela, o EXISTS não enxerga nada e o
+   app inteiro trava fechado. O teste gerado já cobre os dois casos.
+
 5b. execute_sql é leitura, e isso é imposto pelo banco: a query roda dentro de
    uma transação READ ONLY. Escrita escondida em CTE é recusada. Para mudar
    dado, escreva pela aplicação, onde o RLS se aplica.

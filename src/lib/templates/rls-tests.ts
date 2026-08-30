@@ -6,25 +6,66 @@
  * o usuário A ler a linha do usuário B. Ninguém escreve esse teste à mão;
  * aqui ele sai junto com a tabela.
  *
+ * Dois padrões de posse, porque projeto de verdade usa os dois:
+ *
+ *  - DONO DIRETO: a linha tem user_id/owner_id. É a casa: uma família por
+ *    porta. Prova que outro usuário não lê, não altera, não apaga.
+ *
+ *  - MULTI-TENANT: a linha pertence a uma organização (org_id/team_id/...),
+ *    e quem enxerga é decidido por uma tabela de sócios (memberships). É o
+ *    prédio: vários andares, cada família no seu. Prova que um membro do
+ *    tenant B não toca em nada do tenant A — o furo clássico de SaaS, onde a
+ *    policy por engano some com o filtro de organização.
+ *
  * O teste gerado roda contra um Postgres real (Supabase local no CI) e prova,
- * por tabela:
- *   - o dono lê a própria linha
- *   - outro usuário autenticado NÃO lê aquela linha
- *   - a anon key NÃO lê nada
- *   - outro usuário NÃO consegue update nem delete
- *   - não dá para inserir linha em nome de outro
+ * por tabela, as cinco+ formas de vazamento entre contas.
  */
+
+export interface Column {
+  name: string
+  sampleValue: string
+}
+
+/** A tabela que liga usuário ↔ tenant. O coração do modelo multi-tenant. */
+export interface Membership {
+  table: string
+  /** Coluna que aponta para o tenant, ex: org_id. */
+  tenantColumn: string
+  /** Coluna que aponta para o usuário, ex: user_id. */
+  userColumn: string
+  /** Colunas NOT NULL a preencher ao semear um sócio. */
+  requiredColumns: Column[]
+}
 
 export interface TableSpec {
   name: string
-  /** Coluna que aponta para o dono. */
-  ownerColumn: string
-  /** Colunas obrigatórias além de id e da coluna de dono. */
-  requiredColumns?: Array<{ name: string; sampleValue: string }>
+  requiredColumns: Column[]
+  /** Presente quando a posse é por dono direto (user_id/owner_id). */
+  ownerColumn?: string
+  /** Presente quando a posse é por organização (multi-tenant). */
+  tenant?: {
+    /** Coluna desta tabela que aponta para o tenant, ou 'id' se ela é o tenant. */
+    column: string
+    /** true quando ESTA tabela é o próprio tenant (orgs); o tenant é o id dela. */
+    isSelf: boolean
+    membership: Membership
+    /** Tabela do tenant para semear as organizações; null usa uuid solto. */
+    table: string | null
+    /** Colunas NOT NULL a preencher ao semear uma organização. */
+    tableRequiredColumns: Column[]
+  }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Geração do arquivo de teste
+// ─────────────────────────────────────────────────────────────
+
 export function generateRlsTest(tables: TableSpec[]): string {
-  const cases = tables.map((table) => renderTableSuite(table)).join('\n')
+  const cases = tables
+    .map((table) =>
+      table.tenant ? renderTenantSuite(table) : renderDirectSuite(table),
+    )
+    .join('\n')
 
   return `import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
@@ -113,14 +154,18 @@ async function signIn(credentials: { email: string; password: string }) {
 ${cases}`
 }
 
-function renderTableSuite(table: TableSpec): string {
-  const extras = table.requiredColumns ?? []
-  const extraFields = extras
+// ─────────────────────────────────────────────────────────────
+// Dono direto — a casa
+// ─────────────────────────────────────────────────────────────
+
+function renderDirectSuite(table: TableSpec): string {
+  const owner = table.ownerColumn ?? 'user_id'
+  const extraFields = (table.requiredColumns ?? [])
     .map((column) => `    ${column.name}: ${column.sampleValue},`)
     .join('\n')
 
   const rowLiteral = `{
-    ${table.ownerColumn}: aliceId,
+    ${owner}: aliceId,
 ${extraFields}
   }`
 
@@ -139,8 +184,7 @@ describe('RLS · ${table.name}', () => {
       throw new Error(
         \`Não foi possível semear ${table.name}: \${error.message}\\n\\n\` +
           'Se a tabela não existe, as migrations não foram aplicadas: rode ' +
-          'supabase db reset. Se faltou coluna obrigatória, ajuste ' +
-          'requiredColumns no gerador de testes.'
+          'supabase db reset.'
       )
     }
     rowId = data.id
@@ -181,7 +225,7 @@ describe('RLS · ${table.name}', () => {
   it('outro usuário NÃO consegue atualizar a linha', async () => {
     const { data } = await bobClient
       .from('${table.name}')
-      .update({ ${table.ownerColumn}: bobId })
+      .update({ ${owner}: bobId })
       .eq('id', rowId)
       .select('id')
 
@@ -189,11 +233,11 @@ describe('RLS · ${table.name}', () => {
 
     const { data: unchanged } = await admin
       .from('${table.name}')
-      .select('${table.ownerColumn}')
+      .select('${owner}')
       .eq('id', rowId)
       .single()
 
-    expect(unchanged?.${table.ownerColumn}).toBe(aliceId)
+    expect(unchanged?.${owner}).toBe(aliceId)
   })
 
   it('outro usuário NÃO consegue deletar a linha', async () => {
@@ -208,10 +252,7 @@ describe('RLS · ${table.name}', () => {
   })
 
   it('não é possível inserir linha em nome de outro usuário', async () => {
-    const { error } = await bobClient.from('${table.name}').insert(${rowLiteral.replace(
-      `${table.ownerColumn}: aliceId`,
-      `${table.ownerColumn}: aliceId`,
-    )})
+    const { error } = await bobClient.from('${table.name}').insert(${rowLiteral})
 
     expect(error).not.toBeNull()
   })
@@ -219,40 +260,372 @@ describe('RLS · ${table.name}', () => {
 `
 }
 
-/**
- * Lê uma migration e deduz as tabelas que precisam de teste de RLS.
- * Usado tanto pelo scaffold quanto pela ferramenta apply_migration.
- */
-export function inferTablesFromMigration(sql: string): TableSpec[] {
-  const tables: TableSpec[] = []
-  const pattern =
-    /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["']?(?:public\.)?(\w+)["']?\s*\(([\s\S]*?)\n\s*\)/gi
+// ─────────────────────────────────────────────────────────────
+// Multi-tenant — o prédio
+// ─────────────────────────────────────────────────────────────
 
+/** Campos `coluna: valor,` para um insert, indentados. */
+function fields(columns: Column[], indent: string): string {
+  return columns
+    .map((column) => `${indent}${column.name}: ${column.sampleValue},`)
+    .join('\n')
+}
+
+function renderTenantSuite(table: TableSpec): string {
+  const t = table.tenant!
+  const m = t.membership
+
+  // Como nasce uma organização de teste. Com tabela de tenant conhecida,
+  // semeamos a linha (o service role ignora o RLS). Sem FK conhecida, um uuid
+  // solto basta e não esbarra em constraint.
+  const makeOrg = t.table
+    ? `async (): Promise<string> => {
+    const { data, error } = await admin
+      .from('${t.table}')
+      .insert({
+${fields(t.tableRequiredColumns, '        ')}
+      })
+      .select('id')
+      .single()
+    if (error) throw new Error(\`semear ${t.table}: \${error.message}\`)
+    return data.id as string
+  }`
+    : `async (): Promise<string> => crypto.randomUUID()`
+
+  // Vincula um usuário a uma organização.
+  const enroll = (org: string, user: string) =>
+    `await admin.from('${m.table}').insert({
+      ${m.tenantColumn}: ${org},
+      ${m.userColumn}: ${user},
+${fields(m.requiredColumns, '      ')}
+    })`
+
+  const label = t.isSelf
+    ? `RLS · ${table.name} (tenant, sócios via ${m.table})`
+    : `RLS · ${table.name} (multi-tenant via ${m.table})`
+
+  // Quando a tabela É o tenant, a linha sob teste é a própria organização A.
+  // Quando é um recurso do tenant, criamos uma linha marcada com a org A.
+  const seedRow = t.isSelf
+    ? `    rowId = orgA`
+    : `    const { data, error } = await admin
+      .from('${table.name}')
+      .insert({
+        ${t.column}: orgA,
+${fields(table.requiredColumns, '        ')}
+      })
+      .select('id')
+      .single()
+    if (error) {
+      throw new Error(
+        \`Não foi possível semear ${table.name}: \${error.message}\\n\\n\` +
+          'Se a tabela não existe, rode supabase db reset.'
+      )
+    }
+    rowId = data.id`
+
+  // A organização A é apagada no fim; o FK em cascata leva sócios e recursos.
+  // Sem tabela de tenant conhecida, apagamos o recurso à mão.
+  const cleanup = t.table
+    ? `    await admin.from('${t.table}').delete().in('id', [orgA, orgB])`
+    : `    await admin.from('${table.name}').delete().eq('id', rowId)
+    await admin.from('${m.table}').delete().in('${m.tenantColumn}', [orgA, orgB])`
+
+  // O membro do tenant errado tentando inserir no tenant A. Só faz sentido
+  // para recurso — criar uma organização nova costuma ser aberto.
+  const insertGuard = t.isSelf
+    ? ''
+    : `
+  it('membro de outro tenant NÃO grava linha no tenant alheio', async () => {
+    const { error } = await bobClient.from('${table.name}').insert({
+      ${t.column}: orgA,
+${fields(table.requiredColumns, '      ')}
+    })
+
+    expect(error).not.toBeNull()
+  })`
+
+  return `
+describe('${label}', () => {
+  let orgA: string
+  let orgB: string
+  let rowId: string
+
+  beforeAll(async () => {
+    const makeOrg = ${makeOrg}
+
+    orgA = await makeOrg()
+    orgB = await makeOrg()
+
+    // Alice é do tenant A, Bob é do tenant B. É o que faz o teste provar
+    // isolamento por organização, não por usuário.
+    ${enroll('orgA', 'aliceId')}
+    ${enroll('orgB', 'bobId')}
+
+${seedRow}
+  })
+
+  afterAll(async () => {
+${cleanup}
+  })
+
+  it('membro do tenant lê a linha', async () => {
+    const { data, error } = await aliceClient
+      .from('${table.name}')
+      .select('id')
+      .eq('id', rowId)
+
+    expect(error).toBeNull()
+    expect(data).toHaveLength(1)
+  })
+
+  it('membro de OUTRO tenant NÃO lê a linha', async () => {
+    const { data } = await bobClient
+      .from('${table.name}')
+      .select('id')
+      .eq('id', rowId)
+
+    expect(data ?? []).toHaveLength(0)
+  })
+
+  it('a anon key NÃO lê a linha', async () => {
+    const { data } = await anonClient
+      .from('${table.name}')
+      .select('id')
+      .eq('id', rowId)
+
+    expect(data ?? []).toHaveLength(0)
+  })
+
+  it('membro de outro tenant NÃO atualiza a linha', async () => {
+    await bobClient
+      .from('${table.name}')
+      .update({ id: rowId })
+      .eq('id', rowId)
+
+    const { data: stillThere } = await admin
+      .from('${table.name}')
+      .select('id')
+      .eq('id', rowId)
+
+    expect(stillThere ?? []).toHaveLength(1)
+  })
+
+  it('membro de outro tenant NÃO deleta a linha', async () => {
+    await bobClient.from('${table.name}').delete().eq('id', rowId)
+
+    const { data: stillThere } = await admin
+      .from('${table.name}')
+      .select('id')
+      .eq('id', rowId)
+
+    expect(stillThere ?? []).toHaveLength(1)
+  })${insertGuard}
+})
+`
+}
+
+// ─────────────────────────────────────────────────────────────
+// Detecção a partir da migration
+// ─────────────────────────────────────────────────────────────
+
+/** Nomes conhecidos de coluna de tenant. Lista fechada evita falso positivo. */
+const TENANT_COLUMNS = [
+  'org_id',
+  'organization_id',
+  'team_id',
+  'workspace_id',
+  'account_id',
+  'tenant_id',
+  'company_id',
+  'group_id',
+]
+
+interface ParsedTable {
+  name: string
+  body: string
+}
+
+function parseTables(sql: string): ParsedTable[] {
+  // O corpo é lido por parênteses balanceados, não por regex de fim de linha:
+  // migration real vem multi-linha, mas apply_migration aceita o que o agente
+  // escrever, inclusive tudo numa linha só. Uma versão anterior casava só o
+  // `)` em linha própria e não via nenhuma tabela nesse caso.
+  const head =
+    /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["']?(?:public\.)?(\w+)["']?\s*\(/gi
+  const tables: ParsedTable[] = []
   let match: RegExpExecArray | null
-  while ((match = pattern.exec(sql)) !== null) {
+
+  while ((match = head.exec(sql)) !== null) {
     const name = match[1]
-    const body = match[2]
-    if (!name || !body) continue
+    if (!name) continue
 
-    const ownerColumn = /\buser_id\b/.test(body)
-      ? 'user_id'
-      : /\bowner_id\b/.test(body)
-        ? 'owner_id'
-        : null
+    const open = head.lastIndex - 1
+    let depth = 0
+    let end = -1
+    for (let i = open; i < sql.length; i++) {
+      const char = sql[i]
+      if (char === '(') depth++
+      else if (char === ')') {
+        depth--
+        if (depth === 0) {
+          end = i
+          break
+        }
+      }
+    }
+    if (end === -1) continue
 
-    // Sem coluna de dono não há o que testar por linha.
-    if (!ownerColumn) continue
-
-    const requiredColumns = [
-      ...body.matchAll(/^\s*(\w+)\s+(TEXT|VARCHAR)[^,\n]*NOT NULL/gim),
-    ]
-      .map((column) => column[1])
-      .filter((column): column is string => Boolean(column))
-      .filter((column) => column !== ownerColumn)
-      .map((column) => ({ name: column, sampleValue: `'teste'` }))
-
-    tables.push({ name, ownerColumn, requiredColumns })
+    tables.push({ name, body: sql.slice(open + 1, end) })
+    head.lastIndex = end
   }
 
   return tables
+}
+
+function hasColumn(body: string, column: string): boolean {
+  return new RegExp(`\\b${column}\\b`, 'i').test(body)
+}
+
+function tenantColumnOf(body: string): string | null {
+  return TENANT_COLUMNS.find((c) => hasColumn(body, c)) ?? null
+}
+
+/** Alvo da foreign key de uma coluna: `col ... REFERENCES [public.]tabela(...`. */
+function fkTarget(body: string, column: string): string | null {
+  const re = new RegExp(
+    `\\b${column}\\b[^,]*?\\breferences\\s+(?:public\\.)?["']?(\\w+)`,
+    'i',
+  )
+  return re.exec(body)?.[1] ?? null
+}
+
+/** Colunas TEXT/VARCHAR NOT NULL, que precisam de valor ao semear a linha. */
+function requiredTextColumns(body: string, exclude: string[]): Column[] {
+  return [...body.matchAll(/^\s*(\w+)\s+(TEXT|VARCHAR)[^,\n]*NOT NULL/gim)]
+    .map((column) => column[1])
+    .filter((name): name is string => Boolean(name))
+    .filter((name) => !exclude.includes(name))
+    .map((name) => ({ name, sampleValue: `'teste'` }))
+}
+
+/** A tabela de sócios: tem coluna de usuário E coluna de tenant. */
+function findMembership(tables: ParsedTable[]): Membership | null {
+  const candidates = tables.filter(
+    (t) => hasColumn(t.body, 'user_id') && tenantColumnOf(t.body),
+  )
+  if (candidates.length === 0) return null
+
+  // Se houver mais de uma, a que se chama de sócios ganha.
+  candidates.sort((a, b) => {
+    const am = /member|soci|participa/i.test(a.name) ? 0 : 1
+    const bm = /member|soci|participa/i.test(b.name) ? 0 : 1
+    return am - bm
+  })
+
+  const chosen = candidates[0]!
+  const tenantColumn = tenantColumnOf(chosen.body)!
+  return {
+    table: chosen.name,
+    tenantColumn,
+    userColumn: 'user_id',
+    requiredColumns: requiredTextColumns(chosen.body, [
+      tenantColumn,
+      'user_id',
+    ]),
+  }
+}
+
+/**
+ * Lê uma migration e deduz as tabelas que precisam de teste de RLS, e por
+ * qual padrão de posse. Usado pelo scaffold e por apply_migration.
+ */
+export function inferTablesFromMigration(sql: string): TableSpec[] {
+  const parsed = parseTables(sql)
+  const membership = findMembership(parsed)
+  const tenantTable = membership
+    ? fkTarget(
+        parsed.find((t) => t.name === membership.table)?.body ?? '',
+        membership.tenantColumn,
+      )
+    : null
+  const tenantTableRequired =
+    tenantTable !== null
+      ? requiredTextColumns(
+          parsed.find((t) => t.name === tenantTable)?.body ?? '',
+          [],
+        )
+      : []
+
+  const specs: TableSpec[] = []
+
+  for (const { name, body } of parsed) {
+    const direct = hasColumn(body, 'user_id')
+      ? 'user_id'
+      : hasColumn(body, 'owner_id')
+        ? 'owner_id'
+        : null
+
+    // A própria tabela de sócios: cada linha é do usuário dela. Dono direto
+    // prova que um usuário não lê o vínculo de outro.
+    if (membership && name === membership.table) {
+      specs.push({
+        name,
+        ownerColumn: 'user_id',
+        requiredColumns: requiredTextColumns(body, [
+          'user_id',
+          membership.tenantColumn,
+        ]),
+      })
+      continue
+    }
+
+    // Recurso de tenant: tem a coluna de organização, e há sócios para mediar.
+    const tenantCol = membership ? tenantColumnOf(body) : null
+    if (membership && tenantCol) {
+      specs.push({
+        name,
+        requiredColumns: requiredTextColumns(body, [tenantCol]),
+        tenant: {
+          column: tenantCol,
+          isSelf: false,
+          membership,
+          table: fkTarget(body, tenantCol) ?? tenantTable,
+          tableRequiredColumns: tenantTableRequired,
+        },
+      })
+      continue
+    }
+
+    // A própria tabela de tenant (orgs): quem a vê é membro dela. O tenant é
+    // o id da própria linha.
+    if (membership && tenantTable && name === tenantTable) {
+      specs.push({
+        name,
+        requiredColumns: requiredTextColumns(body, []),
+        tenant: {
+          column: 'id',
+          isSelf: true,
+          membership,
+          table: name,
+          tableRequiredColumns: requiredTextColumns(body, []),
+        },
+      })
+      continue
+    }
+
+    // Dono direto comum (user_id/owner_id) fora do modelo de tenant.
+    if (direct) {
+      specs.push({
+        name,
+        ownerColumn: direct,
+        requiredColumns: requiredTextColumns(body, [direct]),
+      })
+      continue
+    }
+
+    // Sem coluna de dono nem de tenant: não há isolamento por linha a provar.
+  }
+
+  return specs
 }

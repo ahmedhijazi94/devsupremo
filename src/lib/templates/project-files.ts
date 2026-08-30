@@ -977,6 +977,14 @@ jobs:
         with:
           version: latest
       - run: supabase start
+
+      # O start sobe o banco, mas quem aplica as migrations do repositório
+      # é o db reset. Sem isto o teste falha com "Could not find the table
+      # ... in the schema cache", e o gate de RLS passa a acusar ausência de
+      # tabela em vez de falha de policy.
+      - name: Aplicar as migrations do repositório
+        run: supabase db reset --no-seed
+
       - name: Exportar credenciais locais
         run: |
           echo "SUPABASE_URL=$(supabase status -o env | grep API_URL | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV

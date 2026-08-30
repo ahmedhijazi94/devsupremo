@@ -137,8 +137,10 @@ describe('RLS · ${table.name}', () => {
 
     if (error) {
       throw new Error(
-        \`Não foi possível semear ${table.name}: \${error.message}. \` +
-          'Ajuste requiredColumns no gerador de testes.'
+        \`Não foi possível semear ${table.name}: \${error.message}\\n\\n\` +
+          'Se a tabela não existe, as migrations não foram aplicadas: rode ' +
+          'supabase db reset. Se faltou coluna obrigatória, ajuste ' +
+          'requiredColumns no gerador de testes.'
       )
     }
     rowId = data.id

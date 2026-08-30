@@ -107,6 +107,9 @@ function guard<A>(
     try {
       return await handler(args)
     } catch (error) {
+      // Registrado no log do servidor com a causa real: quando um agente vê só
+      // "Erro genérico", é aqui que se descobre o que de fato falhou.
+      console.error('[mcp] ferramenta falhou:', error)
       return fail(error)
     }
   }
@@ -184,8 +187,16 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         // chamada. Sem isto, um PR meio-feito ficava invisível para quem não
         // o abriu, e o próximo agente começava do zero.
         const openPrs = await gh.listOpenPullRequests(creds)
-        const described = await Promise.all(
-          openPrs.map(async (pr) => {
+        const agentPrs = openPrs.filter((pr) => pr.isAgentWork)
+        const otherPrs = openPrs.filter((pr) => !pr.isAgentWork)
+
+        // O estado do gate só é buscado para o trabalho do agente. Buscar para
+        // todo PR aberto tornava esta chamada lenta o bastante para o cliente
+        // dar timeout — um projeto com 6 PRs de Dependabot virava 7+ chamadas
+        // ao GitHub em série. E não faz sentido: os PRs de Dependabot são
+        // ignorados, não têm por que consultar o gate deles.
+        context.inFlight = await Promise.all(
+          agentPrs.map(async (pr) => {
             const checks = await gh.getChecks(creds, pr.headSha)
             return {
               pr: pr.number,
@@ -196,28 +207,19 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
               isMigration: pr.isMigration,
               gate: checks.state,
               gateDetail: `${checks.passed}/${checks.total} verdes, ${checks.failed} vermelhos, ${checks.pending} rodando`,
-              isAgentWork: pr.isAgentWork,
+              action: resumeAction(checks.state),
             }
           }),
         )
 
-        // Trabalho de agente (branches supremo/ e migration/) é o que se retoma.
-        // PR de Dependabot ou de terceiro é informação: mencione, não bloqueie
-        // a feature nele. Sem essa separação, o agente ficava preso mesclando
-        // bump de dependência antes de fazer o que o usuário pediu.
-        context.inFlight = described
-          .filter((pr) => pr.isAgentWork)
-          .map((pr) => ({ ...pr, action: resumeAction(pr.gate) }))
-
-        context.otherOpenPrs = described
-          .filter((pr) => !pr.isAgentWork)
-          .map((pr) => ({
-            pr: pr.pr,
-            title: pr.title,
-            branch: pr.branch,
-            gate: pr.gate,
-            note: 'Não é trabalho seu (Dependabot ou PR manual). Apenas informe ao usuário; não mescle nem bloqueie a nova feature por causa dele, a menos que o usuário peça.',
-          }))
+        // Dependabot e PRs manuais: informação, sem consultar o gate. O agente
+        // menciona ao usuário, mas não mescla nem bloqueia a feature neles.
+        context.otherOpenPrs = otherPrs.map((pr) => ({
+          pr: pr.number,
+          title: pr.title,
+          branch: pr.headRef,
+          note: 'Não é trabalho seu (Dependabot ou PR manual). Apenas informe ao usuário; não mescle nem bloqueie a nova feature por causa dele, a menos que o usuário peça.',
+        }))
       } catch (error) {
         context.rulesError =
           error instanceof Error ? error.message : String(error)

@@ -9,6 +9,7 @@ import { isVercelOAuthAvailable } from '@/actions/vercel'
 import { isSupabaseOAuthAvailable } from '@/actions/accounts'
 import { DisconnectVercelButton } from '@/components/accounts/disconnect-vercel-button'
 import { DisconnectAccountButton } from '@/components/accounts/disconnect-account-button'
+import { ReconnectButton } from '@/components/accounts/reconnect-button'
 import { AccountsToastHandler } from '@/components/accounts/accounts-toast-handler'
 
 export default async function AccountsPage({
@@ -93,7 +94,10 @@ export default async function AccountsPage({
                     </p>
                   </div>
                 </div>
-                <DisconnectAccountButton type="github" accountId={acc.id} />
+                <div className="flex items-center gap-2">
+                  <ReconnectButton provider="github" label={acc.login} />
+                  <DisconnectAccountButton type="github" accountId={acc.id} />
+                </div>
               </div>
             ))}
           </div>
@@ -139,7 +143,10 @@ export default async function AccountsPage({
                     </p>
                   </div>
                 </div>
-                <DisconnectAccountButton type="supabase" accountId={acc.id} />
+                <div className="flex items-center gap-2">
+                  <ReconnectButton provider="supabase" label={acc.org_name} />
+                  <DisconnectAccountButton type="supabase" accountId={acc.id} />
+                </div>
               </div>
             ))}
           </div>

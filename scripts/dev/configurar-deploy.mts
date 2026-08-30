@@ -30,6 +30,12 @@ for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
   if (match?.[1]) local.set(match[1], (match[2] ?? '').replace(/^["']|["']$/g, ''))
 }
 
+// decryptToken lê de process.env; sem isto o passo do Supabase falha mesmo
+// com a chave presente no arquivo.
+for (const [key, value] of local) {
+  if (!process.env[key]) process.env[key] = value
+}
+
 const vercelToken = local.get('VERCEL_TOKEN')
 if (!vercelToken) {
   console.error(`

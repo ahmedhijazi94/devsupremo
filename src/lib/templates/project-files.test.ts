@@ -341,6 +341,15 @@ describe('primeira tela — o app abre antes de configurar nada', () => {
     expect(proxyHelper).not.toContain('NEXT_PUBLIC_SUPABASE_URL!')
   })
 
+  it('o starter não liga middleware antes de existir login', () => {
+    // proxy.ts roda em todo request. Num projeto sem autenticação é peça a
+    // mais, e no preview em navegador chegou a derrubar a aplicação.
+    const paths = files.map((f) => f.path)
+    expect(paths).not.toContain('proxy.ts')
+    expect(paths).not.toContain('middleware.ts')
+    expect(paths).toContain('lib/supabase/proxy.example.ts')
+  })
+
   it('o cliente de navegador explica o que falta em vez de estourar cru', () => {
     const client = file('lib/supabase/client.ts')
     expect(client).toContain('Supabase não configurado')

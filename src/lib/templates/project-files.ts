@@ -120,8 +120,8 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'app/layout.tsx', content: appLayout(projectName, summary) },
     { path: 'app/page.tsx', content: appPage(projectName, summary) },
     { path: 'app/globals.css', content: globalsCss() },
-    { path: 'proxy.ts', content: proxy() },
     { path: 'lib/utils.ts', content: libUtils() },
+    { path: 'lib/supabase/proxy.example.ts', content: proxyExample() },
     { path: 'lib/supabase/client.ts', content: supabaseClient() },
     { path: 'lib/supabase/server.ts', content: supabaseServer() },
     { path: 'lib/supabase/middleware.ts', content: supabaseMiddleware() },
@@ -586,14 +586,21 @@ function globalsCss(): string {
 `
 }
 
-function proxy(): string {
+function proxyExample(): string {
   return `import type { NextRequest } from 'next/server'
 import { updateSession } from '@/lib/supabase/middleware'
 
 /**
  * Renova a sessão do Supabase a cada requisição.
  *
- * No Next 16 a convenção \`middleware\` foi renomeada para \`proxy\`.
+ * ESTE ARQUIVO ESTÁ DESLIGADO DE PROPÓSITO.
+ *
+ * Ele só faz sentido depois que o projeto tiver login. Antes disso é código
+ * rodando em todo request sem nada para fazer — e no preview em navegador
+ * chegou a derrubar a aplicação inteira.
+ *
+ * Para ligar: renomeie para proxy.ts na raiz. No Next 16 a convenção
+ * \`middleware\` passou a se chamar \`proxy\`.
  */
 export async function proxy(request: NextRequest) {
   return updateSession(request)
@@ -1226,6 +1233,12 @@ Antes de abrir um PR:
 \`\`\`bash
 npm run typecheck && npm run lint && npm test && npm run build
 \`\`\`
+
+## Autenticação
+
+Os helpers do Supabase estão em \`lib/supabase/\`. O middleware que renova a
+sessão vem como \`lib/supabase/proxy.example.ts\`, **desligado**: ele só faz
+sentido depois que existir login. Para ativar, mova para \`proxy.ts\` na raiz.
 
 ## Banco de dados
 

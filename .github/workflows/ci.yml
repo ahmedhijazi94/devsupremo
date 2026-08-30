@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: read
   security-events: write
+  # gitleaks lê os commits do PR; sem isto recebe 403 e falha sem escanear.
+  pull-requests: read
+  actions: read
 
 env:
   NODE_VERSION: '20'

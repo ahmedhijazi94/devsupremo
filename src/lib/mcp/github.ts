@@ -365,17 +365,19 @@ export async function getFailedJobLogs(
     per_page: 20,
   })
 
-  const failedRuns = runs.workflow_runs.filter(
-    (run) => run.conclusion === 'failure'
-  )
-
-  if (failedRuns.length === 0) {
-    return 'Nenhum job falhou para este commit.'
-  }
-
+  // Procuramos JOBS que falharam, não runs com conclusão de falha.
+  //
+  // Um run só recebe conclusion "failure" quando todos os seus jobs
+  // terminam. O agente chama esta ferramenta logo depois de wait_for_checks
+  // apontar vermelho — momento em que o run ainda está in_progress e sua
+  // conclusion é null. Filtrar por conclusion do run devolvia "nenhum job
+  // falhou" exatamente quando havia falha para reportar.
   const sections: string[] = []
+  let inspected = 0
 
-  for (const run of failedRuns.slice(0, 3)) {
+  for (const run of runs.workflow_runs) {
+    if (inspected >= 3) break
+
     const { data: jobs } = await gh.actions.listJobsForWorkflowRun({
       owner: creds.owner,
       repo: creds.repo,
@@ -383,19 +385,38 @@ export async function getFailedJobLogs(
       per_page: 50,
     })
 
-    for (const job of jobs.jobs.filter((j) => j.conclusion === 'failure')) {
+    const failedJobs = jobs.jobs.filter(
+      (job) =>
+        job.conclusion === 'failure' ||
+        job.conclusion === 'timed_out' ||
+        job.conclusion === 'cancelled'
+    )
+
+    if (failedJobs.length === 0) continue
+    inspected++
+
+    for (const job of failedJobs) {
       const failedSteps = (job.steps ?? [])
         .filter((step) => step.conclusion === 'failure')
         .map((step) => step.name)
         .join(', ')
 
       sections.push(
-        `### ${run.name} › ${job.name}\n` +
+        `### ${run.name} › ${job.name} (${job.conclusion})\n` +
           (failedSteps ? `Passo que falhou: ${failedSteps}\n` : '') +
           `${job.html_url}\n\n` +
           (await downloadJobLog(gh, creds, job.id))
       )
     }
+  }
+
+  if (sections.length === 0) {
+    const stillRunning = runs.workflow_runs.some(
+      (run) => run.status !== 'completed'
+    )
+    return stillRunning
+      ? 'Nenhum job falhou ainda — o CI segue rodando. Chame wait_for_checks.'
+      : 'Nenhum job falhou para este commit.'
   }
 
   const combined = sections.join('\n\n---\n\n')

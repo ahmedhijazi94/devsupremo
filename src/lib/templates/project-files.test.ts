@@ -174,6 +174,15 @@ describe('lockfile — sem ele o CI quebra antes de instalar', () => {
 describe('CI — actions em versão suportada', () => {
   const ci = file('.github/workflows/ci.yml')
 
+  it('concede as permissões que os jobs realmente usam', () => {
+    // gitleaks lê /pulls/N/commits; sem pull-requests: read recebe 403 e
+    // o job falha sem ter escaneado nada — falso vermelho que treina a
+    // equipe a ignorar o gate.
+    expect(ci).toMatch(/pull-requests:\s*read/)
+    expect(ci).toMatch(/security-events:\s*write/)
+    expect(ci).toMatch(/contents:\s*read/)
+  })
+
   it('não usa actions em depreciação de Node 20', () => {
     expect(ci).not.toMatch(/actions\/checkout@v4/)
     expect(ci).not.toMatch(/actions\/setup-node@v4/)
@@ -241,6 +250,47 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
 
   it('o .env.example não prefixa a service role com NEXT_PUBLIC_', () => {
     expect(file('.env.example')).not.toMatch(/NEXT_PUBLIC_SUPABASE_SERVICE/)
+  })
+})
+
+describe('E2E — o CI instala os motores que a suíte usa', () => {
+  const ci = file('.github/workflows/ci.yml')
+  const config = file('playwright.config.ts')
+
+  // Bug real: o CI instalava só chromium, mas o projeto "mobile" usa
+  // iPhone 14, que roda em WebKit. O job falhava com
+  // "Executable doesn't exist at .../webkit-XXXX/pw_run.sh".
+  const ENGINE_BY_DEVICE: Record<string, string> = {
+    'Desktop Chrome': 'chromium',
+    'Desktop Edge': 'chromium',
+    'Pixel 7': 'chromium',
+    'Desktop Safari': 'webkit',
+    'iPhone 14': 'webkit',
+    'iPad Pro 11': 'webkit',
+    'Desktop Firefox': 'firefox',
+  }
+
+  const declaredDevices = [...config.matchAll(/devices\['([^']+)'\]/g)].map(
+    (m) => m[1] as string
+  )
+
+  it('declara ao menos um projeto de teste', () => {
+    expect(declaredDevices.length).toBeGreaterThan(0)
+  })
+
+  it('todo motor exigido pelo config é instalado no CI', () => {
+    const installLine = ci.match(/playwright install[^\n']*/)?.[0] ?? ''
+
+    const required = new Set(
+      declaredDevices
+        .map((device) => ENGINE_BY_DEVICE[device])
+        .filter((engine): engine is string => Boolean(engine))
+    )
+
+    const missing = [...required].filter(
+      (engine) => !installLine.includes(engine)
+    )
+    expect(missing).toEqual([])
   })
 })
 

@@ -383,9 +383,11 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
+  // Ao adicionar um projeto aqui, instale o motor correspondente no CI
+  // (.github/workflows/ci.yml). iPhone roda em WebKit, não em Chromium.
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'mobile', use: { ...devices['iPhone 14'] } },
+    { name: 'mobile', use: { ...devices['iPhone 14'] } }, // WebKit
   ],
   // Sem webServer quando aponta para um preview deploy já publicado.
   ...(process.env.PLAYWRIGHT_BASE_URL
@@ -930,6 +932,10 @@ concurrency:
 permissions:
   contents: read
   security-events: write
+  # gitleaks lê os commits do PR para varrer só o que mudou; sem isto ele
+  # recebe 403 em /pulls/N/commits e o job falha sem ter escaneado nada.
+  pull-requests: read
+  actions: read
 
 jobs:
   quality:
@@ -1044,7 +1050,7 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v5
         if: failure()

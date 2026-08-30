@@ -67,6 +67,9 @@ const link = JSON.parse(fs.readFileSync(linkPath, 'utf8')) as {
 
 const VARS = [
   'ENCRYPTION_KEY',
+  // Conta Vercel onde os previews de todos os projetos são publicados.
+  'SUPREMO_PREVIEW_VERCEL_TOKEN',
+  'SUPREMO_PREVIEW_VERCEL_TEAM_ID',
   'NEXT_PUBLIC_SUPABASE_URL',
   'NEXT_PUBLIC_SUPABASE_ANON_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
@@ -88,7 +91,14 @@ const vercelBase = `https://api.vercel.com/v10/projects/${link.projectId}/env?up
 for (const key of [...VARS, 'NEXT_PUBLIC_APP_URL'] as const) {
   const value = key === 'NEXT_PUBLIC_APP_URL' ? domain : local.get(key)
 
-  if (!value) { bad(key, '(não está no .env.local)'); continue }
+  if (!value) {
+    // Opcionais: sem elas o recurso correspondente fica desligado, o que é
+    // um estado válido — não é falha de configuração.
+    const optional = key.startsWith('SUPREMO_PREVIEW_') || key.startsWith('VERCEL_')
+    console.log(`  ${optional ? '\x1b[2m·\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${key} (não está no .env.local)`)
+    if (!optional) failures++
+    continue
+  }
 
   const response = await fetch(vercelBase, {
     method: 'POST',

@@ -42,3 +42,4 @@ next-env.d.ts
 packages/cli/node_modules/
 docs/security-audit/last-audit.json
 DEPLOY.txt
+PREVIEW.txt

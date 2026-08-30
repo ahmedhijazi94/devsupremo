@@ -590,10 +590,22 @@ async function linkVercel(
     const detail =
       error instanceof VercelError ? error.message : String(error)
 
+    // "repository couldn't be found" quase nunca é erro de digitação: é a
+    // Vercel sem acesso àquela conta do GitHub. A mensagem crua manda o
+    // usuário procurar typo e ele não acha nada.
+    const owner = repoFullName.split('/')[0] ?? ''
+    const noAccess = /couldn't be found|not found|no access/i.test(detail)
+
     return {
       accountId: account.id as string,
       projectId: null,
-      warnings: [`Não foi possível criar o projeto na Vercel: ${detail}`],
+      warnings: [
+        noAccess
+          ? `A Vercel não enxerga o repositório ${repoFullName}. ` +
+            `Ela precisa de acesso à conta GitHub "${owner}" — instale o app ` +
+            `da Vercel nessa conta em github.com/apps/vercel e provisione de novo.`
+          : `Não foi possível criar o projeto na Vercel: ${detail}`,
+      ],
     }
   }
 }

@@ -253,6 +253,15 @@ describe('CI — actions em versão suportada', () => {
     expect(ci).not.toMatch(/actions\/checkout@v4/)
     expect(ci).not.toMatch(/actions\/setup-node@v4/)
   })
+
+  it('roda em Node 22, e o .nvmrc concorda com o CI', () => {
+    // Bug real da natureza: com Node 20, o Dependabot subiu jsdom para a v30
+    // (que exige Node 22+), os testes não iniciavam e a cobertura ia a 0%.
+    // Node 22 é o LTS ativo e resolve essa classe de quebra.
+    expect(ci).toMatch(/node-version:\s*'22'/)
+    expect(ci).not.toMatch(/node-version:\s*'20'/)
+    expect(file('.nvmrc').trim()).toBe('22')
+  })
 })
 
 describe('cobertura — o threshold falha o build', () => {

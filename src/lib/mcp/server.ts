@@ -29,11 +29,15 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
 
 1. Chame get_project_context ANTES de escrever qualquer código. Ele devolve o
    agents.md, o CLAUDE.md e o SECURITY.md do repositório — as regras do projeto,
-   com precedência sobre os seus padrões — E o campo inFlight, com os PRs
-   abertos e o estado do gate de cada um. Se inFlight não estiver vazio, existe
-   trabalho começado por outra sessão ou outra máquina: RETOME ele antes de
-   abrir coisa nova. Cada item traz a ação certa (corrigir, esperar, ou fechar).
-   Abrir um PR paralelo para a mesma coisa duplica trabalho e conflita.
+   com precedência sobre os seus padrões — e dois campos sobre PRs abertos:
+
+   - inFlight: o SEU trabalho (branches supremo/ e migration/), com o estado do
+     gate e a ação certa. Se não estiver vazio, RETOME antes de abrir coisa
+     nova — abrir PR paralelo para a mesma coisa duplica trabalho e conflita.
+   - otherOpenPrs: PRs de Dependabot ou manuais. NÃO são seu trabalho. Apenas
+     mencione ao usuário se forem relevantes; não os mescle, não os conserte e
+     NÃO bloqueie a feature pedida por causa deles — a menos que o usuário peça.
+     A tarefa do usuário vem primeiro; bump de dependência não é a tarefa.
 
 2. Você não commita na branch principal. propose_changes cria uma branch e abre
    um pull request. É o único caminho de escrita, e o servidor não expõe outro.
@@ -180,7 +184,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         // chamada. Sem isto, um PR meio-feito ficava invisível para quem não
         // o abriu, e o próximo agente começava do zero.
         const openPrs = await gh.listOpenPullRequests(creds)
-        context.inFlight = await Promise.all(
+        const described = await Promise.all(
           openPrs.map(async (pr) => {
             const checks = await gh.getChecks(creds, pr.headSha)
             return {
@@ -192,10 +196,28 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
               isMigration: pr.isMigration,
               gate: checks.state,
               gateDetail: `${checks.passed}/${checks.total} verdes, ${checks.failed} vermelhos, ${checks.pending} rodando`,
-              action: resumeAction(checks.state),
+              isAgentWork: pr.isAgentWork,
             }
           }),
         )
+
+        // Trabalho de agente (branches supremo/ e migration/) é o que se retoma.
+        // PR de Dependabot ou de terceiro é informação: mencione, não bloqueie
+        // a feature nele. Sem essa separação, o agente ficava preso mesclando
+        // bump de dependência antes de fazer o que o usuário pediu.
+        context.inFlight = described
+          .filter((pr) => pr.isAgentWork)
+          .map((pr) => ({ ...pr, action: resumeAction(pr.gate) }))
+
+        context.otherOpenPrs = described
+          .filter((pr) => !pr.isAgentWork)
+          .map((pr) => ({
+            pr: pr.pr,
+            title: pr.title,
+            branch: pr.branch,
+            gate: pr.gate,
+            note: 'Não é trabalho seu (Dependabot ou PR manual). Apenas informe ao usuário; não mescle nem bloqueie a nova feature por causa dele, a menos que o usuário peça.',
+          }))
       } catch (error) {
         context.rulesError =
           error instanceof Error ? error.message : String(error)

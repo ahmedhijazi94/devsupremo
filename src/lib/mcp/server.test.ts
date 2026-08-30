@@ -35,6 +35,17 @@ vi.mock('./github', () => ({
       url: 'https://github.com/dono/app/pull/7',
       updatedAt: '2026-01-01T00:00:00Z',
       isMigration: false,
+      isAgentWork: true,
+    },
+    {
+      number: 8,
+      title: 'chore(deps): bump jsdom to 30',
+      headRef: 'dependabot/npm_and_yarn/jsdom-30',
+      headSha: 'sha8',
+      url: 'https://github.com/dono/app/pull/8',
+      updatedAt: '2026-01-02T00:00:00Z',
+      isMigration: false,
+      isAgentWork: false,
     },
   ]),
   getChecks: vi.fn(async () => ({
@@ -183,17 +194,29 @@ describe('get_project_context — continuar de onde parou', () => {
     expect(context.project.repo).toBe('dono/app')
   })
 
-  it('inclui o trabalho em andamento com o estado do gate e a ação', async () => {
+  it('inclui só o trabalho de agente como inFlight, com gate e ação', async () => {
     const context = await callTool('get_project_context')
 
+    // Apenas o PR de branch supremo/ é "trabalho a retomar".
     expect(context.inFlight).toHaveLength(1)
     const pending = context.inFlight[0]
     expect(pending.pr).toBe(7)
     expect(pending.branch).toBe('supremo/carrinho')
     expect(pending.gate).toBe('failed')
-    // Um PR vermelho tem que dizer ao próximo agente para corrigir, não abrir
-    // outro PR paralelo.
     expect(pending.action).toMatch(/get_failed_logs/)
     expect(pending.gateDetail).toContain('5/7')
+  })
+
+  it('não trata PR de Dependabot como trabalho a retomar', async () => {
+    // O bug real da natureza: o agente ficava preso mesclando bump de
+    // dependência em vez de fazer a feature do usuário.
+    const context = await callTool('get_project_context')
+
+    expect(context.inFlight.map((p: { pr: number }) => p.pr)).not.toContain(8)
+
+    expect(context.otherOpenPrs).toHaveLength(1)
+    const dep = context.otherOpenPrs[0]
+    expect(dep.pr).toBe(8)
+    expect(dep.note).toMatch(/não bloqueie|não mescle/i)
   })
 })

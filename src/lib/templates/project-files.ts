@@ -161,7 +161,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'vercel.json', content: vercelJson() },
     { path: '.gitignore', content: gitignore() },
     { path: '.env.example', content: envExample() },
-    { path: '.nvmrc', content: '20\n' },
+    { path: '.nvmrc', content: '22\n' },
 
     // ── Aplicação ─────────────────────────────────────────────
     { path: 'app/layout.tsx', content: appLayout(projectName, summary) },
@@ -1871,7 +1871,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - run: npm ci
       - run: npm run typecheck
@@ -1885,7 +1885,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - run: npm ci
       - run: npm run test:coverage
@@ -1897,7 +1897,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - uses: supabase/setup-cli@v1
         with:
@@ -1927,7 +1927,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - run: npm ci
       - run: npm audit --audit-level=high
@@ -1954,7 +1954,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -1970,7 +1970,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit

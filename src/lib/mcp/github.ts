@@ -278,6 +278,16 @@ export interface OpenPullRequest {
   updatedAt: string
   /** É uma migration esperando o teste de RLS virar verde? Ajuda a priorizar. */
   isMigration: boolean
+  /**
+   * É trabalho de agente, criado pelo Supremo?
+   *
+   * O MCP só escreve em branches `supremo/` (propose_changes) e `migration/`
+   * (apply_migration). Tudo o mais — `dependabot/…`, branch manual — é PR de
+   * terceiro. A distinção existe porque um agente que trata PR de Dependabot
+   * como "trabalho a retomar" gasta os primeiros movimentos mesclando bump de
+   * dependência em vez da funcionalidade que o usuário pediu.
+   */
+  isAgentWork: boolean
 }
 
 /**
@@ -311,6 +321,9 @@ export async function listOpenPullRequests(
     url: pr.html_url,
     updatedAt: pr.updated_at,
     isMigration: pr.head.ref.startsWith('migration/'),
+    isAgentWork:
+      pr.head.ref.startsWith('supremo/') ||
+      pr.head.ref.startsWith('migration/'),
   }))
 }
 

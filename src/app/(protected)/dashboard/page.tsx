@@ -2,6 +2,9 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { ProjectCard } from '@/components/dashboard/project-card'
 import { EmptyProjects } from '@/components/dashboard/empty-projects'
+import { Onboarding } from '@/components/dashboard/onboarding'
+import { isSupabaseOAuthAvailable } from '@/actions/accounts'
+import { isVercelOAuthAvailable } from '@/actions/vercel'
 import { PlusIcon } from 'lucide-react'
 import Link from 'next/link'
 
@@ -14,17 +17,53 @@ export default async function DashboardPage() {
 
   if (!user) redirect('/login')
 
-  const { data: projects, error } = await supabase
-    .from('projects')
-    .select('*')
-    .eq('user_id', user.id)
-    .order('updated_at', { ascending: false })
+  const [
+    { data: projects, error },
+    github,
+    supabaseAccounts,
+    vercel,
+    supabaseOAuth,
+    vercelOAuth,
+  ] = await Promise.all([
+    supabase
+      .from('projects')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('updated_at', { ascending: false }),
+    supabase
+      .from('github_accounts')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id),
+    supabase
+      .from('supabase_accounts')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id),
+    supabase
+      .from('vercel_accounts')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id),
+    isSupabaseOAuthAvailable(),
+    isVercelOAuthAvailable(),
+  ])
 
   if (error) {
-    console.error('[Dashboard] Error loading projects:', error.message)
+    console.error('[dashboard] falha ao carregar projetos:', error.message)
   }
 
   const projectList = projects ?? []
+
+  const connections = {
+    github: (github.count ?? 0) > 0,
+    supabase: (supabaseAccounts.count ?? 0) > 0,
+    vercel: (vercel.count ?? 0) > 0,
+    supabaseOAuth,
+    vercelOAuth,
+  }
+
+  // O passo a passo some quando as três estão conectadas — depois disso ele
+  // seria só ruído acima da lista de projetos.
+  const showOnboarding =
+    !connections.github || !connections.supabase || !connections.vercel
 
   return (
     <div className="space-y-6">
@@ -46,8 +85,10 @@ export default async function DashboardPage() {
         </Link>
       </div>
 
+      {showOnboarding && <Onboarding status={connections} />}
+
       {projectList.length === 0 ? (
-        <EmptyProjects />
+        !showOnboarding && <EmptyProjects />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {projectList.map((project) => (

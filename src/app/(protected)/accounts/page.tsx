@@ -3,9 +3,10 @@ import { redirect } from 'next/navigation'
 import { Database } from 'lucide-react'
 import { formatRelativeTime } from '@/lib/utils'
 import { ConnectGithubButton } from '@/components/accounts/connect-github-button'
-import { AddSupabaseModal } from '@/components/accounts/add-supabase-modal'
+import { ConnectSupabaseButton } from '@/components/accounts/connect-supabase-button'
 import { ConnectVercelModal } from '@/components/accounts/connect-vercel-modal'
 import { isVercelOAuthAvailable } from '@/actions/vercel'
+import { isSupabaseOAuthAvailable } from '@/actions/accounts'
 import { DisconnectVercelButton } from '@/components/accounts/disconnect-vercel-button'
 import { DisconnectAccountButton } from '@/components/accounts/disconnect-account-button'
 import { AccountsToastHandler } from '@/components/accounts/accounts-toast-handler'
@@ -30,7 +31,10 @@ export default async function AccountsPage({
   const githubAccounts = githubResponse.data ?? []
   const supabaseAccounts = supabaseResponse.data ?? []
   const vercelAccounts = vercelResponse.data ?? []
-  const vercelOAuth = await isVercelOAuthAvailable()
+  const [vercelOAuth, supabaseOAuth] = await Promise.all([
+    isVercelOAuthAvailable(),
+    isSupabaseOAuthAvailable(),
+  ])
 
   return (
     <div className="space-y-8 max-w-4xl">
@@ -110,7 +114,7 @@ export default async function AccountsPage({
               <p className="text-xs text-muted-foreground">Para provisionar bancos e aplicar migrations</p>
             </div>
           </div>
-          <AddSupabaseModal />
+          <ConnectSupabaseButton oauthAvailable={supabaseOAuth} />
         </div>
 
         {supabaseAccounts.length === 0 ? (

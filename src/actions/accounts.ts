@@ -7,6 +7,14 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { createOAuthState } from '@/lib/oauth-state'
 
+/** Se o app OAuth do Supabase existe neste ambiente. */
+export async function isSupabaseOAuthAvailable(): Promise<boolean> {
+  return Boolean(
+    process.env.SUPABASE_OAUTH_CLIENT_ID &&
+      process.env.SUPABASE_OAUTH_CLIENT_SECRET
+  )
+}
+
 // ─────────────────────────────────────────────────────────────
 // Iniciar conexão GitHub — gera state CSRF e redireciona
 // ─────────────────────────────────────────────────────────────

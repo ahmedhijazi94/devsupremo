@@ -222,6 +222,27 @@ export async function createProject(
   })
 }
 
+/**
+ * Contas do GitHub que esta conta Vercel enxerga.
+ *
+ * A Vercel só cria projeto a partir de repositório que ela consegue ler, e
+ * isso depende do app dela estar instalado naquela conta do GitHub — uma
+ * autorização entre Vercel e GitHub, que o Supremo não pode conceder.
+ * Consultar antes evita descobrir isso só no fim do provisionamento.
+ */
+export async function accessibleGitNamespaces(
+  token: string,
+  teamId: string | null
+): Promise<string[]> {
+  const data = await call<
+    Array<{ name?: string; slug?: string; provider?: string }>
+  >('/v1/integrations/git-namespaces?provider=github', { token, teamId })
+
+  return (Array.isArray(data) ? data : [])
+    .map((namespace) => namespace.slug ?? namespace.name)
+    .filter((name): name is string => Boolean(name))
+}
+
 export async function findProjectByName(
   token: string,
   teamId: string | null,

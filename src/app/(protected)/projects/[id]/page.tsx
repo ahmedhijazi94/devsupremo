@@ -139,6 +139,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           <ScaffoldForm
             projectId={project.id}
             disabled={!project.github_accounts || !project.supabase_accounts}
+            githubOwner={project.github_accounts?.login ?? null}
           />
           {(!project.github_accounts || !project.supabase_accounts) && (
             <p className="text-xs text-amber-500 flex items-center gap-1.5">

@@ -1,0 +1,151 @@
+import Link from 'next/link'
+import { Check, ArrowRight, ExternalLink } from 'lucide-react'
+import {
+  connectGithubFromOnboarding,
+  connectSupabaseFromOnboarding,
+  connectVercelFromOnboarding,
+} from '@/actions/onboarding'
+import { cn } from '@/lib/utils'
+
+export interface OnboardingStatus {
+  github: boolean
+  supabase: boolean
+  vercel: boolean
+  supabaseOAuth: boolean
+  vercelOAuth: boolean
+}
+
+interface Step {
+  key: 'github' | 'supabase' | 'vercel'
+  title: string
+  description: string
+  done: boolean
+  oauth: boolean
+  action: () => Promise<void>
+}
+
+/**
+ * Passo a passo de conexão.
+ *
+ * A ordem importa: sem GitHub não há onde pôr o código, sem Supabase não há
+ * banco, e sem Vercel não há preview. Cada passo é uma autorização — quem
+ * conecta nunca precisa gerar token, desde que os apps OAuth estejam
+ * configurados no ambiente.
+ */
+export function Onboarding({ status }: { status: OnboardingStatus }) {
+  const steps: Step[] = [
+    {
+      key: 'github',
+      title: 'GitHub',
+      description: 'Onde o código do projeto vai morar',
+      done: status.github,
+      oauth: true,
+      action: connectGithubFromOnboarding,
+    },
+    {
+      key: 'supabase',
+      title: 'Supabase',
+      description: 'Banco de dados e autenticação',
+      done: status.supabase,
+      oauth: status.supabaseOAuth,
+      action: connectSupabaseFromOnboarding,
+    },
+    {
+      key: 'vercel',
+      title: 'Vercel',
+      description: 'Publica o preview de cada mudança',
+      done: status.vercel,
+      oauth: status.vercelOAuth,
+      action: connectVercelFromOnboarding,
+    },
+  ]
+
+  const remaining = steps.filter((step) => !step.done)
+  const ready = remaining.length === 0
+
+  return (
+    <section className="rounded-xl border bg-card p-6">
+      <header className="mb-5">
+        <h2 className="text-lg font-semibold">
+          {ready ? 'Tudo conectado' : 'Conecte suas contas'}
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {ready
+            ? 'Você já pode criar um projeto. Ele nasce com repositório, banco e preview.'
+            : `Faltam ${remaining.length} de ${steps.length}. Cada uma é uma autorização — nenhuma pede token.`}
+        </p>
+      </header>
+
+      <ol className="space-y-2">
+        {steps.map((step, index) => (
+          <li
+            key={step.key}
+            className={cn(
+              'flex items-center gap-4 rounded-lg border p-4 transition-colors',
+              step.done ? 'border-border/60 bg-muted/20' : 'bg-background'
+            )}
+          >
+            <span
+              className={cn(
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
+                step.done
+                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                  : 'border text-muted-foreground'
+              )}
+            >
+              {step.done ? <Check className="h-4 w-4" /> : index + 1}
+            </span>
+
+            <div className="min-w-0 flex-1">
+              <p
+                className={cn(
+                  'text-sm font-medium',
+                  step.done && 'text-muted-foreground'
+                )}
+              >
+                {step.title}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {step.description}
+              </p>
+            </div>
+
+            {step.done ? (
+              <span className="shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                Conectado
+              </span>
+            ) : step.oauth ? (
+              <form action={step.action} className="shrink-0">
+                <button
+                  type="submit"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-90"
+                >
+                  Autorizar
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </form>
+            ) : (
+              <Link
+                href="/accounts"
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors hover:bg-accent"
+              >
+                Conectar
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Link>
+            )}
+          </li>
+        ))}
+      </ol>
+
+      {ready && (
+        <Link
+          href="/projects/new"
+          className="mt-5 inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          Criar primeiro projeto
+          <ArrowRight className="h-4 w-4" />
+        </Link>
+      )}
+    </section>
+  )
+}

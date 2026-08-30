@@ -6,6 +6,7 @@ import { requireUser, requireProjectOwner, toActionError } from '@/lib/auth'
 import { decryptToken, encryptToken } from '@/lib/crypto'
 import { createOAuthState } from '@/lib/oauth-state'
 import {
+  accessibleGitNamespaces,
   identify,
   installationUrl,
   latestDeployment,
@@ -118,6 +119,62 @@ export async function disconnectVercelAccount(
     return {}
   } catch (error) {
     return { error: toActionError(error) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Checagem prévia
+// ─────────────────────────────────────────────────────────────
+
+export interface GitAccessCheck {
+  /** Sem conta Vercel não há o que checar. */
+  status: 'no_account' | 'ok' | 'missing_access'
+  /** Conta do GitHub que a Vercel não enxerga. */
+  owner?: string
+  installUrl?: string
+}
+
+/**
+ * Confere, antes de provisionar, se a Vercel enxerga a conta do GitHub.
+ *
+ * Sem isto o usuário só descobre no fim, com a mensagem genérica da Vercel
+ * mandando procurar erro de digitação.
+ */
+export async function checkVercelGitAccess(
+  githubOwner: string
+): Promise<GitAccessCheck> {
+  try {
+    const { user, supabase } = await requireUser()
+
+    const { data: account } = await supabase
+      .from('vercel_accounts')
+      .select('access_token_encrypted, team_id')
+      .eq('user_id', user.id)
+      .limit(1)
+      .maybeSingle()
+
+    if (!account) return { status: 'no_account' }
+
+    const namespaces = await accessibleGitNamespaces(
+      decryptToken(account.access_token_encrypted as string),
+      (account.team_id as string | null) ?? null
+    )
+
+    const visible = namespaces.some(
+      (name) => name.toLowerCase() === githubOwner.toLowerCase()
+    )
+
+    if (visible) return { status: 'ok' }
+
+    return {
+      status: 'missing_access',
+      owner: githubOwner,
+      installUrl: 'https://github.com/apps/vercel/installations/new',
+    }
+  } catch {
+    // Falha na checagem não deve impedir o provisionamento — na pior das
+    // hipóteses o erro aparece depois, como antes.
+    return { status: 'ok' }
   }
 }
 

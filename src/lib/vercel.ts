@@ -201,8 +201,9 @@ export interface VercelProject {
 /**
  * Cria o projeto na Vercel já ligado ao repositório.
  *
- * A partir daí a própria Vercel publica: cada branch vira preview e a branch
- * principal vira produção. O Supremo não precisa disparar deploy.
+ * A partir daí a própria Vercel publica sozinha. Usado quando o projeto vai
+ * para a conta do próprio usuário — exige que o app da Vercel esteja
+ * instalado naquela conta do GitHub.
  */
 export async function createProject(
   token: string,
@@ -219,6 +220,26 @@ export async function createProject(
       framework: 'nextjs',
       gitRepository: { type: 'github', repo: repoFullName },
     },
+  })
+}
+
+/**
+ * Cria o projeto sem vínculo com Git.
+ *
+ * É o que permite o preview compartilhado: os arquivos são enviados pelo
+ * Supremo, então a Vercel não precisa enxergar o repositório — e o usuário
+ * não precisa autorizar nada além de GitHub e Supabase.
+ */
+export async function createDetachedProject(
+  token: string,
+  teamId: string | null,
+  name: string
+): Promise<VercelProject> {
+  return call<VercelProject>('/v11/projects', {
+    token,
+    teamId,
+    method: 'POST',
+    body: { name, framework: 'nextjs' },
   })
 }
 
@@ -282,6 +303,94 @@ export async function setEnvironmentVariables(
 }
 
 // ─────────────────────────────────────────────────────────────
+// Deploy por envio de arquivos
+// ─────────────────────────────────────────────────────────────
+
+export interface DeployFile {
+  /** Caminho relativo à raiz do projeto. */
+  path: string
+  content: string
+}
+
+/**
+ * Envia um arquivo para o armazenamento da Vercel.
+ *
+ * O deploy referencia arquivos por hash: primeiro sobem, depois o deploy é
+ * criado apontando para eles. Arquivo que a Vercel já tem é descartado do
+ * lado dela, então reenviar o mesmo conteúdo é barato.
+ */
+async function uploadFile(
+  token: string,
+  teamId: string | null,
+  content: string
+): Promise<{ sha: string; size: number }> {
+  const { createHash } = await import('node:crypto')
+  const buffer = Buffer.from(content, 'utf8')
+  const sha = createHash('sha1').update(buffer).digest('hex')
+
+  const url = new URL(`${API}/v2/files`)
+  if (teamId) url.searchParams.set('teamId', teamId)
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/octet-stream',
+      'x-vercel-digest': sha,
+      'Content-Length': String(buffer.length),
+    },
+    body: new Uint8Array(buffer),
+  })
+
+  if (!response.ok) {
+    throw new VercelError(
+      `Falha ao enviar arquivo (${response.status})`,
+      response.status
+    )
+  }
+
+  return { sha, size: buffer.length }
+}
+
+/**
+ * Publica um preview enviando os arquivos, sem passar pelo Git.
+ *
+ * A Vercel constrói e hospeda. O build consome a cota da conta que fez o
+ * envio — no preview compartilhado, a do Supremo. Com muitos projetos ao
+ * mesmo tempo o plano gratuito enfileira, porque permite um build por vez.
+ */
+export async function deployFiles(
+  token: string,
+  teamId: string | null,
+  projectName: string,
+  files: DeployFile[],
+  meta: Record<string, string> = {}
+): Promise<Deployment> {
+  const uploaded = await Promise.all(
+    files.map(async (file) => {
+      const { sha, size } = await uploadFile(token, teamId, file.content)
+      return { file: file.path, sha, size }
+    })
+  )
+
+  const raw = await call<RawDeployment>('/v13/deployments', {
+    token,
+    teamId,
+    method: 'POST',
+    body: {
+      name: projectName,
+      project: projectName,
+      target: 'preview',
+      files: uploaded,
+      projectSettings: { framework: 'nextjs' },
+      meta,
+    },
+  })
+
+  return normalizeDeployment(raw)
+}
+
+// ─────────────────────────────────────────────────────────────
 // Deploys
 // ─────────────────────────────────────────────────────────────
 
@@ -311,7 +420,19 @@ interface RawDeployment {
   target?: 'production' | 'preview' | null
   created: number
   inspectorUrl?: string
-  meta?: { githubCommitRef?: string }
+  meta?: { githubCommitRef?: string; supremoBranch?: string }
+}
+
+function normalizeDeployment(raw: RawDeployment): Deployment {
+  return {
+    id: raw.uid,
+    url: raw.url.startsWith('http') ? raw.url : `https://${raw.url}`,
+    state: raw.readyState ?? raw.state ?? 'QUEUED',
+    target: raw.target ?? null,
+    branch: raw.meta?.githubCommitRef ?? raw.meta?.supremoBranch ?? null,
+    createdAt: raw.created,
+    inspectorUrl: raw.inspectorUrl ?? null,
+  }
 }
 
 export async function listDeployments(
@@ -331,15 +452,7 @@ export async function listDeployments(
   )
 
   return (data.deployments ?? [])
-    .map((raw) => ({
-      id: raw.uid,
-      url: raw.url.startsWith('http') ? raw.url : `https://${raw.url}`,
-      state: raw.readyState ?? raw.state ?? 'QUEUED',
-      target: raw.target ?? null,
-      branch: raw.meta?.githubCommitRef ?? null,
-      createdAt: raw.created,
-      inspectorUrl: raw.inspectorUrl ?? null,
-    }))
+    .map(normalizeDeployment)
     .filter((d) => (options.branch ? d.branch === options.branch : true))
 }
 

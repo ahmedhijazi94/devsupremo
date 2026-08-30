@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { requireUser, requireProjectOwner, toActionError } from '@/lib/auth'
 import { decryptToken, encryptToken } from '@/lib/crypto'
 import { createOAuthState } from '@/lib/oauth-state'
+import { readSharedPreview, sharedPreviewConfig } from '@/lib/preview'
 import {
   accessibleGitNamespaces,
   identify,
@@ -197,17 +198,29 @@ export async function getPreviewState(
   try {
     const { user, supabase, project } = await requireProjectOwner(
       projectId,
-      'id, user_id, vercel_account_id, vercel_project_id, active_branch, default_branch'
+      'id, user_id, vercel_account_id, vercel_project_id, active_branch, ' +
+        'default_branch, preview_project_name'
     )
+
+    // O preview compartilhado tem precedência: é o caminho sem configuração,
+    // e é onde o projeto publica por padrão.
+    const shared = sharedPreviewConfig()
+    const sharedName = project.preview_project_name as string | null
+
+    if (shared && sharedName) {
+      const deployment = await readSharedPreview(shared, sharedName)
+      if (deployment) return describeDeployment(deployment)
+    }
 
     const accountId = project.vercel_account_id as string | null
     const vercelProjectId = project.vercel_project_id as string | null
 
     if (!accountId || !vercelProjectId) {
       return {
-        status: 'not_connected',
-        message:
-          'Conecte uma conta Vercel em Contas para este projeto ganhar preview.',
+        status: shared ? 'no_deployment' : 'not_connected',
+        message: shared
+          ? 'Nenhum preview publicado ainda. Publique para ver o app.'
+          : 'Conecte uma conta Vercel em Contas para este projeto ganhar preview.',
       }
     }
 

@@ -6,6 +6,7 @@ import {
   Tablet,
   Smartphone,
   RefreshCw,
+  Rocket,
   ExternalLink,
   Code2,
   Link2,
@@ -15,6 +16,7 @@ import {
   CloudOff,
 } from 'lucide-react'
 import { getPreviewState, type PreviewState } from '@/actions/vercel'
+import { publishPreview } from '@/actions/preview'
 import { cn } from '@/lib/utils'
 
 interface PreviewPanelProps {
@@ -38,6 +40,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   const [device, setDevice] = useState<Device>('desktop')
   const [frameKey, setFrameKey] = useState(0)
   const [copied, setCopied] = useState(false)
+  const [publishing, setPublishing] = useState(false)
   const [, startTransition] = useTransition()
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -70,6 +73,21 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
     } catch {
       // Área de transferência bloqueada — o link segue visível no botão Abrir.
     }
+  }
+
+  function publish() {
+    setPublishing(true)
+    startTransition(async () => {
+      const result = await publishPreview(projectId)
+      setPublishing(false)
+
+      if (result.error) {
+        setState({ status: 'error', message: result.error })
+        return
+      }
+
+      load()
+    })
   }
 
   const deviceConfig = DEVICES.find((d) => d.id === device) ?? DEVICES[0]!
@@ -112,6 +130,20 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
         <StatusPill state={state} />
 
         <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={publish}
+            disabled={publishing}
+            title="Publicar o estado atual do repositório"
+            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:text-foreground disabled:opacity-50"
+          >
+            {publishing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Rocket className="h-3.5 w-3.5" />
+            )}
+            {publishing ? 'Publicando' : 'Publicar'}
+          </button>
+
           {state?.url && (
             <button
               onClick={copyLink}

@@ -61,6 +61,26 @@ export interface TableSpec {
 // ─────────────────────────────────────────────────────────────
 
 export function generateRlsTest(tables: TableSpec[]): string {
+  // App público não tem tabela com dono nem tenant — não há isolamento por
+  // linha a provar. Ainda assim o job "Políticas RLS" roda este arquivo, e um
+  // arquivo sem nenhum teste faria o vitest reclamar. Um teste que afirma
+  // exatamente isso mantém o gate verde e honesto.
+  if (tables.length === 0) {
+    return `import { describe, it, expect } from 'vitest'
+
+/**
+ * Este app não tem tabelas com posse por usuário ou por tenant, então não há
+ * isolamento entre contas a provar. Quando a primeira tabela com user_id,
+ * owner_id ou org_id chegar, o teste de isolamento dela nasce aqui.
+ */
+describe('RLS', () => {
+  it('sem tabela de dono ou tenant — nada a isolar', () => {
+    expect(true).toBe(true)
+  })
+})
+`
+  }
+
   const cases = tables
     .map((table) =>
       table.tenant ? renderTenantSuite(table) : renderDirectSuite(table),

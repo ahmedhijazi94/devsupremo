@@ -108,10 +108,19 @@ const rel = (file) => path.relative(ROOT, file)
 function stripNoise(source) {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (m, p) => p + ' '.repeat(m.length - p.length))
+    .replace(
+      /(^|[^:])\/\/[^\n]*/g,
+      (m, p) => p + ' '.repeat(m.length - p.length),
+    )
     .replace(/`(?:[^`\\]|\\.)*`/g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/'(?:[^'\\\n]|\\.)*'/g, (m) => "'" + ' '.repeat(Math.max(0, m.length - 2)) + "'")
-    .replace(/"(?:[^"\\\n]|\\.)*"/g, (m) => '"' + ' '.repeat(Math.max(0, m.length - 2)) + '"')
+    .replace(
+      /'(?:[^'\\\n]|\\.)*'/g,
+      (m) => "'" + ' '.repeat(Math.max(0, m.length - 2)) + "'",
+    )
+    .replace(
+      /"(?:[^"\\\n]|\\.)*"/g,
+      (m) => '"' + ' '.repeat(Math.max(0, m.length - 2)) + '"',
+    )
 }
 
 const tsFiles = collectFiles(path.join(ROOT, 'src'), ['.ts', '.tsx'])
@@ -122,7 +131,9 @@ const tsFiles = collectFiles(path.join(ROOT, 'src'), ['.ts', '.tsx'])
 const sqlFiles = collectFiles(path.join(ROOT, 'supabase'), ['.sql'])
 
 say(`\n${COLORS.DIM}Supremo — auditoria de segurança${COLORS.RESET}`)
-say(`${COLORS.DIM}${tsFiles.length} arquivos TypeScript · ${sqlFiles.length} migrations${COLORS.RESET}`)
+say(
+  `${COLORS.DIM}${tsFiles.length} arquivos TypeScript · ${sqlFiles.length} migrations${COLORS.RESET}`,
+)
 
 // ═════════════════════════════════════════════════════════════
 // 1. RLS
@@ -137,7 +148,9 @@ for (const file of sqlFiles) {
   const lines = source.split('\n')
 
   const created = [
-    ...source.matchAll(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["']?([\w.]+)["']?/gi),
+    ...source.matchAll(
+      /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["']?([\w.]+)["']?/gi,
+    ),
   ]
 
   for (const match of created) {
@@ -147,14 +160,13 @@ for (const file of sqlFiles) {
 
     const rlsPattern = new RegExp(
       `ALTER TABLE\\s+(?:IF EXISTS\\s+)?["']?(?:\\w+\\.)?${table}["']?\\s+ENABLE ROW LEVEL SECURITY`,
-      'i'
+      'i',
     )
 
     if (rlsPattern.test(source)) {
       tablesProtected++
     } else {
-      const lineNumber =
-        lines.findIndex((l) => l.includes(match[0])) + 1 || 1
+      const lineNumber = lines.findIndex((l) => l.includes(match[0])) + 1 || 1
       finding(
         'CRITICAL',
         'RLS',
@@ -162,7 +174,7 @@ for (const file of sqlFiles) {
         lineNumber,
         match[0],
         `Tabela "${table}" criada sem RLS. Sem isso, a anon key lê a tabela inteira. ` +
-          `Adicione: ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`
+          `Adicione: ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`,
       )
     }
   }
@@ -170,12 +182,15 @@ for (const file of sqlFiles) {
   // Policy que libera tudo é pior que policy nenhuma: parece proteção.
   const permissive = [
     ...source.matchAll(
-      /CREATE POLICY\s+["'][^"']+["']\s+ON\s+["']?(\w+)["']?[\s\S]{0,200}?(USING|WITH CHECK)\s*\(\s*true\s*\)/gi
+      /CREATE POLICY\s+["'][^"']+["']\s+ON\s+["']?(\w+)["']?[\s\S]{0,200}?(USING|WITH CHECK)\s*\(\s*true\s*\)/gi,
     ),
   ]
 
   for (const match of permissive) {
-    const lineNumber = lines.findIndex((l) => l.includes(`CREATE POLICY`) && l.includes(match[1])) + 1 || 1
+    const lineNumber =
+      lines.findIndex(
+        (l) => l.includes(`CREATE POLICY`) && l.includes(match[1]),
+      ) + 1 || 1
     finding(
       'HIGH',
       'RLS',
@@ -183,7 +198,7 @@ for (const file of sqlFiles) {
       lineNumber,
       match[0].split('\n')[0],
       `Policy em "${match[1]}" usa ${match[2]} (true) — libera a tabela para qualquer um. ` +
-        `Escreva a condição de dono: auth.uid() = user_id.`
+        `Escreva a condição de dono: auth.uid() = user_id.`,
     )
   }
 }
@@ -201,7 +216,8 @@ for (const file of tsFiles) {
   const isClient = /^\s*['"]use client['"]/m.test(source)
 
   if (isClient) {
-    const lineNumber = lines.findIndex((l) => l.includes('SUPABASE_SERVICE_ROLE_KEY')) + 1
+    const lineNumber =
+      lines.findIndex((l) => l.includes('SUPABASE_SERVICE_ROLE_KEY')) + 1
     finding(
       'CRITICAL',
       'RLS',
@@ -209,7 +225,7 @@ for (const file of tsFiles) {
       lineNumber,
       lines[lineNumber - 1] ?? '',
       'Service role key referenciada em Client Component. Ela ignora RLS e ' +
-        'iria para o bundle do navegador.'
+        'iria para o bundle do navegador.',
     )
   }
 }
@@ -247,6 +263,13 @@ for (const file of tsFiles) {
   const hasExportedFunction = /export\s+(async\s+)?function\s+\w+/.test(clean)
   if (!hasExportedFunction) continue
 
+  // O risco é acesso a DADO sem checar a sessão — é o que a própria mensagem
+  // do achado diz. Um handler que não toca em tabela nem storage (logout, que
+  // só encerra a sessão; um webhook de auth) não é endpoint de dado, e cobrar
+  // getUser() dele é falso positivo. A regra segue o dado, não o verbo HTTP.
+  const accessesData = /\.\s*(from|rpc)\s*\(|\.\s*storage\b/.test(clean)
+  if (!accessesData) continue
+
   const authenticated = AUTH_MARKERS.some((marker) => marker.test(clean))
 
   if (authenticated) {
@@ -265,7 +288,7 @@ for (const file of tsFiles) {
     lines[lineNumber - 1] ?? '',
     'Server Action ou Route Handler sem verificação de sessão. São endpoints ' +
       'POST públicos: qualquer um pode chamá-los diretamente. Use requireUser() ' +
-      'ou supabase.auth.getUser() antes de qualquer acesso a dados.'
+      'ou supabase.auth.getUser() antes de qualquer acesso a dados.',
   )
 }
 
@@ -370,7 +393,7 @@ for (const file of tsFiles) {
       lineNumber,
       chain.text.split('\n').slice(0, 2).join(' ').replace(/\s+/g, ' '),
       `Query em "${chain.table}" acessa objeto por ID sem filtrar por dono. ` +
-        `Adicione .eq('user_id', user.id) — o RLS é a primeira camada, não a única.`
+        `Adicione .eq('user_id', user.id) — o RLS é a primeira camada, não a única.`,
     )
   }
 }
@@ -390,16 +413,22 @@ const SECRET_PATTERNS = [
   { name: 'OpenAI', pattern: /\bsk-[A-Za-z0-9]{32,}\b/ },
   { name: 'Anthropic', pattern: /\bsk-ant-[A-Za-z0-9_-]{32,}\b/ },
   { name: 'AWS Access Key', pattern: /\bAKIA[0-9A-Z]{16}\b/ },
-  { name: 'Chave privada', pattern: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/ },
+  {
+    name: 'Chave privada',
+    pattern: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
+  },
   { name: 'JWT', pattern: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./ },
 ]
 
 /** Placeholder de documentação não é segredo. */
-const PLACEHOLDER = /(your|seu|my|example|placeholder|xxx|\.\.\.|<[^>]+>|dummy|fake|test|sample)/i
+const PLACEHOLDER =
+  /(your|seu|my|example|placeholder|xxx|\.\.\.|<[^>]+>|dummy|fake|test|sample)/i
 
 let secretsFound = 0
 
-for (const file of tsFiles.concat(collectFiles(ROOT, ['.json', '.yml', '.yaml']))) {
+for (const file of tsFiles.concat(
+  collectFiles(ROOT, ['.json', '.yml', '.yaml']),
+)) {
   if (/\.env\.example$/.test(file) || /package-lock\.json$/.test(file)) continue
 
   const lines = fs.readFileSync(file, 'utf8').split('\n')
@@ -418,7 +447,7 @@ for (const file of tsFiles.concat(collectFiles(ROOT, ['.json', '.yml', '.yaml'])
         index + 1,
         `${line.slice(0, 40)}…`,
         `Possível ${name} em código. Mova para variável de ambiente e ` +
-          `revogue a credencial — ela já está no histórico do git.`
+          `revogue a credencial — ela já está no histórico do git.`,
       )
     }
   })
@@ -438,7 +467,7 @@ if (fs.existsSync(gitignorePath)) {
     .filter((l) => l && !l.startsWith('#'))
 
   const coversEnv = patterns.some((p) =>
-    ['.env', '.env*', '.env.local', '*.local', '.env.*'].includes(p)
+    ['.env', '.env*', '.env.local', '*.local', '.env.*'].includes(p),
   )
 
   if (coversEnv) {
@@ -450,11 +479,18 @@ if (fs.existsSync(gitignorePath)) {
       '.gitignore',
       1,
       patterns.slice(0, 3).join(' · '),
-      'Nenhum padrão cobrindo .env. Adicione a linha: .env*'
+      'Nenhum padrão cobrindo .env. Adicione a linha: .env*',
     )
   }
 } else {
-  finding('HIGH', 'SECRET', '.gitignore', 1, '(ausente)', 'Projeto sem .gitignore.')
+  finding(
+    'HIGH',
+    'SECRET',
+    '.gitignore',
+    1,
+    '(ausente)',
+    'Projeto sem .gitignore.',
+  )
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -506,7 +542,7 @@ if (xssFound === 0) {
 
 // Zod como sinal de validação no servidor.
 const usesZod = tsFiles.some((file) =>
-  /from\s+['"]zod['"]/.test(fs.readFileSync(file, 'utf8'))
+  /from\s+['"]zod['"]/.test(fs.readFileSync(file, 'utf8')),
 )
 if (usesZod) strength('Validação de entrada com Zod presente')
 
@@ -543,7 +579,7 @@ const reportDir = path.join(ROOT, 'docs', 'security-audit')
 fs.mkdirSync(reportDir, { recursive: true })
 fs.writeFileSync(
   path.join(reportDir, 'last-audit.json'),
-  `${JSON.stringify(report, null, 2)}\n`
+  `${JSON.stringify(report, null, 2)}\n`,
 )
 
 if (JSON_ONLY) {
@@ -553,12 +589,14 @@ if (JSON_ONLY) {
 const blocking = critical + high
 
 if (STRICT && blocking > 0) {
-  say(`\n${COLORS.CRITICAL} FALHOU ${COLORS.RESET} ${blocking} achado(s) bloqueante(s).\n`)
+  say(
+    `\n${COLORS.CRITICAL} FALHOU ${COLORS.RESET} ${blocking} achado(s) bloqueante(s).\n`,
+  )
   process.exit(1)
 }
 
 say(
   blocking > 0
     ? `\n${COLORS.HIGH}Auditoria concluída com ${blocking} achado(s) para revisar.${COLORS.RESET}\n`
-    : `\n${COLORS.OK}Auditoria limpa.${COLORS.RESET}\n`
+    : `\n${COLORS.OK}Auditoria limpa.${COLORS.RESET}\n`,
 )

@@ -364,32 +364,44 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
 })
 
 describe('primeira tela — o app abre antes de configurar nada', () => {
-  // Um projeto recém-criado não tem Supabase ligado. Sem guarda,
-  // createServerClient estourava dentro do proxy e TODA requisição virava
-  // 500 — o preview mostrava uma tela em branco e parecia que o app não
-  // tinha subido.
-  const proxyHelper = file('lib/supabase/middleware.ts')
-
-  it('o proxy não estoura sem as variáveis do Supabase', () => {
-    expect(proxyHelper).toContain('if (!supabaseUrl || !supabaseKey)')
-    expect(proxyHelper).not.toContain('NEXT_PUBLIC_SUPABASE_URL!')
+  it('o proxy renova a sessão sem estourar quando o Supabase não está configurado', () => {
+    // Projeto recém-criado ainda não tem env do Supabase. O proxy padrão
+    // renova a sessão, mas guarda a chamada: sem as variáveis ele apenas
+    // segue com a CSP, em vez de estourar 500 em toda requisição.
+    const proxy = file('proxy.ts')
+    expect(proxy).toContain('if (supabaseUrl && supabaseKey)')
+    expect(proxy).not.toContain('NEXT_PUBLIC_SUPABASE_URL!')
   })
 
-  it('o proxy que roda não depende do Supabase', () => {
-    // O proxy existe pelo nonce da CSP, e só. Ligar a sessão do Supabase nele
-    // antes de o projeto ter login já derrubou a aplicação inteira em todo
-    // request — por isso a parte de sessão continua sendo exemplo.
-    const paths = files.map((f) => f.path)
-    expect(paths).toContain('proxy.ts')
-    expect(paths).not.toContain('middleware.ts')
-    expect(paths).toContain('lib/supabase/proxy.example.ts')
+  it('com login o proxy renova a sessão; app público não toca no Supabase', () => {
+    const withAuth = buildProjectFiles({
+      projectName: 'a',
+      description: 'x',
+      auth: true,
+    })
+    const publicApp = buildProjectFiles({
+      projectName: 'a',
+      description: 'x',
+      auth: false,
+    })
 
-    // A CSP cita *.supabase.co como origem permitida — isso é declaração,
-    // não dependência. O que não pode é o proxy importar e chamar o cliente.
-    const proxy = file('proxy.ts')
-    expect(proxy).not.toMatch(/from '@?\/?lib\/supabase/)
-    expect(proxy).not.toContain('updateSession')
-    expect(proxy).not.toContain('createServerClient')
+    const proxyOf = (fs: typeof withAuth) =>
+      fs.find((f) => f.path === 'proxy.ts')!.content
+
+    // Com login, o proxy mantém o token vivo a cada requisição.
+    expect(proxyOf(withAuth)).toContain('createServerClient')
+    expect(proxyOf(withAuth)).toContain('supabase.auth.getUser()')
+
+    // Público não carrega Supabase no proxy, nem cliente, nem tela de login:
+    // nada de caminho autenticado morto num app que não tem usuários.
+    expect(proxyOf(publicApp)).not.toContain('createServerClient')
+    const publicPaths = publicApp.map((f) => f.path)
+    expect(publicPaths).not.toContain('lib/supabase/server.ts')
+    expect(publicPaths).not.toContain('app/login/page.tsx')
+
+    // Os dois sempre carregam o nonce da CSP — é o que o proxy garante sempre.
+    expect(proxyOf(withAuth)).toContain("'nonce-")
+    expect(proxyOf(publicApp)).toContain("'nonce-")
   })
 
   it('o cliente de navegador explica o que falta em vez de estourar cru', () => {
@@ -640,5 +652,64 @@ describe('teste de RLS do scaffold', () => {
     const suites = [...rlsTest.matchAll(/describe\('RLS · /g)].length
     const casos = [...rlsTest.matchAll(/\n  it\(/g)].length
     expect(casos).toBe(suites * 6)
+  })
+})
+
+describe('login opcional — app com usuários vs. app público', () => {
+  const withAuth = buildProjectFiles({
+    projectName: 'meu-app',
+    description: 'x',
+    auth: true,
+  })
+  const publicApp = buildProjectFiles({
+    projectName: 'meu-app',
+    description: 'x',
+    auth: false,
+  })
+  const path = (fs: typeof withAuth, p: string) =>
+    fs.find((f) => f.path === p)?.content ?? ''
+
+  it('o padrão é ter login', () => {
+    // Supremo é feito para app com dados de gente; público é a exceção.
+    const defaultApp = buildProjectFiles({ projectName: 'a', description: 'x' })
+    expect(defaultApp.some((f) => f.path === 'app/login/page.tsx')).toBe(true)
+  })
+
+  it('com login: a rota protegida decide o acesso no servidor', () => {
+    const page = path(withAuth, 'app/app/page.tsx')
+    // O gate real é getUser + redirect, não o proxy.
+    expect(page).toContain('supabase.auth.getUser()')
+    expect(page).toContain("redirect('/login')")
+  })
+
+  it('com login: sair e o retorno de OAuth existem', () => {
+    expect(path(withAuth, 'app/auth/signout/route.ts')).toContain('signOut()')
+    expect(path(withAuth, 'app/auth/callback/route.ts')).toContain(
+      'exchangeCodeForSession',
+    )
+  })
+
+  it('público: sem arquivo de auth e sem tabela que exige login', () => {
+    const paths = publicApp.map((f) => f.path)
+    expect(paths.filter((p) => p.startsWith('app/login'))).toHaveLength(0)
+    expect(paths).not.toContain('app/auth/callback/route.ts')
+
+    // A migration pública não cria tabela nem policy: sem login, RLS por
+    // auth.uid() trancaria tudo fechado. (O comentário do arquivo explica
+    // isso e cita auth.uid() — por isso a asserção olha CREATE, não o texto.)
+    const migration = path(
+      publicApp,
+      'supabase/migrations/00000000000000_initial_schema.sql',
+    )
+    expect(migration).not.toContain('CREATE TABLE')
+    expect(migration).not.toContain('CREATE POLICY')
+  })
+
+  it('público: o gate de RLS roda mesmo sem tabela de dono', () => {
+    // Um arquivo de teste sem nenhum it() faria o vitest reclamar; o gerado
+    // afirma explicitamente que não há isolamento a provar.
+    const rls = path(publicApp, 'supabase/rls.rls.test.ts')
+    expect(rls).toContain('nada a isolar')
+    expect(rls).toMatch(/it\(/)
   })
 })

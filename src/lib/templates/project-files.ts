@@ -27,6 +27,19 @@ export interface FileEntry {
 export interface TemplateOptions {
   projectName: string
   description: string
+  /**
+   * O app tem usuários e login?
+   *
+   * Ligado (padrão): nasce com fluxo de login pronto, uma rota protegida de
+   * exemplo, e as tabelas de usuário com RLS. É o caso central do Supremo —
+   * app com dados de gente.
+   *
+   * Desligado: app público. Sem login, sem tabela de usuário, sem código de
+   * auth morto. É a resposta honesta para "meu app não precisa de login":
+   * forçar RLS em auth.uid() sem login trava tudo fechado, então o app
+   * público simplesmente não recebe essa camada.
+   */
+  auth?: boolean
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -119,8 +132,14 @@ export const CI_INVOKED_SCRIPTS = [
 export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
   const { projectName, description } = options
   const summary = description || `${projectName} — criado com Supremo`
+  const auth = options.auth ?? true
 
-  return [
+  // A migration muda com a decisão de auth: com login, as tabelas de usuário
+  // (profiles/audit_logs); sem login, um exemplo público, para o app não
+  // nascer com tabela morta que só funciona autenticado.
+  const migration = auth ? initialMigration() : publicMigration()
+
+  const files: FileEntry[] = [
     // ── Manifesto e configuração ──────────────────────────────
     { path: 'package.json', content: packageJson(projectName) },
     { path: 'package-lock.json', content: packageLock(projectName) },
@@ -138,20 +157,18 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
 
     // ── Aplicação ─────────────────────────────────────────────
     { path: 'app/layout.tsx', content: appLayout(projectName, summary) },
-    { path: 'app/page.tsx', content: appPage(projectName, summary) },
+    { path: 'app/page.tsx', content: appPage(projectName, summary, auth) },
     { path: 'app/globals.css', content: globalsCss() },
     { path: 'lib/utils.ts', content: libUtils() },
-    { path: 'proxy.ts', content: proxyFile() },
-    { path: 'lib/supabase/proxy.example.ts', content: proxyExample() },
-    { path: 'lib/supabase/client.ts', content: supabaseClient() },
-    { path: 'lib/supabase/server.ts', content: supabaseServer() },
-    { path: 'lib/supabase/middleware.ts', content: supabaseMiddleware() },
+    // O proxy sempre existe pelo nonce da CSP. Com login, ele também renova
+    // a sessão a cada requisição.
+    { path: 'proxy.ts', content: proxyFile(auth) },
 
     // ── Banco ─────────────────────────────────────────────────
     { path: 'supabase/config.toml', content: supabaseConfig(projectName) },
     {
       path: 'supabase/migrations/00000000000000_initial_schema.sql',
-      content: initialMigration(),
+      content: migration,
     },
 
     // ── Testes ────────────────────────────────────────────────
@@ -163,9 +180,9 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
       // mão. A lista à mão cobria só `profiles`, e `audit_logs` — a trilha de
       // auditoria, onde uma policy furada é mais cara — nascia sem uma única
       // asserção provando o isolamento. O gate ficava verde por não olhar.
-      content: generateRlsTest(inferTablesFromMigration(initialMigration())),
+      content: generateRlsTest(inferTablesFromMigration(migration)),
     },
-    { path: 'e2e/smoke.spec.ts', content: e2eSmoke(projectName) },
+    { path: 'e2e/smoke.spec.ts', content: e2eSmoke(projectName, auth) },
 
     // ── Gates ─────────────────────────────────────────────────
     { path: '.github/workflows/ci.yml', content: ciWorkflow(projectName) },
@@ -182,6 +199,22 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'CLAUDE.md', content: claudeMd(projectName) },
     { path: 'SECURITY.md', content: securityMd(projectName) },
   ]
+
+  if (auth) {
+    // O cliente de navegador e o servidor só fazem sentido com login. App
+    // público não os carrega para não haver caminho de dado autenticado morto.
+    files.push(
+      { path: 'lib/supabase/client.ts', content: supabaseClient() },
+      { path: 'lib/supabase/server.ts', content: supabaseServer() },
+      { path: 'app/login/page.tsx', content: loginPage(projectName) },
+      { path: 'app/login/login-form.tsx', content: loginForm() },
+      { path: 'app/auth/callback/route.ts', content: authCallbackRoute() },
+      { path: 'app/auth/signout/route.ts', content: signoutRoute() },
+      { path: 'app/app/page.tsx', content: protectedPage(projectName) },
+    )
+  }
+
+  return files
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -376,6 +409,11 @@ export default defineConfig({
         'lib/supabase/**',
         // Shell da aplicação, sem lógica própria.
         'app/layout.tsx',
+        // Telas de login e a rota protegida falam com o Supabase e são
+        // cobertas pelo E2E — um teste unitário aqui exercitaria o mock.
+        'app/login/**',
+        'app/app/**',
+        'app/auth/**',
       ],
       // Threshold que FALHA o build. Cobertura reportada e não exigida
       // não é gate — é decoração. Se este número incomodar, escreva o
@@ -538,8 +576,27 @@ export default async function RootLayout({
 `
 }
 
-function appPage(projectName: string, description: string): string {
-  return `export default function HomePage() {
+function appPage(
+  projectName: string,
+  description: string,
+  auth: boolean,
+): string {
+  const loginLink = auth
+    ? `
+        <div>
+          <a
+            href="/login"
+            className="inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-90"
+          >
+            Entrar
+          </a>
+        </div>
+`
+    : ''
+
+  return `import Link from 'next/link'
+
+export default function HomePage() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center px-6 py-16">
       <div className="space-y-6">
@@ -555,7 +612,7 @@ function appPage(projectName: string, description: string): string {
         <p className="max-w-prose text-lg text-muted">
           ${escapeJsx(description)}
         </p>
-
+${loginLink}
         <div className="grid gap-3 pt-4 sm:grid-cols-2">
           <div className="rounded-lg border border-border p-4">
             <h2 className="text-sm font-medium">RLS ativo</h2>
@@ -576,6 +633,10 @@ function appPage(projectName: string, description: string): string {
     </main>
   )
 }
+
+// Link é usado só quando há login; a importação fica válida nos dois casos.
+void Link
+
 `
 }
 
@@ -637,13 +698,312 @@ function globalsCss(): string {
  * Não ficava: `'unsafe-inline'` autoriza qualquer script escrito na página,
  * que é exatamente o que um XSS injeta. A CSP existia e não defendia do que
  * ela existe para defender.
+// ═════════════════════════════════════════════════════════════
+// Login — só quando o app tem usuários
+// ═════════════════════════════════════════════════════════════
+
+/** A página de login: uma casca server que monta o formulário client. */
+function loginPage(projectName: string): string {
+  return `import { LoginForm } from './login-form'
+
+export const metadata = { title: 'Entrar — ${escapeJs(projectName)}' }
+
+export default function LoginPage() {
+  return (
+    <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center px-6 py-16">
+      <h1 className="text-2xl font-semibold tracking-tight">Entrar</h1>
+      <p className="mt-1 mb-6 text-sm text-muted">
+        Acesse a sua conta ou crie uma nova.
+      </p>
+      <LoginForm />
+    </main>
+  )
+}
+`
+}
+
+/**
+ * Formulário de login por email e senha.
  *
+ * Email + senha porque funciona sem configurar OAuth: o Supabase já vem com
+ * esse provedor ligado. Para adicionar GitHub/Google depois, use
+ * supabase.auth.signInWithOAuth e a rota /auth/callback já existe para o
+ * retorno.
+ */
+function loginForm(): string {
+  return `'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+
+export function LoginForm() {
+  const router = useRouter()
+  const supabase = createClient()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+
+    const fn =
+      mode === 'signin'
+        ? supabase.auth.signInWithPassword({ email, password })
+        : supabase.auth.signUp({
+            email,
+            password,
+            options: { emailRedirectTo: \`\${location.origin}/auth/callback\` },
+          })
+
+    const { error } = await fn
+    setBusy(false)
+
+    if (error) {
+      setError(error.message)
+      return
+    }
+    // Server Component decide o acesso; aqui só levamos para a área logada.
+    router.push('/app')
+    router.refresh()
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="space-y-1">
+        <label htmlFor="email" className="text-sm font-medium">
+          Email
+        </label>
+        <input
+          id="email"
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent"
+        />
+      </div>
+
+      <div className="space-y-1">
+        <label htmlFor="password" className="text-sm font-medium">
+          Senha
+        </label>
+        <input
+          id="password"
+          type="password"
+          required
+          minLength={6}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent"
+        />
+      </div>
+
+      {error && <p className="text-sm text-red-600">{error}</p>}
+
+      <button
+        type="submit"
+        disabled={busy}
+        className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+      >
+        {busy ? '...' : mode === 'signin' ? 'Entrar' : 'Criar conta'}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
+        className="w-full text-center text-sm text-muted hover:text-foreground"
+      >
+        {mode === 'signin'
+          ? 'Não tem conta? Criar uma'
+          : 'Já tem conta? Entrar'}
+      </button>
+    </form>
+  )
+}
+`
+}
+
+/**
+ * Retorno do OAuth e da confirmação de email: troca o código por sessão.
+ *
+ * Existe mesmo com login por senha, porque o link de confirmação de email
+ * cai aqui. Adicionar um provedor OAuth depois não pede rota nova.
+ */
+function authCallbackRoute(): string {
+  return `import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+
+export async function GET(request: Request) {
+  const { searchParams, origin } = new URL(request.url)
+  const code = searchParams.get('code')
+
+  if (code) {
+    const supabase = await createClient()
+    await supabase.auth.exchangeCodeForSession(code)
+  }
+
+  return NextResponse.redirect(\`\${origin}/app\`)
+}
+`
+}
+
+/** Sair: encerra a sessão e volta para o login. */
+function signoutRoute(): string {
+  return `import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+
+export async function POST(request: Request) {
+  const supabase = await createClient()
+  await supabase.auth.signOut()
+  return NextResponse.redirect(new URL('/login', request.url), { status: 303 })
+}
+`
+}
+
+/**
+ * Rota protegida de exemplo.
+ *
+ * É aqui que o acesso é decidido — no servidor, com getUser(). O proxy só
+ * renova o token; ele NÃO barra ninguém. Sem usuário, redireciona ao login.
+ * Também garante a linha de profile do usuário, respeitando o próprio RLS.
+ */
+function protectedPage(projectName: string): string {
+  return `import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+
+export default async function AppPage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  // O gate real de acesso. O proxy renova a sessão, mas quem decide é isto.
+  if (!user) redirect('/login')
+
+  // Garante o profile do próprio usuário. O RLS permite porque user_id é o
+  // dono — a mesma policy que impede mexer no profile alheio.
+  await supabase
+    .from('profiles')
+    .upsert(
+      { user_id: user.id, display_name: user.email ?? 'sem nome' },
+      { onConflict: 'user_id' },
+    )
+
+  return (
+    <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-6 px-6 py-16">
+      <div>
+        <p className="text-sm text-muted">Área logada de ${escapeJsx(projectName)}</p>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+          Olá, {user.email}
+        </h1>
+      </div>
+
+      <p className="max-w-prose text-muted">
+        Esta rota só abre autenticado. Cada dado que você guardar fica isolado
+        pela sua conta — o RLS garante que ninguém mais leia a sua linha.
+      </p>
+
+      <form action="/auth/signout" method="post">
+        <button
+          type="submit"
+          className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-foreground/5"
+        >
+          Sair
+        </button>
+      </form>
+    </main>
+  )
+}
+`
+}
+
+/**
+ * Migration de app público: sem tabela de usuário.
+ *
+ * A resposta honesta a "não preciso de login": RLS por auth.uid() sem login
+ * tranca tudo fechado, então um app público não recebe essa camada. Ele nasce
+ * limpo, e as tabelas que precisar vêm depois, com a posse que fizer sentido.
+ */
+function publicMigration(): string {
+  return `-- ============================================================
+-- Migration inicial — app público (sem login)
+-- criada pelo Supremo
+-- ============================================================
+--
+-- Este app não tem usuários. Não há tabela com RLS por auth.uid() porque,
+-- sem login, auth.uid() é sempre nulo e isso trancaria tudo fechado.
+--
+-- Quando precisar guardar dado, crie a tabela com a posse certa:
+--   - dado público de leitura: FOR SELECT USING (true)
+--   - dado por usuário: adicione login e user_id (veja o SECURITY.md)
+
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Utilitário de updated_at, pronto para quando a primeira tabela chegar.
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$;
+`
+}
+
+// ═════════════════════════════════════════════════════════════
+// Proxy
+// ═════════════════════════════════════════════════════════════
+
+/**
  * O nonce só pode ser gerado por requisição, e cabeçalho de next.config é
  * estático — por isso a CSP mudou de lugar. `strict-dynamic` faz o navegador
  * confiar apenas no que veio com o nonce, e ignorar lista de origens.
  */
-function proxyFile(): string {
-  return `import { NextResponse, type NextRequest } from 'next/server'
+function proxyFile(auth: boolean): string {
+  // O import e a renovação de sessão só entram quando há login. App público
+  // não carrega o cliente Supabase no proxy.
+  const authImport = auth
+    ? `import { createServerClient } from '@supabase/ssr'\n`
+    : ''
+
+  const renew = auth
+    ? `
+  // Renova a sessão a cada requisição, mantendo o token válido. Sem isto, o
+  // usuário é deslogado quando o access token expira. NÃO decide acesso a
+  // rota — quem decide é o Server Component chamando supabase.auth.getUser().
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (supabaseUrl && supabaseKey) {
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            response.cookies.set(name, value, options),
+          )
+        },
+      },
+    })
+    await supabase.auth.getUser()
+  }
+`
+    : ''
+
+  const signature = auth
+    ? 'export async function proxy(request: NextRequest) {'
+    : 'export function proxy(request: NextRequest) {'
+
+  return `${authImport}import { NextResponse, type NextRequest } from 'next/server'
 
 const isDev = process.env.NODE_ENV === 'development'
 
@@ -654,7 +1014,7 @@ const isFramable =
   process.env.VERCEL_ENV === 'preview' ||
   process.env.SUPREMO_PREVIEW === '1'
 
-export function proxy(request: NextRequest) {
+${signature}
   // 128 bits de aleatoriedade por requisição. Nonce previsível não é nonce.
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
 
@@ -691,6 +1051,7 @@ export function proxy(request: NextRequest) {
 
   const response = NextResponse.next({ request: { headers } })
   response.headers.set('Content-Security-Policy', csp)
+${renew}
   return response
 }
 
@@ -704,37 +1065,6 @@ export const config = {
       ],
     },
   ],
-}
-`
-}
-
-function proxyExample(): string {
-  return `import { updateSession } from '@/lib/supabase/middleware'
-import type { NextRequest } from 'next/server'
-
-/**
- * COMO LIGAR A SESSÃO DO SUPABASE NO PROXY.
- *
- * Este arquivo é exemplo, não roda. O proxy que roda é o proxy.ts da raiz, e
- * ele já faz uma coisa indispensável: gerar o nonce da CSP. Não o substitua —
- * some com a proteção contra XSS junto.
- *
- * Quando o projeto tiver login, junte as duas responsabilidades assim, dentro
- * do proxy.ts existente:
- *
- *   export async function proxy(request: NextRequest) {
- *     const response = cspResponse(request)      // o que o proxy.ts já faz
- *     await updateSession(request)               // renova o token
- *     return response
- *   }
- *
- * Renovar a sessão NÃO protege rota nenhuma: updateSession só mantém o token
- * válido, nunca redireciona quem não está logado. Quem decide acesso é o
- * Server Component ou a Server Action, chamando supabase.auth.getUser() e
- * tratando a ausência de usuário. E quem decide acesso a DADO é o RLS.
- */
-export async function exemploDeProxyComSessao(request: NextRequest) {
-  return updateSession(request)
 }
 `
 }
@@ -825,52 +1155,6 @@ export async function createClient() {
       },
     }
   )
-}
-`
-}
-
-function supabaseMiddleware(): string {
-  return `import { createServerClient } from '@supabase/ssr'
-import { NextResponse, type NextRequest } from 'next/server'
-
-export async function updateSession(request: NextRequest) {
-  let response = NextResponse.next({ request })
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-  // Projeto recém-criado ainda não tem o Supabase ligado. Sem esta guarda,
-  // createServerClient estoura e TODA requisição vira 500 — o app não abre
-  // nem para mostrar a primeira tela.
-  if (!supabaseUrl || !supabaseKey) {
-    return response
-  }
-
-  const supabase = createServerClient(
-    supabaseUrl,
-    supabaseKey,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll()
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          )
-          response = NextResponse.next({ request })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          )
-        },
-      },
-    }
-  )
-
-  // Necessário para renovar o token — não remova.
-  await supabase.auth.getUser()
-
-  return response
 }
 `
 }
@@ -1063,10 +1347,34 @@ describe('HomePage', () => {
  * O template anterior gerava um teste que checava o título "Create Next App"
  * contra um layout sem título nenhum — falha garantida.
  */
-function e2eSmoke(projectName: string): string {
+function e2eSmoke(projectName: string, auth: boolean): string {
+  // Com login, o E2E exercita a tela de /login e o gate da rota protegida.
+  // É a cobertura real dessas telas — por isso elas ficam fora do coverage
+  // unitário, como o resto do que fala com o Supabase.
+  const authTests = auth
+    ? `
+  test('a tela de login carrega e mostra o formulário', async ({ page }) => {
+    await page.goto('/login')
+    await expect(page.getByLabel('Email')).toBeVisible()
+    await expect(page.getByLabel('Senha')).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Entrar' }),
+    ).toBeVisible()
+  })
+
+  test('a rota protegida redireciona quem não está logado', async ({
+    page,
+  }) => {
+    await page.goto('/app')
+    // O gate é no servidor: sem sessão, /app manda para /login.
+    await expect(page).toHaveURL(/\\/login$/)
+  })
+`
+    : ''
+
   return `import { test, expect } from '@playwright/test'
 
-test.describe('smoke', () => {
+test.describe('smoke', () => {${authTests}
   test('a home carrega com o título do projeto', async ({ page }) => {
     await page.goto('/')
     await expect(page).toHaveTitle('${escapeJs(projectName)}')

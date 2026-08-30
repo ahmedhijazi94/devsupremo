@@ -44,6 +44,22 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321'
 const ANON_KEY = process.env.SUPABASE_ANON_KEY ?? ''
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 
+if (!ANON_KEY || !SERVICE_KEY) {
+  throw new Error(
+    [
+      'Os testes de RLS precisam de um Postgres real — eles provam que o',
+      'isolamento entre contas existe de verdade, não só no texto da policy.',
+      '',
+      'Localmente:',
+      '  supabase start',
+      '  export $(supabase status -o env | sed \'s/^/SUPABASE_/\' | xargs)',
+      '  npm run test:rls',
+      '',
+      'No CI isso já acontece no job "Políticas RLS".',
+    ].join('\n')
+  )
+}
+
 const ALICE = { email: \`alice-\${Date.now()}@rls.test\`, password: 'test-password-123!' }
 const BOB = { email: \`bob-\${Date.now()}@rls.test\`, password: 'test-password-123!' }
 

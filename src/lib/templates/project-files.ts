@@ -74,7 +74,7 @@ const SCRIPTS = {
   test: 'vitest run --exclude "**/*.rls.test.ts"',
   'test:watch': 'vitest',
   'test:coverage': 'vitest run --coverage --exclude "**/*.rls.test.ts"',
-  'test:rls': 'vitest run src/**/*.rls.test.ts',
+  'test:rls': 'vitest run rls.test',
   'test:e2e': 'playwright test',
   'audit:security': 'node scripts/security-audit.js',
 } as const

@@ -321,6 +321,45 @@ describe('E2E — o smoke test corresponde ao app gerado', () => {
   })
 })
 
+describe('test:rls — o filtro casa com o arquivo gerado', () => {
+  // Bug real: o script filtrava `src/**/*.rls.test.ts`, mas o template não
+  // tem diretório src/ — o teste de RLS fica em supabase/. O job passava
+  // meses "verde" sem nunca ter rodado... na verdade falhava com
+  // "No test files found", que é melhor, mas o gate mais importante do
+  // template nunca exercitou nada.
+  const rlsFiles = files.filter((f) => f.path.includes('.rls.test.'))
+
+  it('o template gera ao menos um arquivo de teste de RLS', () => {
+    expect(rlsFiles.length).toBeGreaterThan(0)
+  })
+
+  it('o filtro do script encontra os arquivos gerados', () => {
+    const script = packageJson.scripts['test:rls'] ?? ''
+    const filter = script.replace(/^vitest run\s*/, '').trim()
+
+    expect(filter).not.toBe('')
+
+    for (const rls of rlsFiles) {
+      expect(
+        rls.path.includes(filter),
+        `"${filter}" não casa com "${rls.path}"`
+      ).toBe(true)
+    }
+  })
+
+  it('a suíte normal exclui os testes de RLS', () => {
+    // Eles precisam de Postgres real; rodar junto quebraria `npm test`.
+    expect(packageJson.scripts.test).toContain('rls.test.ts')
+    expect(packageJson.scripts.test).toContain('--exclude')
+  })
+
+  it('o padrão de exclusão casa com os arquivos gerados', () => {
+    for (const rls of rlsFiles) {
+      expect(rls.path.endsWith('.rls.test.ts')).toBe(true)
+    }
+  })
+})
+
 describe('geração de teste de RLS', () => {
   const sql = `
     CREATE TABLE posts (

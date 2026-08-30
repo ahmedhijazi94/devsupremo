@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { decryptToken } from '@/lib/crypto'
 import { deleteSharedPreview, sharedPreviewConfig } from '@/lib/preview'
+import type { ProjectKind } from '@/lib/templates/project-files'
 
 const activateProjectSchema = z.object({
   projectId: z.string().uuid(),
@@ -82,6 +83,9 @@ const createProjectSchema = z.object({
   description: z.string().max(200).optional(),
   githubAccountId: z.string().uuid().optional(),
   supabaseAccountId: z.string().uuid().optional(),
+  // Tipo de app, escolhido na criação. Decide a migration e os arquivos que o
+  // scaffold gera. Padrão 'solo' — app com login e dados por usuário.
+  kind: z.enum(['public', 'solo', 'team']).default('solo'),
 })
 
 export async function createProject(
@@ -129,6 +133,7 @@ export async function createProject(
       user_id: user.id,
       name: parsed.data.name,
       description: parsed.data.description ?? null,
+      kind: parsed.data.kind,
       github_account_id: parsed.data.githubAccountId ?? null,
       supabase_account_id: parsed.data.supabaseAccountId ?? null,
       active_mcp: 'antigravity',
@@ -312,12 +317,24 @@ export async function deleteProject(
   return warnings.length > 0 ? { warnings } : {}
 }
 
-export async function createEmptyProject(name: string, description?: string) {
+export async function createEmptyProject(
+  name: string,
+  description?: string,
+  kind: ProjectKind = 'solo',
+) {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { error: 'Não autorizado.' }
+
+  // O tipo é decisão do usuário, mas nunca confiamos no valor cru vindo do
+  // cliente: só os três que o scaffold entende.
+  const safeKind: ProjectKind = (['public', 'solo', 'team'] as const).includes(
+    kind,
+  )
+    ? kind
+    : 'solo'
 
   const { data, error } = await supabase
     .from('projects')
@@ -325,6 +342,7 @@ export async function createEmptyProject(name: string, description?: string) {
       user_id: user.id,
       name,
       description,
+      kind: safeKind,
       status: 'creating',
     })
     .select('id')

@@ -24,22 +24,25 @@ export interface FileEntry {
   mode?: '100644' | '100755'
 }
 
+/**
+ * Que tipo de app nasce. Uma decisão arquitetural, cara de reverter, então
+ * escolhida na criação em vez de adivinhada.
+ *
+ *  - public: site sem usuários. Sem login, sem tabela de dono. RLS em
+ *    auth.uid() sem login trancaria tudo fechado, então essa camada não vem.
+ *  - solo: app com login e dados por usuário. Cada linha é de um user_id.
+ *    O caso central.
+ *  - team: multi-tenant. O dado pertence a uma organização, e quem enxerga é
+ *    decidido por uma tabela de sócios. É o prédio: vários times, cada um no
+ *    seu andar.
+ */
+export type ProjectKind = 'public' | 'solo' | 'team'
+
 export interface TemplateOptions {
   projectName: string
   description: string
-  /**
-   * O app tem usuários e login?
-   *
-   * Ligado (padrão): nasce com fluxo de login pronto, uma rota protegida de
-   * exemplo, e as tabelas de usuário com RLS. É o caso central do Supremo —
-   * app com dados de gente.
-   *
-   * Desligado: app público. Sem login, sem tabela de usuário, sem código de
-   * auth morto. É a resposta honesta para "meu app não precisa de login":
-   * forçar RLS em auth.uid() sem login trava tudo fechado, então o app
-   * público simplesmente não recebe essa camada.
-   */
-  auth?: boolean
+  /** Padrão: 'solo'. Ver ProjectKind. */
+  kind?: ProjectKind
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -132,12 +135,17 @@ export const CI_INVOKED_SCRIPTS = [
 export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
   const { projectName, description } = options
   const summary = description || `${projectName} — criado com Supremo`
-  const auth = options.auth ?? true
+  const kind = options.kind ?? 'solo'
+  const auth = kind !== 'public'
 
-  // A migration muda com a decisão de auth: com login, as tabelas de usuário
-  // (profiles/audit_logs); sem login, um exemplo público, para o app não
-  // nascer com tabela morta que só funciona autenticado.
-  const migration = auth ? initialMigration() : publicMigration()
+  // A migration segue o tipo de app: público não tem tabela de dono; solo tem
+  // dados por usuário; team tem organizações, sócios e recursos de tenant.
+  const migration =
+    kind === 'public'
+      ? publicMigration()
+      : kind === 'team'
+        ? teamMigration()
+        : initialMigration()
 
   const files: FileEntry[] = [
     // ── Manifesto e configuração ──────────────────────────────
@@ -919,6 +927,160 @@ export default async function AppPage() {
     </main>
   )
 }
+`
+}
+
+/**
+ * Migration multi-tenant: o prédio.
+ *
+ * orgs é o tenant, memberships liga usuário ↔ tenant, projects é um recurso
+ * do tenant. A ordem importa: as tabelas primeiro, as policies depois, porque
+ * a policy de orgs e a de projects referenciam memberships.
+ *
+ * A policy de memberships (ver o próprio vínculo) NÃO é opcional: sem ela, o
+ * EXISTS das outras policies não enxerga nada e o app inteiro trava fechado.
+ * Provado num Postgres real antes de virar template.
+ */
+function teamMigration(): string {
+  return `-- ============================================================
+-- Migration inicial — multi-tenant (organizações)
+-- criada pelo Supremo
+-- ============================================================
+
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$;
+
+-- ------------------------------------------------------------
+-- Tabelas
+-- ------------------------------------------------------------
+
+-- O tenant.
+CREATE TABLE IF NOT EXISTS orgs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+-- Quem pertence a qual organização.
+CREATE TABLE IF NOT EXISTS memberships (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id UUID REFERENCES orgs(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member',
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  UNIQUE(org_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memberships_org_id ON memberships(org_id);
+CREATE INDEX IF NOT EXISTS idx_memberships_user_id ON memberships(user_id);
+
+-- Perfil do usuário — existe mesmo no modelo de time.
+CREATE TABLE IF NOT EXISTS profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  display_name TEXT NOT NULL,
+  avatar_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  UNIQUE(user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_profiles_user_id ON profiles(user_id);
+
+-- Um recurso que pertence à organização, não ao usuário.
+CREATE TABLE IF NOT EXISTS projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id UUID REFERENCES orgs(id) ON DELETE CASCADE NOT NULL,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_org_id ON projects(org_id);
+
+-- ------------------------------------------------------------
+-- RLS
+-- ------------------------------------------------------------
+ALTER TABLE orgs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+
+-- Sócios: cada um vê o próprio vínculo. Esta policy é o que faz o EXISTS das
+-- outras funcionar — sem ela, ninguém enxerga organização nem recurso.
+CREATE POLICY "memberships_select_own" ON memberships
+  FOR SELECT USING (user_id = auth.uid());
+
+CREATE POLICY "memberships_insert_own" ON memberships
+  FOR INSERT WITH CHECK (user_id = auth.uid());
+
+-- Organização: um membro vê a própria org.
+CREATE POLICY "orgs_select_member" ON orgs
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM memberships m
+      WHERE m.org_id = orgs.id AND m.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "orgs_update_member" ON orgs
+  FOR UPDATE USING (
+    EXISTS (
+      SELECT 1 FROM memberships m
+      WHERE m.org_id = orgs.id AND m.user_id = auth.uid()
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM memberships m
+      WHERE m.org_id = orgs.id AND m.user_id = auth.uid()
+    )
+  );
+
+-- Perfil: dono direto.
+CREATE POLICY "profiles_select_own" ON profiles
+  FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "profiles_insert_own" ON profiles
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "profiles_update_own" ON profiles
+  FOR UPDATE USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- Recurso do tenant: só membro da organização dona toca nele.
+CREATE POLICY "projects_all_member" ON projects
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM memberships m
+      WHERE m.org_id = projects.org_id AND m.user_id = auth.uid()
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM memberships m
+      WHERE m.org_id = projects.org_id AND m.user_id = auth.uid()
+    )
+  );
+
+CREATE TRIGGER orgs_updated_at
+  BEFORE UPDATE ON orgs
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+CREATE TRIGGER profiles_updated_at
+  BEFORE UPDATE ON profiles
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+CREATE TRIGGER projects_updated_at
+  BEFORE UPDATE ON projects
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 `
 }
 

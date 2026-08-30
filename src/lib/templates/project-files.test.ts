@@ -377,12 +377,12 @@ describe('primeira tela — o app abre antes de configurar nada', () => {
     const withAuth = buildProjectFiles({
       projectName: 'a',
       description: 'x',
-      auth: true,
+      kind: 'solo',
     })
     const publicApp = buildProjectFiles({
       projectName: 'a',
       description: 'x',
-      auth: false,
+      kind: 'public',
     })
 
     const proxyOf = (fs: typeof withAuth) =>
@@ -659,12 +659,12 @@ describe('login opcional — app com usuários vs. app público', () => {
   const withAuth = buildProjectFiles({
     projectName: 'meu-app',
     description: 'x',
-    auth: true,
+    kind: 'solo',
   })
   const publicApp = buildProjectFiles({
     projectName: 'meu-app',
     description: 'x',
-    auth: false,
+    kind: 'public',
   })
   const path = (fs: typeof withAuth, p: string) =>
     fs.find((f) => f.path === p)?.content ?? ''
@@ -711,5 +711,43 @@ describe('login opcional — app com usuários vs. app público', () => {
     const rls = path(publicApp, 'supabase/rls.rls.test.ts')
     expect(rls).toContain('nada a isolar')
     expect(rls).toMatch(/it\(/)
+  })
+})
+
+describe('multi-tenant — o prédio nasce testado', () => {
+  const team = buildProjectFiles({
+    projectName: 'loja',
+    description: 'x',
+    kind: 'team',
+  })
+  const content = (p: string) => team.find((f) => f.path === p)?.content ?? ''
+  const migration = content(
+    'supabase/migrations/00000000000000_initial_schema.sql',
+  )
+  const rls = content('supabase/rls.rls.test.ts')
+
+  it('a migration cria tenant, sócios e recurso de tenant', () => {
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS orgs')
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS memberships')
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS projects')
+  })
+
+  it('a policy de sócios existe — sem ela o app trava fechado', () => {
+    // Descoberta contra Postgres real: sem SELECT em memberships, o EXISTS
+    // das outras policies não enxerga nada.
+    expect(migration).toContain('memberships_select_own')
+    expect(migration).toContain('user_id = auth.uid()')
+  })
+
+  it('o teste gerado prova isolamento entre organizações', () => {
+    expect(rls).toContain('RLS · projects (multi-tenant via memberships)')
+    expect(rls).toContain('membro de OUTRO tenant NÃO lê a linha')
+    expect(rls).toContain(
+      'membro de outro tenant NÃO grava linha no tenant alheio',
+    )
+  })
+
+  it('team tem login, como solo', () => {
+    expect(team.some((f) => f.path === 'app/login/page.tsx')).toBe(true)
   })
 })

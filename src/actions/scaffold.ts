@@ -7,6 +7,7 @@ import { decryptToken, encryptToken } from '@/lib/crypto'
 import {
   buildProjectFiles,
   CI_JOB_NAMES,
+  type ProjectKind,
   TEMPLATE_VERSION,
   type FileEntry,
 } from '@/lib/templates/project-files'
@@ -92,6 +93,10 @@ async function runScaffold(
 
   const name = project.name as string
   const description = (project.description as string | null) ?? ''
+  // O tipo escolhido na criação decide a migration e os arquivos. Projeto
+  // antigo, de antes da coluna existir, cai em 'solo' — o comportamento que
+  // ele já tinha.
+  const kind = ((project.kind as string | null) ?? 'solo') as ProjectKind
   const githubToken = decryptToken(
     (project.github_accounts as { access_token_encrypted: string })
       .access_token_encrypted,
@@ -132,7 +137,7 @@ async function runScaffold(
   }
 
   // ── 2. Template ─────────────────────────────────────────────
-  const files = buildProjectFiles({ projectName: name, description })
+  const files = buildProjectFiles({ projectName: name, description, kind })
   const commitSha = await commitTemplate(
     repo.full_name,
     branch,

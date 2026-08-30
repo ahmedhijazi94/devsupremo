@@ -1,26 +1,143 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/**
+ * Sistema visual do Supremo.
+ *
+ * Superfícies claras sobre um fundo levemente frio, cantos generosos e
+ * números grandes como âncora de cada cartão. O preto é a cor de ação —
+ * botões, barras, ênfase — e a cor viva aparece só onde carrega informação:
+ * variação para cima, para baixo, estado de um gate.
+ *
+ * Os tons neutros têm um viés frio de propósito. Cinza puro sobre branco
+ * puro parece descuido; este conjunto parece escolhido.
+ */
+
+@theme {
+  /* Fundo da aplicação e superfícies */
+  --color-canvas: oklch(96.5% 0.003 255);
+  --color-surface: oklch(100% 0 0);
+  --color-sunken: oklch(97.6% 0.003 255);
+
+  /* Texto */
+  --color-ink: oklch(18% 0.012 255);
+  --color-ink-soft: oklch(38% 0.012 255);
+  --color-muted: oklch(55% 0.014 255);
+
+  /* Traços */
+  --color-line: oklch(92.5% 0.004 255);
+  --color-line-strong: oklch(87% 0.006 255);
+
+  /* Ação: preto, como no topo e nas barras */
+  --color-accent: oklch(18% 0.012 255);
+  --color-accent-ink: oklch(100% 0 0);
+
+  /* Semânticas — separadas da cor de ação de propósito */
+  --color-up: oklch(88% 0.17 135);
+  --color-up-ink: oklch(32% 0.11 135);
+  --color-down: oklch(88% 0.09 25);
+  --color-down-ink: oklch(45% 0.16 25);
+  --color-wait: oklch(91% 0.09 85);
+  --color-wait-ink: oklch(45% 0.12 75);
+  --color-info: oklch(90% 0.06 250);
+  --color-info-ink: oklch(45% 0.15 250);
+
+  /* Cantos: generosos por fora, menores por dentro */
+  --radius-card: 1.5rem;
+  --radius-inner: 1rem;
+  --radius-control: 0.75rem;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
+/**
+ * Tema escuro.
+ *
+ * Não é a inversão do claro: os papéis se mantêm — o fundo continua sendo o
+ * plano mais distante e o cartão o mais próximo — mas as cores de ação
+ * clareiam, porque preto sobre preto não é ação nenhuma.
+ */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  @theme {
+    --color-canvas: oklch(14% 0.008 255);
+    --color-surface: oklch(18.5% 0.01 255);
+    --color-sunken: oklch(21% 0.01 255);
+
+    --color-ink: oklch(96% 0.004 255);
+    --color-ink-soft: oklch(80% 0.008 255);
+    --color-muted: oklch(64% 0.012 255);
+
+    --color-line: oklch(26% 0.01 255);
+    --color-line-strong: oklch(33% 0.012 255);
+
+    --color-accent: oklch(96% 0.004 255);
+    --color-accent-ink: oklch(16% 0.01 255);
+
+    --color-up: oklch(38% 0.11 140);
+    --color-up-ink: oklch(88% 0.16 140);
+    --color-down: oklch(34% 0.1 25);
+    --color-down-ink: oklch(84% 0.13 25);
+    --color-wait: oklch(36% 0.08 80);
+    --color-wait-ink: oklch(88% 0.13 85);
+    --color-info: oklch(32% 0.07 250);
+    --color-info-ink: oklch(85% 0.1 250);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Números em coluna precisam alinhar; texto corrido, não. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: var(--color-ink);
+    color: var(--color-surface);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Cartão: a unidade de composição da interface inteira. */
+  .card {
+    background: var(--color-surface);
+    border-radius: var(--radius-card);
+    padding: 1.5rem;
+  }
+
+  /* Cartão dentro de cartão: um degrau mais fundo, canto menor. */
+  .card-inner {
+    background: var(--color-sunken);
+    border-radius: var(--radius-inner);
+    padding: 1.25rem;
+  }
+
+  .hairline {
+    border: 1px solid var(--color-line);
+  }
 }

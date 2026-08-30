@@ -94,10 +94,10 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   const showFrame = state?.status === 'ready' && state.url
 
   return (
-    <section className="flex h-full flex-col overflow-hidden rounded-xl border bg-card">
+    <section className="flex h-full flex-col overflow-hidden rounded-[var(--radius-card)] bg-surface">
       {/* Barra de ferramentas */}
-      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-muted/30 px-3 py-2.5">
-        <div className="flex rounded-lg border bg-background p-0.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-sunken px-3 py-2.5">
+        <div className="flex rounded-[var(--radius-control)] bg-sunken p-0.5">
           {DEVICES.map((option) => (
             <button
               key={option.id}
@@ -107,8 +107,8 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
               className={cn(
                 'rounded-md p-1.5 transition-colors',
                 device === option.id
-                  ? 'bg-muted text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'bg-surface text-ink shadow-sm'
+                  : 'text-muted hover:text-ink'
               )}
             >
               <option.icon className="h-4 w-4" />
@@ -122,7 +122,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
             load()
           }}
           title="Recarregar"
-          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="rounded-md p-1.5 text-muted transition-colors hover:bg-sunken hover:text-ink"
         >
           <RefreshCw className="h-4 w-4" />
         </button>
@@ -134,7 +134,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
             onClick={publish}
             disabled={publishing}
             title="Publicar o estado atual do repositório"
-            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:text-foreground disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-sunken px-2.5 py-1.5 text-xs font-medium transition-colors hover:text-ink disabled:opacity-50"
           >
             {publishing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -147,7 +147,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
           {state?.url && (
             <button
               onClick={copyLink}
-              className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-sunken px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:text-ink"
             >
               {copied ? (
                 <>
@@ -168,7 +168,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
               href={`https://github.com/${repoFullName}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-sunken px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:text-ink"
             >
               <Code2 className="h-3.5 w-3.5" />
               Código
@@ -180,7 +180,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
               href={state.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-sunken px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:text-ink"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               Abrir
@@ -190,10 +190,10 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
       </header>
 
       {/* Área do preview */}
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-zinc-100 p-4 dark:bg-zinc-950/50">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-sunken p-3">
         {showFrame ? (
           <div
-            className="h-full max-h-full overflow-hidden rounded-lg border bg-white shadow-lg transition-[width] duration-300"
+            className="h-full max-h-full overflow-hidden rounded-[var(--radius-inner)] bg-white shadow-lg transition-[width] duration-300"
             style={{ width: deviceConfig.width, maxWidth: '100%' }}
           >
             <iframe
@@ -215,7 +215,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
 function StatusPill({ state }: { state: PreviewState | null }) {
   if (!state) {
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted">
         <Loader2 className="h-3 w-3 animate-spin" />
         Verificando
       </span>
@@ -226,8 +226,8 @@ function StatusPill({ state }: { state: PreviewState | null }) {
     ready: { dot: 'bg-emerald-500', label: 'No ar', pulse: false },
     building: { dot: 'bg-amber-500', label: 'Publicando', pulse: true },
     error: { dot: 'bg-red-500', label: 'Falhou', pulse: false },
-    no_deployment: { dot: 'bg-muted-foreground', label: 'Sem deploy', pulse: false },
-    not_connected: { dot: 'bg-muted-foreground', label: 'Não conectado', pulse: false },
+    no_deployment: { dot: 'bg-sunken-foreground', label: 'Sem deploy', pulse: false },
+    not_connected: { dot: 'bg-sunken-foreground', label: 'Não conectado', pulse: false },
   }[state.status]
 
   return (
@@ -241,7 +241,7 @@ function StatusPill({ state }: { state: PreviewState | null }) {
       />
       {config.label}
       {state.branch && (
-        <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+        <code className="rounded bg-sunken px-1.5 py-0.5 font-mono text-[11px] text-muted">
           {state.branch}
         </code>
       )}
@@ -252,7 +252,7 @@ function StatusPill({ state }: { state: PreviewState | null }) {
 function EmptyState({ state }: { state: PreviewState | null }) {
   if (!state) {
     return (
-      <div className="flex flex-col items-center gap-3 text-muted-foreground">
+      <div className="flex flex-col items-center gap-3 text-muted">
         <Loader2 className="h-5 w-5 animate-spin" />
         <p className="text-sm">Consultando a Vercel…</p>
       </div>
@@ -271,10 +271,10 @@ function EmptyState({ state }: { state: PreviewState | null }) {
       <Icon
         className={cn(
           'mx-auto mb-3 h-6 w-6',
-          state.status === 'building' && 'animate-spin text-amber-500',
+          state.status === 'building' && 'animate-spin text-wait-ink',
           state.status === 'error' && 'text-red-500',
           (state.status === 'not_connected' || state.status === 'no_deployment') &&
-            'text-muted-foreground'
+            'text-muted'
         )}
       />
       <p className="text-sm font-medium">
@@ -284,14 +284,14 @@ function EmptyState({ state }: { state: PreviewState | null }) {
         {state.status === 'not_connected' && 'Preview não configurado'}
       </p>
       {state.message && (
-        <p className="mt-1.5 text-sm text-muted-foreground">{state.message}</p>
+        <p className="mt-1.5 text-sm text-muted">{state.message}</p>
       )}
       {state.inspectorUrl && (
         <a
           href={state.inspectorUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+          className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-ink hover:underline"
         >
           Ver logs na Vercel
           <ExternalLink className="h-3 w-3" />

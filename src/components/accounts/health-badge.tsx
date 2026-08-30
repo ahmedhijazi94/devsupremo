@@ -14,9 +14,9 @@ export function HealthBadge({ health }: { health: AccountHealth }) {
     <span
       className={cn(
         'inline-flex items-center gap-1.5 text-xs font-medium',
-        health === 'ok' && 'text-emerald-500',
-        health === 'expired' && 'text-amber-500',
-        health === 'unknown' && 'text-muted-foreground'
+        health === 'ok' && 'text-up-ink',
+        health === 'expired' && 'text-wait-ink',
+        health === 'unknown' && 'text-muted'
       )}
     >
       <Icon className="h-3.5 w-3.5" />

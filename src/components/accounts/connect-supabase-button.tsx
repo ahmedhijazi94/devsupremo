@@ -32,7 +32,7 @@ export function ConnectSupabaseButton({
       <button
         onClick={() => setShowToken((value) => !value)}
         title="Usar token pessoal em vez de autorizar"
-        className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="rounded-lg p-2 text-muted transition-colors hover:bg-sunken hover:text-ink"
       >
         <KeyRound className="h-4 w-4" />
       </button>

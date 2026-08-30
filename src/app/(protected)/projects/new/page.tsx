@@ -11,7 +11,7 @@ export default async function NewProjectPage() {
     <div className="space-y-6 max-w-2xl mx-auto">
       <div>
         <h1 className="text-2xl font-bold">Novo Projeto</h1>
-        <p className="text-muted-foreground mt-1">
+        <p className="text-muted mt-1">
           Crie o registro do seu projeto. Você conectará as contas e a infraestrutura na próxima tela.
         </p>
       </div>

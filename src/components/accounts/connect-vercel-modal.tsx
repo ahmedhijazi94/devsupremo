@@ -69,32 +69,32 @@ export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-md rounded-xl border bg-card p-5 shadow-xl">
+      <div className="w-full max-w-md rounded-xl border border-line bg-surface p-5 shadow-xl">
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 className="font-semibold">Conectar conta Vercel</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-1 text-sm text-muted">
               É o que dá preview publicado aos seus projetos — um link por
               pull request, que você pode mandar para outra pessoa.
             </p>
           </div>
           <button
             onClick={() => setOpen(false)}
-            className="rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+            className="rounded-md p-1 text-muted transition-colors hover:text-ink"
             aria-label="Fechar"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <ol className="mb-4 space-y-1.5 text-sm text-muted-foreground">
+        <ol className="mb-4 space-y-1.5 text-sm text-muted">
           <li>
             1. Abra{' '}
             <a
               href="https://vercel.com/account/tokens"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-primary hover:underline"
+              className="inline-flex items-center gap-1 text-ink hover:underline"
             >
               vercel.com/account/tokens
               <ExternalLink className="h-3 w-3" />
@@ -111,10 +111,10 @@ export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) 
             onChange={(event) => setToken(event.target.value)}
             placeholder="Token da Vercel"
             autoComplete="off"
-            className="h-10 w-full rounded-lg border bg-background px-3 font-mono text-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="h-10 w-full rounded-lg border border-line bg-surface px-3 font-mono text-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-line-strong"
           />
 
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted">
             O token é guardado cifrado em AES-256-GCM e usado só para criar e
             consultar os seus projetos.
           </p>
@@ -123,7 +123,7 @@ export function ConnectVercelModal({ oauthAvailable }: ConnectVercelModalProps) 
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="h-9 rounded-lg border px-3.5 text-sm font-medium transition-colors hover:bg-accent"
+              className="h-9 rounded-lg border border-line px-3.5 text-sm font-medium transition-colors hover:bg-sunken"
             >
               Cancelar
             </button>

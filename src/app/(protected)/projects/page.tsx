@@ -1,13 +1,17 @@
-import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { ProjectCard } from '@/components/dashboard/project-card'
-import { EmptyProjects } from '@/components/dashboard/empty-projects'
 import { Plus } from 'lucide-react'
-import Link from 'next/link'
+import { createClient } from '@/lib/supabase/server'
+import { Card, CardTitle, CardNote } from '@/components/ui/card'
+import { ButtonLink } from '@/components/ui/button'
+import { ProjectCard } from '@/components/dashboard/project-card'
+
+export const metadata = { title: 'Projetos — Supremo' }
 
 export default async function ProjectsPage() {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
   const { data: projects } = await supabase
@@ -16,37 +20,48 @@ export default async function ProjectsPage() {
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false })
 
-  const projectList = projects ?? []
+  const list = projects ?? []
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-3 sm:space-y-4">
+      <Card className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Projetos</h1>
-          <p className="text-muted-foreground">
-            {projectList.length === 0
+          <CardTitle className="text-xl">Projetos</CardTitle>
+          <CardNote className="mt-1">
+            {list.length === 0
               ? 'Nenhum projeto ainda'
-              : `${projectList.length} projeto${projectList.length > 1 ? 's' : ''}`}
-          </p>
+              : `${list.length} projeto${list.length > 1 ? 's' : ''}`}
+          </CardNote>
         </div>
-        <Link
-          href="/projects/new"
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          Novo projeto
-        </Link>
-      </div>
 
-      {projectList.length === 0 ? (
-        <EmptyProjects />
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {projectList.map((project) => (
-            <ProjectCard key={project.id} project={project} />
-          ))}
-        </div>
-      )}
+        <ButtonLink href="/projects/new">
+          <Plus className="h-4 w-4" />
+          Novo projeto
+        </ButtonLink>
+      </Card>
+
+      <Card>
+        {list.length === 0 ? (
+          <div className="rounded-[var(--radius-inner)] bg-sunken px-6 py-16 text-center">
+            <p className="font-medium">Comece pelo primeiro</p>
+            <CardNote className="mx-auto mt-1.5 max-w-md">
+              Um projeto novo nasce com repositório no GitHub, banco com Row
+              Level Security, gates no CI e preview publicado — sem você
+              configurar nada disso.
+            </CardNote>
+            <ButtonLink href="/projects/new" className="mt-6" size="sm">
+              <Plus className="h-4 w-4" />
+              Criar projeto
+            </ButtonLink>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {list.map((project) => (
+              <ProjectCard key={project.id} project={project} />
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   )
 }

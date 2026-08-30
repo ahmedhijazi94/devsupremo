@@ -35,13 +35,13 @@ const PIPELINE_STATES = {
   passed: {
     icon: CheckCircle2,
     label: 'Gates verdes',
-    className: 'text-emerald-600 dark:text-emerald-400',
+    className: 'text-up-ink',
     dot: 'bg-emerald-500',
   },
   failed: {
     icon: XCircle,
     label: 'Gate vermelho',
-    className: 'text-red-600 dark:text-red-400',
+    className: 'text-down-ink',
     dot: 'bg-red-500',
   },
   running: {
@@ -53,8 +53,8 @@ const PIPELINE_STATES = {
   pending: {
     icon: Clock,
     label: 'Na fila',
-    className: 'text-muted-foreground',
-    dot: 'bg-muted-foreground',
+    className: 'text-muted',
+    dot: 'bg-sunken-foreground',
   },
 } as const
 
@@ -65,10 +65,10 @@ function countFiles(filesChanged: Json | null): number {
 export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
   if (items.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed p-8 text-center">
-        <Sparkles className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
+      <div className="rounded-xl border border-line border-dashed p-8 text-center">
+        <Sparkles className="mx-auto mb-3 h-6 w-6 text-muted" />
         <p className="text-sm font-medium">Nenhuma mudança ainda</p>
-        <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+        <p className="mx-auto mt-1 max-w-sm text-sm text-muted">
           Conecte um agente em{' '}
           <Link href="/mcps" className="underline underline-offset-2">
             Integração MCP
@@ -95,14 +95,14 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
             {!isLast && (
               <span
                 aria-hidden
-                className="absolute left-[7px] top-5 h-full w-px bg-border"
+                className="absolute left-[7px] top-5 h-full w-px bg-border border-line"
               />
             )}
 
             <span
               aria-hidden
-              className={`relative mt-1.5 h-[15px] w-[15px] shrink-0 rounded-full border-2 border-background ring-1 ring-border ${
-                state?.dot ?? 'bg-muted-foreground'
+              className={`relative mt-1.5 h-[15px] w-[15px] shrink-0 rounded-full border-2 border-background ring-1 ring-line ${
+                state?.dot ?? 'bg-sunken-foreground'
               }`}
             />
 
@@ -113,13 +113,13 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
                 </p>
                 <time
                   dateTime={item.created_at}
-                  className="shrink-0 text-xs text-muted-foreground tabular-nums"
+                  className="shrink-0 text-xs text-muted tabular-nums"
                 >
                   {formatRelativeTime(item.created_at)}
                 </time>
               </div>
 
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted">
                 {state && (
                   <span
                     className={`inline-flex items-center gap-1 font-medium ${state.className}`}
@@ -138,7 +138,7 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
                     href={item.pr_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+                    className="inline-flex items-center gap-1 hover:text-ink transition-colors"
                   >
                     <GitPullRequest className="h-3.5 w-3.5" />#{item.pr_number}
                   </a>
@@ -149,7 +149,7 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
                     href={`https://github.com/${repoFullName}/commit/${item.commit_sha}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 font-mono hover:text-foreground transition-colors"
+                    className="inline-flex items-center gap-1 font-mono hover:text-ink transition-colors"
                   >
                     <GitCommit className="h-3.5 w-3.5" />
                     {item.commit_sha.slice(0, 7)}
@@ -164,7 +164,7 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
                 )}
 
                 {item.branch && (
-                  <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px]">
+                  <code className="rounded bg-sunken px-1.5 py-0.5 font-mono text-[11px]">
                     {item.branch}
                   </code>
                 )}

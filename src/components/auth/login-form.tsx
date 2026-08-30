@@ -29,7 +29,7 @@ export function LoginForm() {
       <button
         onClick={() => handleOAuth('github')}
         disabled={loading !== null}
-        className="w-full inline-flex items-center justify-center gap-3 rounded-lg border bg-card px-4 py-3 font-semibold hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full inline-flex items-center justify-center gap-3 rounded-lg border border-line bg-surface px-4 py-3 font-semibold hover:bg-sunken transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <GitBranch className="w-5 h-5" />
         {loading === 'github' ? 'Redirecionando...' : 'Continuar com GitHub'}
@@ -38,7 +38,7 @@ export function LoginForm() {
       <button
         onClick={() => handleOAuth('google')}
         disabled={loading !== null}
-        className="w-full inline-flex items-center justify-center gap-3 rounded-lg border bg-card px-4 py-3 font-semibold hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full inline-flex items-center justify-center gap-3 rounded-lg border border-line bg-surface px-4 py-3 font-semibold hover:bg-sunken transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <svg className="w-5 h-5" viewBox="0 0 24 24">
           <path
@@ -61,7 +61,7 @@ export function LoginForm() {
         {loading === 'google' ? 'Redirecionando...' : 'Continuar com Google'}
       </button>
 
-      <p className="text-center text-xs text-muted-foreground pt-2">
+      <p className="text-center text-xs text-muted pt-2">
         Ao entrar, você concorda com os termos de uso e política de privacidade.
       </p>
     </div>

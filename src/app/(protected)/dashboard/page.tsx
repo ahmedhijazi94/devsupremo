@@ -1,12 +1,21 @@
-import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
+import {
+  Plus,
+  FolderOpen,
+  GitPullRequest,
+  ShieldCheck,
+  ArrowRight,
+} from 'lucide-react'
+import { createClient } from '@/lib/supabase/server'
+import { Card, CardTitle, CardNote, Stat } from '@/components/ui/card'
+import { ButtonLink } from '@/components/ui/button'
+import { Pill } from '@/components/ui/pill'
 import { ProjectCard } from '@/components/dashboard/project-card'
-import { EmptyProjects } from '@/components/dashboard/empty-projects'
 import { Onboarding } from '@/components/dashboard/onboarding'
 import { isSupabaseOAuthAvailable } from '@/actions/accounts'
 import { isVercelOAuthAvailable } from '@/actions/vercel'
-import { PlusIcon } from 'lucide-react'
-import Link from 'next/link'
+import { formatRelativeTime } from '@/lib/utils'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -14,14 +23,14 @@ export default async function DashboardPage() {
   const {
     data: { user },
   } = await supabase.auth.getUser()
-
   if (!user) redirect('/login')
 
   const [
-    { data: projects, error },
+    { data: projects },
     github,
     supabaseAccounts,
     vercel,
+    { data: changes },
     supabaseOAuth,
     vercelOAuth,
   ] = await Promise.all([
@@ -42,15 +51,18 @@ export default async function DashboardPage() {
       .from('vercel_accounts')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', user.id),
+    supabase
+      .from('messages')
+      .select('id, content, pipeline_status, created_at, project_id, pr_number')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(6),
     isSupabaseOAuthAvailable(),
     isVercelOAuthAvailable(),
   ])
 
-  if (error) {
-    console.error('[dashboard] falha ao carregar projetos:', error.message)
-  }
-
   const projectList = projects ?? []
+  const changeList = changes ?? []
 
   const connections = {
     github: (github.count ?? 0) > 0,
@@ -60,42 +72,173 @@ export default async function DashboardPage() {
     vercelOAuth,
   }
 
-  // O passo a passo some quando as três estão conectadas — depois disso ele
-  // seria só ruído acima da lista de projetos.
-  const showOnboarding =
+  const needsSetup =
     !connections.github || !connections.supabase || !connections.vercel
 
+  const provisioned = projectList.filter((p) => p.github_repo_full_name).length
+  const green = changeList.filter((c) => c.pipeline_status === 'passed').length
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-3 sm:space-y-4">
+      {needsSetup && <Onboarding status={connections} />}
+
+      {/* Cabeçalho */}
+      <Card className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Projetos</h1>
-          <p className="text-muted-foreground">
+          <CardTitle className="text-xl">Painel</CardTitle>
+          <CardNote className="mt-1">
             {projectList.length === 0
               ? 'Nenhum projeto ainda'
-              : `${projectList.length} projeto${projectList.length > 1 ? 's' : ''}`}
-          </p>
+              : `${projectList.length} projeto${projectList.length > 1 ? 's' : ''} · ${provisioned} provisionado${provisioned === 1 ? '' : 's'}`}
+          </CardNote>
         </div>
-        <Link
-          href="/projects/new"
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
-        >
-          <PlusIcon className="w-4 h-4" />
+
+        <ButtonLink href="/projects/new">
+          <Plus className="h-4 w-4" />
           Novo projeto
-        </Link>
+        </ButtonLink>
+      </Card>
+
+      {/* Números */}
+      <div className="grid gap-3 sm:gap-4 md:grid-cols-3">
+        <Stat
+          label="Projetos"
+          value={projectList.length}
+          icon={<FolderOpen className="h-5 w-5" />}
+          footer={
+            <Link
+              href="/projects"
+              className="group inline-flex items-center gap-2 text-sm font-medium"
+            >
+              Ver todos
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </Link>
+          }
+        />
+
+        <Stat
+          label="Mudanças propostas"
+          value={changeList.length}
+          {...(green > 0
+            ? { delta: { value: `${green} verde${green > 1 ? 's' : ''}`, direction: 'up' as const } }
+            : {})}
+          icon={<GitPullRequest className="h-5 w-5" />}
+          footer={
+            <p className="text-sm text-muted">
+              Cada uma passou por pull request e gates.
+            </p>
+          }
+        />
+
+        <Stat
+          label="Contas conectadas"
+          value={
+            (connections.github ? 1 : 0) +
+            (connections.supabase ? 1 : 0) +
+            (connections.vercel ? 1 : 0)
+          }
+          icon={<ShieldCheck className="h-5 w-5" />}
+          footer={
+            <Link
+              href="/accounts"
+              className="group inline-flex items-center gap-2 text-sm font-medium"
+            >
+              Gerenciar
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </Link>
+          }
+        />
       </div>
 
-      {showOnboarding && <Onboarding status={connections} />}
+      {/* Projetos e atividade */}
+      <div className="grid gap-3 sm:gap-4 xl:grid-cols-[1fr_380px]">
+        <Card>
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <div>
+              <CardTitle>Seus projetos</CardTitle>
+              <CardNote className="mt-0.5">
+                Repositório, banco e preview de cada um.
+              </CardNote>
+            </div>
+            {projectList.length > 0 && (
+              <Link
+                href="/projects"
+                className="shrink-0 text-sm font-medium text-muted transition-colors hover:text-ink"
+              >
+                Ver todos
+              </Link>
+            )}
+          </div>
 
-      {projectList.length === 0 ? (
-        !showOnboarding && <EmptyProjects />
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {projectList.map((project) => (
-            <ProjectCard key={project.id} project={project} />
-          ))}
-        </div>
-      )}
+          {projectList.length === 0 ? (
+            <div className="rounded-[var(--radius-inner)] bg-sunken px-6 py-12 text-center">
+              <p className="font-medium">Nenhum projeto ainda</p>
+              <CardNote className="mx-auto mt-1.5 max-w-sm">
+                Um projeto novo já nasce com repositório, banco com RLS, gates
+                no CI e preview publicado.
+              </CardNote>
+              <ButtonLink href="/projects/new" className="mt-5" size="sm">
+                <Plus className="h-4 w-4" />
+                Criar projeto
+              </ButtonLink>
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {projectList.slice(0, 6).map((project) => (
+                <ProjectCard key={project.id} project={project} />
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <CardTitle>Últimas mudanças</CardTitle>
+          <CardNote className="mt-0.5 mb-5">
+            Propostas do agente, com o resultado dos gates.
+          </CardNote>
+
+          {changeList.length === 0 ? (
+            <div className="rounded-[var(--radius-inner)] bg-sunken px-5 py-10 text-center">
+              <CardNote>
+                Conecte um agente em{' '}
+                <Link href="/mcps" className="underline underline-offset-2">
+                  MCP
+                </Link>{' '}
+                e peça a primeira alteração.
+              </CardNote>
+            </div>
+          ) : (
+            <ul className="space-y-2.5">
+              {changeList.map((change) => (
+                <li
+                  key={change.id}
+                  className="flex items-start gap-3 rounded-[var(--radius-inner)] bg-sunken p-3.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">
+                      {change.content}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted">
+                      {change.pr_number ? `PR #${change.pr_number} · ` : ''}
+                      {formatRelativeTime(change.created_at)}
+                    </p>
+                  </div>
+                  <GateBadge status={change.pipeline_status} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
     </div>
   )
+}
+
+function GateBadge({ status }: { status: string | null }) {
+  if (status === 'passed') return <Pill tone="up">verde</Pill>
+  if (status === 'failed') return <Pill tone="down">vermelho</Pill>
+  if (status === 'running' || status === 'pending') {
+    return <Pill tone="wait">rodando</Pill>
+  }
+  return <Pill>—</Pill>
 }

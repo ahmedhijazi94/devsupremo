@@ -22,7 +22,7 @@ export function SignOutButton() {
   return (
     <button
       onClick={handleSignOut}
-      className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+      className="p-2 rounded-lg hover:bg-sunken transition-colors text-muted hover:text-ink"
       title="Sair"
     >
       <LogOut className="w-4 h-4" />

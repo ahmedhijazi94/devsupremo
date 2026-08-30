@@ -41,13 +41,13 @@ export function ScaffoldForm({
   return (
     <div className="space-y-3">
       {access?.status === 'missing_access' && (
-        <div className="flex gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5">
-          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+        <div className="flex gap-3 rounded-lg border border-wait bg-wait/30 p-3.5">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-wait-ink" />
           <div className="space-y-1.5 text-sm">
             <p className="font-medium">
               A Vercel ainda não enxerga a conta {access.owner}
             </p>
-            <p className="text-muted-foreground">
+            <p className="text-muted">
               Ela precisa ler o repositório para publicar o preview. É uma
               autorização entre a Vercel e o GitHub, feita uma vez por conta.
               Sem ela o projeto é criado, mas fica sem preview.
@@ -57,7 +57,7 @@ export function ScaffoldForm({
                 href={access.installUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline"
+                className="inline-flex items-center gap-1.5 font-medium text-ink hover:underline"
               >
                 Autorizar a Vercel em {access.owner}
                 <ExternalLink className="h-3.5 w-3.5" />

@@ -6,6 +6,7 @@ import {
   connectVercelFromOnboarding,
 } from '@/actions/onboarding'
 import { cn } from '@/lib/utils'
+import { Card } from '@/components/ui/card'
 
 export interface OnboardingStatus {
   github: boolean
@@ -64,12 +65,12 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
   const ready = remaining.length === 0
 
   return (
-    <section className="rounded-xl border bg-card p-6">
+    <Card>
       <header className="mb-5">
         <h2 className="text-lg font-semibold">
           {ready ? 'Tudo conectado' : 'Conecte suas contas'}
         </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="mt-1 text-sm text-muted">
           {ready
             ? 'Você já pode criar um projeto. Ele nasce com repositório, banco e preview.'
             : `Faltam ${remaining.length} de ${steps.length}. Cada uma é uma autorização — nenhuma pede token.`}
@@ -82,15 +83,15 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
             key={step.key}
             className={cn(
               'flex items-center gap-4 rounded-lg border p-4 transition-colors',
-              step.done ? 'border-border/60 bg-muted/20' : 'bg-background'
+              step.done ? 'border-line bg-sunken' : 'bg-surface'
             )}
           >
             <span
               className={cn(
                 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
                 step.done
-                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                  : 'border text-muted-foreground'
+                  ? 'bg-up text-up-ink'
+                  : 'border text-muted'
               )}
             >
               {step.done ? <Check className="h-4 w-4" /> : index + 1}
@@ -100,18 +101,18 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
               <p
                 className={cn(
                   'text-sm font-medium',
-                  step.done && 'text-muted-foreground'
+                  step.done && 'text-muted'
                 )}
               >
                 {step.title}
               </p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-muted">
                 {step.description}
               </p>
             </div>
 
             {step.done ? (
-              <span className="shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              <span className="shrink-0 text-xs font-medium text-up-ink">
                 Conectado
               </span>
             ) : step.oauth ? (
@@ -127,7 +128,7 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
             ) : (
               <Link
                 href="/accounts"
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors hover:bg-accent"
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line px-3 text-xs font-medium transition-colors hover:bg-sunken"
               >
                 Conectar
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -140,12 +141,12 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
       {ready && (
         <Link
           href="/projects/new"
-          className="mt-5 inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          className="mt-5 inline-flex h-10 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent/90"
         >
           Criar primeiro projeto
           <ArrowRight className="h-4 w-4" />
         </Link>
       )}
-    </section>
+    </Card>
   )
 }

@@ -31,7 +31,7 @@ export function DisconnectAccountButton({ type, accountId }: DisconnectAccountBu
     <button
       onClick={handleDisconnect}
       disabled={isPending}
-      className="p-2 rounded-lg text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+      className="p-2 rounded-lg text-muted hover:bg-down hover:text-down-ink transition-colors disabled:opacity-50"
       title="Desconectar conta"
     >
       <Trash2 className="w-4 h-4" />

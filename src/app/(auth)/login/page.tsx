@@ -1,15 +1,25 @@
+import { Zap } from 'lucide-react'
+import { Card, CardNote } from '@/components/ui/card'
 import { LoginForm } from '@/components/auth/login-form'
+
+export const metadata = { title: 'Entrar — Supremo' }
 
 export default function LoginPage() {
   return (
-    <main className="min-h-screen bg-background flex items-center justify-center px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold">Supremo</h1>
-          <p className="text-muted-foreground">Entre para gerenciar seus apps</p>
+    <main className="flex min-h-screen items-center justify-center p-4">
+      <Card className="w-full max-w-sm px-7 py-9">
+        <div className="mb-7 text-center">
+          <span className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-[var(--radius-control)] bg-accent">
+            <Zap className="h-5 w-5 text-accent-ink" />
+          </span>
+          <h1 className="text-2xl font-semibold tracking-tight">Supremo</h1>
+          <CardNote className="mt-1.5">
+            Entre para gerenciar seus projetos
+          </CardNote>
         </div>
+
         <LoginForm />
-      </div>
+      </Card>
     </main>
   )
 }

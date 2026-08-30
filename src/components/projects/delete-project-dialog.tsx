@@ -57,7 +57,7 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
           e.preventDefault()
           setIsOpen(true)
         }}
-        className="p-1.5 rounded-lg border hover:bg-destructive/10 border-destructive/20 text-destructive transition-colors ml-2"
+        className="p-1.5 rounded-lg border border-line hover:bg-destructive/10 border-destructive/20 text-destructive transition-colors ml-2"
         title="Excluir Projeto"
       >
         <Trash2 className="w-3.5 h-3.5" />
@@ -66,8 +66,8 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-      <div className="w-full max-w-md p-6 bg-card border rounded-xl shadow-lg relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface/80 backdrop-blur-sm">
+      <div className="w-full max-w-md p-6 bg-surface border border-line rounded-xl shadow-lg relative">
         <div className="flex items-center gap-3 text-destructive mb-4">
           <div className="p-2 bg-destructive/10 rounded-full">
             <AlertTriangle className="w-6 h-6" />
@@ -75,11 +75,11 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
           <h2 className="text-xl font-bold">DANGER ZONE</h2>
         </div>
         
-        <p className="text-muted-foreground text-sm mb-4">
+        <p className="text-muted text-sm mb-4">
           Você está prestes a excluir o projeto <strong>{projectName}</strong>. 
           Isso irá deletar de forma <strong className="text-destructive">IRREVERSÍVEL</strong>:
         </p>
-        <ul className="list-disc pl-5 text-sm text-muted-foreground mb-6 space-y-1">
+        <ul className="list-disc pl-5 text-sm text-muted mb-6 space-y-1">
           <li>O repositório no GitHub (e todo o código).</li>
           <li>O projeto no Supabase (banco de dados, storage, logs).</li>
           <li>Este projeto no dashboard do Supremo.</li>
@@ -94,7 +94,7 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
               type="text"
               value={confirmName}
               onChange={(e) => setConfirmName(e.target.value)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-destructive"
+              className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-destructive"
               placeholder={projectName}
               required
             />
@@ -104,7 +104,7 @@ export function DeleteProjectDialog({ projectId, projectName }: DeleteProjectDia
             <button
               type="button"
               onClick={() => setIsOpen(false)}
-              className="px-4 py-2 text-sm font-medium hover:bg-accent rounded-md transition-colors"
+              className="px-4 py-2 text-sm font-medium hover:bg-sunken rounded-md transition-colors"
               disabled={isPending}
             >
               Cancelar

@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Settings, User, KeyRound, GitBranch, Database, ArrowRight } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
+import { Card, CardTitle, CardNote } from '@/components/ui/card'
 
 export const metadata = {
   title: 'Configurações — Supremo',
@@ -47,25 +48,25 @@ export default async function SettingsPage() {
   ]
 
   return (
-    <div className="space-y-8 max-w-3xl">
-      <header>
+    <div className="space-y-3 sm:space-y-4">
+      <Card>
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Settings className="w-6 h-6 text-primary" />
+          <Settings className="w-6 h-6 text-ink" />
           Configurações
         </h1>
-        <p className="text-muted-foreground mt-1.5">
+        <p className="text-muted mt-1.5">
           Sua conta, integrações e acessos.
         </p>
-      </header>
+      </Card>
 
-      <section className="rounded-xl border bg-card p-5 space-y-4">
+      <Card className="space-y-4">
         <div className="flex items-center gap-2">
-          <User className="w-4 h-4 text-primary" />
+          <User className="w-4 h-4 text-ink" />
           <h2 className="font-semibold">Perfil</h2>
         </div>
         <dl className="grid gap-3 sm:grid-cols-2">
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <dt className="text-xs font-medium uppercase tracking-wide text-muted">
               Nome
             </dt>
             <dd className="text-sm mt-0.5">
@@ -73,13 +74,13 @@ export default async function SettingsPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <dt className="text-xs font-medium uppercase tracking-wide text-muted">
               E-mail
             </dt>
             <dd className="text-sm mt-0.5 break-all">{user.email}</dd>
           </div>
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <dt className="text-xs font-medium uppercase tracking-wide text-muted">
               Conta criada
             </dt>
             <dd className="text-sm mt-0.5">
@@ -87,7 +88,7 @@ export default async function SettingsPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <dt className="text-xs font-medium uppercase tracking-wide text-muted">
               Provedor
             </dt>
             <dd className="text-sm mt-0.5 capitalize">
@@ -95,11 +96,11 @@ export default async function SettingsPage() {
             </dd>
           </div>
         </dl>
-      </section>
+      </Card>
 
-      <section className="space-y-3">
+      <Card className="space-y-3">
         <div className="flex items-center gap-2">
-          <Database className="w-4 h-4 text-primary" />
+          <Database className="w-4 h-4 text-ink" />
           <h2 className="font-semibold">Integrações</h2>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -107,28 +108,28 @@ export default async function SettingsPage() {
             <Link
               key={link.href}
               href={link.href}
-              className="group rounded-xl border bg-card p-4 hover:border-primary/40 hover:bg-accent/40 transition-colors"
+              className="group rounded-xl border border-line bg-surface p-4 hover:border-primary/40 hover:bg-sunken transition-colors"
             >
               <div className="flex items-start gap-3">
-                <link.icon className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
+                <link.icon className="w-4 h-4 text-muted mt-0.5 shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">{link.title}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
+                  <p className="text-xs text-muted mt-0.5">
                     {link.description}
                   </p>
                 </div>
-                <ArrowRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                <ArrowRight className="w-4 h-4 text-muted opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
               </div>
             </Link>
           ))}
         </div>
-      </section>
+      </Card>
 
-      <section className="rounded-xl border border-red-500/20 bg-red-500/5 p-5 space-y-3">
-        <h2 className="font-semibold text-red-600 dark:text-red-400">
+      <Card className="rounded-xl border border-down bg-down/30 p-5 space-y-3">
+        <h2 className="font-semibold text-down-ink">
           Encerrar sessão
         </h2>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm text-muted">
           Sai apenas deste navegador. Os tokens de MCP continuam válidos —
           revogue-os em{' '}
           <Link href="/mcps" className="underline underline-offset-2">
@@ -139,12 +140,12 @@ export default async function SettingsPage() {
         <form action="/auth/logout" method="POST">
           <button
             type="submit"
-            className="h-9 inline-flex items-center rounded-lg border border-red-500/30 bg-background px-4 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+            className="h-9 inline-flex items-center rounded-lg border border-down bg-surface px-4 text-sm font-medium text-down-ink hover:bg-red-500/10 transition-colors"
           >
             Sair
           </button>
         </form>
-      </section>
+      </Card>
     </div>
   )
 }

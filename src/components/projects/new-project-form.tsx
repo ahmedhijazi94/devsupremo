@@ -47,15 +47,15 @@ export function NewProjectForm() {
 
   if (isPending) {
     return (
-      <div className="rounded-xl border p-10 text-center space-y-4">
-        <Loader2 className="w-10 h-10 mx-auto animate-spin text-primary" />
+      <div className="rounded-xl border border-line p-10 text-center space-y-4">
+        <Loader2 className="w-10 h-10 mx-auto animate-spin text-ink" />
         <p className="font-semibold text-lg">Criando projeto...</p>
       </div>
     )
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 rounded-xl border bg-card p-6">
+    <form onSubmit={handleSubmit} className="space-y-6 rounded-xl border border-line bg-surface p-6">
       {/* Nome do projeto */}
       <div className="space-y-2">
         <label className="text-sm font-medium">
@@ -67,12 +67,12 @@ export function NewProjectForm() {
           onChange={handleNameChange}
           placeholder="Meu Novo Projeto"
           required
-          className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
         />
         {nameError && <p className="text-xs text-destructive">{nameError}</p>}
         {slug && (
-          <p className="text-xs text-muted-foreground mt-1">
-            Repositório será: <span className="font-mono text-foreground">{slug}</span>
+          <p className="text-xs text-muted mt-1">
+            Repositório será: <span className="font-mono text-ink">{slug}</span>
           </p>
         )}
       </div>
@@ -86,14 +86,14 @@ export function NewProjectForm() {
           onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
           placeholder="O que esse app vai fazer?"
           maxLength={200}
-          className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
         />
       </div>
 
       <button
         type="submit"
         disabled={!form.name || !!nameError || isPending}
-        className="w-full rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+        className="w-full rounded-lg bg-accent px-4 py-3 text-sm font-semibold text-accent-ink hover:bg-accent/90 transition-colors disabled:opacity-50"
       >
         Avançar para Configuração
       </button>

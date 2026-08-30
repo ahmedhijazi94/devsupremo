@@ -20,7 +20,7 @@ export default function RootLayout({
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <body
-        className={`${inter.className} antialiased min-h-screen bg-background`}
+        className={`${inter.className} antialiased min-h-screen bg-surface`}
         suppressHydrationWarning
       >
         <ThemeProvider

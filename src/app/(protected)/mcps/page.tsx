@@ -2,6 +2,7 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { Cpu, Globe, ShieldCheck, GitPullRequest } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
+import { Card, CardTitle, CardNote } from '@/components/ui/card'
 import { CopyButton } from '@/components/ui/copy-button'
 import { TokenManager, type TokenRow } from '@/components/mcps/token-manager'
 
@@ -74,59 +75,59 @@ export default async function MCPsPage() {
   )
 
   return (
-    <div className="space-y-8 max-w-4xl">
-      <header>
+    <div className="space-y-3 sm:space-y-4">
+      <Card>
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Cpu className="w-6 h-6 text-primary" />
+          <Cpu className="w-6 h-6 text-ink" />
           Integração MCP
         </h1>
-        <p className="text-muted-foreground mt-1.5">
+        <p className="text-muted mt-1.5">
           Conecte qualquer agente — Claude Code, Antigravity, Codex, Cursor — de
           qualquer computador. Nada é instalado localmente: o agente fala HTTP
           com o Supremo, e o Supremo é o único que toca o seu GitHub e o seu
           Supabase.
         </p>
-      </header>
+      </Card>
 
       {/* Endpoint */}
-      <section className="rounded-xl border bg-card p-5 space-y-3">
+      <Card className="space-y-3">
         <div className="flex items-center gap-2">
-          <Globe className="w-4 h-4 text-primary" />
+          <Globe className="w-4 h-4 text-ink" />
           <h2 className="font-semibold">Seu endpoint</h2>
         </div>
         <div className="relative">
-          <pre className="bg-secondary rounded-lg p-3 pr-12 text-sm font-mono overflow-x-auto text-secondary-foreground">
+          <pre className="bg-sunken rounded-lg p-3 pr-12 text-sm font-mono overflow-x-auto text-ink">
             {mcpUrl}
           </pre>
           <CopyButton value={mcpUrl} className="absolute top-2.5 right-2.5" />
         </div>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm text-muted">
           O mesmo endereço funciona de qualquer lugar. O que separa as suas
           contas é o token, não a máquina.
         </p>
-      </section>
+      </Card>
 
       {/* Tokens */}
-      <section className="space-y-3">
+      <Card className="space-y-3">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-primary" />
+          <ShieldCheck className="w-4 h-4 text-ink" />
           <h2 className="font-semibold">Tokens de acesso</h2>
         </div>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm text-muted">
           Um token por máquina facilita revogar o acesso de um computador sem
           derrubar os outros.
         </p>
         <TokenManager tokens={(tokens ?? []) as TokenRow[]} mcpUrl={mcpUrl} />
-      </section>
+      </Card>
 
       {/* Clientes */}
-      <section className="space-y-4">
+      <Card className="space-y-4">
         <h2 className="font-semibold">Como conectar</h2>
 
-        <div className="rounded-xl border bg-card p-5 space-y-3">
+        <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
           <h3 className="text-sm font-semibold">Claude Code</h3>
           <div className="relative">
-            <pre className="bg-secondary rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-secondary-foreground">
+            <pre className="bg-sunken rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-ink">
               {claudeCodeCommand}
             </pre>
             <CopyButton
@@ -136,15 +137,15 @@ export default async function MCPsPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border bg-card p-5 space-y-3">
+        <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
           <h3 className="text-sm font-semibold">
             Cursor · Windsurf · Claude Desktop · Codex
           </h3>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted">
             Clientes com suporte a MCP remoto aceitam a configuração direta:
           </p>
           <div className="relative">
-            <pre className="bg-secondary rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-secondary-foreground">
+            <pre className="bg-sunken rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-ink">
               {jsonConfig}
             </pre>
             <CopyButton
@@ -154,17 +155,17 @@ export default async function MCPsPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border bg-card p-5 space-y-3">
+        <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
           <h3 className="text-sm font-semibold">
             Cliente sem suporte a MCP remoto
           </h3>
-          <p className="text-sm text-muted-foreground">
-            A ponte roda via <code className="bg-secondary px-1 py-0.5 rounded">npx</code>,
+          <p className="text-sm text-muted">
+            A ponte roda via <code className="bg-sunken px-1 py-0.5 rounded">npx</code>,
             sem instalação permanente. Ela só repassa as chamadas para o
             endpoint acima — nenhum segredo mora nela.
           </p>
           <div className="relative">
-            <pre className="bg-secondary rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-secondary-foreground">
+            <pre className="bg-sunken rounded-lg p-3 pr-12 text-xs font-mono overflow-x-auto text-ink">
               {bridgeConfig}
             </pre>
             <CopyButton
@@ -173,54 +174,54 @@ export default async function MCPsPage() {
             />
           </div>
         </div>
-      </section>
+      </Card>
 
       {/* Como funciona */}
-      <section className="rounded-xl border border-primary/20 bg-primary/5 p-5 space-y-3">
-        <div className="flex items-center gap-2 text-primary">
+      <Card className="rounded-xl border border-line bg-sunken p-5 space-y-3">
+        <div className="flex items-center gap-2 text-ink">
           <GitPullRequest className="w-4 h-4" />
           <h2 className="font-semibold">O que o agente pode e não pode fazer</h2>
         </div>
-        <ul className="text-sm space-y-2 text-muted-foreground">
+        <ul className="text-sm space-y-2 text-muted">
           <li>
-            <strong className="text-foreground">
+            <strong className="text-ink">
               As regras viajam com o projeto.
             </strong>{' '}
-            <code className="bg-secondary px-1 py-0.5 rounded text-xs">
+            <code className="bg-sunken px-1 py-0.5 rounded text-xs">
               get_project_context
             </code>{' '}
             devolve o agents.md, o CLAUDE.md e o SECURITY.md lidos do seu
             repositório. O agente segue as regras sem clonar nada.
           </li>
           <li>
-            <strong className="text-foreground">
+            <strong className="text-ink">
               Não existe commit direto na main.
             </strong>{' '}
             A única ferramenta de escrita cria branch e abre pull request.
           </li>
           <li>
-            <strong className="text-foreground">O gate é real.</strong>{' '}
-            <code className="bg-secondary px-1 py-0.5 rounded text-xs">
+            <strong className="text-ink">O gate é real.</strong>{' '}
+            <code className="bg-sunken px-1 py-0.5 rounded text-xs">
               wait_for_checks
             </code>{' '}
             espera o CI de verdade, e{' '}
-            <code className="bg-secondary px-1 py-0.5 rounded text-xs">
+            <code className="bg-sunken px-1 py-0.5 rounded text-xs">
               merge_when_green
             </code>{' '}
             recusa se algum check estiver vermelho.
           </li>
           <li>
-            <strong className="text-foreground">
+            <strong className="text-ink">
               Migration sem RLS é recusada.
             </strong>{' '}
             Tabela nova sem{' '}
-            <code className="bg-secondary px-1 py-0.5 rounded text-xs">
+            <code className="bg-sunken px-1 py-0.5 rounded text-xs">
               ENABLE ROW LEVEL SECURITY
             </code>{' '}
             não passa pelo servidor.
           </li>
         </ul>
-      </section>
+      </Card>
     </div>
   )
 }

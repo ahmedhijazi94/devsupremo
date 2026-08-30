@@ -146,7 +146,7 @@ export default async function SettingsPage() {
         <form action="/auth/logout" method="POST">
           <button
             type="submit"
-            className="border-down bg-surface text-down-ink inline-flex h-9 items-center rounded-[var(--radius-control)] border px-4 text-sm font-medium transition-colors hover:bg-red-500/10"
+            className="border-down bg-surface text-down-ink hover:bg-down-ink/10 inline-flex h-9 items-center rounded-[var(--radius-control)] border px-4 text-sm font-medium transition-colors"
           >
             Sair
           </button>

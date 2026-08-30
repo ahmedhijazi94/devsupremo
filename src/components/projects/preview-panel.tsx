@@ -99,10 +99,10 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   const showFrame = state?.status === 'ready' && state.url
 
   return (
-    <section className="bg-surface flex h-full flex-col overflow-hidden rounded-[var(--radius-card)]">
+    <section className="bg-sunken flex h-full flex-col overflow-hidden rounded-[var(--radius-inner)]">
       {/* Barra de ferramentas */}
       <header className="flex shrink-0 flex-wrap items-center gap-3 px-3 py-2.5">
-        <div className="bg-sunken flex rounded-[var(--radius-control)] p-0.5">
+        <div className="bg-surface flex rounded-[var(--radius-control)] p-0.5">
           {DEVICES.map((option) => (
             <button
               key={option.id}
@@ -112,7 +112,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
               className={cn(
                 'rounded-md p-1.5 transition-colors',
                 device === option.id
-                  ? 'bg-surface text-ink shadow-sm'
+                  ? 'bg-sunken text-ink'
                   : 'text-muted hover:text-ink',
               )}
             >
@@ -127,7 +127,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
             load()
           }}
           title="Recarregar"
-          className="text-muted hover:bg-sunken hover:text-ink rounded-md p-1.5 transition-colors"
+          className="bg-surface text-muted hover:text-ink rounded-[var(--radius-control)] p-1.5 transition-colors"
         >
           <RefreshCw className="h-4 w-4" />
         </button>
@@ -139,7 +139,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
             onClick={publish}
             disabled={publishing}
             title="Publicar o estado atual do repositório"
-            className="bg-sunken hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+            className="bg-surface hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
           >
             {publishing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -152,7 +152,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
           {state?.url && (
             <button
               onClick={copyLink}
-              className="bg-sunken text-muted hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors"
+              className="bg-surface text-muted hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors"
             >
               {copied ? (
                 <>
@@ -173,7 +173,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
               href={`https://github.com/${repoFullName}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="bg-sunken text-muted hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors"
+              className="bg-surface text-muted hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors"
             >
               <Code2 className="h-3.5 w-3.5" />
               Código
@@ -185,7 +185,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
               href={state.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="bg-sunken text-muted hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors"
+              className="bg-surface text-muted hover:text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               Abrir
@@ -195,7 +195,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
       </header>
 
       {/* Área do preview */}
-      <div className="bg-sunken flex min-h-0 flex-1 items-center justify-center overflow-auto p-3">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto px-3 pb-3">
         {showFrame ? (
           <div
             className="h-full max-h-full overflow-hidden rounded-[var(--radius-inner)] bg-white shadow-lg transition-[width] duration-300"
@@ -228,16 +228,16 @@ function StatusPill({ state }: { state: PreviewState | null }) {
   }
 
   const config = {
-    ready: { dot: 'bg-emerald-500', label: 'No ar', pulse: false },
-    building: { dot: 'bg-amber-500', label: 'Publicando', pulse: true },
-    error: { dot: 'bg-red-500', label: 'Falhou', pulse: false },
+    ready: { dot: 'bg-up-ink', label: 'No ar', pulse: false },
+    building: { dot: 'bg-wait-ink', label: 'Publicando', pulse: true },
+    error: { dot: 'bg-down-ink', label: 'Falhou', pulse: false },
     no_deployment: {
-      dot: 'bg-sunken-foreground',
+      dot: 'bg-line-strong',
       label: 'Sem deploy',
       pulse: false,
     },
     not_connected: {
-      dot: 'bg-sunken-foreground',
+      dot: 'bg-line-strong',
       label: 'Não conectado',
       pulse: false,
     },
@@ -285,7 +285,7 @@ function EmptyState({ state }: { state: PreviewState | null }) {
         className={cn(
           'mx-auto mb-3 h-6 w-6',
           state.status === 'building' && 'text-wait-ink animate-spin',
-          state.status === 'error' && 'text-red-500',
+          state.status === 'error' && 'text-down-ink',
           (state.status === 'not_connected' ||
             state.status === 'no_deployment') &&
             'text-muted',

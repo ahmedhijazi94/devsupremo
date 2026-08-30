@@ -15,9 +15,9 @@
 
 @theme {
   /* Superfícies — do mais distante ao mais próximo */
-  --color-canvas: oklch(96.2% 0.004 255);
+  --color-canvas: oklch(93.4% 0.005 255);
   --color-surface: oklch(100% 0 0);
-  --color-sunken: oklch(97.4% 0.003 255);
+  --color-sunken: oklch(96.5% 0.004 255);
 
   /* Texto */
   --color-ink: oklch(17% 0.014 255);
@@ -25,8 +25,8 @@
   --color-muted: oklch(58% 0.012 255);
 
   /* Traço — reservado a campos e ao que precisa de contorno real */
-  --color-line: oklch(93% 0.004 255);
-  --color-line-strong: oklch(88% 0.006 255);
+  --color-line: oklch(91% 0.005 255);
+  --color-line-strong: oklch(85% 0.007 255);
 
   /* Ação */
   --color-accent: oklch(17% 0.014 255);

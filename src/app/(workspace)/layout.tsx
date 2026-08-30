@@ -20,5 +20,5 @@ export default async function WorkspaceLayout({
 
   if (!user) redirect('/login')
 
-  return <div className="bg-surface h-screen overflow-hidden">{children}</div>
+  return <div className="bg-canvas h-screen overflow-hidden">{children}</div>
 }

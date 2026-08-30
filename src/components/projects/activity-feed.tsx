@@ -36,25 +36,25 @@ const PIPELINE_STATES = {
     icon: CheckCircle2,
     label: 'Gates verdes',
     className: 'text-up-ink',
-    dot: 'bg-emerald-500',
+    dot: 'bg-up-ink',
   },
   failed: {
     icon: XCircle,
     label: 'Gate vermelho',
     className: 'text-down-ink',
-    dot: 'bg-red-500',
+    dot: 'bg-down-ink',
   },
   running: {
     icon: Loader2,
     label: 'Rodando',
-    className: 'text-amber-600',
-    dot: 'bg-amber-500',
+    className: 'text-wait-ink',
+    dot: 'bg-wait-ink',
   },
   pending: {
     icon: Clock,
     label: 'Na fila',
     className: 'text-muted',
-    dot: 'bg-sunken-foreground',
+    dot: 'bg-line-strong',
   },
 } as const
 
@@ -102,7 +102,7 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
             <span
               aria-hidden
               className={`border-surface ring-line-strong relative mt-1.5 h-[15px] w-[15px] shrink-0 rounded-full border-2 ring-1 ${
-                state?.dot ?? 'bg-sunken-foreground'
+                state?.dot ?? 'bg-line-strong'
               }`}
             />
 

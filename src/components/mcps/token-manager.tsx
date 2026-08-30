@@ -153,7 +153,7 @@ export function TokenManager({ tokens, mcpUrl }: TokenManagerProps) {
                       {token.token_prefix}…
                     </code>
                     {expired && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide text-amber-600 uppercase">
+                      <span className="text-wait-ink inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide uppercase">
                         <AlertTriangle className="h-3 w-3" />
                         expirado
                       </span>

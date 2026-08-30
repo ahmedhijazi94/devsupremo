@@ -305,6 +305,33 @@ export async function findProjectByName(
   }
 }
 
+/**
+ * Remove um projeto da Vercel.
+ *
+ * Projeto de preview existe enquanto o projeto do Supremo existe. Sem isso
+ * cada exclusão deixa um órfão consumindo cota da conta compartilhada — e
+ * ninguém vai limpá-los à mão.
+ */
+export async function deleteProject(
+  token: string,
+  teamId: string | null,
+  projectIdOrName: string
+): Promise<'deleted' | 'already_gone'> {
+  try {
+    await call(`/v9/projects/${projectIdOrName}`, {
+      token,
+      teamId,
+      method: 'DELETE',
+    })
+    return 'deleted'
+  } catch (error) {
+    if (error instanceof VercelError && error.status === 404) {
+      return 'already_gone'
+    }
+    throw error
+  }
+}
+
 export async function setEnvironmentVariables(
   token: string,
   teamId: string | null,

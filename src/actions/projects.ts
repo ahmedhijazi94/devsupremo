@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { decryptToken } from '@/lib/crypto'
+import { deleteSharedPreview, sharedPreviewConfig } from '@/lib/preview'
 
 const activateProjectSchema = z.object({
   projectId: z.string().uuid(),
@@ -264,6 +265,22 @@ export async function deleteProject(
       } catch {
         warnings.push('Não foi possível falar com a API do GitHub.')
       }
+    }
+  }
+
+  // ── Preview compartilhado ───────────────────────────────────
+  const previewName = project.preview_project_name as string | null
+  const preview = sharedPreviewConfig()
+
+  if (previewName && preview) {
+    try {
+      await deleteSharedPreview(preview, previewName)
+    } catch {
+      // Órfão na conta compartilhada é problema de quem opera a plataforma,
+      // não do usuário — vira registro, não aviso na tela dele.
+      console.error(
+        `[projects] preview ${previewName} não foi removido da conta compartilhada`
+      )
     }
   }
 

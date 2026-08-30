@@ -3,6 +3,7 @@ import {
   deployFiles,
   findProjectByName,
   makePubliclyAccessible,
+  deleteProject as deleteVercelProject,
   latestDeployment,
   setEnvironmentVariables,
   VercelError,
@@ -146,6 +147,19 @@ export async function publishSharedPreview(
   )
 
   return { deployment, projectName }
+}
+
+/**
+ * Remove o projeto de preview da conta compartilhada.
+ *
+ * Chamado ao excluir o projeto no Supremo: preview é acessório do projeto e
+ * não deve sobreviver a ele.
+ */
+export async function deleteSharedPreview(
+  config: SharedPreviewConfig,
+  projectName: string
+): Promise<'deleted' | 'already_gone'> {
+  return deleteVercelProject(config.token, config.teamId, projectName)
 }
 
 /** Estado do último preview publicado, sem republicar. */

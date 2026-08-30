@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { generateRlsTest } from './rls-tests'
+import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
 
 /**
  * Manifesto de arquivos de um projeto novo.
@@ -83,6 +83,26 @@ const SCRIPTS = {
   'audit:security': 'node scripts/security-audit.js',
 } as const
 
+/**
+ * Nome de cada job do CI, na grafia exata que o GitHub usa como nome do check.
+ *
+ * Fonte única de propósito: a proteção de branch exige checks POR NOME, e a
+ * lista dela vivia escrita à mão em outro arquivo. As duas divergiram — o CI
+ * rodava sete gates e o merge exigia três. Isolamento entre contas, varredura
+ * de segredos, vulnerabilidades e end-to-end rodavam, ficavam vermelhos, e o
+ * botão de merge continuava verde. Quem acrescentar um job aqui torna ele
+ * obrigatório no mesmo movimento.
+ */
+export const CI_JOB_NAMES = [
+  'Tipos, lint e auditoria',
+  'Testes e cobertura',
+  'Políticas RLS',
+  'Vulnerabilidades',
+  'Varredura de segredos',
+  'Build de produção',
+  'End-to-end',
+] as const
+
 /** Scripts que o CI invoca. O teste do manifesto confere que todos existem. */
 export const CI_INVOKED_SCRIPTS = [
   'audit:security',
@@ -121,6 +141,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'app/page.tsx', content: appPage(projectName, summary) },
     { path: 'app/globals.css', content: globalsCss() },
     { path: 'lib/utils.ts', content: libUtils() },
+    { path: 'proxy.ts', content: proxyFile() },
     { path: 'lib/supabase/proxy.example.ts', content: proxyExample() },
     { path: 'lib/supabase/client.ts', content: supabaseClient() },
     { path: 'lib/supabase/server.ts', content: supabaseServer() },
@@ -138,13 +159,11 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'app/page.test.tsx', content: pageTest(projectName) },
     {
       path: 'supabase/rls.rls.test.ts',
-      content: generateRlsTest([
-        {
-          name: 'profiles',
-          ownerColumn: 'user_id',
-          requiredColumns: [{ name: 'display_name', sampleValue: `'Alice'` }],
-        },
-      ]),
+      // Derivado da migration que acabou de ser escrita, nunca de uma lista à
+      // mão. A lista à mão cobria só `profiles`, e `audit_logs` — a trilha de
+      // auditoria, onde uma policy furada é mais cara — nascia sem uma única
+      // asserção provando o isolamento. O gate ficava verde por não olhar.
+      content: generateRlsTest(inferTablesFromMigration(initialMigration())),
     },
     { path: 'e2e/smoke.spec.ts', content: e2eSmoke(projectName) },
 
@@ -222,6 +241,18 @@ function tsconfig(): string {
  * O SECURITY.md do template anterior afirmava que a CSP estava configurada
  * em next.config.ts — arquivo que o scaffold nunca gerava.
  */
+/**
+ * Origem do painel do Supremo, embutida no app gerado.
+ *
+ * É o único site autorizado a enquadrar a aplicação. Sem um valor confiável
+ * aqui a alternativa seria liberar para todo mundo, que era o problema.
+ */
+function supremoOrigin(): string {
+  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim()
+  if (configured) return configured.replace(/\/+$/, '')
+  return 'https://supremo-three.vercel.app'
+}
+
 function nextConfig(): string {
   return `import type { NextConfig } from 'next'
 
@@ -243,27 +274,15 @@ const isFramable =
   process.env.SUPREMO_PREVIEW === '1'
 
 /**
- * Content-Security-Policy.
+ * A Content-Security-Policy NÃO mora aqui.
  *
- * 'unsafe-eval' só em desenvolvimento, onde o Fast Refresh do Next precisa.
- * Em produção o script fica restrito à própria origem.
+ * Ela precisa de um nonce diferente a cada requisição, e cabeçalho declarado
+ * em next.config é estático. A política inteira está em proxy.ts, na raiz.
+ * Duas CSPs no mesmo response se somam pela regra mais restritiva e viram
+ * bloqueio difícil de diagnosticar — por isso aqui não há nenhuma.
  */
-const csp = [
-  "default-src 'self'",
-  \`script-src 'self' 'unsafe-inline'\${isDev ? " 'unsafe-eval'" : ''}\`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.supabase.co https://avatars.githubusercontent.com",
-  "font-src 'self' data:",
-  "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
-  isFramable ? 'frame-ancestors *' : "frame-ancestors 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "object-src 'none'",
-  'upgrade-insecure-requests',
-].join('; ')
 
 const securityHeaders = [
-  { key: 'Content-Security-Policy', value: csp },
   {
     key: 'Strict-Transport-Security',
     value: 'max-age=63072000; includeSubDomains; preload',
@@ -479,6 +498,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 function appLayout(projectName: string, description: string): string {
   return `import type { Metadata } from 'next'
+import { headers } from 'next/headers'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -486,11 +506,27 @@ export const metadata: Metadata = {
   description: '${escapeJs(description)}',
 }
 
-export default function RootLayout({
+/**
+ * Ler o nonce aqui não é decoração: é o que faz a CSP funcionar.
+ *
+ * O nonce muda a cada requisição, então uma página pré-renderizada no build
+ * não tem como carregá-lo — o HTML estático sai sem nonce nenhum, e a CSP
+ * bloqueia todo script do Next. O sintoma é cruel: a página APARECE (o HTML
+ * é servido) e simplesmente não responde a nada, porque não hidratou.
+ *
+ * Chamar headers() marca a árvore como dinâmica, e é a partir daí que o Next
+ * assina os próprios scripts com o nonce. O custo é render por requisição —
+ * que é o que uma aplicação com login faz de qualquer forma, já que ela lê
+ * cookie. Se algum dia existir aqui uma página realmente estática e pública,
+ * ela deve ficar fora deste layout.
+ */
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  await headers()
+
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <body className="min-h-dvh bg-background text-foreground antialiased">
@@ -591,30 +627,114 @@ function globalsCss(): string {
 `
 }
 
-function proxyExample(): string {
-  return `import type { NextRequest } from 'next/server'
-import { updateSession } from '@/lib/supabase/middleware'
-
 /**
- * Renova a sessão do Supabase a cada requisição.
+ * Proxy do Next 16 — antigo middleware.
  *
- * ESTE ARQUIVO ESTÁ DESLIGADO DE PROPÓSITO.
+ * Existe por um motivo só: a CSP precisa de um nonce por requisição.
  *
- * Ele só faz sentido depois que o projeto tiver login. Antes disso é código
- * rodando em todo request sem nada para fazer — e no preview em navegador
- * chegou a derrubar a aplicação inteira.
+ * Sem ele a política de scripts era `'self' 'unsafe-inline'`, e o comentário
+ * ao lado dizia que em produção o script ficava restrito à própria origem.
+ * Não ficava: `'unsafe-inline'` autoriza qualquer script escrito na página,
+ * que é exatamente o que um XSS injeta. A CSP existia e não defendia do que
+ * ela existe para defender.
  *
- * Para ligar: renomeie para proxy.ts na raiz. No Next 16 a convenção
- * \`middleware\` passou a se chamar \`proxy\`.
+ * O nonce só pode ser gerado por requisição, e cabeçalho de next.config é
+ * estático — por isso a CSP mudou de lugar. `strict-dynamic` faz o navegador
+ * confiar apenas no que veio com o nonce, e ignorar lista de origens.
  */
-export async function proxy(request: NextRequest) {
-  return updateSession(request)
+function proxyFile(): string {
+  return `import { NextResponse, type NextRequest } from 'next/server'
+
+const isDev = process.env.NODE_ENV === 'development'
+
+const SUPREMO_ORIGIN = '${supremoOrigin()}'
+
+const isFramable =
+  isDev ||
+  process.env.VERCEL_ENV === 'preview' ||
+  process.env.SUPREMO_PREVIEW === '1'
+
+export function proxy(request: NextRequest) {
+  // 128 bits de aleatoriedade por requisição. Nonce previsível não é nonce.
+  const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
+
+  const csp = [
+    "default-src 'self'",
+    // 'strict-dynamic' faz o navegador ignorar a lista de origens e confiar
+    // só no que carregar com este nonce. 'unsafe-inline' fica na política
+    // apenas como plano B para navegador antigo: onde 'strict-dynamic' é
+    // entendido, ele anula o 'unsafe-inline'.
+    \`script-src 'self' 'nonce-\${nonce}' 'strict-dynamic' 'unsafe-inline'\${
+      isDev ? " 'unsafe-eval'" : ''
+    }\`,
+    // Estilo continua com 'unsafe-inline': o Next injeta CSS na página e não
+    // aplica nonce a ele. Estilo inline não executa código.
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https://*.supabase.co https://avatars.githubusercontent.com",
+    "font-src 'self' data:",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+    isFramable
+      ? \`frame-ancestors 'self' \${isDev ? 'http://localhost:*' : SUPREMO_ORIGIN}\`
+      : "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+    'upgrade-insecure-requests',
+  ].join('; ')
+
+  // O Next lê o nonce do cabeçalho da REQUISIÇÃO e o aplica nos próprios
+  // scripts. Sem repassar aqui, a página carregaria sem nonce e a política
+  // bloquearia o hidrate.
+  const headers = new Headers(request.headers)
+  headers.set('x-nonce', nonce)
+  headers.set('Content-Security-Policy', csp)
+
+  const response = NextResponse.next({ request: { headers } })
+  response.headers.set('Content-Security-Policy', csp)
+  return response
 }
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    {
+      source: '/((?!_next/static|_next/image|favicon.ico).*)',
+      missing: [
+        { type: 'header', key: 'next-router-prefetch' },
+        { type: 'header', key: 'purpose', value: 'prefetch' },
+      ],
+    },
   ],
+}
+`
+}
+
+function proxyExample(): string {
+  return `import { updateSession } from '@/lib/supabase/middleware'
+import type { NextRequest } from 'next/server'
+
+/**
+ * COMO LIGAR A SESSÃO DO SUPABASE NO PROXY.
+ *
+ * Este arquivo é exemplo, não roda. O proxy que roda é o proxy.ts da raiz, e
+ * ele já faz uma coisa indispensável: gerar o nonce da CSP. Não o substitua —
+ * some com a proteção contra XSS junto.
+ *
+ * Quando o projeto tiver login, junte as duas responsabilidades assim, dentro
+ * do proxy.ts existente:
+ *
+ *   export async function proxy(request: NextRequest) {
+ *     const response = cspResponse(request)      // o que o proxy.ts já faz
+ *     await updateSession(request)               // renova o token
+ *     return response
+ *   }
+ *
+ * Renovar a sessão NÃO protege rota nenhuma: updateSession só mantém o token
+ * válido, nunca redireciona quem não está logado. Quem decide acesso é o
+ * Server Component ou a Server Action, chamando supabase.auth.getUser() e
+ * tratando a ausência de usuário. E quem decide acesso a DADO é o RLS.
+ */
+export async function exemploDeProxyComSessao(request: NextRequest) {
+  return updateSession(request)
 }
 `
 }
@@ -672,9 +792,22 @@ import { cookies } from 'next/headers'
 export async function createClient() {
   const cookieStore = await cookies()
 
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  // O cliente de navegador já explicava a ausência; aqui havia \`!\`, que troca
+  // a explicação por um erro opaco no meio do render do servidor.
+  if (!url || !key) {
+    throw new Error(
+      'Supabase não configurado no servidor. Defina NEXT_PUBLIC_SUPABASE_URL e ' +
+        'NEXT_PUBLIC_SUPABASE_ANON_KEY no ambiente — em produção, nas variáveis ' +
+        'do projeto na Vercel.'
+    )
+  }
+
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    url,
+    key,
     {
       cookies: {
         getAll() {
@@ -789,6 +922,10 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE OR REPLACE FUNCTION public.set_updated_at()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+-- search_path fixo: sem isto a função resolve nomes pelo caminho de quem a
+-- chama, e um schema plantado na frente do public muda o que ela executa.
+-- É o mesmo aviso que o linter do Supabase dá como function_search_path_mutable.
+SET search_path = ''
 AS $$
 BEGIN
   NEW.updated_at = NOW();
@@ -945,6 +1082,50 @@ test.describe('smoke', () => {
     expect(headers['x-content-type-options']).toBe('nosniff')
     expect(headers['x-frame-options']).toBe('DENY')
     expect(headers['content-security-policy']).toContain("default-src 'self'")
+  })
+
+  /**
+   * Este teste existe por causa de um bug real, e é o único que o pegaria.
+   *
+   * Ao trocar a CSP para nonce, a home continuava pré-renderizada estática —
+   * HTML sem nonce nenhum. O navegador bloqueou TODOS os scripts. A página
+   * carregava, aparecia perfeita, e não respondia a nada, porque nunca
+   * hidratou. Build passava, título batia, cabeçalho de segurança batia.
+   *
+   * Só olhando o console do navegador dá para ver.
+   */
+  test('nenhum script é bloqueado pela própria CSP', async ({ page }) => {
+    const violacoes: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && /Content Security Policy/i.test(msg.text())) {
+        violacoes.push(msg.text())
+      }
+    })
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+
+    expect(violacoes, violacoes.join(' | ')).toEqual([])
+  })
+
+  test('a aplicação hidrata de verdade', async ({ page }) => {
+    await page.goto('/')
+    // React só marca a raiz com esta chave interna depois de hidratar. HTML
+    // servido sem script executado não tem nenhuma.
+    const hidratou = await page.evaluate(() => {
+      const raiz = document.querySelector('main')
+      if (!raiz) return false
+      return Object.keys(raiz).some((k) => k.startsWith('__react'))
+    })
+    expect(hidratou).toBe(true)
+  })
+
+  test('a CSP não autoriza script inline por origem', async ({ page }) => {
+    const response = await page.goto('/')
+    const csp = response?.headers()['content-security-policy'] ?? ''
+
+    expect(csp).toContain("'strict-dynamic'")
+    expect(csp).toMatch(/'nonce-[A-Za-z0-9+/=]+'/)
   })
 
   test('não vaza a service role key para o cliente', async ({ page }) => {
@@ -1382,7 +1563,10 @@ E o teste correspondente em \`supabase/rls.rls.test.ts\`.
 - Desabilitar RLS "temporariamente"
 
 ## Cabeçalhos
-Configurados em \`next.config.ts\` e verificados por teste E2E:
+A Content-Security-Policy fica em \`proxy.ts\`, porque usa um nonce por
+requisição — cabeçalho estático não consegue gerar isso, e sem nonce a
+política precisaria autorizar \`'unsafe-inline'\`, que é exatamente o que um
+XSS injeta. Os demais ficam em \`next.config.ts\`. Todos verificados por E2E:
 Content-Security-Policy, Strict-Transport-Security, X-Frame-Options,
 X-Content-Type-Options, Referrer-Policy, Permissions-Policy.
 

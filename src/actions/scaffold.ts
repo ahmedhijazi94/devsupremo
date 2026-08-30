@@ -6,6 +6,7 @@ import { requireUser, toActionError } from '@/lib/auth'
 import { decryptToken, encryptToken } from '@/lib/crypto'
 import {
   buildProjectFiles,
+  CI_JOB_NAMES,
   TEMPLATE_VERSION,
   type FileEntry,
 } from '@/lib/templates/project-files'
@@ -28,11 +29,11 @@ const GITHUB_API = 'https://api.github.com'
 const SUPABASE_API = 'https://api.supabase.com'
 
 /** Checks que precisam passar antes de qualquer merge na branch principal. */
-const REQUIRED_CHECKS = [
-  'Tipos, lint e auditoria',
-  'Testes e cobertura',
-  'Build de produção',
-]
+/**
+ * Todo gate do CI é obrigatório para o merge. A lista vem do gerador do
+ * workflow, não de uma cópia: gate que não bloqueia é relatório, não gate.
+ */
+const REQUIRED_CHECKS = [...CI_JOB_NAMES]
 
 interface GithubRepo {
   id: number
@@ -515,7 +516,7 @@ async function protectBranch(
       method: 'PUT',
       body: JSON.stringify({
         required_status_checks: { strict: true, contexts: REQUIRED_CHECKS },
-        enforce_admins: false,
+        enforce_admins: true,
         required_pull_request_reviews: null,
         restrictions: null,
         allow_force_pushes: false,

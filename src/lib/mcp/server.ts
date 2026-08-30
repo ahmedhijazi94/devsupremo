@@ -3,6 +3,10 @@ import { z } from 'zod'
 import * as repo from './repository'
 import * as gh from './github'
 import { assertSafeSql } from './sql-guard'
+import {
+  generateRlsTest,
+  inferTablesFromMigration,
+} from '@/lib/templates/rls-tests'
 import { mcpDataClient } from './tokens'
 import {
   previewProjectName,
@@ -41,9 +45,16 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
    do merge, chame get_preview_errors para confirmar que ela sobe de verdade
    — e para ler o log quando não subir.
 
-5. Toda tabela nova precisa de RLS, foreign keys explícitas, índice nas FKs e
-   um teste que prove que outro usuário não lê aquela linha. apply_migration
-   recusa DDL de tabela sem ENABLE ROW LEVEL SECURITY.
+5. Toda tabela nova precisa de RLS, foreign keys explícitas e índice nas FKs.
+   apply_migration recusa tabela sem ENABLE ROW LEVEL SECURITY, recusa policy
+   que seja sempre verdadeira (escrita de qualquer forma, inclusive 1=1) e
+   recusa policy de escrita que não chegue em auth.uid(). O teste que prova o
+   isolamento é gerado por ela e vai no mesmo PR — você não precisa escrevê-lo,
+   mas precisa ver o gate "Políticas RLS" ficar verde.
+
+5b. execute_sql é leitura, e isso é imposto pelo banco: a query roda dentro de
+   uma transação READ ONLY. Escrita escondida em CTE é recusada. Para mudar
+   dado, escreva pela aplicação, onde o RLS se aplica.
 
 6. Nunca escreva segredo em código. Nunca valide no cliente o que decide acesso.
    Nunca confie em user_id vindo do corpo da requisição — use auth.uid().`
@@ -581,7 +592,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
             Authorization: `Bearer ${creds.token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify({ query: readOnlyTransaction(query) }),
         },
       )
 
@@ -625,15 +636,35 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const path = `supabase/migrations/${stamp}_${name}.sql`
       const branchName = `migration/${name}`
 
+      // A regra 5 dizia "toda tabela precisa de um teste que prove o
+      // isolamento" e depois pedia isso ao agente em prosa. Pedido não é
+      // garantia: uma tabela criada aqui entrava no banco com policy e sem
+      // uma única asserção provando que a policy funciona. O teste nasce no
+      // mesmo commit da migration, gerado a partir do SQL que acabou de ser
+      // aprovado pelo guard.
+      const newTables = inferTablesFromMigration(sql)
+      const files = [{ path, content: sql }]
+      let testPath: string | null = null
+
+      if (newTables.length > 0) {
+        testPath = `supabase/${name}.rls.test.ts`
+        files.push({ path: testPath, content: generateRlsTest(newTables) })
+      }
+
       await gh.ensureBranch(ghCreds, branchName, project.default_branch)
-      await gh.commitFiles(ghCreds, branchName, `feat(db): ${name}`, [
-        { path, content: sql },
-      ])
+      await gh.commitFiles(ghCreds, branchName, `feat(db): ${name}`, files)
       const pr = await gh.openOrUpdatePullRequest(
         ghCreds,
         branchName,
         `feat(db): ${name}`,
-        `Migration versionada em \`${path}\`.\n\nAplicada no banco no momento da criação deste PR.`,
+        [
+          `Migration versionada em \`${path}\`.`,
+          testPath
+            ? `Teste de isolamento gerado em \`${testPath}\` — ele prova que ` +
+              `outro usuário não lê, não altera e não apaga estas linhas.`
+            : 'Nenhuma tabela nova: nenhum teste de RLS a gerar.',
+          'Aplicada no banco no momento da criação deste PR.',
+        ].join('\n\n'),
         project.default_branch,
       )
 
@@ -669,9 +700,14 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 
       return json({
         migration: path,
+        rlsTest: testPath,
+        tablesCovered: newTables.map((t) => t.name),
         pullRequest: { number: pr.number, url: pr.url },
         applied: true,
-        next: 'Escreva os testes de RLS desta tabela e proponha no mesmo PR.',
+        next: testPath
+          ? 'O teste de isolamento já foi gerado e commitado no mesmo PR. ' +
+            'Chame wait_for_checks e confirme que o gate "Políticas RLS" ficou verde.'
+          : 'Chame wait_for_checks.',
       })
     }),
   )
@@ -680,6 +716,28 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 }
 
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Envolve a query de execute_sql numa transação somente-leitura.
+ *
+ * Esta é a segunda camada, e a única que não depende de eu ter previsto a
+ * sintaxe. O guard estático recusa escrita — inclusive dentro de CTE, que era
+ * o furo — mas quem decide o que é escrita, aqui, é o Postgres: dentro de
+ * `BEGIN READ ONLY` ele recusa INSERT, UPDATE, DELETE e qualquer comando que
+ * grave, tenha a forma que tiver.
+ *
+ * A query do usuário fica por último de propósito: é o resultado dela que a
+ * API devolve. E não há COMMIT — se algo escapasse, morreria no fim da sessão.
+ *
+ * Verificado num Postgres real: `BEGIN READ ONLY; SELECT ...` devolve as
+ * linhas normalmente; `DELETE` direto e `WITH d AS (DELETE ...)` são recusados
+ * pelo banco. `SET TRANSACTION READ WRITE` escaparia se viesse antes de
+ * qualquer query — por isso `SET` está na lista de recusa do guard estático.
+ * Uma camada cobre o furo da outra.
+ */
+export function readOnlyTransaction(query: string): string {
+  return `BEGIN READ ONLY;\n${query.trim().replace(/;?\s*$/, ';')}`
+}
 
 /**
  * Converte um resumo de commit em nome de branch.

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { buildProjectFiles, CI_INVOKED_SCRIPTS } from './project-files'
+import {
+  CI_JOB_NAMES,
+  buildProjectFiles,
+  CI_INVOKED_SCRIPTS,
+} from './project-files'
 import { inferTablesFromMigration, generateRlsTest } from './rls-tests'
 
 /**
@@ -264,11 +268,39 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
     expect(() => file('next.config.ts')).not.toThrow()
   })
 
-  it('a CSP é real, não só mencionada', () => {
-    const config = file('next.config.ts')
-    expect(config).toContain('Content-Security-Policy')
-    expect(config).toContain("default-src 'self'")
-    expect(config).toContain("frame-ancestors 'none'")
+  it('a CSP é real, e vive onde o nonce pode existir', () => {
+    // Cabeçalho de next.config é estático, e nonce precisa mudar a cada
+    // requisição. Enquanto a CSP morava lá, a política de scripts era
+    // 'unsafe-inline' — ou seja, autorizava exatamente o que um XSS injeta.
+    const proxy = file('proxy.ts')
+    expect(proxy).toContain('Content-Security-Policy')
+    expect(proxy).toContain("default-src 'self'")
+    expect(proxy).toContain("'strict-dynamic'")
+    expect(proxy).toContain("'nonce-")
+    expect(proxy).toContain('x-nonce')
+
+    // Duas CSPs no mesmo response se somam pela regra mais restritiva e viram
+    // bloqueio difícil de diagnosticar.
+    expect(file('next.config.ts')).not.toMatch(/key: 'Content-Security-Policy'/)
+  })
+
+  it('nenhum script inline é autorizado por origem', () => {
+    const proxy = file('proxy.ts')
+    const scriptSrc = /script-src[^`]*/.exec(proxy)?.[0] ?? ''
+    expect(scriptSrc).toContain("'strict-dynamic'")
+    // 'strict-dynamic' anula 'self' e 'unsafe-inline' em qualquer navegador
+    // que o entenda; o inline fica só como plano B para navegador antigo.
+    expect(scriptSrc).not.toMatch(/script-src 'self' 'unsafe-inline'/)
+  })
+
+  it('só o Supremo pode enquadrar, nunca a internet inteira', () => {
+    // Era `frame-ancestors *`. Bastava SUPREMO_PREVIEW aparecer num deploy de
+    // produção — copiada junto com as outras variáveis — para a aplicação
+    // virar alvo aberto de clickjacking.
+    const proxy = file('proxy.ts')
+    expect(proxy).not.toContain('frame-ancestors *')
+    expect(proxy).toMatch(/frame-ancestors 'self' \$\{/)
+    expect(proxy).toContain('SUPREMO_ORIGIN')
   })
 
   it('produção bloqueia enquadramento, preview permite', () => {
@@ -281,7 +313,6 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
     // O deploy por envio de arquivos pode vir rotulado como produção; o
     // sinal explícito é o que garante o enquadramento no painel.
     expect(config).toContain("SUPREMO_PREVIEW === '1'")
-    expect(config).toContain('frame-ancestors *')
 
     // X-Frame-Options não tem valor permissivo: precisa sair da lista,
     // senão anula o frame-ancestors da CSP.
@@ -344,13 +375,21 @@ describe('primeira tela — o app abre antes de configurar nada', () => {
     expect(proxyHelper).not.toContain('NEXT_PUBLIC_SUPABASE_URL!')
   })
 
-  it('o starter não liga middleware antes de existir login', () => {
-    // proxy.ts roda em todo request. Num projeto sem autenticação é peça a
-    // mais, e no preview em navegador chegou a derrubar a aplicação.
+  it('o proxy que roda não depende do Supabase', () => {
+    // O proxy existe pelo nonce da CSP, e só. Ligar a sessão do Supabase nele
+    // antes de o projeto ter login já derrubou a aplicação inteira em todo
+    // request — por isso a parte de sessão continua sendo exemplo.
     const paths = files.map((f) => f.path)
-    expect(paths).not.toContain('proxy.ts')
+    expect(paths).toContain('proxy.ts')
     expect(paths).not.toContain('middleware.ts')
     expect(paths).toContain('lib/supabase/proxy.example.ts')
+
+    // A CSP cita *.supabase.co como origem permitida — isso é declaração,
+    // não dependência. O que não pode é o proxy importar e chamar o cliente.
+    const proxy = file('proxy.ts')
+    expect(proxy).not.toMatch(/from '@?\/?lib\/supabase/)
+    expect(proxy).not.toContain('updateSession')
+    expect(proxy).not.toContain('createServerClient')
   })
 
   it('o cliente de navegador explica o que falta em vez de estourar cru', () => {
@@ -540,5 +579,66 @@ describe('documentação — sem promessa vazia', () => {
     expect(() => file('agents.md')).not.toThrow()
     expect(() => file('CLAUDE.md')).not.toThrow()
     expect(() => file('SECURITY.md')).not.toThrow()
+  })
+})
+
+describe('gates obrigatórios', () => {
+  const ci = file('.github/workflows/ci.yml')
+
+  /**
+   * A proteção de branch exige check POR NOME. Um nome que não existe no
+   * workflow nunca fica verde, e o PR trava para sempre; um job do workflow
+   * fora da lista roda, fica vermelho, e não impede o merge. Os dois erros
+   * são silenciosos, então a coerência é testada nos dois sentidos.
+   */
+  it('todo nome exigido existe como job no workflow', () => {
+    for (const name of CI_JOB_NAMES) {
+      expect(ci, `job "${name}" não existe no ci.yml`).toContain(
+        `name: ${name}`,
+      )
+    }
+  })
+
+  it('todo job do workflow está na lista de obrigatórios', () => {
+    const declared = [...ci.matchAll(/^    name: (.+)$/gm)].map((m) => m[1])
+    expect(declared.length).toBeGreaterThan(0)
+    for (const name of declared) {
+      expect(
+        CI_JOB_NAMES as readonly string[],
+        `job "${name}" roda mas não bloqueia o merge`,
+      ).toContain(name)
+    }
+  })
+})
+
+describe('teste de RLS do scaffold', () => {
+  const migration = file(
+    'supabase/migrations/00000000000000_initial_schema.sql',
+  )
+  const rlsTest = file('supabase/rls.rls.test.ts')
+
+  /**
+   * A lista de tabelas testadas já foi escrita à mão e ficou para trás da
+   * migration: `audit_logs` nascia com policy e sem nenhuma asserção provando
+   * que a policy funciona, e o gate ficava verde por não olhar para ela.
+   */
+  it('cobre toda tabela da migration que tem coluna de dono', () => {
+    const tables = [
+      ...migration.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(\w+)/g),
+    ].map((m) => m[1])
+
+    expect(tables.length).toBeGreaterThan(1)
+
+    for (const table of tables) {
+      expect(rlsTest, `tabela ${table} sem teste de isolamento`).toContain(
+        `RLS · ${table}`,
+      )
+    }
+  })
+
+  it('prova leitura, escrita e remoção por terceiro em cada tabela', () => {
+    const suites = [...rlsTest.matchAll(/describe\('RLS · /g)].length
+    const casos = [...rlsTest.matchAll(/\n  it\(/g)].length
+    expect(casos).toBe(suites * 6)
   })
 })

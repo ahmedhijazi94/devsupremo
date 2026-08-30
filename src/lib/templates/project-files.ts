@@ -67,6 +67,10 @@ const DEV_DEPENDENCIES = {
 
 const SCRIPTS = {
   dev: 'next dev',
+  // O preview do Supremo roda dentro de um WebContainer, onde binário
+  // nativo não executa — e o Turbopack, padrão do Next 16, é nativo.
+  // Webpack roda em WASM e é o que funciona lá.
+  'dev:preview': 'next dev --webpack',
   build: 'next build',
   start: 'next start',
   lint: 'eslint',
@@ -224,6 +228,16 @@ function nextConfig(): string {
 const isDev = process.env.NODE_ENV === 'development'
 
 /**
+ * O preview do Supremo abre a aplicação dentro de um iframe.
+ *
+ * Em produção o enquadramento fica bloqueado — é a defesa contra
+ * clickjacking, alguém colocar seu site dentro do dele para enganar o
+ * usuário. Em desenvolvimento e em preview deploy isso é liberado, senão o
+ * preview mostra uma tela em branco.
+ */
+const isFramable = isDev || process.env.VERCEL_ENV === 'preview'
+
+/**
  * Content-Security-Policy.
  *
  * 'unsafe-eval' só em desenvolvimento, onde o Fast Refresh do Next precisa.
@@ -236,7 +250,7 @@ const csp = [
   "img-src 'self' data: blob: https://*.supabase.co https://avatars.githubusercontent.com",
   "font-src 'self' data:",
   "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
-  "frame-ancestors 'none'",
+  isFramable ? 'frame-ancestors *' : "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
   "object-src 'none'",
@@ -249,7 +263,9 @@ const securityHeaders = [
     key: 'Strict-Transport-Security',
     value: 'max-age=63072000; includeSubDomains; preload',
   },
-  { key: 'X-Frame-Options', value: 'DENY' },
+  // Omitido quando enquadrável: o header não tem valor que signifique
+  // "permita", e mantê-lo anularia o frame-ancestors da CSP.
+  ...(isFramable ? [] : [{ key: 'X-Frame-Options', value: 'DENY' }]),
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   {
@@ -621,10 +637,18 @@ function supabaseClient(): string {
  * este cliente enxerga.
  */
 export function createClient() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!url || !key) {
+    throw new Error(
+      'Supabase não configurado. Preencha NEXT_PUBLIC_SUPABASE_URL e ' +
+        'NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local — os valores estão em ' +
+        'Project Settings > API no painel do Supabase.'
+    )
+  }
+
+  return createBrowserClient(url, key)
 }
 `
 }
@@ -667,9 +691,19 @@ import { NextResponse, type NextRequest } from 'next/server'
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request })
 
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  // Projeto recém-criado ainda não tem o Supabase ligado. Sem esta guarda,
+  // createServerClient estoura e TODA requisição vira 500 — o app não abre
+  // nem para mostrar a primeira tela.
+  if (!supabaseUrl || !supabaseKey) {
+    return response
+  }
+
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseKey,
     {
       cookies: {
         getAll() {

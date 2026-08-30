@@ -106,9 +106,8 @@ function SandboxContent() {
         log('Montando sistema de arquivos...')
         await webcontainerInstance.mount(tree)
 
-        // Step 5: npm install (with --ignore-scripts fallback)
+        // Step 5: instalar dependências
         setStage('installing')
-        log('Executando npm install...')
 
         async function runInstall(args: string[]): Promise<number> {
           const proc = await webcontainerInstance!.spawn('npm', args)
@@ -116,21 +115,60 @@ function SandboxContent() {
           return proc.exit
         }
 
-        let exitCode = await runInstall(['install', '--no-package-lock', '--legacy-peer-deps'])
+        const startedAt = Date.now()
+        const hasLockfile = 'package-lock.json' in tree
 
-        if (exitCode !== 0) {
-          log('⚠️  npm install falhou. Tentando com --ignore-scripts...', '33')
-          exitCode = await runInstall(['install', '--no-package-lock', '--legacy-peer-deps', '--ignore-scripts'])
+        // npm ci usa o lockfile e pula a fase de resolução, que é a parte
+        // cara. O install sem lockfile resolvia a árvore inteira na rede a
+        // cada boot do preview.
+        let exitCode: number
+
+        if (hasLockfile) {
+          log('Instalando a partir do lockfile (npm ci)...')
+          exitCode = await runInstall(['ci', '--no-audit', '--no-fund'])
+
+          if (exitCode !== 0) {
+            log('npm ci falhou — o lockfile pode estar dessincronizado. Resolvendo do zero...', '33')
+            exitCode = await runInstall(['install', '--no-audit', '--no-fund', '--legacy-peer-deps'])
+          }
+        } else {
+          log('Projeto sem lockfile — resolvendo dependências do zero...', '33')
+          exitCode = await runInstall(['install', '--no-audit', '--no-fund', '--legacy-peer-deps'])
         }
 
-        if (exitCode !== 0) throw new Error('npm install falhou mesmo com --ignore-scripts. Verifique o package.json do projeto.')
+        if (exitCode !== 0) {
+          log('Tentando sem executar scripts de instalação...', '33')
+          exitCode = await runInstall([
+            'install', '--no-audit', '--no-fund', '--legacy-peer-deps', '--ignore-scripts',
+          ])
+        }
 
-        log('Dependências instaladas ✓', '32')
+        if (exitCode !== 0) {
+          throw new Error('Não foi possível instalar as dependências. Confira o package.json do projeto.')
+        }
 
-        // Step 6: npm run dev
+        const seconds = Math.round((Date.now() - startedAt) / 1000)
+        log(`Dependências instaladas em ${seconds}s ✓`, '32')
+
+        // Step 6: subir o servidor de desenvolvimento
         setStage('starting')
-        log('Iniciando servidor Next.js...')
-        const devProcess = await webcontainerInstance.spawn('npm', ['run', 'dev'])
+
+        // Turbopack, padrão do Next 16, é binário nativo e não roda dentro
+        // do WebContainer. Projetos gerados pelo Supremo trazem um script
+        // dedicado; nos demais, passamos a flag adiante.
+        const packageJsonFile = tree['package.json']
+        const packageJson =
+          packageJsonFile && 'file' in packageJsonFile
+            ? String(packageJsonFile.file.contents)
+            : ''
+        const hasPreviewScript = packageJson.includes('"dev:preview"')
+
+        const devArgs = hasPreviewScript
+          ? ['run', 'dev:preview']
+          : ['run', 'dev', '--', '--webpack']
+
+        log(`Iniciando servidor Next.js (${hasPreviewScript ? 'dev:preview' : 'webpack'})...`)
+        const devProcess = await webcontainerInstance.spawn('npm', devArgs)
         devProcess.output.pipeTo(new WritableStream({ write(data) { terminal.current?.write(data) } }))
 
         webcontainerInstance.on('server-ready', (port, previewUrl) => {

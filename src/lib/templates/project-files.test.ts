@@ -271,6 +271,20 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
     expect(config).toContain("frame-ancestors 'none'")
   })
 
+  it('produção bloqueia enquadramento, preview permite', () => {
+    // O preview abre o app num iframe. Com frame-ancestors 'none' fixo, a
+    // tela ficava em branco e parecia que o app não tinha subido.
+    const config = file('next.config.ts')
+
+    expect(config).toContain('isFramable')
+    expect(config).toContain("VERCEL_ENV === 'preview'")
+    expect(config).toContain('frame-ancestors *')
+
+    // X-Frame-Options não tem valor permissivo: precisa sair da lista,
+    // senão anula o frame-ancestors da CSP.
+    expect(config).toMatch(/isFramable \? \[\] : \[\{ key: 'X-Frame-Options'/)
+  })
+
   it('o SECURITY.md aponta para o arquivo que de fato existe', () => {
     const doc = file('SECURITY.md')
     const referenced = doc.match(/`(next\.config\.[tj]s)`/)?.[1]
@@ -312,6 +326,36 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
 
   it('o .env.example não prefixa a service role com NEXT_PUBLIC_', () => {
     expect(file('.env.example')).not.toMatch(/NEXT_PUBLIC_SUPABASE_SERVICE/)
+  })
+})
+
+describe('primeira tela — o app abre antes de configurar nada', () => {
+  // Um projeto recém-criado não tem Supabase ligado. Sem guarda,
+  // createServerClient estourava dentro do proxy e TODA requisição virava
+  // 500 — o preview mostrava uma tela em branco e parecia que o app não
+  // tinha subido.
+  const proxyHelper = file('lib/supabase/middleware.ts')
+
+  it('o proxy não estoura sem as variáveis do Supabase', () => {
+    expect(proxyHelper).toContain('if (!supabaseUrl || !supabaseKey)')
+    expect(proxyHelper).not.toContain('NEXT_PUBLIC_SUPABASE_URL!')
+  })
+
+  it('o cliente de navegador explica o que falta em vez de estourar cru', () => {
+    const client = file('lib/supabase/client.ts')
+    expect(client).toContain('Supabase não configurado')
+    expect(client).toContain('.env.local')
+  })
+
+  it('a home não depende de dado remoto para renderizar', () => {
+    const page = file('app/page.tsx')
+    expect(page).not.toContain('createClient')
+    expect(page).not.toContain('await ')
+  })
+
+  it('o preview roda com webpack, não com o bundler nativo', () => {
+    // Turbopack é binário nativo e não executa dentro do WebContainer.
+    expect(packageJson.scripts['dev:preview']).toBe('next dev --webpack')
   })
 })
 

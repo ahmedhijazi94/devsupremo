@@ -114,6 +114,72 @@ describe('dependências — tudo que é importado está instalado', () => {
   })
 })
 
+describe('lockfile — sem ele o CI quebra antes de instalar', () => {
+  // Bug real encontrado em produção: o CI gerado usava `npm ci` e
+  // `cache: npm`, e ambos exigem lockfile. Sem ele, todo job falhava em
+  // actions/setup-node antes de rodar uma linha do projeto.
+  const lock = JSON.parse(file('package-lock.json')) as {
+    name: string
+    lockfileVersion: number
+    packages: Record<string, { name?: string; version?: string }>
+  }
+
+  it('o manifesto inclui package-lock.json', () => {
+    expect(() => file('package-lock.json')).not.toThrow()
+  })
+
+  it('o nome do lock bate com o do package.json', () => {
+    expect(lock.name).toBe('meu-app')
+    expect(lock.packages['']?.name).toBe('meu-app')
+  })
+
+  it('o .gitignore não exclui o lockfile', () => {
+    const ignore = file('.gitignore')
+      .split('\n')
+      .map((l) => l.trim())
+    expect(ignore).not.toContain('package-lock.json')
+  })
+
+  it('toda dependência do package.json está travada no lock', () => {
+    const declared = {
+      ...packageJson.dependencies,
+      ...packageJson.devDependencies,
+    }
+
+    const missing = Object.keys(declared).filter(
+      (name) => !(`node_modules/${name}` in lock.packages)
+    )
+    expect(missing).toEqual([])
+  })
+
+  it('o lock não trava pacote que o package.json não declara', () => {
+    const declared = new Set([
+      ...Object.keys(packageJson.dependencies),
+      ...Object.keys(packageJson.devDependencies),
+    ])
+    const root = lock.packages[''] as unknown as {
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+    }
+    const inLock = new Set([
+      ...Object.keys(root.dependencies ?? {}),
+      ...Object.keys(root.devDependencies ?? {}),
+    ])
+
+    const extra = [...inLock].filter((name) => !declared.has(name))
+    expect(extra).toEqual([])
+  })
+})
+
+describe('CI — actions em versão suportada', () => {
+  const ci = file('.github/workflows/ci.yml')
+
+  it('não usa actions em depreciação de Node 20', () => {
+    expect(ci).not.toMatch(/actions\/checkout@v4/)
+    expect(ci).not.toMatch(/actions\/setup-node@v4/)
+  })
+})
+
 describe('cobertura — o threshold falha o build', () => {
   it('define thresholds, não só reporter', () => {
     const config = file('vitest.config.ts')

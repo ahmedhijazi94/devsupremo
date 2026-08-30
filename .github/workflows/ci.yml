@@ -22,8 +22,8 @@ jobs:
     name: Tipos, lint e auditoria
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -31,7 +31,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run audit:security -- --strict
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: security-audit
@@ -42,8 +42,8 @@ jobs:
     name: Testes e cobertura
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -57,8 +57,8 @@ jobs:
     # quebrado. A única forma honesta de garantir que não volta é gerar um
     # projeto de verdade e rodar os gates dele aqui.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -69,7 +69,9 @@ jobs:
 
       - name: Instalar dependências do projeto gerado
         working-directory: /tmp/generated
-        run: npm install
+        # npm ci, não npm install: é o que o CI do projeto gerado roda, e
+        # exige lockfile. Usar `install` aqui escondia a ausência dele.
+        run: npm ci
 
       - name: Gates do projeto gerado
         working-directory: /tmp/generated
@@ -87,8 +89,8 @@ jobs:
     name: Vulnerabilidades
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -99,7 +101,7 @@ jobs:
     name: Varredura de segredos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
@@ -110,7 +112,7 @@ jobs:
     name: Análise estática
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
@@ -126,8 +128,8 @@ jobs:
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder' }}
       NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL || 'http://localhost:3000' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm

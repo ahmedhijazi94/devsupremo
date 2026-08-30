@@ -161,9 +161,19 @@ async function runScaffold(
   if (protectionError) warnings.push(protectionError)
 
   // ── 5. Persistência ─────────────────────────────────────────
+  // O projeto recém-provisionado passa a ser o ativo: é nele que o usuário
+  // vai trabalhar, e sem isso as ferramentas do MCP falham com "nenhum
+  // projeto ativo" logo depois de criar o primeiro projeto.
+  await supabase
+    .from('projects')
+    .update({ is_active: false })
+    .eq('user_id', user.id)
+    .neq('id', projectId)
+
   const { error: updateError } = await supabase
     .from('projects')
     .update({
+      is_active: true,
       github_repo_full_name: repo.full_name,
       github_repo_id: repo.id,
       default_branch: branch,

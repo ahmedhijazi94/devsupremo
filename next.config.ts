@@ -16,7 +16,10 @@ const nextConfig: NextConfig = {
   // projetos gerados. Sem isto o arquivo não vai para o bundle de deploy
   // e o projeto novo nasce sem o gate de auditoria.
   outputFileTracingIncludes: {
-    '/**': ['./scripts/security-audit.js'],
+    '/**': [
+      './scripts/security-audit.js',
+      './src/lib/templates/assets/**',
+    ],
   },
   async headers() {
     return [

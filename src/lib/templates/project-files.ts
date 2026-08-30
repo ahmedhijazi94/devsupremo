@@ -99,6 +99,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
   return [
     // ── Manifesto e configuração ──────────────────────────────
     { path: 'package.json', content: packageJson(projectName) },
+    { path: 'package-lock.json', content: packageLock(projectName) },
     { path: 'tsconfig.json', content: tsconfig() },
     { path: 'next.config.ts', content: nextConfig() },
     { path: 'eslint.config.mjs', content: eslintConfig() },
@@ -935,8 +936,8 @@ jobs:
     name: Tipos, lint e auditoria
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -949,8 +950,8 @@ jobs:
     name: Testes e cobertura
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -961,8 +962,8 @@ jobs:
     name: Políticas RLS
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -983,8 +984,8 @@ jobs:
     name: Vulnerabilidades
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -995,7 +996,7 @@ jobs:
     name: Varredura de segredos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
@@ -1006,7 +1007,7 @@ jobs:
     name: Análise estática (CodeQL)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
@@ -1021,8 +1022,8 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: \${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co' }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: \${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -1037,15 +1038,15 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: \${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co' }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: \${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: playwright-report
@@ -1070,6 +1071,41 @@ updates:
     schedule:
       interval: monthly
 `
+}
+
+/**
+ * Lockfile pré-resolvido do conjunto fixo de dependências do template.
+ *
+ * Sem ele o projeto nasce com o CI quebrado: `npm ci` e o `cache: npm` do
+ * actions/setup-node exigem lockfile, e o job falha antes de instalar nada.
+ * Como as dependências do template são fixas, o lock é resolvido uma vez e
+ * versionado aqui — o que também dá build reproduzível ao usuário.
+ *
+ * Regenerar após mudar DEPENDENCIES ou DEV_DEPENDENCIES:
+ *   npx tsx scripts/dev/regenerate-template-lock.ts
+ */
+function packageLock(projectName: string): string {
+  const lockPath = path.join(
+    process.cwd(),
+    'src',
+    'lib',
+    'templates',
+    'assets',
+    'package-lock.json'
+  )
+
+  const raw = fs.readFileSync(/* turbopackIgnore: true */ lockPath, 'utf8')
+  const lock = JSON.parse(raw) as {
+    name: string
+    packages: Record<string, { name?: string }>
+  }
+
+  // O nome no lock precisa bater com o do package.json, senão o npm avisa.
+  lock.name = projectName
+  const root = lock.packages['']
+  if (root) root.name = projectName
+
+  return `${JSON.stringify(lock, null, 2)}\n`
 }
 
 /**

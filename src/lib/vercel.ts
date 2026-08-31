@@ -432,7 +432,12 @@ export async function deployFiles(
     body: {
       name: projectName,
       project: projectName,
-      target: 'preview',
+      // target é OMITIDO de propósito. A API /v13/deployments só aceita
+      // 'production', 'staging' ou um ambiente custom — enviar 'preview'
+      // devolve "Invalid request: target should be production, staging...".
+      // Sem target, a Vercel cria um deploy de PREVIEW, que é o que queremos,
+      // e define VERCEL_ENV=preview (o que já libera o enquadramento no painel,
+      // junto do sinal SUPREMO_PREVIEW).
       files: uploaded,
       projectSettings: { framework: 'nextjs' },
       meta,

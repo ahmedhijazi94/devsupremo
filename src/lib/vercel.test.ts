@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { describeState, listDeployments, identify, VercelError } from './vercel'
+import {
+  describeState,
+  listDeployments,
+  identify,
+  deployFiles,
+  VercelError,
+} from './vercel'
 
 describe('describeState', () => {
   it.each([
@@ -178,5 +184,48 @@ describe('identify', () => {
       })
 
     expect((await identify('t')).accountName).toBe('ahmed')
+  })
+})
+
+describe('deployFiles', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('não envia target — a Vercel recusa "preview" no /v13/deployments', async () => {
+    // Bug real: enviar target:'preview' devolvia "Invalid request: target
+    // should be production, staging, or a custom environment identifier", e o
+    // preview nunca subia. Sem target, a Vercel cria um deploy de preview.
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/v2/files')) {
+        return { ok: true, status: 200, text: async () => JSON.stringify({}) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            uid: 'd1',
+            url: 'app.vercel.app',
+            created: 1,
+            readyState: 'READY',
+          }),
+      }
+    })
+
+    await deployFiles('t', null, 'proj', [
+      { path: 'index.html', content: '<x>' },
+    ])
+
+    const deployCall = fetchMock.mock.calls.find(([u]) =>
+      String(u).includes('/v13/deployments'),
+    )
+    expect(deployCall, 'deveria ter chamado /v13/deployments').toBeTruthy()
+    const body = JSON.parse((deployCall![1] as { body: string }).body)
+    expect(body).not.toHaveProperty('target')
   })
 })

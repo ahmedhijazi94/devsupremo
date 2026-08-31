@@ -1,0 +1,25 @@
+{
+  "name": "@supremo/companion",
+  "version": "0.1.0",
+  "description": "Runtime local do Supremo — roda o preview Next real na máquina do dev.",
+  "bin": {
+    "supremo-runtime": "./dist/bin.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/bin.ts --bundle --platform=node --target=node20 --format=esm --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\" --outfile=dist/bin.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.4",
+    "commander": "^12.1.0",
+    "zod": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

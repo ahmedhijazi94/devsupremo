@@ -59,6 +59,24 @@ describe('manifesto — integridade', () => {
   })
 })
 
+describe('login no preview — cookie de terceira-parte no iframe', () => {
+  // Sem Partitioned (CHIPS), o Chrome descarta o cookie de sessão no iframe
+  // mesmo com SameSite=None, e o login volta para /login. Os três lugares que
+  // escrevem cookie precisam do conjunto completo.
+  for (const path of [
+    'proxy.ts',
+    'lib/supabase/client.ts',
+    'lib/supabase/server.ts',
+  ]) {
+    it(`${path} usa SameSite=None; Secure; Partitioned no preview`, () => {
+      const content = file(path)
+      expect(content).toContain("sameSite: 'none'")
+      expect(content).toContain('secure: true')
+      expect(content).toContain('partitioned: true')
+    })
+  }
+})
+
 describe('CI — todo script invocado existe', () => {
   const ci = file('.github/workflows/ci.yml')
 

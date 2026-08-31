@@ -3,7 +3,12 @@
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { freshGithubToken } from '@/lib/github-token'
-import { commitFiles, ensureBranch, openOrUpdatePullRequest } from '@/lib/mcp/github'
+import {
+  commitFiles,
+  ensureBranch,
+  listOpenPullRequests,
+  openOrUpdatePullRequest,
+} from '@/lib/mcp/github'
 import type { GithubCredentials } from '@/lib/mcp/repository'
 import {
   TEMPLATE_VERSION,
@@ -101,6 +106,11 @@ async function resolveProject(
   }
 }
 
+/** Branch do PR de atualização. Fixo por versão, para reusar o mesmo PR. */
+function updateBranch(): string {
+  return `supremo/atualizar-base-${TEMPLATE_VERSION}`
+}
+
 export interface TemplateSyncStatus {
   projectVersion: string | null
   latestVersion: string
@@ -111,6 +121,8 @@ export interface TemplateSyncStatus {
   creates: string[]
   /** Scaffold intocado — só a contagem importa para a UI. */
   skipped: number
+  /** PR de atualização já aberto esperando merge, se houver. */
+  openPr: { number: number; url: string } | null
 }
 
 /**
@@ -144,6 +156,16 @@ export async function getTemplateSyncStatus(
         .eq('user_id', userId)
     }
 
+    // Se está atrás, pode já haver um PR de atualização aberto esperando merge
+    // — sem detectar isso, o cartão mandava "Abrir PR" de novo e confundia.
+    let openPr: { number: number; url: string } | null = null
+    if (!upToDate) {
+      const branch = updateBranch()
+      const prs = await listOpenPullRequests(creds)
+      const existing = prs.find((pr) => pr.headRef === branch)
+      if (existing) openPr = { number: existing.number, url: existing.url }
+    }
+
     return {
       status: {
         projectVersion: templateVersion,
@@ -152,6 +174,7 @@ export async function getTemplateSyncStatus(
         updates: plan.updates.map((item) => item.path),
         creates: plan.creates.map((item) => item.path),
         skipped: plan.skipped.length,
+        openPr,
       },
     }
   } catch (error) {
@@ -185,7 +208,7 @@ export async function applyTemplateSync(
     const plan = await planTemplateSync(creds, options)
     if (planIsEmpty(plan)) return { upToDate: true }
 
-    const branch = `supremo/atualizar-base-${TEMPLATE_VERSION}`
+    const branch = updateBranch()
     await ensureBranch(creds, branch, creds.defaultBranch)
 
     await commitFiles(

@@ -140,18 +140,37 @@ export function TemplateUpdateCard({
 
           {error && <p className="text-down-ink mt-2 text-xs">{error}</p>}
 
-          <button
-            onClick={apply}
-            disabled={busy}
-            className="bg-accent text-accent-ink mt-3 inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-60"
-          >
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <GitPullRequest className="h-3.5 w-3.5" />
-            )}
-            Abrir PR de atualização
-          </button>
+          {status?.openPr ? (
+            // Já existe um PR aberto: o próximo passo é o MERGE, não reabrir.
+            <div className="mt-3">
+              <p className="text-muted text-xs">
+                PR #{status.openPr.number} já aberto. Falta só o merge — quando
+                os gates ficarem verdes, mescle para a base entrar no ar.
+              </p>
+              <a
+                href={status.openPr.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-accent mt-2 inline-flex items-center gap-1 text-xs font-medium hover:underline"
+              >
+                <GitPullRequest className="h-3.5 w-3.5" />
+                Revisar e mesclar o PR #{status.openPr.number}
+              </a>
+            </div>
+          ) : (
+            <button
+              onClick={apply}
+              disabled={busy}
+              className="bg-accent text-accent-ink mt-3 inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-60"
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <GitPullRequest className="h-3.5 w-3.5" />
+              )}
+              Abrir PR de atualização
+            </button>
+          )}
         </div>
       </div>
     </Shell>

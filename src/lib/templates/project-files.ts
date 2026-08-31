@@ -16,10 +16,11 @@ import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
  * declarados, as dependências instaladas e os jobs do CI.
  */
 
-// 2.1.0: cookies do preview (SameSite=None) no cliente/servidor Supabase e no
-// proxy, inspector de componente, e CI adaptativo. Projeto em 2.0.0 mostra o
-// cartão "Atualizar base" e traz esses rails pelo PR.
-export const TEMPLATE_VERSION = '2.1.0'
+// 2.1.1: cookies do preview agora com Partitioned (CHIPS) — sem ele o Chrome
+// moderno descarta o cookie de terceira-parte no iframe mesmo com SameSite=None,
+// e o login não persistia no preview. 2.1.0 trouxe SameSite=None, o inspector e
+// o CI adaptativo. Projeto atrás mostra o cartão "Atualizar base".
+export const TEMPLATE_VERSION = '2.1.1'
 
 export interface FileEntry {
   path: string
@@ -1548,9 +1549,12 @@ function proxyFile(auth: boolean): string {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          // No preview (iframe) o cookie precisa de SameSite=None; Secure.
+          // No preview (iframe de outro domínio) o cookie precisa de
+          // SameSite=None; Secure para valer, E Partitioned (CHIPS) — sem ele
+          // o Chrome moderno descarta cookie de terceira-parte mesmo com
+          // SameSite=None, e o login não persiste.
           const cookieFix = isFramable
-            ? { sameSite: 'none' as const, secure: true }
+            ? { sameSite: 'none' as const, secure: true, partitioned: true }
             : {}
           cookiesToSet.forEach(({ name, value, options }) =>
             response.cookies.set(name, value, { ...options, ...cookieFix }),
@@ -1676,13 +1680,14 @@ export function createClient() {
 
   // No preview do Supremo o app roda num iframe de outro domínio, e o cookie
   // de sessão vira "terceira-parte" — o navegador o bloqueia, e o login não
-  // persiste (volta para /login). SameSite=None; Secure faz o cookie valer
-  // no iframe. Fora do iframe, nada muda.
+  // persiste (volta para /login). SameSite=None; Secure faz o cookie valer no
+  // iframe; Partitioned (CHIPS) é o que falta no Chrome moderno, que descarta
+  // cookie de terceira-parte mesmo com SameSite=None. Fora do iframe, nada muda.
   const inIframe = typeof window !== 'undefined' && window.self !== window.top
 
   return createBrowserClient(url, key, {
     ...(inIframe
-      ? { cookieOptions: { sameSite: 'none', secure: true } }
+      ? { cookieOptions: { sameSite: 'none', secure: true, partitioned: true } }
       : {}),
   })
 }
@@ -1710,12 +1715,13 @@ export async function createClient() {
   }
 
   // No preview (iframe de outro domínio) o cookie precisa de SameSite=None;
-  // Secure, senão o navegador o trata como terceira-parte e o descarta.
+  // Secure, e Partitioned (CHIPS), senão o Chrome o trata como terceira-parte
+  // e o descarta mesmo com SameSite=None.
   const preview =
     process.env.SUPREMO_PREVIEW === '1' ||
     process.env.VERCEL_ENV === 'preview'
   const cookieOptions = preview
-    ? { sameSite: 'none' as const, secure: true }
+    ? { sameSite: 'none' as const, secure: true, partitioned: true }
     : {}
 
   return createServerClient(

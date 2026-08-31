@@ -8,20 +8,31 @@
  * fonte da verdade — inclusive da lista de ferramentas, que por isso nunca
  * sai de sincronia com o Supremo.
  *
+ * Prefira o mcp-remote (o gerador de conexão do Supremo já dá o snippet). Esta
+ * ponte é legado; use só se o mcp-remote não servir.
+ *
  * Configuração:
- *   SUPREMO_URL    endpoint MCP (padrão: https://supremo.app/api/mcp)
+ *   SUPREMO_URL    endpoint MCP — copie de /mcps. Sem padrão: apontar para o
+ *                  lugar errado (localhost, domínio inexistente) é pior que
+ *                  falhar claro.
  *   SUPREMO_TOKEN  token pessoal gerado em /mcps
  */
 
 import { createInterface } from 'node:readline'
 
-const DEFAULT_URL = 'https://supremo.app/api/mcp'
-
-const endpoint = process.env.SUPREMO_URL ?? DEFAULT_URL
+const endpoint = process.env.SUPREMO_URL
 const token = process.env.SUPREMO_TOKEN
 
 function logStderr(message: string): void {
   process.stderr.write(`[supremo] ${message}\n`)
+}
+
+if (!endpoint) {
+  logStderr(
+    'SUPREMO_URL não definido. Copie a URL do MCP em /mcps (ex.: ' +
+      'https://SEU-APP.vercel.app/api/mcp) e exporte antes de rodar a ponte.'
+  )
+  process.exit(1)
 }
 
 if (!token) {
@@ -103,15 +114,15 @@ async function forward(message: Record<string, unknown>): Promise<void> {
     process.stdout.write(`${body.trim()}\n`)
   } catch (error) {
     if (id === undefined) return
-    write(
-      protocolError(
-        id,
-        -32603,
-        `Falha ao falar com o Supremo em ${endpoint}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      )
-    )
+    // Erro que não é Error vira "[object Object]" com String(); JSON.stringify
+    // preserva a causa real em vez de esconder o que quebrou.
+    const detail =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : JSON.stringify(error)
+    write(protocolError(id, -32603, `Falha ao falar com o Supremo em ${endpoint}: ${detail}`))
   }
 }
 

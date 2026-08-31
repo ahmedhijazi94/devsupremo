@@ -39,12 +39,20 @@ Leia agents.md primeiro. Este arquivo complementa com regras específicas de com
 
 ## Fluxo de Trabalho no Supremo
 
+Ferramentas reais do MCP (fonte da verdade: `src/lib/mcp/server.ts`):
+`get_project_context`, `list_projects`, `switch_project`, `read_file`,
+`list_files`, `propose_changes`, `get_checks`, `wait_for_checks`,
+`get_failed_logs`, `retrigger_ci`, `merge_when_green`, `get_preview_errors`,
+`execute_sql`, `apply_data_change`, `apply_migration`, `sync_template`,
+`request_secret`.
+
 Quando ativado via MCP do Supremo:
-1. Chame `get_active_project()` para saber o projeto ativo
-2. Chame `get_project_context()` para ler agents.md e regras
-3. Chame `get_branch_state()` para entender o estado atual
-4. Implemente a funcionalidade
-5. Chame `apply_code_diff(diff)` para aplicar as mudanças
-6. Chame `run_test_pipeline()` e aguarde resultado
-7. Se testes passarem → `commit_and_deploy(msg)`
-8. Se falhar → corrija e tente novamente (máx 3x)
+1. `get_project_context` — projeto ativo, regras (agents.md/CLAUDE.md/SECURITY.md)
+   e PRs em andamento a retomar, tudo numa chamada
+2. Planeje a mudança inteira e implemente no MENOR número de ciclos
+3. `propose_changes` (ou `apply_migration` com `files` para migration+código no
+   mesmo PR); dado puro é `apply_data_change`, sem gates
+4. `wait_for_checks`; se `ciStarted:false`, `retrigger_ci` uma vez
+5. `merge_when_green` fecha o ciclo (recusa sem tudo verde)
+6. Integração externa que precisa de chave: `request_secret`, nunca no código
+7. Se falhar: `get_failed_logs`, corrija, proponha de novo (máx 3x)

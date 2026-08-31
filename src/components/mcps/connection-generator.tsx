@@ -43,7 +43,37 @@ const remoteJson = (url: string, token: string) =>
     2,
   )
 
+const mcpRemoteJson = (url: string, token: string) =>
+  JSON.stringify(
+    {
+      mcpServers: {
+        supremo: {
+          command: 'npx',
+          args: [
+            '-y',
+            'mcp-remote',
+            url,
+            '--header',
+            `Authorization: Bearer ${token}`,
+          ],
+        },
+      },
+    },
+    null,
+    2,
+  )
+
 const AGENTS: Agent[] = [
+  {
+    id: 'claude',
+    label: 'Claude (app)',
+    kind: 'json',
+    where:
+      'No app do Claude: Configurações › Desenvolvedor › Editar config, ou o arquivo claude_desktop_config.json. Cole e reinicie o Claude. NÃO use um CLI local — é a ponte mcp-remote oficial que injeta o token.',
+    build: mcpRemoteJson,
+    start:
+      'Reinicie o Claude. O "supremo" aparece nas ferramentas e traz get_project_context, apply_migration, etc.',
+  },
   {
     id: 'claude-code',
     label: 'Claude Code',
@@ -85,26 +115,8 @@ const AGENTS: Agent[] = [
     label: 'Outro',
     kind: 'json',
     where:
-      'Qualquer cliente com MCP remoto (Claude Desktop, Windsurf…). Se o cliente só aceita stdio, use a ponte mcp-remote abaixo.',
-    build: (url, token) =>
-      JSON.stringify(
-        {
-          mcpServers: {
-            supremo: {
-              command: 'npx',
-              args: [
-                '-y',
-                'mcp-remote',
-                url,
-                '--header',
-                `Authorization: Bearer ${token}`,
-              ],
-            },
-          },
-        },
-        null,
-        2,
-      ),
+      'Qualquer cliente com MCP remoto (Windsurf, Zed…). A ponte mcp-remote vale quando o cliente só aceita stdio.',
+    build: mcpRemoteJson,
     start: 'Reinicie o cliente. O Supremo aparece como servidor MCP.',
   },
 ]

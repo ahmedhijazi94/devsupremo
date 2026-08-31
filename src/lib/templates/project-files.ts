@@ -1860,7 +1860,45 @@ permissions:
   pull-requests: read
   actions: read
 
+# ------------------------------------------------------------------
+# Gates adaptativos, sem perder segurança.
+#
+# Os gates baratos (tipos, lint, build, auditoria, segredos, unitários)
+# rodam SEMPRE. Os dois caros — RLS (sobe um Postgres) e E2E (dois
+# navegadores) — rodam sempre como job, mas os passos pesados só executam se
+# os arquivos que os alimentam mudaram. O RLS só pode reprovar se uma policy
+# mudou (supabase/**); o E2E só se o app mudou. Nenhum pulo é por adivinhação
+# de "parece seguro": é por dependência provável, e na dúvida roda.
+#
+# O job ainda reporta o check verde em segundos quando não é afetado, então a
+# proteção de branch continua exigindo todos os gates.
+# ------------------------------------------------------------------
+
 jobs:
+  changes:
+    name: Áreas afetadas
+    runs-on: ubuntu-latest
+    outputs:
+      db: \${{ steps.filter.outputs.db }}
+      app: \${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            db:
+              - 'supabase/**'
+            app:
+              - 'app/**'
+              - 'components/**'
+              - 'lib/**'
+              - 'proxy.ts'
+              - 'next.config.ts'
+              - 'playwright.config.ts'
+              - 'package.json'
+              - 'package-lock.json'
+
   quality:
     name: Tipos, lint e auditoria
     runs-on: ubuntu-latest
@@ -1890,31 +1928,44 @@ jobs:
   rls:
     name: Políticas RLS
     runs-on: ubuntu-latest
+    needs: changes
     steps:
+      - name: Não afetado — nenhuma policy mudou
+        if: needs.changes.outputs.db != 'true'
+        run: echo "Sem mudanca em supabase/** - as policies sao as mesmas, nada de isolamento novo a provar. Gate verde."
+
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.db == 'true'
       - uses: actions/setup-node@v5
+        if: needs.changes.outputs.db == 'true'
         with:
           node-version: '22'
           cache: npm
       - uses: supabase/setup-cli@v1
+        if: needs.changes.outputs.db == 'true'
         with:
           version: latest
-      - run: supabase start
+      - if: needs.changes.outputs.db == 'true'
+        run: supabase start
 
       # O start sobe o banco, mas quem aplica as migrations do repositório
       # é o db reset. Sem isto o teste falha com "Could not find the table
       # ... in the schema cache", e o gate de RLS passa a acusar ausência de
       # tabela em vez de falha de policy.
       - name: Aplicar as migrations do repositório
+        if: needs.changes.outputs.db == 'true'
         run: supabase db reset --no-seed
 
       - name: Exportar credenciais locais
+        if: needs.changes.outputs.db == 'true'
         run: |
           echo "SUPABASE_URL=$(supabase status -o env | grep API_URL | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
           echo "SUPABASE_ANON_KEY=$(supabase status -o env | grep ANON_KEY | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
           echo "SUPABASE_SERVICE_ROLE_KEY=$(supabase status -o env | grep SERVICE_ROLE_KEY | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
-      - run: npm ci
+      - if: needs.changes.outputs.db == 'true'
+        run: npm ci
       - name: Provar isolamento entre contas
+        if: needs.changes.outputs.db == 'true'
         run: npm run test:rls
 
   dependencies:
@@ -1959,21 +2010,30 @@ jobs:
   e2e:
     name: End-to-end
     runs-on: ubuntu-latest
-    needs: [build]
+    needs: [build, changes]
     env:
       NEXT_PUBLIC_SUPABASE_URL: \${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co' }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: \${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder' }}
     steps:
+      - name: Não afetado — o app não mudou
+        if: needs.changes.outputs.app != 'true'
+        run: echo "Sem mudanca em app/**, components/**, lib/**, proxy.ts ou config - a tela e a mesma. Gate verde."
+
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.app == 'true'
       - uses: actions/setup-node@v5
+        if: needs.changes.outputs.app == 'true'
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:e2e
+      - if: needs.changes.outputs.app == 'true'
+        run: npm ci
+      - if: needs.changes.outputs.app == 'true'
+        run: npx playwright install --with-deps chromium webkit
+      - if: needs.changes.outputs.app == 'true'
+        run: npm run test:e2e
       - uses: actions/upload-artifact@v5
-        if: failure()
+        if: failure() && needs.changes.outputs.app == 'true'
         with:
           name: playwright-report
           path: playwright-report/

@@ -620,14 +620,59 @@ describe('gates obrigatórios', () => {
     }
   })
 
-  it('todo job do workflow está na lista de obrigatórios', () => {
-    const declared = [...ci.matchAll(/^    name: (.+)$/gm)].map((m) => m[1])
+  it('todo job do workflow (fora helpers) está na lista de obrigatórios', () => {
+    // "Áreas afetadas" é um helper de gating: os gates dependem dele, então se
+    // ele falhar os gates ficam pendentes e o merge trava do mesmo jeito. Não
+    // é um gate em si, então não precisa estar na lista de obrigatórios.
+    const HELPERS = ['Áreas afetadas']
+    const declared = [...ci.matchAll(/^    name: (.+)$/gm)]
+      .map((m) => m[1])
+      .filter(
+        (name): name is string =>
+          typeof name === 'string' && !HELPERS.includes(name),
+      )
     expect(declared.length).toBeGreaterThan(0)
     for (const name of declared) {
       expect(
         CI_JOB_NAMES as readonly string[],
         `job "${name}" roda mas não bloqueia o merge`,
       ).toContain(name)
+    }
+  })
+})
+
+describe('gates adaptativos — rápido sem perder segurança', () => {
+  const ci = file('.github/workflows/ci.yml')
+
+  it('o RLS só roda os passos pesados quando uma policy muda', () => {
+    // O gate de RLS não pode reprovar se nenhuma migration mudou; subir um
+    // Postgres nesse caso é só lentidão. Mas o job ainda reporta verde.
+    expect(ci).toContain("db:\n              - 'supabase/**'")
+    expect(ci).toContain("if: needs.changes.outputs.db == 'true'")
+    expect(ci).toContain("if: needs.changes.outputs.db != 'true'")
+  })
+
+  it('o E2E só roda quando o app muda', () => {
+    expect(ci).toContain("if: needs.changes.outputs.app == 'true'")
+    expect(ci).toContain("if: needs.changes.outputs.app != 'true'")
+  })
+
+  it('os gates de segurança e correção NÃO são adaptativos — sempre rodam', () => {
+    // Extrai o bloco de cada job e confirma que nada de segurança é pulado.
+    const alwaysFull = [
+      'Tipos, lint e auditoria',
+      'Testes e cobertura',
+      'Vulnerabilidades',
+      'Varredura de segredos',
+      'Build de produção',
+    ]
+    for (const name of alwaysFull) {
+      const start = ci.indexOf(`name: ${name}`)
+      const nextJob = ci.indexOf('\n  ', ci.indexOf('steps:', start))
+      const block = ci.slice(start, nextJob > start ? nextJob : undefined)
+      expect(block, `${name} não pode ter gating`).not.toContain(
+        'needs.changes',
+      )
     }
   })
 })

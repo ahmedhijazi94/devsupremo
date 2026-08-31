@@ -409,3 +409,31 @@ describe('assertSafeDataChange — ajuste de dado sem migration', () => {
     )
   })
 })
+
+describe('tokenizador — string vs comentário (bug real do editor de dados)', () => {
+  it('aceita valor com -- dentro da string (não é comentário)', () => {
+    // A versão anterior tirava comentários antes de mascarar strings, então o
+    // -- dentro do valor comia o WHERE e o UPDATE era rejeitado por engano.
+    expect(() =>
+      assertSafeDataChange(
+        `UPDATE t SET label = 'promo -- 50% off' WHERE id = '1'`,
+      ),
+    ).not.toThrow()
+  })
+
+  it('neutraliza injeção pelo valor: a aspas escapada vira texto', () => {
+    // O DROP fica dentro do literal (aspas duplicada), então é só texto.
+    expect(() =>
+      assertSafeDataChange(
+        `UPDATE t SET name = 'x''; DROP TABLE t; --' WHERE id = '1'`,
+      ),
+    ).not.toThrow()
+  })
+
+  it('ainda vê o comando fora da string', () => {
+    // DROP de verdade (fora de string) continua sendo DDL e é recusado.
+    expect(() =>
+      assertSafeDataChange(`DELETE FROM t WHERE id = '1'; DROP TABLE t`),
+    ).toThrow(UnsafeSqlError)
+  })
+})

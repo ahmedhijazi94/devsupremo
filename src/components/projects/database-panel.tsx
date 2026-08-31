@@ -9,19 +9,25 @@ import {
   FunctionSquare,
   Loader2,
   RefreshCw,
+  Trash2,
 } from 'lucide-react'
 import {
   getDatabaseOverview,
   getTableDetail,
+  updateCell,
+  deleteRow,
   type DatabaseOverview,
   type TableDetail,
 } from '@/actions/database'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 /**
- * A aba do banco: tabelas, colunas, policies de RLS e Edge Functions, tudo
- * read-only, direto no Supremo. É a prova visível do que o agente construiu —
- * e do isolamento (as policies aparecem por tabela).
+ * A aba do banco: tabelas, colunas, policies de RLS e Edge Functions, direto
+ * no Supremo. É a prova visível do que o agente construiu — e do isolamento
+ * (as policies aparecem por tabela). As linhas dão para editar em tabela com
+ * chave primária, com o mesmo guard de dado do MCP; estrutura continua só pelo
+ * agente.
  */
 export function DatabasePanel({ projectId }: { projectId: string }) {
   const [overview, setOverview] = useState<DatabaseOverview | null>(null)
@@ -266,47 +272,200 @@ function TableDetailView({
         )}
       </section>
 
-      {/* Linhas */}
-      <section>
-        <h3 className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
-          Linhas ({detail.data.rows.length})
-        </h3>
-        {detail.data.rows.length === 0 ? (
-          <p className="text-muted text-sm">Tabela vazia.</p>
-        ) : (
-          <div className="bg-surface overflow-x-auto rounded-[var(--radius-control)]">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="text-muted">
-                  {detail.data.columns.map((col) => (
-                    <th
-                      key={col}
-                      className="border-line border-b px-3 py-2 font-medium"
-                    >
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {detail.data.rows.map((row, i) => (
-                  <tr key={i} className="border-line border-b last:border-0">
-                    {detail.data.columns.map((col) => (
-                      <td
-                        key={col}
-                        className="text-ink max-w-[16rem] truncate px-3 py-2 font-mono"
-                      >
-                        {formatCell(row[col])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {/* Linhas — editáveis */}
+      <EditableRows
+        projectId={projectId}
+        table={table}
+        columns={detail.data.columns}
+        pkColumn={
+          detail.columns.filter((c) => c.isPrimaryKey).length === 1
+            ? (detail.columns.find((c) => c.isPrimaryKey)?.name ?? null)
+            : null
+        }
+        rows={detail.data.rows}
+      />
     </div>
+  )
+}
+
+function EditableRows({
+  projectId,
+  table,
+  columns,
+  pkColumn,
+  rows: initialRows,
+}: {
+  projectId: string
+  table: string
+  columns: string[]
+  pkColumn: string | null
+  rows: Array<Record<string, unknown>>
+}) {
+  const [rows, setRows] = useState(initialRows)
+  const [editing, setEditing] = useState<{ pk: string; col: string } | null>(
+    null,
+  )
+  const [draft, setDraft] = useState('')
+  const [busy, startBusy] = useTransition()
+
+  const editable = pkColumn !== null
+
+  function save(pk: string) {
+    if (!editing) return
+    const { col } = editing
+    const value = draft === '' ? null : draft
+    startBusy(async () => {
+      const result = await updateCell({
+        projectId,
+        table,
+        pkColumn: pkColumn!,
+        pkValue: pk,
+        column: col,
+        value,
+      })
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+      setRows((prev) =>
+        prev.map((r) =>
+          String(r[pkColumn!]) === pk ? { ...r, [col]: value } : r,
+        ),
+      )
+      setEditing(null)
+      toast.success('Dado atualizado.')
+    })
+  }
+
+  function remove(pk: string) {
+    startBusy(async () => {
+      const result = await deleteRow({
+        projectId,
+        table,
+        pkColumn: pkColumn!,
+        pkValue: pk,
+      })
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+      setRows((prev) => prev.filter((r) => String(r[pkColumn!]) !== pk))
+      toast.success('Linha removida.')
+    })
+  }
+
+  return (
+    <section>
+      <h3 className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
+        Linhas ({rows.length})
+      </h3>
+      {!editable && rows.length > 0 && (
+        <p className="text-muted mb-2 text-xs">
+          Edição direta precisa de uma chave primária única — esta tabela não
+          tem. Peça a alteração ao agente.
+        </p>
+      )}
+      {rows.length === 0 ? (
+        <p className="text-muted text-sm">Tabela vazia.</p>
+      ) : (
+        <div className="bg-surface overflow-x-auto rounded-[var(--radius-control)]">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="text-muted">
+                {columns.map((col) => (
+                  <th
+                    key={col}
+                    className="border-line border-b px-3 py-2 font-medium"
+                  >
+                    {col}
+                  </th>
+                ))}
+                {editable && <th className="border-line border-b px-2" />}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const pk = editable ? String(row[pkColumn]) : ''
+                return (
+                  <tr
+                    key={pk || JSON.stringify(row)}
+                    className="border-line border-b last:border-0"
+                  >
+                    {columns.map((col) => {
+                      const isEditing =
+                        editing?.pk === pk && editing?.col === col
+                      const isPk = col === pkColumn
+                      return (
+                        <td
+                          key={col}
+                          className="text-ink max-w-[16rem] px-3 py-1.5 font-mono"
+                        >
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              value={draft}
+                              disabled={busy}
+                              onChange={(e) => setDraft(e.target.value)}
+                              onBlur={() => save(pk)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') save(pk)
+                                if (e.key === 'Escape') setEditing(null)
+                              }}
+                              className="bg-sunken w-full rounded px-1.5 py-0.5 outline-none"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!editable || isPk}
+                              onClick={() => {
+                                setDraft(
+                                  row[col] === null || row[col] === undefined
+                                    ? ''
+                                    : String(row[col]),
+                                )
+                                setEditing({ pk, col })
+                              }}
+                              className={cn(
+                                'block max-w-full truncate text-left',
+                                editable && !isPk
+                                  ? 'hover:bg-sunken -mx-1 rounded px-1'
+                                  : 'cursor-default',
+                              )}
+                              title={
+                                editable && !isPk
+                                  ? 'Clique para editar'
+                                  : undefined
+                              }
+                            >
+                              {formatCell(row[col])}
+                            </button>
+                          )}
+                        </td>
+                      )
+                    })}
+                    {editable && (
+                      <td className="px-2">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            if (confirm('Remover esta linha?')) remove(pk)
+                          }}
+                          title="Remover linha"
+                          className="text-muted hover:text-down-ink p-1"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   )
 }
 

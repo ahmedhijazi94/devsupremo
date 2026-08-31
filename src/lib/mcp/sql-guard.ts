@@ -37,9 +37,7 @@ export interface SqlGuardOptions {
   allowDdl: boolean
 }
 
-const DOLLAR_BODY = /\$([A-Za-z_]\w*)?\$([\s\S]*?)\$\1?\$/g
-
-/** Remove comentários e colapsa espaço. Preserva todo o resto. */
+/** Remove comentários de um corpo já isolado (não tem string a preservar). */
 function stripComments(sql: string): string {
   return sql
     .replace(/--[^\n]*/g, ' ')
@@ -49,29 +47,87 @@ function stripComments(sql: string): string {
 }
 
 /**
- * Separa o SQL em duas visões, porque elas servem a perguntas diferentes.
+ * Separa o SQL em duas visões, numa única passada da esquerda para a direita.
  *
  * `text` é o SQL sem literais e sem corpo de função: é onde se procura
  * estrutura (qual comando, qual tabela) sem casar dentro de uma string.
  *
- * `bodies` é o conteúdo cru de cada função, COM os literais preservados —
- * é justamente dentro de uma string que mora o `EXECUTE 'ALTER TABLE ...'`.
+ * `bodies` é o conteúdo cru de cada função — é dentro de uma string que mora
+ * o `EXECUTE 'ALTER TABLE ...'`.
+ *
+ * Por que uma passada, e não regex em série: a versão anterior tirava os
+ * comentários ANTES de mascarar as strings. Um valor com `--` (ex.: 'promo --
+ * 50%') era lido como comentário e comia o resto da linha — inclusive um WHERE
+ * legítimo. Aqui, dentro de uma string, `--` e `/* *` /` são só texto; comentário
+ * só conta fora de string. É o mesmo que um lexer de SQL faz.
  */
 function split(sql: string): { text: string; bodies: string[] } {
-  const withoutComments = stripComments(sql)
   const bodies: string[] = []
+  let text = ''
+  let i = 0
+  const n = sql.length
 
-  const withoutBodies = withoutComments.replace(
-    DOLLAR_BODY,
-    (_all, _tag, body) => {
-      bodies.push(String(body))
-      return ' $$BODY$$ '
-    },
-  )
+  while (i < n) {
+    const two = sql.slice(i, i + 2)
 
-  const text = withoutBodies.replace(/'(?:[^']|'')*'/g, "''")
+    // Comentário de linha — só fora de string (aqui já estamos fora).
+    if (two === '--') {
+      i += 2
+      while (i < n && sql[i] !== '\n') i++
+      text += ' '
+      continue
+    }
 
-  return { text, bodies: bodies.map(stripComments) }
+    // Comentário de bloco.
+    if (two === '/*') {
+      i += 2
+      while (i < n && sql.slice(i, i + 2) !== '*/') i++
+      i += 2
+      text += ' '
+      continue
+    }
+
+    // Corpo dollar-quoted: $$ ... $$ ou $tag$ ... $tag$.
+    if (sql[i] === '$') {
+      const open = /^\$([A-Za-z_]\w*)?\$/.exec(sql.slice(i))
+      if (open) {
+        const marker = open[0]
+        const end = sql.indexOf(marker, i + marker.length)
+        if (end !== -1) {
+          bodies.push(sql.slice(i + marker.length, end))
+          i = end + marker.length
+          text += ' $$BODY$$ '
+          continue
+        }
+      }
+    }
+
+    // String literal — '...' com '' escapado. Vira '' no text.
+    if (sql[i] === "'") {
+      i++
+      while (i < n) {
+        if (sql[i] === "'" && sql[i + 1] === "'") {
+          i += 2
+          continue
+        }
+        if (sql[i] === "'") {
+          i++
+          break
+        }
+        i++
+      }
+      text += "''"
+      continue
+    }
+
+    text += sql[i]
+    i++
+  }
+
+  return {
+    text: text.replace(/\s+/g, ' ').trim(),
+    bodies: bodies.map(stripComments),
+  }
 }
 
 /** Proibido em qualquer contexto, migration incluída. */

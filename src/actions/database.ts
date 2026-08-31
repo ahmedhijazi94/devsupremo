@@ -3,12 +3,14 @@
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { decryptToken } from '@/lib/crypto'
+import { assertSafeDataChange } from '@/lib/mcp/sql-guard'
 import {
   listTables,
   tableColumns,
   tablePolicies,
   tableRows,
   listEdgeFunctions,
+  safeIdent,
   type TableInfo,
   type ColumnInfo,
   type PolicyInfo,
@@ -114,6 +116,124 @@ export async function getTableDetail(
     ])
 
     return { data: { columns, policies, data } }
+  } catch (error) {
+    return { error: toActionError(error) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Escrita — fase 2: editar dado direto na aba
+//
+// Só DADO, com o mesmo guard do apply_data_change do MCP: nada de estrutura,
+// e todo UPDATE/DELETE amarrado à chave primária (um WHERE que pega exatamente
+// uma linha). O identificador passa por safeIdent; o valor vira literal com
+// aspas escapadas — a combinação fecha injeção por nome e por valor.
+// ─────────────────────────────────────────────────────────────
+
+const SUPABASE_API = 'https://api.supabase.com'
+
+/** Literal SQL seguro: NULL, ou string com aspas duplicadas. */
+function sqlLiteral(value: string | null): string {
+  if (value === null) return 'NULL'
+  return "'" + value.replace(/'/g, "''") + "'"
+}
+
+async function runWrite(
+  token: string,
+  projectRef: string,
+  sql: string,
+): Promise<void> {
+  assertSafeDataChange(sql)
+
+  const response = await fetch(
+    `${SUPABASE_API}/v1/projects/${projectRef}/database/query`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      cache: 'no-store',
+      body: JSON.stringify({ query: sql }),
+    },
+  )
+
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null)
+    const message =
+      payload && typeof payload === 'object' && 'message' in payload
+        ? String((payload as { message: unknown }).message)
+        : 'O banco recusou a alteração.'
+    throw new Error(message)
+  }
+}
+
+const ident = z.string().regex(/^[a-z_][a-z0-9_]*$/i, 'Identificador inválido.')
+
+export async function updateCell(input: {
+  projectId: string
+  table: string
+  pkColumn: string
+  pkValue: string
+  column: string
+  value: string | null
+}): Promise<{ error?: string }> {
+  const parsed = z
+    .object({
+      projectId: z.string().uuid(),
+      table: ident,
+      pkColumn: ident,
+      pkValue: z.string(),
+      column: ident,
+      value: z.string().nullable(),
+    })
+    .safeParse(input)
+  if (!parsed.success) return { error: 'Dados inválidos.' }
+
+  try {
+    const creds = await resolveSupabase(parsed.data.projectId)
+    if (!creds.ok) return { error: creds.error }
+
+    const { table, pkColumn, pkValue, column, value } = parsed.data
+    const sql =
+      `UPDATE public."${safeIdent(table)}" ` +
+      `SET "${safeIdent(column)}" = ${sqlLiteral(value)} ` +
+      `WHERE "${safeIdent(pkColumn)}" = ${sqlLiteral(pkValue)}`
+
+    await runWrite(creds.token, creds.ref, sql)
+    return {}
+  } catch (error) {
+    return { error: toActionError(error) }
+  }
+}
+
+export async function deleteRow(input: {
+  projectId: string
+  table: string
+  pkColumn: string
+  pkValue: string
+}): Promise<{ error?: string }> {
+  const parsed = z
+    .object({
+      projectId: z.string().uuid(),
+      table: ident,
+      pkColumn: ident,
+      pkValue: z.string(),
+    })
+    .safeParse(input)
+  if (!parsed.success) return { error: 'Dados inválidos.' }
+
+  try {
+    const creds = await resolveSupabase(parsed.data.projectId)
+    if (!creds.ok) return { error: creds.error }
+
+    const { table, pkColumn, pkValue } = parsed.data
+    const sql =
+      `DELETE FROM public."${safeIdent(table)}" ` +
+      `WHERE "${safeIdent(pkColumn)}" = ${sqlLiteral(pkValue)}`
+
+    await runWrite(creds.token, creds.ref, sql)
+    return {}
   } catch (error) {
     return { error: toActionError(error) }
   }

@@ -20,7 +20,7 @@ import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
 // moderno descarta o cookie de terceira-parte no iframe mesmo com SameSite=None,
 // e o login não persistia no preview. 2.1.0 trouxe SameSite=None, o inspector e
 // o CI adaptativo. Projeto atrás mostra o cartão "Atualizar base".
-export const TEMPLATE_VERSION = '2.1.1'
+export const TEMPLATE_VERSION = '2.1.2'
 
 export interface FileEntry {
   path: string
@@ -2106,7 +2106,16 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
+      # node_modules cacheado pelo lockfile: cache-hit pula o npm ci inteiro
+      # (~40s por job). Instalação é determinística, então restaurar é seguro.
+      - name: Cache node_modules
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: modules-\${{ runner.os }}-\${{ hashFiles('package-lock.json') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run audit:security -- --strict
@@ -2120,7 +2129,16 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
+      # node_modules cacheado pelo lockfile: cache-hit pula o npm ci inteiro
+      # (~40s por job). Instalação é determinística, então restaurar é seguro.
+      - name: Cache node_modules
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: modules-\${{ runner.os }}-\${{ hashFiles('package-lock.json') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
       - run: npm run test:coverage
 
   rls:
@@ -2175,7 +2193,16 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
+      # node_modules cacheado pelo lockfile: cache-hit pula o npm ci inteiro
+      # (~40s por job). Instalação é determinística, então restaurar é seguro.
+      - name: Cache node_modules
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: modules-\${{ runner.os }}-\${{ hashFiles('package-lock.json') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
       - run: npm audit --audit-level=high
 
   secrets:
@@ -2202,7 +2229,16 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
+      # node_modules cacheado pelo lockfile: cache-hit pula o npm ci inteiro
+      # (~40s por job). Instalação é determinística, então restaurar é seguro.
+      - name: Cache node_modules
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: modules-\${{ runner.os }}-\${{ hashFiles('package-lock.json') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
       - run: npm run build
 
   e2e:

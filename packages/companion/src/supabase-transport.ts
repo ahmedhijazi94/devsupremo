@@ -66,7 +66,8 @@ export class SupabaseRealtimeTransport implements Transport {
     this.client.realtime.setAuth(this.session.realtimeToken)
 
     const channel = this.client.channel(this.session.channel, {
-      config: { broadcast: { self: false }, presence: { key: 'companion' } },
+      // private: RLS em realtime.messages garante que só o dono entra no canal.
+      config: { private: true, broadcast: { self: false }, presence: { key: 'companion' } },
     })
     channel.on('broadcast', { event: 'command' }, ({ payload }) => {
       this.handler?.(payload)

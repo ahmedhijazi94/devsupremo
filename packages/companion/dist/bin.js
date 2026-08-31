@@ -36214,13 +36214,14 @@ function parseCommand(raw) {
 
 // src/companion.ts
 var Companion = class {
-  constructor(transport, manager, logger) {
+  constructor(transport, manager, logger, fetchGitCredentials) {
     this.transport = transport;
     this.manager = manager;
     this.logger = logger;
+    this.fetchGitCredentials = fetchGitCredentials;
   }
-  // Último token de curta duração por projeto (do start_project), reusado para
-  // pull/sync até o próximo start renovar. Nunca logado (registrado como secret).
+  // Último token de curta duração por projeto (do git-credentials), reusado para
+  // git_sync até renovar. Nunca logado (registrado como secret).
   tokens = /* @__PURE__ */ new Map();
   async start() {
     this.transport.onMessage((raw) => this.route(raw));
@@ -36235,12 +36236,27 @@ var Companion = class {
     }
     switch (cmd.type) {
       case "start_project": {
-        if (cmd.cloneToken) {
-          this.logger.addSecret(cmd.cloneToken);
-          this.tokens.set(cmd.projectId, cmd.cloneToken);
-        }
         this.logger.info(`start_project ${cmd.projectId}`);
-        void this.manager.start(cmd);
+        void (async () => {
+          try {
+            const creds = await this.fetchGitCredentials(cmd.projectId);
+            this.logger.addSecret(creds.token);
+            this.tokens.set(cmd.projectId, creds.token);
+            await this.manager.start({
+              projectId: cmd.projectId,
+              repoFullName: creds.repoFullName || cmd.repoFullName,
+              branch: creds.branch || cmd.branch,
+              cloneToken: creds.token
+            });
+          } catch (error61) {
+            this.transport.send({
+              type: "error",
+              projectId: cmd.projectId,
+              kind: "clone",
+              message: error61 instanceof Error ? error61.message : String(error61)
+            });
+          }
+        })();
         break;
       }
       case "stop_project": {
@@ -44186,7 +44202,8 @@ var SupabaseRealtimeTransport = class {
     });
     this.client.realtime.setAuth(this.session.realtimeToken);
     const channel = this.client.channel(this.session.channel, {
-      config: { broadcast: { self: false }, presence: { key: "companion" } }
+      // private: RLS em realtime.messages garante que só o dono entra no canal.
+      config: { private: true, broadcast: { self: false }, presence: { key: "companion" } }
     });
     channel.on("broadcast", { event: "command" }, ({ payload }) => {
       this.handler?.(payload);
@@ -44253,7 +44270,23 @@ program2.command("run", { isDefault: true }).description("Conecta ao Supremo e f
     git: new RealGit(new RealRunner()),
     emit: (event) => transport.send(event)
   });
-  const companion = new Companion(transport, manager, logger);
+  const fetchGitCredentials = async (projectId) => {
+    const res = await fetch(`${config2.supremoUrl}/api/companion/git-credentials`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config2.token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ projectId }),
+      signal: AbortSignal.timeout(3e4)
+    });
+    if (!res.ok) {
+      throw new Error(`Credencial de git negada (${res.status}).`);
+    }
+    const data = await res.json();
+    return data;
+  };
+  const companion = new Companion(transport, manager, logger, fetchGitCredentials);
   await companion.start();
   logger.info(`Online como ${session.userId}. Aguardando comandos do Supremo.`);
   const shutdown = async () => {

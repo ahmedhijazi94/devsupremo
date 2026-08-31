@@ -1,17 +1,19 @@
 'use client'
 
 import { useState } from 'react'
-import { Monitor, Database, FlaskConical, Code2, Zap } from 'lucide-react'
+import { Monitor, Database, FlaskConical, Code2, Zap, Rocket } from 'lucide-react'
 import { PreviewPanel } from '@/components/projects/preview-panel'
+import { LocalPreviewPanel } from '@/components/projects/local-preview-panel'
 import { DatabasePanel } from '@/components/projects/database-panel'
 import { TestsPanel } from '@/components/projects/tests-panel'
 import { CodePanel } from '@/components/projects/code-panel'
 import { cn } from '@/lib/utils'
 
-type Tab = 'preview' | 'banco' | 'codigo' | 'testes'
+type Tab = 'local' | 'preview' | 'banco' | 'codigo' | 'testes'
 
 const TABS: { id: Tab; label: string; icon: typeof Monitor }[] = [
-  { id: 'preview', label: 'Preview', icon: Monitor },
+  { id: 'local', label: 'Preview local', icon: Rocket },
+  { id: 'preview', label: 'Preview (Vercel)', icon: Monitor },
   { id: 'banco', label: 'Banco', icon: Database },
   { id: 'codigo', label: 'Código', icon: Code2 },
   { id: 'testes', label: 'Testes', icon: FlaskConical },
@@ -32,7 +34,7 @@ export function WorkspaceTabs({
   repoFullName: string | null
   provisioned: boolean
 }) {
-  const [tab, setTab] = useState<Tab>('preview')
+  const [tab, setTab] = useState<Tab>('local')
 
   if (!provisioned) {
     return (
@@ -74,8 +76,14 @@ export function WorkspaceTabs({
       </div>
 
       <div className="min-h-0 flex-1">
-        {/* Todos montados, só um visível: preserva o preview carregado ao
-            trocar de aba, e evita refazer a consulta do banco/testes à toa. */}
+        {/* Preview local (companion) montado enquanto ativo: preserva o canal
+            Realtime e o iframe do dev server ao trocar de aba. */}
+        {tab === 'local' && (
+          <div className="h-full">
+            <LocalPreviewPanel projectId={projectId} />
+          </div>
+        )}
+        {/* Vercel = fallback, preservado. Montado-escondido pra não recarregar. */}
         <div className={cn('h-full', tab !== 'preview' && 'hidden')}>
           <PreviewPanel repoFullName={repoFullName} projectId={projectId} />
         </div>

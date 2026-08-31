@@ -13,15 +13,26 @@ import type { Logger } from './logger'
  * agir é um comando do protocolo, e cada um mapeia para uma ação fixa e
  * limitada ao projeto autorizado.
  */
+/** Credencial de git resolvida no servidor para um projeto (curta duração). */
+export interface GitCredentials {
+  token: string
+  repoFullName: string
+  branch: string
+}
+
 export class Companion {
-  // Último token de curta duração por projeto (do start_project), reusado para
-  // pull/sync até o próximo start renovar. Nunca logado (registrado como secret).
+  // Último token de curta duração por projeto (do git-credentials), reusado para
+  // git_sync até renovar. Nunca logado (registrado como secret).
   private tokens = new Map<string, string>()
 
   constructor(
     private readonly transport: Transport,
     private readonly manager: ProjectManager,
     private readonly logger: Logger,
+    /** Busca a credencial de git no Supremo (endpoint autenticado). */
+    private readonly fetchGitCredentials: (
+      projectId: string,
+    ) => Promise<GitCredentials>,
   ) {}
 
   async start(): Promise<void> {
@@ -39,12 +50,29 @@ export class Companion {
 
     switch (cmd.type) {
       case 'start_project': {
-        if (cmd.cloneToken) {
-          this.logger.addSecret(cmd.cloneToken)
-          this.tokens.set(cmd.projectId, cmd.cloneToken)
-        }
         this.logger.info(`start_project ${cmd.projectId}`)
-        void this.manager.start(cmd)
+        // A credencial de git NÃO vem no comando (canal sem segredo): busca no
+        // Supremo, autenticado, só pra este projeto.
+        void (async () => {
+          try {
+            const creds = await this.fetchGitCredentials(cmd.projectId)
+            this.logger.addSecret(creds.token)
+            this.tokens.set(cmd.projectId, creds.token)
+            await this.manager.start({
+              projectId: cmd.projectId,
+              repoFullName: creds.repoFullName || cmd.repoFullName,
+              branch: creds.branch || cmd.branch,
+              cloneToken: creds.token,
+            })
+          } catch (error) {
+            this.transport.send({
+              type: 'error',
+              projectId: cmd.projectId,
+              kind: 'clone',
+              message: error instanceof Error ? error.message : String(error),
+            })
+          }
+        })()
         break
       }
       case 'stop_project': {

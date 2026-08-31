@@ -65,7 +65,28 @@ program
       git: new RealGit(new RealRunner()),
       emit: (event) => transport.send(event),
     })
-    const companion = new Companion(transport, manager, logger)
+    // Busca a credencial de git no Supremo (autenticado com o token do dev).
+    const fetchGitCredentials = async (projectId: string) => {
+      const res = await fetch(`${config.supremoUrl}/api/companion/git-credentials`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ projectId }),
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!res.ok) {
+        throw new Error(`Credencial de git negada (${res.status}).`)
+      }
+      const data = (await res.json()) as {
+        token: string
+        repoFullName: string
+        branch: string
+      }
+      return data
+    }
+    const companion = new Companion(transport, manager, logger, fetchGitCredentials)
 
     await companion.start()
     logger.info(`Online como ${session.userId}. Aguardando comandos do Supremo.`)

@@ -9,7 +9,9 @@ import {
 } from '@/lib/templates/rls-tests'
 import { mcpDataClient } from './tokens'
 import {
+  isDeployable,
   previewProjectName,
+  publishSharedPreview,
   readPreviewFailure,
   readSharedPreview,
   sharedPreviewConfig,
@@ -555,9 +557,20 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         sha: merged.sha,
       })
 
+      // O preview compartilhado é um deploy de arquivos: não redeploya sozinho
+      // quando a main muda. Sem republicar aqui, o merge entra mas o preview
+      // continua mostrando a versão antiga — o agente diz "publicado" e o
+      // usuário não vê nada mudar. Republicar fecha o loop.
+      const preview = await republishPreview(ctx.userId, project.id)
+
       return ok(
         `PR #${prNumber} mergeado em ${project.default_branch} (${merged.sha.slice(0, 7)}). ` +
-          `Todos os ${checks.total} gates passaram.`,
+          `Todos os ${checks.total} gates passaram.` +
+          (preview.url
+            ? `\nPreview atualizado: ${preview.url}`
+            : preview.note
+              ? `\nPreview: ${preview.note}`
+              : ''),
       )
     }),
   )
@@ -774,6 +787,74 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 }
 
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Republica o preview compartilhado a partir da branch principal.
+ *
+ * Chamado depois do merge, porque o preview é um deploy de arquivos e não
+ * acompanha o git sozinho. Best-effort: se o preview não está configurado ou
+ * a publicação falha, o merge não é desfeito — o resultado só perde a URL
+ * nova. É preferível a fazer o merge_when_green inteiro falhar por causa do
+ * preview.
+ */
+async function republishPreview(
+  userId: string,
+  projectId: string,
+): Promise<{ url?: string; note?: string }> {
+  const config = sharedPreviewConfig()
+  if (!config) {
+    return { note: 'preview compartilhado não configurado neste ambiente.' }
+  }
+
+  try {
+    const project = await repo.resolveProject(userId, projectId)
+    if (!project.github_repo_full_name) {
+      return { note: 'projeto sem repositório provisionado.' }
+    }
+
+    const creds = await repo.getGithubCredentials(userId, project)
+    const branch = project.default_branch ?? 'main'
+
+    const tree = await gh.listTree(creds, branch)
+    const files: Array<{ path: string; content: string }> = []
+    for (const entry of tree) {
+      if (!isDeployable(entry.path)) continue
+      try {
+        files.push({
+          path: entry.path,
+          content: await gh.readFile(creds, entry.path, branch),
+        })
+      } catch {
+        // Arquivo binário ou ilegível fica de fora em vez de derrubar tudo.
+      }
+    }
+
+    const name =
+      project.preview_project_name ??
+      previewProjectName(project.name, project.id)
+
+    const supabaseRef = project.supabase_project_ref
+    const { deployment } = await publishSharedPreview(config, name, files, {
+      branch,
+      ...(supabaseRef
+        ? { supabaseUrl: `https://${supabaseRef}.supabase.co` }
+        : {}),
+    })
+
+    await repo.updateProject(userId, project.id, {
+      preview_project_name: name,
+      preview_url_shared: deployment.url,
+      preview_updated_at: new Date().toISOString(),
+    })
+
+    return { url: deployment.url }
+  } catch (error) {
+    console.error('[mcp] falha ao republicar preview:', error)
+    return {
+      note: 'o merge entrou, mas a republicação do preview falhou — publique pelo painel.',
+    }
+  }
+}
 
 /**
  * A ação certa para um PR em andamento, a partir do estado do gate.

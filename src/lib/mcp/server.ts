@@ -54,6 +54,19 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
 2. Você não commita na branch principal. propose_changes cria uma branch e abre
    um pull request. É o único caminho de escrita, e o servidor não expõe outro.
 
+2b. VELOCIDADE (tempo é dinheiro; cada ciclo de CI custa minutos). Planeje a
+   mudança INTEIRA antes de escrever, e entregue no MENOR número de ciclos:
+   - UM PR por feature, não um por arquivo. Junte tudo o que a feature precisa
+     num propose_changes só, e faça wait_for_checks + merge UMA vez.
+   - Precisa de migration E código (ex.: criar papel admin + proteger um botão)?
+     Passe o código no parâmetro "files" do apply_migration: migration + teste +
+     código no MESMO PR, UM CI só. NÃO faça migration+merge e depois um PR de
+     código à parte — isso dobra a espera à toa.
+   - Ajuste de DADO (promover um e-mail a admin, corrigir um valor) é
+     apply_data_change: instantâneo, SEM CI. Não gaste uma migration nem um
+     ciclo de gate para mexer no valor de uma linha.
+   - Não abra PRs em série esperando cada um. Um planejamento bom = um PR = um CI.
+
 3. Depois de propor mudanças, chame wait_for_checks. Se falhar, chame
    get_failed_logs, corrija, e proponha de novo. Máximo de 3 tentativas antes
    de reportar ao usuário o que não conseguiu resolver.
@@ -871,17 +884,31 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       title: 'Aplicar migration',
       description:
         'Versiona uma migration em supabase/migrations/ (via PR) e aplica no ' +
-        'banco. Recusa CREATE TABLE sem ENABLE ROW LEVEL SECURITY.',
+        'banco. Recusa CREATE TABLE sem ENABLE ROW LEVEL SECURITY. Passe `files` ' +
+        'com o código da feature (página, action, guard) para tudo ir NO MESMO ' +
+        'PR e rodar o CI UMA vez — em vez de uma migration e um PR de código ' +
+        'separados, que dobram a espera.',
       inputSchema: {
         name: z
           .string()
           .regex(/^[a-z0-9_]+$/, 'Use apenas minúsculas, números e underscore.')
           .describe('Nome curto, ex: add_posts_table'),
         sql: z.string().min(1),
+        files: z
+          .array(
+            z.object({
+              path: z.string().min(1),
+              content: z.string(),
+            }),
+          )
+          .optional()
+          .describe(
+            'Código da feature para ir no MESMO PR da migration (um só CI).',
+          ),
         projectId: z.string().uuid().optional(),
       },
     },
-    guard(async ({ name, sql, projectId }) => {
+    guard(async ({ name, sql, files: extraFiles, projectId }) => {
       const project = await repo.resolveProject(ctx.userId, projectId)
       const supabaseCreds = await repo.getSupabaseCredentials(
         ctx.userId,
@@ -890,6 +917,14 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const ghCreds = await repo.getGithubCredentials(ctx.userId, project)
 
       assertSafeSql(sql, { allowDdl: true })
+
+      // Caminho seguro: código junto não pode escapar da pasta nem sobrescrever
+      // a migration/o teste. Ainda passa por todos os gates no mesmo PR.
+      for (const file of extraFiles ?? []) {
+        if (file.path.includes('..') || file.path.startsWith('/')) {
+          return fail(`Caminho inválido em files: ${file.path}`)
+        }
+      }
 
       const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
       const path = `supabase/migrations/${stamp}_${name}.sql`
@@ -908,6 +943,11 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       if (newTables.length > 0) {
         testPath = `supabase/${name}.rls.test.ts`
         files.push({ path: testPath, content: generateRlsTest(newTables) })
+      }
+
+      // Código da feature no MESMO PR: um CI cobre migration + código + teste.
+      for (const file of extraFiles ?? []) {
+        files.push({ path: file.path, content: file.content })
       }
 
       await gh.ensureBranch(ghCreds, branchName, project.default_branch)

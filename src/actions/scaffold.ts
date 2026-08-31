@@ -520,7 +520,12 @@ async function protectBranch(
     {
       method: 'PUT',
       body: JSON.stringify({
-        required_status_checks: { strict: true, contexts: REQUIRED_CHECKS },
+        // strict:false de propósito. strict exige a branch atualizada com o
+        // main antes de mesclar, o que RE-RODA o CI toda vez que o main anda —
+        // um custo enorme num fluxo de um dono/um agente em série, sem ganho
+        // real (não há dois autores concorrentes). Os checks obrigatórios
+        // continuam TODOS rodando e verdes; só não re-rodam à toa.
+        required_status_checks: { strict: false, contexts: REQUIRED_CHECKS },
         enforce_admins: true,
         required_pull_request_reviews: null,
         restrictions: null,

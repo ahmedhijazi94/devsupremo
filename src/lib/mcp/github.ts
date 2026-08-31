@@ -681,7 +681,9 @@ export async function enableBranchProtection(
     repo: creds.repo,
     branch,
     required_status_checks: {
-      strict: true,
+      // Ver scaffold.protectBranch: strict re-roda o CI a cada mudança no main,
+      // caro num fluxo de um autor e sem ganho. Os checks seguem obrigatórios.
+      strict: false,
       contexts: requiredChecks,
     },
     enforce_admins: false,

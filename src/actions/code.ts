@@ -3,14 +3,23 @@
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { decryptToken } from '@/lib/crypto'
-import { listTree, readFile } from '@/lib/mcp/github'
+import {
+  commitFiles,
+  ensureBranch,
+  listTree,
+  openOrUpdatePullRequest,
+  readFile,
+} from '@/lib/mcp/github'
 import type { GithubCredentials } from '@/lib/mcp/repository'
 
 /**
- * O código do projeto, lido dentro do Supremo — para não precisar pular ao
- * GitHub só para olhar um arquivo. Read-only: editar código continua indo pelo
- * agente e pelos gates, porque é código que os testes provam (diferente de
- * dado, que a aba do Banco edita direto).
+ * O código do projeto, dentro do Supremo — para não precisar pular ao GitHub só
+ * para olhar (ou ajustar) um arquivo.
+ *
+ * Ler é direto. Editar NÃO escreve na base: abre um PR pelos mesmos gates que o
+ * agente usa. É o que separa código de dado — o dado a aba do Banco muda na
+ * hora porque teste não prova valor de linha; código é o que os testes provam,
+ * então toda mudança de código passa pelos gates, venha do agente ou daqui.
  */
 
 const PROJECT_COLUMNS =
@@ -112,6 +121,83 @@ export async function getFileContent(
       }
     }
     return { content }
+  } catch (error) {
+    return { error: toActionError(error) }
+  }
+}
+
+/** Deriva um nome de branch estável do caminho, para reusar o PR ao reeditar. */
+function branchForPath(path: string): string {
+  const slug = path
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+  return `supremo/editar-${slug || 'arquivo'}`
+}
+
+export interface ProposeEditResult {
+  prUrl: string
+  prNumber: number
+  branch: string
+}
+
+/**
+ * Abre (ou atualiza) um PR com o novo conteúdo de um arquivo. Nunca escreve na
+ * branch principal: os gates rodam no PR, e o merge é a última palavra. Um PR
+ * por arquivo — reeditar o mesmo arquivo reusa o mesmo PR.
+ */
+export async function proposeFileEdit(input: {
+  projectId: string
+  path: string
+  content: string
+}): Promise<{ result?: ProposeEditResult; error?: string }> {
+  const parsed = z
+    .object({
+      projectId: z.string().uuid(),
+      path: z.string().min(1).max(400),
+      content: z.string().max(MAX_BYTES),
+    })
+    .safeParse(input)
+  if (!parsed.success) return { error: 'Dados inválidos.' }
+
+  const { projectId, path, content } = parsed.data
+  if (path.includes('..') || path.startsWith('/')) {
+    return { error: 'Caminho inválido.' }
+  }
+
+  try {
+    const resolved = await resolveGithub(projectId)
+    if (!resolved.ok) return { error: resolved.error }
+    const { creds } = resolved
+
+    // Sem mudança real: não suja o repo com um PR vazio.
+    const current = await readFile(creds, path, creds.defaultBranch).catch(
+      () => null,
+    )
+    if (current !== null && current === content) {
+      return { error: 'Nada mudou neste arquivo.' }
+    }
+
+    const branch = branchForPath(path)
+    await ensureBranch(creds, branch, creds.defaultBranch)
+    await commitFiles(creds, branch, `chore: editar ${path}`, [
+      { path, content },
+    ])
+    const pr = await openOrUpdatePullRequest(
+      creds,
+      branch,
+      `Editar ${path}`,
+      [
+        `Edição de \`${path}\` pela aba Código do Supremo.`,
+        'Os gates rodam neste PR. Revise o diff e faça o merge quando ficar verde.',
+      ].join('\n\n'),
+      creds.defaultBranch,
+    )
+
+    return {
+      result: { prUrl: pr.url, prNumber: pr.number, branch },
+    }
   } catch (error) {
     return { error: toActionError(error) }
   }

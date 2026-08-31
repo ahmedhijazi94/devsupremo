@@ -207,6 +207,45 @@ export async function updateCell(input: {
   }
 }
 
+export async function insertRow(input: {
+  projectId: string
+  table: string
+  /** Só as colunas que o usuário preencheu. Coluna omitida usa o default do
+   *  banco (id, created_at) — por isso não mandamos a tabela inteira. */
+  values: Record<string, string | null>
+}): Promise<{ error?: string }> {
+  const parsed = z
+    .object({
+      projectId: z.string().uuid(),
+      table: ident,
+      values: z.record(z.string(), z.string().nullable()),
+    })
+    .safeParse(input)
+  if (!parsed.success) return { error: 'Dados inválidos.' }
+
+  const columns = Object.keys(parsed.data.values)
+  if (columns.length === 0) return { error: 'Nada para inserir.' }
+  // Cada nome de coluna também passa pelo mesmo filtro de identificador.
+  if (!columns.every((c) => ident.safeParse(c).success)) {
+    return { error: 'Nome de coluna inválido.' }
+  }
+
+  try {
+    const creds = await resolveSupabase(parsed.data.projectId)
+    if (!creds.ok) return { error: creds.error }
+
+    const { table, values } = parsed.data
+    const cols = columns.map((c) => `"${safeIdent(c)}"`).join(', ')
+    const vals = columns.map((c) => sqlLiteral(values[c] ?? null)).join(', ')
+    const sql = `INSERT INTO public."${safeIdent(table)}" (${cols}) VALUES (${vals})`
+
+    await runWrite(creds.token, creds.ref, sql)
+    return {}
+  } catch (error) {
+    return { error: toActionError(error) }
+  }
+}
+
 export async function deleteRow(input: {
   projectId: string
   table: string

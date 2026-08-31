@@ -10,12 +10,15 @@ import {
   Loader2,
   RefreshCw,
   Trash2,
+  Plus,
+  X,
 } from 'lucide-react'
 import {
   getDatabaseOverview,
   getTableDetail,
   updateCell,
   deleteRow,
+  insertRow,
   type DatabaseOverview,
   type TableDetail,
 } from '@/actions/database'
@@ -171,6 +174,9 @@ function TableDetailView({
 }) {
   const [detail, setDetail] = useState<TableDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Inserir gera id/created_at no banco — não dá para adivinhar aqui. Em vez de
+  // um append otimista errado, o nonce refaz a leitura e traz a linha real.
+  const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
     let active = true
@@ -182,7 +188,7 @@ function TableDetailView({
     return () => {
       active = false
     }
-  }, [projectId, table])
+  }, [projectId, table, nonce])
 
   if (!detail && !error) {
     return (
@@ -272,17 +278,22 @@ function TableDetailView({
         )}
       </section>
 
-      {/* Linhas — editáveis */}
+      {/* Linhas — editáveis. key={nonce} remonta com a leitura nova após um
+          insert, sem herdar o estado de edição antigo. */}
       <EditableRows
+        key={nonce}
         projectId={projectId}
         table={table}
-        columns={detail.data.columns}
+        // Colunas do schema, não derivadas das linhas: tabela vazia também
+        // precisa de todos os campos no formulário de inserir.
+        columns={detail.columns.map((c) => c.name)}
         pkColumn={
           detail.columns.filter((c) => c.isPrimaryKey).length === 1
             ? (detail.columns.find((c) => c.isPrimaryKey)?.name ?? null)
             : null
         }
         rows={detail.data.rows}
+        onInserted={() => setNonce((n) => n + 1)}
       />
     </div>
   )
@@ -294,12 +305,14 @@ function EditableRows({
   columns,
   pkColumn,
   rows: initialRows,
+  onInserted,
 }: {
   projectId: string
   table: string
   columns: string[]
   pkColumn: string | null
   rows: Array<Record<string, unknown>>
+  onInserted: () => void
 }) {
   const [rows, setRows] = useState(initialRows)
   const [editing, setEditing] = useState<{ pk: string; col: string } | null>(
@@ -307,8 +320,33 @@ function EditableRows({
   )
   const [draft, setDraft] = useState('')
   const [busy, startBusy] = useTransition()
+  const [newRow, setNewRow] = useState<Record<string, string> | null>(null)
 
   const editable = pkColumn !== null
+
+  function insert() {
+    if (!newRow) return
+    // Campo em branco = omitido, para o banco preencher o default (id,
+    // created_at). Só o que o usuário digitou vai no INSERT.
+    const values: Record<string, string> = {}
+    for (const [col, val] of Object.entries(newRow)) {
+      if (val !== '') values[col] = val
+    }
+    if (Object.keys(values).length === 0) {
+      toast.error('Preencha ao menos um campo.')
+      return
+    }
+    startBusy(async () => {
+      const result = await insertRow({ projectId, table, values })
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+      setNewRow(null)
+      toast.success('Linha inserida.')
+      onInserted()
+    })
+  }
 
   function save(pk: string) {
     if (!editing) return
@@ -356,9 +394,70 @@ function EditableRows({
 
   return (
     <section>
-      <h3 className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">
-        Linhas ({rows.length})
-      </h3>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-muted text-xs font-semibold tracking-wide uppercase">
+          Linhas ({rows.length})
+        </h3>
+        {newRow === null ? (
+          <button
+            type="button"
+            onClick={() => setNewRow(Object.fromEntries(columns.map((c) => [c, ''])))}
+            className="bg-sunken hover:bg-line inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1 text-xs font-medium"
+          >
+            <Plus className="h-3.5 w-3.5" /> Inserir linha
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setNewRow(null)}
+            className="text-muted hover:text-ink inline-flex items-center gap-1.5 text-xs font-medium"
+          >
+            <X className="h-3.5 w-3.5" /> Cancelar
+          </button>
+        )}
+      </div>
+
+      {newRow !== null && (
+        <div className="bg-surface mb-3 rounded-[var(--radius-control)] p-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {columns.map((col) => (
+              <label key={col} className="block">
+                <span className="text-muted font-mono text-[11px]">{col}</span>
+                <input
+                  value={newRow[col]}
+                  disabled={busy}
+                  placeholder="vazio = padrão"
+                  onChange={(e) =>
+                    setNewRow((prev) =>
+                      prev ? { ...prev, [col]: e.target.value } : prev,
+                    )
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') insert()
+                    if (e.key === 'Escape') setNewRow(null)
+                  }}
+                  className="bg-sunken mt-0.5 w-full rounded px-2 py-1 font-mono text-xs outline-none"
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={insert}
+              disabled={busy}
+              className="bg-accent text-accent-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium disabled:opacity-60"
+            >
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Inserir
+            </button>
+            <span className="text-muted text-xs">
+              Deixe em branco as colunas com valor automático (id, created_at).
+            </span>
+          </div>
+        </div>
+      )}
+
       {!editable && rows.length > 0 && (
         <p className="text-muted mb-2 text-xs">
           Edição direta precisa de uma chave primária única — esta tabela não

@@ -5,9 +5,9 @@ import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { freshGithubToken } from '@/lib/github-token'
 import {
   commitFiles,
-  ensureBranch,
   listOpenPullRequests,
   openOrUpdatePullRequest,
+  resetBranchToBase,
 } from '@/lib/mcp/github'
 import type { GithubCredentials } from '@/lib/mcp/repository'
 import {
@@ -106,9 +106,14 @@ async function resolveProject(
   }
 }
 
-/** Branch do PR de atualização. Fixo por versão, para reusar o mesmo PR. */
+/**
+ * Branch do PR de atualização. Estável (sem versão no nome) de propósito: um
+ * bump de versão reusa o MESMO PR em vez de criar um concorrente. Dois PRs de
+ * atualização abertos ao mesmo tempo confundem o agente ("duas alterações
+ * concorrentes") — foi o que travou uma vez.
+ */
 function updateBranch(): string {
-  return `supremo/atualizar-base-${TEMPLATE_VERSION}`
+  return 'supremo/atualizar-base'
 }
 
 export interface TemplateSyncStatus {
@@ -209,7 +214,9 @@ export async function applyTemplateSync(
     if (planIsEmpty(plan)) return { upToDate: true }
 
     const branch = updateBranch()
-    await ensureBranch(creds, branch, creds.defaultBranch)
+    // Sempre a partir do main atual: o PR reflete "template atual vs main
+    // atual", sem deriva nem commit velho acumulado.
+    await resetBranchToBase(creds, branch, creds.defaultBranch)
 
     await commitFiles(
       creds,

@@ -133,6 +133,43 @@ export async function ensureBranch(
   return { created: true, sha: baseSha }
 }
 
+/**
+ * Aponta o branch para o HEAD atual da base, criando-o se não existir.
+ *
+ * Para trabalho que deve reusar SEMPRE o mesmo branch (a atualização de base):
+ * ensureBranch mantém o branch onde estava e, se a base andou, o PR acumula
+ * commit velho e diverge. Aqui o branch é sempre "base atual + o commit da
+ * atualização", sem deriva e sem PR concorrente por versão. Força é seguro
+ * porque só o Supremo escreve neste branch.
+ */
+export async function resetBranchToBase(
+  creds: GithubCredentials,
+  branch: string,
+  fromBranch?: string,
+): Promise<{ sha: string }> {
+  const gh = octokitFor(creds)
+  const baseSha = await getHeadSha(creds, fromBranch ?? creds.defaultBranch)
+
+  try {
+    await gh.git.updateRef({
+      owner: creds.owner,
+      repo: creds.repo,
+      ref: `heads/${branch}`,
+      sha: baseSha,
+      force: true,
+    })
+  } catch {
+    await gh.git.createRef({
+      owner: creds.owner,
+      repo: creds.repo,
+      ref: `refs/heads/${branch}`,
+      sha: baseSha,
+    })
+  }
+
+  return { sha: baseSha }
+}
+
 export async function commitFiles(
   creds: GithubCredentials,
   branch: string,

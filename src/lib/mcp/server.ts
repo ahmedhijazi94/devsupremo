@@ -915,8 +915,10 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         })
       }
 
-      const branch = `supremo/atualizar-base-${TEMPLATE_VERSION}`
-      await gh.ensureBranch(creds, branch, project.default_branch)
+      // Branch estável (sem versão): reusa o mesmo PR a cada bump, sem criar
+      // um concorrente. Sempre a partir do main atual, sem deriva.
+      const branch = 'supremo/atualizar-base'
+      await gh.resetBranchToBase(creds, branch, project.default_branch)
       await gh.commitFiles(
         creds,
         branch,

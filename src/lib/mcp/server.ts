@@ -7,6 +7,15 @@ import {
   generateRlsTest,
   inferTablesFromMigration,
 } from '@/lib/templates/rls-tests'
+import {
+  TEMPLATE_VERSION,
+  type ProjectKind,
+} from '@/lib/templates/project-files'
+import {
+  planIsEmpty,
+  planTemplateSync,
+  planToFileChanges,
+} from '@/lib/templates/sync'
 import { mcpDataClient } from './tokens'
 import {
   getSupabaseAnonKey,
@@ -78,7 +87,12 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
    coluna, policy) continua indo por apply_migration, que versiona e testa.
 
 6. Nunca escreva segredo em código. Nunca valide no cliente o que decide acesso.
-   Nunca confie em user_id vindo do corpo da requisição — use auth.uid().`
+   Nunca confie em user_id vindo do corpo da requisição — use auth.uid().
+
+7. Se o preview não loga, o inspector não aparece, ou o CI parece antigo, a base
+   do projeto pode estar atrás do template. Chame sync_template: ele abre um PR
+   que atualiza só os rails de infra (nunca página, migration ou package.json) e
+   passa pelos gates. Depois wait_for_checks e merge_when_green.`
 
 interface ToolContext {
   userId: string
@@ -834,6 +848,75 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
           ? 'O teste de isolamento já foi gerado e commitado no mesmo PR. ' +
             'Chame wait_for_checks e confirme que o gate "Políticas RLS" ficou verde.'
           : 'Chame wait_for_checks.',
+      })
+    }),
+  )
+
+  server.registerTool(
+    'sync_template',
+    {
+      title: 'Atualizar base do template',
+      description:
+        'Traz a base (rails de infra) deste projeto para o template atual, sem ' +
+        'recriar o projeto: consertos de cookies do preview, inspector e CI ' +
+        'chegam a projetos antigos. Nunca toca em página, migration, teste do ' +
+        'app ou package.json — a funcionalidade fica intacta. Abre um PR pelos ' +
+        'gates; depois chame wait_for_checks e merge_when_green.',
+      inputSchema: { projectId: z.string().uuid().optional() },
+    },
+    guard(async ({ projectId }) => {
+      const project = await repo.resolveProject(ctx.userId, projectId)
+      const creds = await repo.getGithubCredentials(ctx.userId, project)
+
+      const plan = await planTemplateSync(creds, {
+        projectName: project.name,
+        description: project.description ?? '',
+        kind: (project.kind ?? 'solo') as ProjectKind,
+      })
+
+      if (planIsEmpty(plan)) {
+        return json({
+          upToDate: true,
+          templateVersion: TEMPLATE_VERSION,
+          message: 'A base já está no template atual. Nada a fazer.',
+        })
+      }
+
+      const branch = `supremo/atualizar-base-${TEMPLATE_VERSION}`
+      await gh.ensureBranch(creds, branch, project.default_branch)
+      await gh.commitFiles(
+        creds,
+        branch,
+        `chore: atualizar base para o template ${TEMPLATE_VERSION}`,
+        planToFileChanges(plan),
+      )
+      const pr = await gh.openOrUpdatePullRequest(
+        creds,
+        branch,
+        `Atualizar base do template (${TEMPLATE_VERSION})`,
+        [
+          `Traz a base para o template ${TEMPLATE_VERSION}. Só arquivos de ` +
+            'infra (rails); nada de app foi tocado.',
+          `Atualizados: ${plan.updates.length}. Criados: ${plan.creates.length}. ` +
+            `Preservados (app): ${plan.skipped.length}.`,
+        ].join('\n\n'),
+        project.default_branch,
+      )
+
+      await repo.logAudit(
+        ctx.userId,
+        'mcp.sync_template',
+        'project',
+        project.id,
+        { template_version: TEMPLATE_VERSION, pr: pr.number },
+      )
+
+      return json({
+        pullRequest: { number: pr.number, url: pr.url },
+        updated: plan.updates.map((i) => i.path),
+        created: plan.creates.map((i) => i.path),
+        preserved: plan.skipped.length,
+        next: 'Chame wait_for_checks; quando verde, merge_when_green.',
       })
     }),
   )

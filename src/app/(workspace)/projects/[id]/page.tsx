@@ -14,6 +14,8 @@ import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog
 import { ScaffoldForm } from '@/components/projects/scaffold-form'
 import { WorkspaceTabs } from '@/components/projects/workspace-tabs'
 import { LiveGateBadge } from '@/components/projects/live-gate-badge'
+import { TemplateUpdateCard } from '@/components/projects/template-update-card'
+import { TEMPLATE_VERSION } from '@/lib/templates/project-files'
 import {
   ActivityFeed,
   type ActivityItem,
@@ -77,6 +79,11 @@ export default async function ProjectPage({
   const project = data as unknown as ProjectWithAccounts
   const provisioned = Boolean(project.github_repo_full_name)
   const status = STATUS[project.status] ?? STATUS.active
+  // A versão gravada é o gatilho barato do selo; a conferência precisa vem só
+  // quando o usuário abre o cartão. Projeto antigo (versão nula) também está
+  // atrás, por definição.
+  const templateBehind =
+    provisioned && project.template_version !== TEMPLATE_VERSION
 
   return (
     // Tela cheia: sem barra lateral, o preview usa toda a largura.
@@ -179,6 +186,14 @@ export default async function ProjectPage({
               }}
               actionLabel="Conectar Supabase"
             />
+
+            {templateBehind && (
+              <TemplateUpdateCard
+                projectId={project.id}
+                projectVersion={project.template_version}
+                latestVersion={TEMPLATE_VERSION}
+              />
+            )}
 
             <section className="bg-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">
               <div className="mb-3 shrink-0">

@@ -29,12 +29,17 @@ export interface ProjectRecord {
   status: string
   is_active: boolean
   updated_at: string
+  /** Tipo do app: decide a migration e os arquivos. Nulo (antigo) é 'solo'. */
+  kind: string | null
+  /** Versão do template com que a base foi escrita. Nulo em projeto antigo. */
+  template_version: string | null
 }
 
 const PROJECT_COLUMNS =
   'id, user_id, name, description, github_account_id, supabase_account_id, ' +
   'github_repo_full_name, supabase_project_ref, active_branch, default_branch, ' +
-  'preview_url, preview_project_name, status, is_active, updated_at'
+  'preview_url, preview_project_name, status, is_active, updated_at, ' +
+  'kind, template_version'
 
 export class NotFoundError extends Error {
   constructor(message: string) {

@@ -2028,6 +2028,16 @@ jobs:
           cache: npm
       - if: needs.changes.outputs.app == 'true'
         run: npm ci
+
+      # Os binários dos navegadores são pesados e não mudam entre execuções.
+      # Cacheados pela versão travada no lockfile, o install pula o download
+      # (~100 MB) e só reaplica as libs do sistema — corta ~1 min por rodada.
+      - name: Cache dos navegadores do Playwright
+        if: needs.changes.outputs.app == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-\${{ runner.os }}-\${{ hashFiles('package-lock.json') }}
       - if: needs.changes.outputs.app == 'true'
         run: npx playwright install --with-deps chromium webkit
       - if: needs.changes.outputs.app == 'true'

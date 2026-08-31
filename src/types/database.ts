@@ -52,6 +52,33 @@ export interface Database {
           Database['public']['Tables']['supabase_accounts']['Insert']
         >
       }
+      secret_requests: {
+        Row: {
+          id: string
+          project_id: string
+          user_id: string
+          name: string
+          description: string | null
+          is_secret: boolean
+          status: 'pending' | 'fulfilled'
+          created_at: string
+          fulfilled_at: string | null
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          user_id: string
+          name: string
+          description?: string | null
+          is_secret?: boolean
+          status?: 'pending' | 'fulfilled'
+          created_at?: string
+          fulfilled_at?: string | null
+        }
+        Update: Partial<
+          Database['public']['Tables']['secret_requests']['Insert']
+        >
+      }
       projects: {
         Row: {
           id: string

@@ -16,6 +16,7 @@ import { WorkspaceTabs } from '@/components/projects/workspace-tabs'
 import { WorkspaceShell } from '@/components/projects/workspace-shell'
 import { LiveGateBadge } from '@/components/projects/live-gate-badge'
 import { TemplateUpdateCard } from '@/components/projects/template-update-card'
+import { SecretsCard } from '@/components/projects/secrets-card'
 import { TEMPLATE_VERSION } from '@/lib/templates/project-files'
 import {
   ActivityFeed,
@@ -196,6 +197,8 @@ export default async function ProjectPage({
                 latestVersion={TEMPLATE_VERSION}
               />
             )}
+
+            {provisioned && <SecretsCard projectId={project.id} />}
 
             <section className="bg-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">
               <div className="mb-3 shrink-0">

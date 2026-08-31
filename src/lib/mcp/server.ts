@@ -105,10 +105,22 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
 6. Nunca escreva segredo em código. Nunca valide no cliente o que decide acesso.
    Nunca confie em user_id vindo do corpo da requisição — use auth.uid().
 
+6b. Integração com API externa que precisa de chave: NÃO peça o valor no chat
+   nem escreva no código. Chame request_secret(name, description) — o Supremo
+   mostra ao dono um campo, o valor vira env var na Vercel, e você lê com
+   process.env.NOME. Você nunca vê o segredo. Um request_secret por chave.
+
 7. Se o preview não loga, o inspector não aparece, ou o CI parece antigo, a base
    do projeto pode estar atrás do template. Chame sync_template: ele abre um PR
    que atualiza só os rails de infra (nunca página, migration ou package.json) e
-   passa pelos gates. Depois wait_for_checks e merge_when_green.`
+   passa pelos gates. Depois wait_for_checks e merge_when_green.
+
+8. Job agendado (coleta diária, sincronização periódica): o correto é fazer no
+   Supabase, não depender de cron de terceiro. Crie uma Edge Function com a
+   lógica (fetch + insert) e agende com pg_cron chamando-a por pg_net — tudo
+   versionado por apply_migration e dentro do banco do projeto. O endpoint que a
+   função expõe deve ser protegido por um secret (request_secret), para ninguém
+   de fora disparar a coleta.`
 
 interface ToolContext {
   userId: string
@@ -1078,6 +1090,62 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         created: plan.creates.map((i) => i.path),
         preserved: plan.skipped.length,
         next: 'Chame wait_for_checks; quando verde, merge_when_green.',
+      })
+    }),
+  )
+
+  server.registerTool(
+    'request_secret',
+    {
+      title: 'Pedir um secret ao dono',
+      description:
+        'Registra que o projeto precisa de uma env var (chave de API etc.) para ' +
+        'uma integração externa. NUNCA escreva segredo no código nem peça o ' +
+        'valor no chat: chame isto, e o Supremo mostra ao dono um campo para ' +
+        'preencher; o valor vira env var na Vercel e você NÃO o vê. No código, ' +
+        'leia com process.env.NOME. Um pedido por chave.',
+      inputSchema: {
+        name: z
+          .string()
+          .regex(
+            /^[A-Z][A-Z0-9_]*$/,
+            'Nome de env var: MAIÚSCULAS, números e _ (ex.: LIVELO_API_KEY).',
+          )
+          .describe('Nome da env var, ex.: LIVELO_API_KEY'),
+        description: z
+          .string()
+          .min(3)
+          .describe('Para que serve, para o dono entender o que entrega.'),
+        isSecret: z
+          .boolean()
+          .default(true)
+          .describe('true = chave secreta; false = config pública (NEXT_PUBLIC_).'),
+        projectId: z.string().uuid().optional(),
+      },
+    },
+    guard(async ({ name, description, isSecret, projectId }) => {
+      const project = await repo.resolveProject(ctx.userId, projectId)
+
+      await repo.createSecretRequest(
+        ctx.userId,
+        project.id,
+        name,
+        description,
+        isSecret,
+      )
+      await repo.logAudit(ctx.userId, 'mcp.request_secret', 'project', project.id, {
+        name,
+      })
+
+      return json({
+        requested: name,
+        message:
+          `Pedido de ${name} registrado. Peça ao usuário para preencher em ` +
+          'Supremo (aparece um campo no painel do projeto). NÃO peça o valor ' +
+          'no chat.',
+        next:
+          `No código, leia com process.env.${name}. Depois que o usuário ` +
+          'preencher, o valor fica na env var da Vercel e vale no próximo deploy.',
       })
     }),
   )

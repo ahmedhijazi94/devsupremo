@@ -14,10 +14,36 @@ import {
   TriangleAlert,
   Loader2,
   CloudOff,
+  MousePointerClick,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { getPreviewState, type PreviewState } from '@/actions/vercel'
 import { publishPreview } from '@/actions/preview'
 import { cn } from '@/lib/utils'
+
+/** O que o inspetor dentro do app manda quando um componente é clicado. */
+interface SelectedComponent {
+  tag?: string
+  text?: string
+  classes?: string
+  heading?: string
+  landmarks?: string[]
+  html?: string
+}
+
+/** Monta a referência pronta para colar no prompt do agente. */
+function formatReference(p: SelectedComponent): string {
+  const lines = ['Componente selecionado no preview (altere ESTE):']
+  lines.push(
+    `- Elemento: <${p.tag ?? 'elemento'}>${p.text ? ` "${p.text}"` : ''}`,
+  )
+  if (p.classes) lines.push(`- Classes: ${p.classes}`)
+  if (p.heading) lines.push(`- Contexto: perto do título "${p.heading}"`)
+  if (p.landmarks?.length) lines.push(`- Dentro de: ${p.landmarks.join(' > ')}`)
+  if (p.html) lines.push(`- HTML atual:\n${p.html}`)
+  lines.push('', 'Mudança que eu quero: ')
+  return lines.join('\n')
+}
 
 interface PreviewPanelProps {
   projectId: string
@@ -46,8 +72,61 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   const [frameKey, setFrameKey] = useState(0)
   const [copied, setCopied] = useState(false)
   const [publishing, setPublishing] = useState(false)
+  const [selectMode, setSelectMode] = useState(false)
   const [, startTransition] = useTransition()
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+
+  // O app, no preview, avisa quando um componente é clicado no modo seleção.
+  // Copiamos a referência pronta para colar no prompt do agente.
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (
+        !event.data ||
+        (event.data as { type?: string }).type !== 'supremo:selected'
+      ) {
+        return
+      }
+      // Só aceita do frame do próprio preview.
+      if (state?.url) {
+        try {
+          if (event.origin !== new URL(state.url).origin) return
+        } catch {
+          return
+        }
+      }
+
+      const reference = formatReference(
+        (event.data as { payload?: SelectedComponent }).payload ?? {},
+      )
+      navigator.clipboard
+        .writeText(reference)
+        .then(() =>
+          toast.success('Componente copiado — cole no prompt do agente.'),
+        )
+        .catch(() =>
+          toast.error('Não consegui copiar; selecione o texto na mão.'),
+        )
+
+      setSelectMode(false)
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'supremo:select-mode', on: false },
+        '*',
+      )
+    }
+
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [state?.url])
+
+  function toggleSelect() {
+    const next = !selectMode
+    setSelectMode(next)
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: 'supremo:select-mode', on: next },
+      '*',
+    )
+  }
 
   const load = useCallback(() => {
     startTransition(async () => {
@@ -132,6 +211,23 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
           <RefreshCw className="h-4 w-4" />
         </button>
 
+        {showFrame && (
+          <button
+            onClick={toggleSelect}
+            title="Selecionar um componente para pedir mudança ao agente"
+            aria-pressed={selectMode}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium transition-colors',
+              selectMode
+                ? 'bg-accent text-accent-ink'
+                : 'bg-surface text-muted hover:text-ink',
+            )}
+          >
+            <MousePointerClick className="h-3.5 w-3.5" />
+            {selectMode ? 'Clique um componente' : 'Selecionar'}
+          </button>
+        )}
+
         <StatusPill state={state} />
 
         <div className="ml-auto flex items-center gap-1.5">
@@ -203,6 +299,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
           >
             <iframe
               key={frameKey}
+              ref={iframeRef}
               src={state.url}
               title="Preview do projeto"
               className="h-full w-full border-0"

@@ -177,6 +177,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'components/ui/card.tsx', content: uiCard() },
     { path: 'components/ui/input.tsx', content: uiInput() },
     { path: 'components/ui/badge.tsx', content: uiBadge() },
+    { path: 'components/preview-inspector.tsx', content: previewInspector() },
     // O proxy sempre existe pelo nonce da CSP. Com login, ele também renova
     // a sessão a cada requisição.
     { path: 'proxy.ts', content: proxyFile(auth) },
@@ -555,6 +556,7 @@ function appLayout(projectName: string, description: string): string {
   return `import type { Metadata } from 'next'
 import { headers } from 'next/headers'
 import { Inter } from 'next/font/google'
+import { PreviewInspector } from '@/components/preview-inspector'
 import './globals.css'
 
 // Inter, servida pelo próprio Next (self-hosted) — sem requisição externa,
@@ -591,10 +593,17 @@ export default async function RootLayout({
 }) {
   await headers()
 
+  // O inspetor de seleção visual só faz sentido no preview do Supremo — em
+  // produção ele nem é montado.
+  const isPreview =
+    process.env.SUPREMO_PREVIEW === '1' ||
+    process.env.VERCEL_ENV === 'preview'
+
   return (
     <html lang="pt-BR" className={inter.variable} suppressHydrationWarning>
       <body className="bg-background text-foreground min-h-dvh antialiased">
         {children}
+        {isPreview && <PreviewInspector />}
       </body>
     </html>
   )
@@ -925,6 +934,112 @@ export function Badge({
       {...props}
     />
   )
+}
+`
+}
+
+// ═════════════════════════════════════════════════════════════
+// Inspetor de preview — seleção visual de componentes
+// ═════════════════════════════════════════════════════════════
+
+/**
+ * O inspetor que o Supremo usa para "selecionar componente" no preview.
+ *
+ * O preview roda num iframe de OUTRO domínio, então o Supremo não pode ler o
+ * DOM daqui de fora — o navegador bloqueia. A ponte é este script, que só liga
+ * no preview e conversa com o Supremo por postMessage: ele escuta o comando de
+ * entrar em modo seleção, desenha o contorno no que o mouse passa, e ao clicar
+ * devolve uma referência do componente (tag, texto, classes, contexto e HTML)
+ * pronta para o usuário colar no prompt do agente.
+ *
+ * Nada disto aparece em produção: o layout só monta o inspetor quando o app
+ * está rodando como preview.
+ */
+function previewInspector(): string {
+  return `'use client'
+
+import { useEffect } from 'react'
+
+const SUPREMO_ORIGIN = '${supremoOrigin()}'
+
+export function PreviewInspector() {
+  useEffect(() => {
+    let selectMode = false
+    let hovered: HTMLElement | null = null
+
+    function outline(el: HTMLElement | null, on: boolean) {
+      if (!el) return
+      el.style.outline = on ? '2px solid #7c5cff' : ''
+      el.style.outlineOffset = on ? '2px' : ''
+    }
+
+    function onOver(event: MouseEvent) {
+      if (!selectMode) return
+      const el = event.target as HTMLElement
+      if (hovered === el) return
+      outline(hovered, false)
+      hovered = el
+      outline(el, true)
+    }
+
+    function describe(el: HTMLElement) {
+      const landmarks: string[] = []
+      let node: HTMLElement | null = el
+      let heading = ''
+      while (node && landmarks.length < 3) {
+        if (/^(section|main|header|footer|nav|form|article|aside)$/i.test(node.tagName)) {
+          landmarks.unshift(node.tagName.toLowerCase())
+          if (!heading) {
+            const h = node.querySelector('h1, h2, h3')
+            if (h && h.textContent) heading = h.textContent.trim().slice(0, 60)
+          }
+        }
+        node = node.parentElement
+      }
+      return {
+        tag: el.tagName.toLowerCase(),
+        text: (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 80),
+        classes: el.getAttribute('class') || '',
+        heading,
+        landmarks,
+        html: el.outerHTML.replace(/\\s+/g, ' ').slice(0, 500),
+      }
+    }
+
+    function onClick(event: MouseEvent) {
+      if (!selectMode) return
+      event.preventDefault()
+      event.stopPropagation()
+      const payload = describe(event.target as HTMLElement)
+      window.parent.postMessage({ type: 'supremo:selected', payload }, SUPREMO_ORIGIN)
+    }
+
+    function onMessage(event: MessageEvent) {
+      if (event.origin !== SUPREMO_ORIGIN) return
+      const data = event.data as { type?: string; on?: boolean }
+      if (data.type !== 'supremo:select-mode') return
+      selectMode = Boolean(data.on)
+      document.body.style.cursor = selectMode ? 'crosshair' : ''
+      if (!selectMode) {
+        outline(hovered, false)
+        hovered = null
+      }
+    }
+
+    window.addEventListener('mouseover', onOver, true)
+    window.addEventListener('click', onClick, true)
+    window.addEventListener('message', onMessage)
+    // Avisa o Supremo que o inspetor está pronto neste preview.
+    window.parent.postMessage({ type: 'supremo:inspector-ready' }, SUPREMO_ORIGIN)
+
+    return () => {
+      window.removeEventListener('mouseover', onOver, true)
+      window.removeEventListener('click', onClick, true)
+      window.removeEventListener('message', onMessage)
+    }
+  }, [])
+
+  return null
 }
 `
 }

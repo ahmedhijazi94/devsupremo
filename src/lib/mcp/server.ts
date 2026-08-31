@@ -57,6 +57,9 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
 3. Depois de propor mudanças, chame wait_for_checks. Se falhar, chame
    get_failed_logs, corrija, e proponha de novo. Máximo de 3 tentativas antes
    de reportar ao usuário o que não conseguiu resolver.
+   Se wait_for_checks devolver ciStarted:false, o CI NÃO disparou — não é
+   "ainda rodando". Não fique esperando nem chamando em loop: redispare com um
+   propose_changes na mesma branch, ou reporte ao usuário para checar o Actions.
 
 4. Só merge_when_green fecha o ciclo, e ele recusa se algum gate estiver
    vermelho. Não tente contornar.
@@ -479,14 +482,42 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const pr = await gh.getPullRequest(creds, prNumber)
 
       const deadline = Date.now() + timeoutSeconds * 1000
+      // Se em 90s nenhum check apareceu, o CI não disparou — isso é diferente
+      // de "ainda rodando", e esperar mais não resolve. Sem esta distinção o
+      // agente ficava preso pedindo para esperar um teste que nunca começa.
+      const noChecksDeadline = Date.now() + 90_000
       let result = await gh.getChecks(creds, pr.headSha)
 
-      while (
-        (result.state === 'pending' || result.total === 0) &&
-        Date.now() < deadline
-      ) {
+      while (Date.now() < deadline) {
+        // Terminou (verde ou vermelho): sai.
+        if (result.total > 0 && result.state !== 'pending') break
+        // Nenhum check e a janela de graça passou: o CI não disparou.
+        if (result.total === 0 && Date.now() > noChecksDeadline) break
         await sleep(10_000)
         result = await gh.getChecks(creds, pr.headSha)
+      }
+
+      // CI não disparou: não é "rodando". Diagnóstico e saída, não mais espera.
+      if (result.total === 0) {
+        await markPipelineStatus(ctx.userId, project.id, prNumber, 'pending')
+        return json({
+          ...result,
+          ciStarted: false,
+          problem:
+            'Nenhum check apareceu para o commit ' +
+            `${pr.headSha.slice(0, 7)}. O CI NÃO disparou — isto não é ` +
+            '"ainda rodando", então esperar mais não adianta.',
+          likelyCauses: [
+            'GitHub Actions desabilitado no repositório (Settings > Actions).',
+            'O arquivo .github/workflows/ci.yml não existe nesta branch.',
+            'O commit não disparou o evento (ex.: branch criada sem novo push).',
+          ],
+          next:
+            'Não fique esperando. Redispare o CI: chame propose_changes de novo ' +
+            'na MESMA branch (um commit novo redispara o workflow), ou peça ao ' +
+            'usuário para confirmar que o Actions está habilitado. Depois chame ' +
+            'wait_for_checks outra vez.',
+        })
       }
 
       const status =
@@ -501,12 +532,14 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       if (result.state === 'pending') {
         return json({
           ...result,
-          note: `Ainda rodando depois de ${timeoutSeconds}s. Chame de novo para continuar esperando.`,
+          ciStarted: true,
+          note: `Ainda rodando depois de ${timeoutSeconds}s (${result.pending} de ${result.total} pendentes). Chame de novo para continuar esperando.`,
         })
       }
 
       return json({
         ...result,
+        ciStarted: true,
         next:
           result.state === 'passed'
             ? 'Todos os gates verdes. Chame merge_when_green.'

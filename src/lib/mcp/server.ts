@@ -58,8 +58,8 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
    get_failed_logs, corrija, e proponha de novo. Máximo de 3 tentativas antes
    de reportar ao usuário o que não conseguiu resolver.
    Se wait_for_checks devolver ciStarted:false, o CI NÃO disparou — não é
-   "ainda rodando". Não fique esperando nem chamando em loop: redispare com um
-   propose_changes na mesma branch, ou reporte ao usuário para checar o Actions.
+   "ainda rodando". Não fique esperando nem chamando em loop: chame retrigger_ci
+   UMA vez; se ainda assim não subir, reporte ao usuário para checar o Actions.
 
 4. Só merge_when_green fecha o ciclo, e ele recusa se algum gate estiver
    vermelho. Não tente contornar.
@@ -550,8 +550,8 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
             'O commit não disparou o evento (ex.: branch criada sem novo push).',
           ],
           next:
-            'Não fique esperando. Redispare o CI: chame propose_changes de novo ' +
-            'na MESMA branch (um commit novo redispara o workflow), ou peça ao ' +
+            'Não fique esperando. Chame retrigger_ci com este prNumber para ' +
+            'redisparar o workflow (uma vez), ou peça ao ' +
             'usuário para confirmar que o Actions está habilitado. Depois chame ' +
             'wait_for_checks outra vez.',
         })
@@ -605,6 +605,53 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const creds = await repo.getGithubCredentials(ctx.userId, project)
       const pr = await gh.getPullRequest(creds, prNumber)
       return ok(await gh.getFailedJobLogs(creds, pr.headSha))
+    }),
+  )
+
+  server.registerTool(
+    'retrigger_ci',
+    {
+      title: 'Re-disparar o CI',
+      description:
+        'Empurra um commit vazio na branch do PR para o CI rodar de novo, ' +
+        'quando wait_for_checks disse que o workflow não disparou (ciStarted: ' +
+        'false). Não muda código nem passa por cima de gate — só faz os gates ' +
+        'rodarem. Use UMA vez; se ainda assim não subir, reporte ao usuário ' +
+        '(pode ser Actions desabilitado). Depois, wait_for_checks.',
+      inputSchema: {
+        prNumber: z.number().int().positive(),
+        projectId: z.string().uuid().optional(),
+      },
+    },
+    guard(async ({ prNumber, projectId }) => {
+      const project = await repo.resolveProject(ctx.userId, projectId)
+      const creds = await repo.getGithubCredentials(ctx.userId, project)
+      const pr = await gh.getPullRequest(creds, prNumber)
+
+      if (pr.merged || pr.state !== 'open') {
+        return fail(
+          `PR #${prNumber} está ${pr.merged ? 'mesclado' : pr.state}. ` +
+            'Não há CI para re-disparar. Verifique com get_project_context.',
+        )
+      }
+
+      const { sha } = await gh.pushEmptyCommit(
+        creds,
+        pr.headRef,
+        'chore: re-disparar o CI',
+      )
+
+      await repo.logAudit(ctx.userId, 'mcp.retrigger_ci', 'project', project.id, {
+        pr: prNumber,
+        commit: sha,
+      })
+
+      return json({
+        prNumber,
+        commit: sha,
+        note: 'CI re-disparado por um commit vazio na branch do PR.',
+        next: 'Chame wait_for_checks. Se ciStarted continuar false, reporte ao usuário — não re-dispare em loop.',
+      })
     }),
   )
 

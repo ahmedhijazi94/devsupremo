@@ -253,6 +253,8 @@ export interface PullRequestInfo {
   number: number
   url: string
   headSha: string
+  /** Branch do PR — para re-disparar o CI empurrando um commit nela. */
+  headRef: string
   state: string
   merged: boolean
   mergeable: boolean | null
@@ -281,6 +283,7 @@ export async function openOrUpdatePullRequest(
       number: openPr.number,
       url: openPr.html_url,
       headSha: openPr.head.sha,
+      headRef: openPr.head.ref,
       state: openPr.state,
       merged: false,
       mergeable: null,
@@ -300,6 +303,7 @@ export async function openOrUpdatePullRequest(
     number: created.number,
     url: created.html_url,
     headSha: created.head.sha,
+    headRef: created.head.ref,
     state: created.state,
     merged: false,
     mergeable: created.mergeable,
@@ -321,10 +325,49 @@ export async function getPullRequest(
     number: data.number,
     url: data.html_url,
     headSha: data.head.sha,
+    headRef: data.head.ref,
     state: data.state,
     merged: data.merged,
     mergeable: data.mergeable,
   }
+}
+
+/**
+ * Empurra um commit vazio (mesma árvore) na branch, para RE-DISPARAR o CI que
+ * não subiu. Autonomia operacional segura: não muda uma linha de código nem
+ * passa por cima de gate nenhum — só faz o workflow rodar. O squash no merge
+ * depois some com ele.
+ */
+export async function pushEmptyCommit(
+  creds: GithubCredentials,
+  branch: string,
+  message: string,
+): Promise<{ sha: string }> {
+  const gh = octokitFor(creds)
+  const headSha = await getHeadSha(creds, branch)
+
+  const { data: headCommit } = await gh.git.getCommit({
+    owner: creds.owner,
+    repo: creds.repo,
+    commit_sha: headSha,
+  })
+
+  const { data: commit } = await gh.git.createCommit({
+    owner: creds.owner,
+    repo: creds.repo,
+    message,
+    tree: headCommit.tree.sha, // mesma árvore = commit sem mudança de conteúdo
+    parents: [headSha],
+  })
+
+  await gh.git.updateRef({
+    owner: creds.owner,
+    repo: creds.repo,
+    ref: `heads/${branch}`,
+    sha: commit.sha,
+  })
+
+  return { sha: commit.sha }
 }
 
 export interface OpenPullRequest {

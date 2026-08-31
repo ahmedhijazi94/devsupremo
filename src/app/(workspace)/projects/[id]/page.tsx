@@ -8,7 +8,6 @@ import {
   Loader2,
   TriangleAlert,
   Database,
-  Zap,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'

@@ -1,17 +1,19 @@
 'use client'
 
 import { useState } from 'react'
-import { Monitor, Database, FlaskConical, Zap } from 'lucide-react'
+import { Monitor, Database, FlaskConical, Code2, Zap } from 'lucide-react'
 import { PreviewPanel } from '@/components/projects/preview-panel'
 import { DatabasePanel } from '@/components/projects/database-panel'
 import { TestsPanel } from '@/components/projects/tests-panel'
+import { CodePanel } from '@/components/projects/code-panel'
 import { cn } from '@/lib/utils'
 
-type Tab = 'preview' | 'banco' | 'testes'
+type Tab = 'preview' | 'banco' | 'codigo' | 'testes'
 
 const TABS: { id: Tab; label: string; icon: typeof Monitor }[] = [
   { id: 'preview', label: 'Preview', icon: Monitor },
   { id: 'banco', label: 'Banco', icon: Database },
+  { id: 'codigo', label: 'Código', icon: Code2 },
   { id: 'testes', label: 'Testes', icon: FlaskConical },
 ]
 
@@ -80,6 +82,11 @@ export function WorkspaceTabs({
         {tab === 'banco' && (
           <div className="h-full">
             <DatabasePanel projectId={projectId} />
+          </div>
+        )}
+        {tab === 'codigo' && (
+          <div className="h-full">
+            <CodePanel projectId={projectId} />
           </div>
         )}
         {tab === 'testes' && (

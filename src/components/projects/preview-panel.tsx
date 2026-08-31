@@ -74,6 +74,9 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   const [copied, setCopied] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
+  // O botão "Selecionar" só aparece quando o app anuncia que tem o inspetor
+  // (projetos novos). Sem isto, o botão existiria sem funcionar nos antigos.
+  const [inspectorReady, setInspectorReady] = useState(false)
   const [routes, setRoutes] = useState<AppRoutes | null>(null)
   const [route, setRoute] = useState('/')
   const [, startTransition] = useTransition()
@@ -91,12 +94,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   // Copiamos a referência pronta para colar no prompt do agente.
   useEffect(() => {
     function onMessage(event: MessageEvent) {
-      if (
-        !event.data ||
-        (event.data as { type?: string }).type !== 'supremo:selected'
-      ) {
-        return
-      }
+      const type = (event.data as { type?: string } | null)?.type
       // Só aceita do frame do próprio preview.
       if (state?.url) {
         try {
@@ -105,6 +103,14 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
           return
         }
       }
+
+      // O inspetor anuncia que está presente ao carregar.
+      if (type === 'supremo:inspector-ready') {
+        setInspectorReady(true)
+        return
+      }
+
+      if (type !== 'supremo:selected') return
 
       const reference = formatReference(
         (event.data as { payload?: SelectedComponent }).payload ?? {},
@@ -241,7 +247,7 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
           </select>
         )}
 
-        {showFrame && (
+        {showFrame && inspectorReady && (
           <button
             onClick={toggleSelect}
             title="Selecionar um componente para pedir mudança ao agente"

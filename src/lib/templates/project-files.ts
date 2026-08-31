@@ -1494,8 +1494,12 @@ function proxyFile(auth: boolean): string {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
+          // No preview (iframe) o cookie precisa de SameSite=None; Secure.
+          const cookieFix = isFramable
+            ? { sameSite: 'none' as const, secure: true }
+            : {}
           cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options),
+            response.cookies.set(name, value, { ...options, ...cookieFix }),
           )
         },
       },
@@ -1616,7 +1620,17 @@ export function createClient() {
     )
   }
 
-  return createBrowserClient(url, key)
+  // No preview do Supremo o app roda num iframe de outro domínio, e o cookie
+  // de sessão vira "terceira-parte" — o navegador o bloqueia, e o login não
+  // persiste (volta para /login). SameSite=None; Secure faz o cookie valer
+  // no iframe. Fora do iframe, nada muda.
+  const inIframe = typeof window !== 'undefined' && window.self !== window.top
+
+  return createBrowserClient(url, key, {
+    ...(inIframe
+      ? { cookieOptions: { sameSite: 'none', secure: true } }
+      : {}),
+  })
 }
 `
 }
@@ -1641,6 +1655,15 @@ export async function createClient() {
     )
   }
 
+  // No preview (iframe de outro domínio) o cookie precisa de SameSite=None;
+  // Secure, senão o navegador o trata como terceira-parte e o descarta.
+  const preview =
+    process.env.SUPREMO_PREVIEW === '1' ||
+    process.env.VERCEL_ENV === 'preview'
+  const cookieOptions = preview
+    ? { sameSite: 'none' as const, secure: true }
+    : {}
+
   return createServerClient(
     url,
     key,
@@ -1652,7 +1675,7 @@ export async function createClient() {
         setAll(cookiesToSet) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
+              cookieStore.set(name, value, { ...options, ...cookieOptions })
             )
           } catch {
             // Chamado de Server Component — o middleware cuida dos cookies.

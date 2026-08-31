@@ -13,6 +13,7 @@ import { createClient } from '@/lib/supabase/server'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
 import { ScaffoldForm } from '@/components/projects/scaffold-form'
 import { WorkspaceTabs } from '@/components/projects/workspace-tabs'
+import { WorkspaceShell } from '@/components/projects/workspace-shell'
 import { LiveGateBadge } from '@/components/projects/live-gate-badge'
 import { TemplateUpdateCard } from '@/components/projects/template-update-card'
 import { TEMPLATE_VERSION } from '@/lib/templates/project-files'
@@ -86,8 +87,9 @@ export default async function ProjectPage({
     provisioned && project.template_version !== TEMPLATE_VERSION
 
   return (
-    // Tela cheia: sem barra lateral, o preview usa toda a largura.
-    <div className="h-screen p-3 sm:p-4">
+    // Tela cheia. h-dvh (não h-screen) para o celular não esconder o rodapé
+    // atrás da barra do navegador.
+    <div className="h-dvh p-3 sm:p-4">
       <div className="bg-surface flex h-full flex-col gap-3 rounded-[var(--radius-card)] p-3 sm:gap-4 sm:p-4">
         {/* Cabeçalho */}
         <header className="flex shrink-0 items-center gap-4 px-2 pt-1">
@@ -141,11 +143,11 @@ export default async function ProjectPage({
           </div>
         </header>
 
-        {/* Workspace */}
-        <div className="flex min-h-0 flex-1 flex-col gap-3 sm:gap-4 lg:flex-row">
-          {/* Painel lateral */}
-          <aside className="bg-sunken flex w-full shrink-0 flex-col gap-3 overflow-y-auto rounded-[var(--radius-inner)] p-3 lg:w-[360px]">
-            {!provisioned && (
+        {/* Workspace — lado a lado no desktop, abas no celular. */}
+        <WorkspaceShell
+          sidebar={
+            <>
+              {!provisioned && (
               <ProvisionCard
                 projectId={project.id}
                 githubOwner={project.github_accounts?.login ?? null}
@@ -210,17 +212,16 @@ export default async function ProjectPage({
                 />
               </div>
             </section>
-          </aside>
-
-          {/* Painel principal: Preview · Banco · Testes */}
-          <main className="min-h-0 flex-1">
+            </>
+          }
+          workspace={
             <WorkspaceTabs
               projectId={project.id}
               repoFullName={project.github_repo_full_name}
               provisioned={provisioned}
             />
-          </main>
-        </div>
+          }
+        />
       </div>
     </div>
   )

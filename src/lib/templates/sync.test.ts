@@ -1,19 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { computePlan, planIsEmpty, planToFileChanges } from './sync'
+import {
+  computePlan,
+  planIsEmpty,
+  planToFileChanges,
+  gitBlobSha,
+} from './sync'
 import {
   buildProjectFiles,
   isManagedPath,
   MANAGED_PATHS,
 } from './project-files'
 import type { FileEntry } from './project-files'
-
-/** Um repo hipotético: todo caminho existe, com o conteúdo dado. */
-function repoFrom(entries: Record<string, string>) {
-  return {
-    existing: new Set(Object.keys(entries)),
-    content: new Map(Object.entries(entries)),
-  }
-}
 
 describe('isManagedPath', () => {
   it('trata infra como rail', () => {
@@ -36,6 +33,16 @@ describe('isManagedPath', () => {
   })
 })
 
+describe('gitBlobSha', () => {
+  // Valores conhecidos do git (git hash-object).
+  it('bate com o sha do git para conteúdo conhecido', () => {
+    expect(gitBlobSha('')).toBe('e69de29bb2d1d6434b8b29ae775ad8c2e48c5391')
+    expect(gitBlobSha('hello\n')).toBe(
+      'ce013625030ba8dba906f756967f9e9ca394464a',
+    )
+  })
+})
+
 describe('computePlan', () => {
   const files: FileEntry[] = [
     { path: 'proxy.ts', content: 'NOVO' }, // rail
@@ -43,30 +50,19 @@ describe('computePlan', () => {
     { path: 'app/page.tsx', content: 'TEMPLATE' }, // scaffold
     { path: 'components/ui/badge.tsx', content: 'NOVO' }, // scaffold
   ]
+  const allExist = new Set(files.map((f) => f.path))
 
   it('atualiza rail que divergiu, deixa rail idêntico em paz', () => {
-    const repo = repoFrom({
-      'proxy.ts': 'ANTIGO', // divergiu → update
-      'lib/supabase/server.ts': 'NOVO', // igual → unchanged
-      'app/page.tsx': 'TRABALHO DO AGENTE',
-      'components/ui/badge.tsx': 'existe',
-    })
-    const plan = computePlan(files, repo.existing, repo.content)
+    // server.ts em dia; proxy.ts divergiu.
+    const upToDate = new Set(['lib/supabase/server.ts'])
+    const plan = computePlan(files, allExist, upToDate)
 
     expect(plan.updates.map((u) => u.path)).toEqual(['proxy.ts'])
     expect(plan.unchanged).toBe(1)
   })
 
   it('NUNCA sobrescreve scaffold que já existe', () => {
-    const repo = repoFrom({
-      'proxy.ts': 'NOVO',
-      'lib/supabase/server.ts': 'NOVO',
-      'app/page.tsx': 'HOME QUE O AGENTE CONSTRUIU',
-      'components/ui/badge.tsx': 'BOTÃO CUSTOMIZADO',
-    })
-    const plan = computePlan(files, repo.existing, repo.content)
-
-    // Nenhum scaffold nas escritas.
+    const plan = computePlan(files, allExist, new Set()) // rails divergiram
     const touched = [...plan.creates, ...plan.updates].map((i) => i.path)
     expect(touched).not.toContain('app/page.tsx')
     expect(touched).not.toContain('components/ui/badge.tsx')
@@ -75,8 +71,8 @@ describe('computePlan', () => {
   })
 
   it('cria arquivo que falta, seja rail ou scaffold', () => {
-    const repo = repoFrom({ 'proxy.ts': 'NOVO' }) // só um existe
-    const plan = computePlan(files, repo.existing, repo.content)
+    const existing = new Set(['proxy.ts']) // só um existe
+    const plan = computePlan(files, existing, new Set(['proxy.ts']))
 
     const created = plan.creates.map((c) => c.path)
     expect(created).toContain('lib/supabase/server.ts') // rail que faltava
@@ -85,13 +81,8 @@ describe('computePlan', () => {
   })
 
   it('repo idêntico ao template não gera nada', () => {
-    const repo = repoFrom({
-      'proxy.ts': 'NOVO',
-      'lib/supabase/server.ts': 'NOVO',
-      'app/page.tsx': 'qualquer coisa', // scaffold existente é ignorado
-      'components/ui/badge.tsx': 'qualquer coisa',
-    })
-    const plan = computePlan(files, repo.existing, repo.content)
+    const upToDate = new Set(['proxy.ts', 'lib/supabase/server.ts'])
+    const plan = computePlan(files, allExist, upToDate)
     expect(planIsEmpty(plan)).toBe(true)
   })
 })
@@ -102,8 +93,8 @@ describe('planToFileChanges', () => {
       { path: 'proxy.ts', content: 'A' },
       { path: 'vercel.json', content: 'B' },
     ]
-    const repo = repoFrom({ 'proxy.ts': 'velho' }) // vercel.json falta
-    const plan = computePlan(files, repo.existing, repo.content)
+    const existing = new Set(['proxy.ts']) // vercel.json falta
+    const plan = computePlan(files, existing, new Set()) // proxy divergiu
     const changes = planToFileChanges(plan)
 
     expect(changes).toHaveLength(2)
@@ -118,7 +109,7 @@ describe('integração com o template real', () => {
       description: 'x',
       kind: 'solo',
     })
-    const plan = computePlan(files, new Set(), new Map())
+    const plan = computePlan(files, new Set(), new Set())
     expect(plan.creates).toHaveLength(files.length)
     expect(plan.updates).toHaveLength(0)
     expect(plan.skipped).toHaveLength(0)
@@ -131,8 +122,11 @@ describe('integração com o template real', () => {
       kind: 'team',
     })
     const existing = new Set(files.map((f) => f.path))
-    const content = new Map(files.map((f) => [f.path, f.content]))
-    const plan = computePlan(files, existing, content)
+    // Todo rail em dia.
+    const upToDate = new Set(
+      files.filter((f) => isManagedPath(f.path)).map((f) => f.path),
+    )
+    const plan = computePlan(files, existing, upToDate)
     expect(planIsEmpty(plan)).toBe(true)
   })
 
@@ -143,15 +137,9 @@ describe('integração com o template real', () => {
       kind: 'solo',
     })
     const existing = new Set(files.map((f) => f.path))
-    // Todo rail existe com conteúdo velho; todo scaffold existe com trabalho.
-    const content = new Map(
-      files
-        .filter((f) => isManagedPath(f.path))
-        .map((f) => [f.path, '// versão antiga']),
-    )
-    const plan = computePlan(files, existing, content)
+    // Nenhum rail em dia; todo scaffold existe com trabalho do agente.
+    const plan = computePlan(files, existing, new Set())
 
-    // Todos os rails viram update; nenhum scaffold é tocado.
     const managedCount = files.filter((f) => isManagedPath(f.path)).length
     expect(plan.updates).toHaveLength(managedCount)
     const touched = [...plan.creates, ...plan.updates].map((i) => i.path)

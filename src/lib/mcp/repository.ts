@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { decryptToken } from '@/lib/crypto'
 import { freshGithubToken } from '@/lib/github-token'
+import { freshSupabaseToken } from '@/lib/supabase-token'
 import { mcpDataClient } from './tokens'
 import type { Json } from '@/types/database'
 
@@ -244,20 +244,23 @@ export async function getSupabaseCredentials(
     )
   }
 
+  const accountId = project.supabase_account_id
   const { data, error } = await db()
     .from('supabase_accounts')
-    .select('access_token_encrypted')
-    .eq('id', project.supabase_account_id)
+    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
+    .eq('id', accountId)
     .eq('user_id', userId)
     .maybeSingle()
 
   if (error) throw new Error(`Falha ao ler conta Supabase: ${error.message}`)
   if (!data) throw new NotFoundError('Conta Supabase não encontrada.')
 
-  return {
-    token: decryptToken(data.access_token_encrypted as string),
-    projectRef: project.supabase_project_ref,
-  }
+  // Renova o token de ~1h se expirou — senão migration/dado do MCP falham.
+  const token = await freshSupabaseToken(data, (update) =>
+    db().from('supabase_accounts').update(update).eq('id', accountId).eq('user_id', userId),
+  )
+
+  return { token, projectRef: project.supabase_project_ref }
 }
 
 // ─────────────────────────────────────────────────────────────

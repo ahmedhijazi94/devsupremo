@@ -65,7 +65,7 @@ export async function readFile(
 export async function listTree(
   creds: GithubCredentials,
   ref?: string,
-): Promise<Array<{ path: string; size: number }>> {
+): Promise<Array<{ path: string; size: number; sha: string }>> {
   const gh = octokitFor(creds)
 
   const { data } = await gh.git.getTree({
@@ -77,7 +77,13 @@ export async function listTree(
 
   return data.tree
     .filter((entry) => entry.type === 'blob' && entry.path)
-    .map((entry) => ({ path: entry.path as string, size: entry.size ?? 0 }))
+    .map((entry) => ({
+      path: entry.path as string,
+      size: entry.size ?? 0,
+      // O sha do blob é o hash git do conteúdo. Comparar sha (em vez de baixar
+      // e comparar o texto) diz se um arquivo mudou com UMA chamada de árvore.
+      sha: entry.sha as string,
+    }))
 }
 
 export async function getHeadSha(

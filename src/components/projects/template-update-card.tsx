@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { ArrowUpCircle, Loader2, GitPullRequest, Check } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowUpCircle, Loader2, GitPullRequest } from 'lucide-react'
 import {
   getTemplateSyncStatus,
   applyTemplateSync,
@@ -12,11 +12,15 @@ import {
 /**
  * A ponte entre o template que evolui e um projeto que já existe. Consertos que
  * vivem nos rails — cookies do preview, inspector, CI — chegam aqui sem recriar
- * o projeto. Só aparece quando a base grava uma versão atrás da atual.
+ * o projeto.
  *
- * Confere sob demanda (não a cada load: são leituras do GitHub) e aplica como
- * PR pelos gates. O que muda é sempre rail; a funcionalidade do app fica intacta.
+ * Confere de verdade ao abrir (uma chamada só, comparando sha do git) e some
+ * quando o projeto já está no template atual — mesmo que a versão gravada ainda
+ * dissesse o contrário. Aplicar é um PR pelos gates; a funcionalidade do app
+ * fica intacta.
  */
+type Phase = 'checking' | 'behind' | 'uptodate' | 'error' | 'done'
+
 export function TemplateUpdateCard({
   projectId,
   projectVersion,
@@ -26,19 +30,32 @@ export function TemplateUpdateCard({
   projectVersion: string | null
   latestVersion: string
 }) {
+  const [phase, setPhase] = useState<Phase>('checking')
   const [status, setStatus] = useState<TemplateSyncStatus | null>(null)
   const [result, setResult] = useState<TemplateSyncResult | null>(null)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
-  async function check() {
-    setBusy(true)
-    setError(null)
-    const res = await getTemplateSyncStatus(projectId)
-    setBusy(false)
-    if (res.error) setError(res.error)
-    else if (res.status) setStatus(res.status)
-  }
+  // Ao abrir, confere o estado real. Se já está em dia, o cartão some (e a ação
+  // reconcilia a versão gravada, então nas próximas vezes nem confere).
+  useEffect(() => {
+    let active = true
+    getTemplateSyncStatus(projectId).then((res) => {
+      if (!active) return
+      if (res.error) {
+        setError(res.error)
+        setPhase('error')
+      } else if (res.status?.upToDate) {
+        setPhase('uptodate')
+      } else if (res.status) {
+        setStatus(res.status)
+        setPhase('behind')
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [projectId])
 
   async function apply() {
     setBusy(true)
@@ -46,12 +63,29 @@ export function TemplateUpdateCard({
     const res = await applyTemplateSync(projectId)
     setBusy(false)
     if (res.error) setError(res.error)
-    else if (res.upToDate) setStatus((s) => (s ? { ...s, upToDate: true } : s))
-    else if (res.result) setResult(res.result)
+    else if (res.upToDate) setPhase('uptodate')
+    else if (res.result) {
+      setResult(res.result)
+      setPhase('done')
+    }
   }
 
-  // Já abriu o PR — o trabalho passou para os gates.
-  if (result) {
+  // Em dia (ou ainda conferindo): nada na tela. É o que o usuário pediu —
+  // projeto atualizado não mostra "Atualização de base".
+  if (phase === 'checking' || phase === 'uptodate') return null
+
+  if (phase === 'error') {
+    return (
+      <Shell>
+        <p className="text-muted text-xs">
+          Não deu para checar a base agora
+          {error ? `: ${error}` : '.'}
+        </p>
+      </Shell>
+    )
+  }
+
+  if (phase === 'done' && result) {
     return (
       <Shell>
         <div className="flex items-start gap-2">
@@ -78,18 +112,7 @@ export function TemplateUpdateCard({
     )
   }
 
-  // Conferiu e o repo já bate com o template atual.
-  if (status?.upToDate) {
-    return (
-      <Shell>
-        <p className="text-muted flex items-center gap-2 text-xs">
-          <Check className="text-up-ink h-4 w-4 shrink-0" />
-          Base em dia com o template {latestVersion}.
-        </p>
-      </Shell>
-    )
-  }
-
+  // phase === 'behind'
   return (
     <Shell>
       <div className="flex items-start gap-2">
@@ -101,7 +124,7 @@ export function TemplateUpdateCard({
             consertos de infra sem recriar o projeto nem tocar na funcionalidade.
           </p>
 
-          {status && !status.upToDate && (
+          {status && (
             <div className="text-muted mt-2 space-y-0.5 text-xs">
               {status.updates.length > 0 && (
                 <p>{status.updates.length} arquivos de base atualizados</p>
@@ -117,31 +140,18 @@ export function TemplateUpdateCard({
 
           {error && <p className="text-down-ink mt-2 text-xs">{error}</p>}
 
-          <div className="mt-3">
-            {status ? (
-              <button
-                onClick={apply}
-                disabled={busy}
-                className="bg-accent text-accent-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-60"
-              >
-                {busy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <GitPullRequest className="h-3.5 w-3.5" />
-                )}
-                Abrir PR de atualização
-              </button>
+          <button
+            onClick={apply}
+            disabled={busy}
+            className="bg-accent text-accent-ink mt-3 inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <button
-                onClick={check}
-                disabled={busy}
-                className="bg-surface text-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-80 disabled:opacity-60"
-              >
-                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                Ver o que muda
-              </button>
+              <GitPullRequest className="h-3.5 w-3.5" />
             )}
-          </div>
+            Abrir PR de atualização
+          </button>
         </div>
       </div>
     </Shell>

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { encryptToken } from '@/lib/crypto'
+import { expiryFromNow } from '@/lib/supabase-token'
 import { consumeOAuthState } from '@/lib/oauth-state'
 
 export async function GET(request: Request) {
@@ -89,6 +90,7 @@ export async function GET(request: Request) {
         org_slug: org.id, // Supabase Management API uses id as slug often, but let's stick to id/name.
         access_token_encrypted: encryptedToken,
         refresh_token_encrypted: encryptedRefresh,
+        token_expires_at: expiryFromNow(tokenData.expires_in),
       },
       {
         onConflict: 'user_id,org_slug',

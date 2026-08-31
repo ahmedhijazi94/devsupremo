@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
-import { decryptToken } from '@/lib/crypto'
+import { freshSupabaseToken } from '@/lib/supabase-token'
 import { assertSafeDataChange } from '@/lib/mcp/sql-guard'
 import {
   listTables,
@@ -47,18 +47,23 @@ async function resolveSupabase(
 
   const { data: account } = await supabase
     .from('supabase_accounts')
-    .select('access_token_encrypted')
+    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
     .eq('id', accountId)
     .eq('user_id', user.id)
     .maybeSingle()
 
   if (!account) return { ok: false, error: 'Conta Supabase não encontrada.' }
 
-  return {
-    ok: true,
-    token: decryptToken(account.access_token_encrypted as string),
-    ref,
-  }
+  // Renova o token de ~1h se expirou. Sem isto a aba Banco morre com o tempo.
+  const token = await freshSupabaseToken(account, (update) =>
+    supabase
+      .from('supabase_accounts')
+      .update(update)
+      .eq('id', accountId)
+      .eq('user_id', user.id),
+  )
+
+  return { ok: true, token, ref }
 }
 
 export interface DatabaseOverview {

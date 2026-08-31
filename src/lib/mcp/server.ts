@@ -9,6 +9,7 @@ import {
 } from '@/lib/templates/rls-tests'
 import { mcpDataClient } from './tokens'
 import {
+  getSupabaseAnonKey,
   isDeployable,
   previewProjectName,
   publishSharedPreview,
@@ -833,12 +834,27 @@ async function republishPreview(
       project.preview_project_name ??
       previewProjectName(project.name, project.id)
 
+    // A URL sozinha não basta: sem a anon key, a tela de login estoura no
+    // preview. Buscamos a anon key (pública) e a levamos para o build.
     const supabaseRef = project.supabase_project_ref
+    let supabaseUrl: string | undefined
+    let supabaseAnonKey: string | undefined
+    if (supabaseRef) {
+      supabaseUrl = `https://${supabaseRef}.supabase.co`
+      try {
+        const supaCreds = await repo.getSupabaseCredentials(userId, project)
+        supabaseAnonKey =
+          (await getSupabaseAnonKey(supaCreds.token, supabaseRef)) ?? undefined
+      } catch {
+        // Sem a conta Supabase acessível o preview ainda sobe; só o login
+        // não abre. Não vale derrubar a republicação por isso.
+      }
+    }
+
     const { deployment } = await publishSharedPreview(config, name, files, {
       branch,
-      ...(supabaseRef
-        ? { supabaseUrl: `https://${supabaseRef}.supabase.co` }
-        : {}),
+      ...(supabaseUrl ? { supabaseUrl } : {}),
+      ...(supabaseAnonKey ? { supabaseAnonKey } : {}),
     })
 
     await repo.updateProject(userId, project.id, {

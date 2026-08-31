@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { decryptToken } from '@/lib/crypto'
 import {
+  getSupabaseAnonKey,
   previewProjectName,
   publishSharedPreview,
   readSharedPreview,
@@ -112,12 +113,34 @@ export async function publishPreview(
       previewProjectName(project.name as string, project.id)
 
     const supabaseRef = project.supabase_project_ref as string | null
+    const supabaseAccountId = project.supabase_account_id as string | null
+
+    // A anon key (pública) precisa ir no build do preview, senão a tela de
+    // login estoura ao renderizar e o preview mostra "This page couldn't load".
+    let supabaseAnonKey: string | undefined
+    if (supabaseRef && supabaseAccountId) {
+      const { data: supabaseAccount } = await supabase
+        .from('supabase_accounts')
+        .select('access_token_encrypted')
+        .eq('id', supabaseAccountId)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (supabaseAccount) {
+        supabaseAnonKey =
+          (await getSupabaseAnonKey(
+            decryptToken(supabaseAccount.access_token_encrypted as string),
+            supabaseRef,
+          )) ?? undefined
+      }
+    }
 
     const { deployment } = await publishSharedPreview(config, name, files, {
       branch,
       ...(supabaseRef
         ? { supabaseUrl: `https://${supabaseRef}.supabase.co` }
         : {}),
+      ...(supabaseAnonKey ? { supabaseAnonKey } : {}),
     })
 
     await supabase

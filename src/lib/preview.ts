@@ -91,6 +91,41 @@ export interface PublishResult {
 }
 
 /**
+ * Busca a anon key do projeto Supabase pela Management API.
+ *
+ * Sem ela, qualquer página que usa o cliente de navegador — a começar pelo
+ * login — estoura ao renderizar ("Supabase não configurado"), e o preview
+ * mostra "This page couldn't load". A anon key é pública (protegida por RLS),
+ * então pode ir para o build do preview sem risco.
+ *
+ * Best-effort: se a busca falha, o preview ainda sobe (só as telas que
+ * dependem de auth não abrem), então devolve null em vez de estourar.
+ */
+export async function getSupabaseAnonKey(
+  accessToken: string,
+  projectRef: string,
+): Promise<string | null> {
+  try {
+    const response = await fetch(
+      `https://api.supabase.com/v1/projects/${projectRef}/api-keys`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: 'no-store',
+      },
+    )
+    if (!response.ok) return null
+
+    const keys = (await response.json()) as Array<{
+      name?: string
+      api_key?: string
+    }>
+    return keys.find((key) => key.name === 'anon')?.api_key ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Publica um preview a partir dos arquivos do repositório.
  *
  * Cria o projeto na conta compartilhada na primeira vez e o reaproveita

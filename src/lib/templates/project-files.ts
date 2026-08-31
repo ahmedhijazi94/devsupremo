@@ -16,7 +16,10 @@ import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
  * declarados, as dependências instaladas e os jobs do CI.
  */
 
-export const TEMPLATE_VERSION = '2.0.0'
+// 2.1.0: cookies do preview (SameSite=None) no cliente/servidor Supabase e no
+// proxy, inspector de componente, e CI adaptativo. Projeto em 2.0.0 mostra o
+// cartão "Atualizar base" e traz esses rails pelo PR.
+export const TEMPLATE_VERSION = '2.1.0'
 
 export interface FileEntry {
   path: string

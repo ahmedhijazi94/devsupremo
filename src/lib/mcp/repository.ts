@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decryptToken } from '@/lib/crypto'
+import { freshGithubToken } from '@/lib/github-token'
 import { mcpDataClient } from './tokens'
 import type { Json } from '@/types/database'
 
@@ -195,10 +196,11 @@ export async function getGithubCredentials(
     )
   }
 
+  const accountId = project.github_account_id
   const { data, error } = await db()
     .from('github_accounts')
-    .select('access_token_encrypted')
-    .eq('id', project.github_account_id)
+    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
+    .eq('id', accountId)
     .eq('user_id', userId)
     .maybeSingle()
 
@@ -210,8 +212,15 @@ export async function getGithubCredentials(
     throw new Error(`Repositório inválido: ${project.github_repo_full_name}`)
   }
 
+  // Renova o token de 8h pelo refresh quando expira. Sem isto, o agente
+  // conectado de outra máquina falha com "Bad credentials" depois do prazo —
+  // e "continuar de onde parou" morre junto.
+  const token = await freshGithubToken(data, (update) =>
+    db().from('github_accounts').update(update).eq('id', accountId).eq('user_id', userId),
+  )
+
   return {
-    token: decryptToken(data.access_token_encrypted as string),
+    token,
     repoFullName: project.github_repo_full_name,
     owner,
     repo,

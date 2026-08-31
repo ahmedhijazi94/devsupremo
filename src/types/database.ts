@@ -19,14 +19,15 @@ export interface Database {
           avatar_url: string | null
           access_token_encrypted: string
           refresh_token_encrypted: string | null
+          token_expires_at: string | null
           scopes: string[]
           created_at: string
           updated_at: string
         }
         Insert: Omit<
           Database['public']['Tables']['github_accounts']['Row'],
-          'id' | 'created_at' | 'updated_at'
-        >
+          'id' | 'created_at' | 'updated_at' | 'token_expires_at'
+        > & { token_expires_at?: string | null }
         Update: Partial<
           Database['public']['Tables']['github_accounts']['Insert']
         >
@@ -39,13 +40,14 @@ export interface Database {
           org_slug: string
           access_token_encrypted: string
           refresh_token_encrypted: string | null
+          token_expires_at: string | null
           created_at: string
           updated_at: string
         }
         Insert: Omit<
           Database['public']['Tables']['supabase_accounts']['Row'],
-          'id' | 'created_at' | 'updated_at'
-        >
+          'id' | 'created_at' | 'updated_at' | 'token_expires_at'
+        > & { token_expires_at?: string | null }
         Update: Partial<
           Database['public']['Tables']['supabase_accounts']['Insert']
         >

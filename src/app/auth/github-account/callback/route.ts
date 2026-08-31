@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { encryptToken } from '@/lib/crypto'
+import { expiryFromNow } from '@/lib/github-token'
 import { redirect } from 'next/navigation'
 import { type NextRequest } from 'next/server'
 import { consumeOAuthState } from '@/lib/oauth-state'
@@ -57,6 +58,7 @@ export async function GET(request: NextRequest) {
   const tokenData = (await tokenResponse.json()) as {
     access_token?: string
     refresh_token?: string
+    expires_in?: number
     scope?: string
     error?: string
   }
@@ -102,6 +104,7 @@ export async function GET(request: NextRequest) {
         avatar_url: githubUser.avatar_url,
         access_token_encrypted: encryptedToken,
         refresh_token_encrypted: encryptedRefresh,
+        token_expires_at: expiryFromNow(tokenData.expires_in),
         scopes: tokenData.scope?.split(',') ?? [],
       },
       {

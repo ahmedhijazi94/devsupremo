@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
-import { decryptToken } from '@/lib/crypto'
+import { freshGithubToken } from '@/lib/github-token'
 import { commitFiles, ensureBranch, openOrUpdatePullRequest } from '@/lib/mcp/github'
 import type { GithubCredentials } from '@/lib/mcp/repository'
 import {
@@ -56,7 +56,7 @@ async function resolveProject(
 
   const { data: account } = await supabase
     .from('github_accounts')
-    .select('access_token_encrypted')
+    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
     .eq('id', accountId)
     .eq('user_id', user.id)
     .maybeSingle()
@@ -64,6 +64,16 @@ async function resolveProject(
 
   const [owner, repo] = repoFullName.split('/')
   if (!owner || !repo) return { ok: false, error: 'Repositório inválido.' }
+
+  // Renova o token de 8h se expirou, senão o PR de atualização falharia com
+  // "Bad credentials" — o mesmo que quebrava a aba Código.
+  const token = await freshGithubToken(account, (update) =>
+    supabase
+      .from('github_accounts')
+      .update(update)
+      .eq('id', accountId)
+      .eq('user_id', user.id),
+  )
 
   const defaultBranch = (project.default_branch as string | null) ?? 'main'
 
@@ -74,7 +84,7 @@ async function resolveProject(
       userId: user.id,
       templateVersion: (project.template_version as string | null) ?? null,
       creds: {
-        token: decryptToken(account.access_token_encrypted as string),
+        token,
         repoFullName,
         owner,
         repo,

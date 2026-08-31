@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase/server'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
 import { ScaffoldForm } from '@/components/projects/scaffold-form'
 import { WorkspaceTabs } from '@/components/projects/workspace-tabs'
+import { LiveGateBadge } from '@/components/projects/live-gate-badge'
 import {
   ActivityFeed,
   type ActivityItem,
@@ -111,6 +112,7 @@ export default async function ProjectPage({
                 />
                 {status.label}
               </span>
+              {provisioned && <LiveGateBadge projectId={project.id} />}
             </div>
             {project.github_repo_full_name && (
               <a

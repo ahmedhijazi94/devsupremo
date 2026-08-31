@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import * as repo from './repository'
 import * as gh from './github'
-import { assertSafeSql } from './sql-guard'
+import { assertSafeSql, assertSafeDataChange } from './sql-guard'
 import {
   generateRlsTest,
   inferTablesFromMigration,
@@ -70,9 +70,12 @@ REGRAS INVIOLÁVEIS — valem em qualquer máquina, qualquer cliente, qualquer s
    de SELECT (user_id = auth.uid()) — sem ela, o EXISTS não enxerga nada e o
    app inteiro trava fechado. O teste gerado já cobre os dois casos.
 
-5b. execute_sql é leitura, e isso é imposto pelo banco: a query roda dentro de
-   uma transação READ ONLY. Escrita escondida em CTE é recusada. Para mudar
-   dado, escreva pela aplicação, onde o RLS se aplica.
+5b. execute_sql é leitura, imposta pelo banco (transação READ ONLY). Para
+   AJUSTAR DADO — ligar um perfil a um papel, corrigir um valor — use
+   apply_data_change: INSERT/UPDATE/DELETE direto, SEM migration e SEM gates,
+   porque isso não muda código nem estrutura, e os testes não provam o valor de
+   uma linha. Ele exige WHERE em UPDATE/DELETE e recusa DDL. Estrutura (tabela,
+   coluna, policy) continua indo por apply_migration, que versiona e testa.
 
 6. Nunca escreva segredo em código. Nunca valide no cliente o que decide acesso.
    Nunca confie em user_id vindo do corpo da requisição — use auth.uid().`
@@ -675,6 +678,57 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 
       await repo.logAudit(ctx.userId, 'mcp.execute_sql', 'project', project.id)
       return json(payload)
+    }),
+  )
+
+  server.registerTool(
+    'apply_data_change',
+    {
+      title: 'Alterar dado (sem migration)',
+      description:
+        'Executa uma alteração de DADO — INSERT, UPDATE ou DELETE — direto no ' +
+        'banco, sem migration e sem passar pelos gates. É o caminho para ' +
+        'ajustes de dado (ligar um perfil a um papel, corrigir um valor), que ' +
+        'não mudam código nem estrutura. Recusa DDL, recusa TRUNCATE, e recusa ' +
+        'UPDATE/DELETE sem WHERE. Para mudar a estrutura, use apply_migration.',
+      inputSchema: {
+        sql: z.string().min(1).describe('Um ou mais INSERT/UPDATE/DELETE.'),
+        projectId: z.string().uuid().optional(),
+      },
+    },
+    guard(async ({ sql, projectId }) => {
+      const project = await repo.resolveProject(ctx.userId, projectId)
+      const creds = await repo.getSupabaseCredentials(ctx.userId, project)
+
+      assertSafeDataChange(sql)
+
+      const response = await fetch(
+        `https://api.supabase.com/v1/projects/${creds.projectRef}/database/query`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${creds.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query: sql }),
+        },
+      )
+
+      const payload: unknown = await response.json()
+      if (!response.ok) {
+        return fail(`Supabase recusou a alteração: ${JSON.stringify(payload)}`)
+      }
+
+      // Registrado em auditoria: mudança de dado não versiona no repo, mas fica
+      // no histórico do projeto para quem precisar rastrear o que mudou.
+      await repo.logAudit(
+        ctx.userId,
+        'mcp.apply_data_change',
+        'project',
+        project.id,
+        { sql: sql.slice(0, 500) },
+      )
+      return json({ applied: true, result: payload })
     }),
   )
 

@@ -181,17 +181,20 @@ export default async function ProjectPage({
               actionLabel="Conectar Supabase"
             />
 
-            <section className="bg-surface min-h-0 flex-1 rounded-[var(--radius-inner)] p-4">
-              <div className="mb-3">
+            <section className="bg-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">
+              <div className="mb-3 shrink-0">
                 <h2 className="text-sm font-semibold">Atividade</h2>
                 <p className="text-muted text-xs">
                   Cada proposta do agente, com o pull request e os gates.
                 </p>
               </div>
-              <ActivityFeed
-                items={(activity ?? []) as unknown as ActivityItem[]}
-                repoFullName={project.github_repo_full_name}
-              />
+              {/* A lista rola dentro do cartão, sem vazar pela borda. */}
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <ActivityFeed
+                  items={(activity ?? []) as unknown as ActivityItem[]}
+                  repoFullName={project.github_repo_full_name}
+                />
+              </div>
             </section>
           </aside>
 

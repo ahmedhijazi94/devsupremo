@@ -19,6 +19,7 @@ import {
 import { toast } from 'sonner'
 import { getPreviewState, type PreviewState } from '@/actions/vercel'
 import { publishPreview } from '@/actions/preview'
+import { getAppRoutes, type AppRoutes } from '@/actions/routes'
 import { cn } from '@/lib/utils'
 
 /** O que o inspetor dentro do app manda quando um componente é clicado. */
@@ -73,9 +74,18 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
   const [copied, setCopied] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
+  const [routes, setRoutes] = useState<AppRoutes | null>(null)
+  const [route, setRoute] = useState('/')
   const [, startTransition] = useTransition()
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+
+  // As páginas do app, para o seletor de rotas. Lidas uma vez do repositório.
+  useEffect(() => {
+    getAppRoutes(projectId).then((result) => {
+      if (result.data) setRoutes(result.data)
+    })
+  }, [projectId])
 
   // O app, no preview, avisa quando um componente é clicado no modo seleção.
   // Copiamos a referência pronta para colar no prompt do agente.
@@ -176,6 +186,10 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
 
   const deviceConfig = DEVICES.find((d) => d.id === device) ?? DEVICES[0]!
   const showFrame = state?.status === 'ready' && state.url
+  // A rota escolhida vira o caminho no fim da URL do preview.
+  const frameSrc = state?.url
+    ? state.url.replace(/\/$/, '') + (route === '/' ? '' : route)
+    : ''
 
   return (
     <section className="bg-sunken flex h-full flex-col overflow-hidden rounded-[var(--radius-inner)]">
@@ -210,6 +224,22 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
         >
           <RefreshCw className="h-4 w-4" />
         </button>
+
+        {showFrame && routes && routes.pages.length > 1 && (
+          <select
+            value={route}
+            onChange={(e) => setRoute(e.target.value)}
+            title="Abrir uma página do app no preview"
+            className="bg-surface text-ink rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium outline-none"
+          >
+            {routes.pages.map((page) => (
+              <option key={page.path} value={page.path} disabled={page.dynamic}>
+                {page.path}
+                {page.dynamic ? ' (dinâmica)' : ''}
+              </option>
+            ))}
+          </select>
+        )}
 
         {showFrame && (
           <button
@@ -298,9 +328,9 @@ export function PreviewPanel({ projectId, repoFullName }: PreviewPanelProps) {
             style={{ width: deviceConfig.width, maxWidth: '100%' }}
           >
             <iframe
-              key={frameKey}
+              key={`${frameKey}-${route}`}
               ref={iframeRef}
-              src={state.url}
+              src={frameSrc}
               title="Preview do projeto"
               className="h-full w-full border-0"
               sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"

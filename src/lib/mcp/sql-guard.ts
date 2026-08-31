@@ -208,6 +208,73 @@ export function assertSafeSql(sql: string, options: SqlGuardOptions): void {
   assertRlsOnNewTables(text)
 }
 
+/**
+ * Guard da alteração de DADO direta (apply_data_change).
+ *
+ * Escrita de dado — INSERT/UPDATE/DELETE — não é mudança de código nem de
+ * estrutura, então não precisa de migration nem de gate: os testes provam que
+ * a policy funciona e que a aplicação compila, não que uma linha específica
+ * tem o valor certo. É o equivalente a rodar um UPDATE no SQL editor do
+ * Supabase, que o dono já pode fazer.
+ *
+ * As travas que importam:
+ *  - nada de DDL: estrutura ainda vai por apply_migration (versiona e testa)
+ *  - as mesmas proibições absolutas (desligar RLS, dar acesso a anon, etc.)
+ *  - TRUNCATE não: apaga a tabela inteira sem chance de conferir
+ *  - UPDATE e DELETE exigem WHERE: sem ele, a mudança pega a tabela toda
+ *    (use WHERE true, explícito, se for mesmo intencional)
+ */
+export function assertSafeDataChange(sql: string): void {
+  const { text, bodies } = split(sql)
+
+  if (!text) throw new UnsafeSqlError('Query vazia.')
+
+  for (const rule of ALWAYS_FORBIDDEN) {
+    if (rule.pattern.test(text)) throw new UnsafeSqlError(rule.reason)
+    for (const body of bodies) {
+      if (rule.pattern.test(body)) {
+        throw new UnsafeSqlError(
+          `${rule.reason} (encontrado dentro do corpo de uma função)`,
+        )
+      }
+    }
+  }
+
+  for (const statement of splitStatements(text)) {
+    // TRUNCATE é DDL, mas merece a mensagem específica: é o jeito mais fácil
+    // de apagar a tabela toda sem querer.
+    if (/^\s*truncate\b/i.test(statement)) {
+      throw new UnsafeSqlError(
+        'TRUNCATE apaga a tabela inteira de uma vez. Use DELETE com WHERE.',
+      )
+    }
+
+    if (DDL_KEYWORDS.test(statement)) {
+      throw new UnsafeSqlError(
+        'apply_data_change é só para DADO. Mudança de estrutura (CREATE, ALTER, ' +
+          'DROP…) vai por apply_migration, que versiona a migration e roda os gates.',
+      )
+    }
+
+    const hasUpdate = /\bupdate\s+[\w."]+\s+set\b/i.test(statement)
+    const hasDelete = /\bdelete\s+from\b/i.test(statement)
+    const hasInsert = /\binsert\s+into\b/i.test(statement)
+
+    if (!hasUpdate && !hasDelete && !hasInsert) {
+      throw new UnsafeSqlError(
+        'Só INSERT, UPDATE ou DELETE aqui. Para ler dado, use execute_sql.',
+      )
+    }
+
+    if ((hasUpdate || hasDelete) && !/\bwhere\b/i.test(statement)) {
+      throw new UnsafeSqlError(
+        'UPDATE ou DELETE sem WHERE muda a tabela inteira. Adicione um WHERE ' +
+          '(use WHERE true se a mudança em massa for mesmo intencional).',
+      )
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Policies
 // ─────────────────────────────────────────────────────────────

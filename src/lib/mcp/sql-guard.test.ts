@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { assertSafeSql, UnsafeSqlError } from './sql-guard'
+import {
+  assertSafeSql,
+  assertSafeDataChange,
+  UnsafeSqlError,
+} from './sql-guard'
 
 const readOnly = { allowDdl: false }
 const migration = { allowDdl: true }
@@ -347,5 +351,61 @@ describe('assertSafeSql — furos encontrados atacando o guard', () => {
         ),
       ).not.toThrow()
     })
+  })
+})
+
+describe('assertSafeDataChange — ajuste de dado sem migration', () => {
+  it('aceita UPDATE com WHERE (ligar perfil a papel)', () => {
+    expect(() =>
+      assertSafeDataChange(
+        "UPDATE profiles SET role = 'admin' WHERE user_id = '123'",
+      ),
+    ).not.toThrow()
+  })
+
+  it('aceita INSERT e DELETE com WHERE', () => {
+    expect(() =>
+      assertSafeDataChange(
+        "INSERT INTO memberships (org_id, user_id, role) VALUES ('a','b','admin')",
+      ),
+    ).not.toThrow()
+    expect(() =>
+      assertSafeDataChange('DELETE FROM sessions WHERE expired = true'),
+    ).not.toThrow()
+  })
+
+  it('recusa UPDATE ou DELETE sem WHERE — mudaria a tabela toda', () => {
+    expect(() =>
+      assertSafeDataChange("UPDATE profiles SET role = 'admin'"),
+    ).toThrow(/WHERE/)
+    expect(() => assertSafeDataChange('DELETE FROM profiles')).toThrow(/WHERE/)
+  })
+
+  it('aceita mudança em massa quando o WHERE é explícito', () => {
+    expect(() =>
+      assertSafeDataChange('UPDATE flags SET seen = true WHERE true'),
+    ).not.toThrow()
+  })
+
+  it('recusa DDL — estrutura vai por apply_migration', () => {
+    expect(() =>
+      assertSafeDataChange('ALTER TABLE profiles ADD COLUMN x int'),
+    ).toThrow(/apply_migration/)
+    expect(() => assertSafeDataChange('CREATE TABLE x (id int)')).toThrow(
+      UnsafeSqlError,
+    )
+  })
+
+  it('recusa TRUNCATE e as proibições absolutas', () => {
+    expect(() => assertSafeDataChange('TRUNCATE profiles')).toThrow(/TRUNCATE/)
+    expect(() =>
+      assertSafeDataChange('ALTER TABLE profiles DISABLE ROW LEVEL SECURITY'),
+    ).toThrow(UnsafeSqlError)
+  })
+
+  it('recusa SELECT — leitura é do execute_sql', () => {
+    expect(() => assertSafeDataChange('SELECT * FROM profiles')).toThrow(
+      /execute_sql/,
+    )
   })
 })

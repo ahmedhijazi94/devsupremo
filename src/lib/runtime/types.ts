@@ -64,10 +64,36 @@ export class RuntimeError extends Error {
 }
 
 /**
- * Adapter de um provedor de runtime (Codespaces, e futuros). Só lifecycle e
- * descoberta — executar TAREFA dentro do ambiente é responsabilidade do daemon
- * do runtime (fase posterior), porque o GitHub não expõe API de execução de
- * comando num Codespace.
+ * De onde vem o preview de desenvolvimento.
+ *
+ *  - browser: bundler client-side (Sandpack) no navegador do usuário. Padrão,
+ *    custo zero, rápido — mas client-side (não roda o servidor do Next).
+ *  - vercel: o deploy atual, comportamento de servidor real. Fallback completo.
+ *  - codespace: futuro — dev server real num compute dedicado (opcional/pago).
+ */
+export type PreviewKind = 'browser' | 'vercel' | 'codespace'
+
+/**
+ * Como obter o preview de um projeto. O provider 'browser' é dirigido pelo
+ * cliente (sincroniza arquivos via as actions de runtime-sync e monta o bundle
+ * no navegador); os demais expõem uma URL externa.
+ */
+export interface PreviewDescriptor {
+  kind: PreviewKind
+  /** Para vercel/codespace: a URL a exibir. Para browser: null (é client-side). */
+  externalUrl: string | null
+  status: PreviewStatus
+}
+
+/**
+ * Adapter de um provedor de runtime de COMPUTE (Codespaces, VPS, container —
+ * futuros). Só lifecycle: o preview 'browser' NÃO implementa isto (é
+ * client-side, sem lifecycle de servidor). Genérico de propósito — não é
+ * específico de Codespaces.
+ *
+ * Executar TAREFA dentro de um ambiente de compute é responsabilidade de um
+ * daemon do runtime (fase posterior), porque provedores como o GitHub Codespaces
+ * não expõem API de execução de comando.
  */
 export interface RuntimeProvider {
   readonly name: string

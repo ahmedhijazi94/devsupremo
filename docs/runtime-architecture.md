@@ -1,81 +1,110 @@
-# Runtime de desenvolvimento por projeto (Codespaces)
+# Runtime de desenvolvimento por projeto — Companion Local
 
-Migração incremental do motor de dev do Supremo. Objetivo: velocidade de dev
-próxima do Lovable (dev server + HMR) sem perder segurança, isolamento, RLS,
-auditoria e controle do Supremo.
+Arquitetura ALVO (aprovada, fixa). Objetivo: dev tão rápido quanto o Lovable,
+seguro como o Supremo, **custo de infra ~zero**. O preview de desenvolvimento
+roda na **máquina do dev** (Next.js real + HMR), orquestrado pelo Supremo web.
 
 ## Arquitetura ANTES (auditada)
 
-- **Host**: Next.js 16 (App Router) na Vercel, **serverless** (`/api/mcp` com
-  `runtime='nodejs'`, `maxDuration=300`). Supabase (Postgres + Auth + RLS).
-- **MCP**: Streamable HTTP em `/api/mcp`, auth por token `sup_…`
-  (`resolveMcpToken`), server por requisição (`createSupremoMcpServer(userId)`).
-- **Como o MCP "executa"**: NÃO executa código. Escreve arquivos via **GitHub
-  API** (Octokit), aplica SQL via **Supabase Management API**. O "motor" de
-  build/preview é **GitHub Actions** (gates) + **Vercel** (build + preview em
-  iframe). Cada ciclo = round-trips de API + fila do Actions + build da Vercel =
-  minutos. **Esse é o motor lento.**
-- **Isolamento**: RLS (`auth.uid()`) + `requireProjectOwner` na web; token +
-  service-role com filtro por `user_id` no MCP. Tokens encriptados (AES-256-GCM).
+Next.js 16 na **Vercel (serverless)** + Supabase (RLS). O MCP não executa
+código: escreve via **GitHub API** e SQL via **Supabase Management API**. O
+motor de build/preview era **GitHub Actions** (gates) + **Vercel** (deploy →
+iframe). Cada ciclo = round-trips + fila do Actions + build da Vercel = minutos.
 
 ## Arquitetura DEPOIS (alvo)
 
-Cada projeto ganha um **Codespace** próprio (repo A → Codespace A → preview A).
-O agente edita arquivos no filesystem do Codespace; dev server/HMR dá o preview;
-testes rodam em background dentro do Codespace e reportam ao Supremo. GitHub
-segue como versionamento; Supabase como banco; Supremo como orquestrador.
+```
+                    INTERNET
+   ┌──────────────────────────────────────────┐
+   │            SUPREMO WEB                     │  orquestra (não roda seu app)
+   │      Vercel + Supabase + MCP               │
+   └──────────────────────┬────────────────────┘
+                          │ canal seguro (companion disca pra fora)
+                          ▼
+              ┌───────────────────────┐        ┌──────────────┐
+              │  SUPREMO COMPANION     │◄─clone─│    GITHUB     │ fonte oficial
+              │    na máquina do dev   │──push─►│  (assíncrono) │
+              └───────────┬───────────┘        └──────────────┘
+                          │
+              ┌───────────┴───────────┐
+        projeto real Next.js     testes em background
+              │                   (local, grátis)
+         npm run dev                  │
+              │                  resultado ─► Supremo (Supabase)
+              ▼
+         localhost:PORT
+              ▼  (o navegador do dev acessa localhost direto)
+         PREVIEW REAL ──► exibido na tela do Supremo
+```
 
-## Três achados que definem o desenho (o difícil, honesto)
+**GitHub fora do caminho crítico da edição.** A edição do agente vai DIRETO ao
+filesystem local (`apply_edits`) → HMR → preview imediato. Clone/pull é só
+bootstrap; commit/push é assíncrono (`git_sync`).
 
-1. **O GitHub Codespaces NÃO tem API de executar comando num ambiente rodando.**
-   A REST dá só lifecycle (create/start/stop/delete/list). Para editar arquivos +
-   subir dev server + rodar testes DENTRO, é preciso um **daemon do Supremo
-   dentro do Codespace** (instalado via `.devcontainer`), expondo uma API HTTP
-   autenticada numa porta encaminhada. O MCP manda uma TAREFA a esse daemon (não
-   micro-ops). Alternativa (`gh codespace ssh`) exige host persistente — ver #2.
+## Fluxo do milestone: "cliquei no projeto → preview Next real abriu"
 
-2. **O Supremo é serverless (Vercel).** Função curta não segura canal de
-   controle, worker de teste em background nem monitor de idle. Solução que
-   mantém serverless: **o daemon dentro do Codespace faz o trabalho de fundo**
-   (roda testes, escreve resultado via callback assinado no Supremo); o idle-stop
-   roda por **cron agendado** batendo na API de Codespaces. (Alternativa: um
-   worker persistente separado — mais infra.)
+1. **Uma vez por máquina**: `npx supremo-runtime` + login → o companion fica
+   rodando e disca pro Supremo (canal autenticado, sem abrir porta).
+2. Usuário abre o Projeto A no Supremo web → botão **Preview local**.
+3. Supremo manda `start_project { projectId, repoFullName, branch, cloneToken }`
+   (cloneToken de curta duração; nunca token de admin).
+4. Companion resolve o **workspace isolado** `base/<userId>/<projectId>`:
+   - não existe → `git clone` (bootstrap). Existe → `git pull`.
+5. Detecta o gerenciador (npm/pnpm/yarn pelo lockfile) → instala deps →
+   emite `runtime_status: preparing` (logs throttled via `log`).
+6. Sobe o dev server (`npm run dev`) na porta preferida do projeto →
+   `runtime_status: starting`.
+7. Detecta o dev pronto → `preview_ready { url: http://localhost:PORT }`.
+8. Supremo web exibe o preview (embute; fallback: abre em aba — ver "display").
+9. Agente altera código → `apply_edits` escreve DIRETO no filesystem local →
+   Next **HMR** atualiza o preview em ms. Sem GitHub, sem Vercel, sem CI no meio.
+10. Em paralelo/assíncrono: `run_validation` (testes locais em background) e
+    `git_sync` (commit/push) — nenhum bloqueia o agente/MCP.
 
-3. **Preview privado não embute em iframe cross-origin.** Porta encaminhada
-   privada do Codespaces exige auth do GitHub (cookie) → CSP/cookies barram o
-   iframe. Fallback: abrir o preview **autenticado externamente**, com a
-   arquitetura pronta para um **proxy seguro** do Supremo depois. Porta NUNCA
-   pública por padrão.
+## Protocolo (fonte da verdade: `src/lib/runtime/protocol.ts`)
 
-## Dependência externa (só você pode fazer)
+Comandos (Supremo→companion): `start_project`, `stop_project`, `apply_edits`,
+`run_validation`, `git_sync`. Eventos (companion→Supremo): `runtime_status`,
+`preview_ready`, `log`, `validation_result`, `error`. Tudo validado por zod dos
+dois lados; nenhuma mensagem carrega token de admin/service_role.
 
-A **GitHub App** precisa da permissão **Codespaces (read & write)**, e a conta/org
-precisa de Codespaces habilitado (tem **custo por hora de compute + storage**).
-Sem isso não dá para criar/testar Codespaces. Todo o código é preparado antes.
+## Transporte (canal seguro)
 
-## Modelo (Fase A — feito)
+Vercel serverless não hospeda servidor WebSocket. Escolha: **Supabase Realtime**
+(já está na stack, custo zero, conexão persistente autenticada). Companion e web
+entram num canal por projeto; comandos descem, eventos sobem. (Fase seguinte.)
 
-- `project_runtimes` (1 por projeto, `UNIQUE(project_id)`), `validation_runs`
-  (testes em background), `agent_sessions` (handoff). RLS owner-only.
-- `lib/runtime/types.ts`: `ProjectRuntime`, `RuntimeProvider` (adapter),
-  `RuntimeError` tipado.
+## Segurança (mesmo modelo + a superfície nova)
+
+Inalterado: RLS, isolamento multi-tenant, gates, secrets, ownership, auditoria.
+Novo: o **companion**. Regras — token **escopado, nunca admin**; age só no
+projeto do comando (project_id resolvido no servidor, nunca do cliente);
+**workspace isolado por user+project** (provado em teste: A não escreve em B, sem
+traversal — `safeEditPath`); nunca recebe service_role/secrets de servidor.
+
+## Display do preview (a única nuance)
+
+`https` (Supremo na nuvem) embutir `http://localhost` é "mixed content": Chrome
+costuma liberar loopback; Safari é rígido. Fallback 100%: abrir o preview numa
+aba (localhost direto). Evolução: https-localhost (mkcert) ou túnel pra
+compartilhar com cliente remoto.
 
 ## Fases
 
-- **A — feito**: schema + abstração (não destrutivo).
-- **B** (precisa da permissão): `CodespaceService` (lifecycle via REST), resolução
-  `project_id → runtime` server-side com isolamento + testes.
-- **C**: lifecycle (start on open, idle-stop por cron, retry, detectar deleção externa).
-- **D**: `.devcontainer` + daemon do runtime (dev server, HMR, aplicar edições) + PreviewService (privado + fallback externo).
-- **E**: roteamento do MCP pelo runtime (tarefa → daemon → resumo).
-- **F**: validação em background (debounce 20–30s, stale, resultado resumido).
-- **G**: continuidade de agente (`.supremo/` + `agent_sessions`).
-- **H**: UI (status runtime/preview/validação + Retry).
-- **I**: hardening + testes.
+- **A — feito**: schema (`project_runtimes`, `validation_runs`, `agent_sessions`) +
+  abstração (`RuntimeProvider`, `PreviewKind`). Não destrutivo.
+- **B — feito (fundação)**: protocolo (`protocol.ts`) + lógica pura do workspace
+  (`workspace.ts`: isolamento, detecção de PM, `safeEditPath`) + testes.
+- **C**: companion CLI (conecta via Realtime, `start_project` real: clone/install/
+  dev, `preview_ready`).
+- **D**: Supremo web — botão Preview local + exibição + estados (Loading/Compiling/
+  Ready/Error), com Vercel como fallback (preservado).
+- **E**: `apply_edits` direto (edição do agente → HMR) e roteio do MCP.
+- **F**: `run_validation` local em background (debounce 20–30s, stale, resumo).
+- **G**: `git_sync` assíncrono + handoff (`agent_sessions`, `.supremo/`).
+- **H/I**: UX, concorrência/locks, fallback, hardening.
 
-## Custo/viabilidade (honesto)
+## O que fica do que já existe
 
-Codespaces cobra por hora de compute + storage por projeto. Um Codespace por
-projeto muda o modelo de custo (hoje: Vercel free + minutos do Actions). Idle-stop
-reduz, mas a escala tem custo real. A abstração `RuntimeProvider` permite trocar
-o provedor (Fly, container, sandbox) sem reescrever o resto, se o custo pesar.
+GitHub (versionamento), Supabase (banco + Realtime), Vercel (hospeda o Supremo e
+segue como **preview de fallback** e deploy de produção). Fase A/B são aditivas.

@@ -123,6 +123,34 @@ export const CI_JOB_NAMES = [
   'End-to-end',
 ] as const
 
+/** O gate de isolamento — obrigatório no modo rápido só se o projeto escolher. */
+export const RLS_GATE = 'Políticas RLS'
+
+/**
+ * Gates baratos que pegam catástrofe (app não compila, segredo vazado, dep
+ * vulnerável) em segundos. Ficam SEMPRE obrigatórios, inclusive no modo rápido:
+ * pular não economiza tempo relevante e o custo de deixar passar é alto.
+ */
+export const FAST_GATES = [
+  'Tipos, lint e auditoria',
+  'Vulnerabilidades',
+  'Varredura de segredos',
+  'Build de produção',
+] as const
+
+/**
+ * Checks obrigatórios para o merge, conforme o modo do projeto. Modo rápido
+ * exige só os baratos (+ RLS, se o projeto pediu 'block'). Os lentos — testes e
+ * E2E — ainda RODAM e reportam, só não travam o merge no modo rápido.
+ */
+export function requiredGates(
+  fastMode: boolean,
+  rlsMode: 'block' | 'warn',
+): string[] {
+  if (!fastMode) return [...CI_JOB_NAMES]
+  return rlsMode === 'block' ? [...FAST_GATES, RLS_GATE] : [...FAST_GATES]
+}
+
 /** Scripts que o CI invoca. O teste do manifesto confere que todos existem. */
 export const CI_INVOKED_SCRIPTS = [
   'audit:security',

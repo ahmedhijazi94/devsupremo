@@ -96,6 +96,7 @@ async function refreshSupabaseToken(
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
     }),
+    signal: AbortSignal.timeout(30_000),
   })
 
   const data = (await response.json().catch(() => null)) as {

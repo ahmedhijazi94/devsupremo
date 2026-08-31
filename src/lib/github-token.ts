@@ -114,6 +114,8 @@ async function refreshGithubToken(
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
     }),
+    // Roda a cada chamada de credencial: uma conexão presa aqui travaria tudo.
+    signal: AbortSignal.timeout(30_000),
   })
 
   const data = (await response.json().catch(() => null)) as {

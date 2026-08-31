@@ -32,8 +32,23 @@ export interface ChecksResult {
   headSha: string
 }
 
+/** Nenhuma chamada ao GitHub pendura mais que isto — conexão presa vira erro. */
+const GITHUB_REQUEST_TIMEOUT_MS = 30_000
+
 export function octokitFor(creds: GithubCredentials): Octokit {
-  return new Octokit({ auth: creds.token })
+  return new Octokit({
+    auth: creds.token,
+    request: {
+      // fetch sem timeout pendura para sempre numa conexão presa, e isso
+      // travava o agente. Aborta em 30s; o guard e o wait_for_checks cuidam
+      // do resto. Respeita um signal do chamador, se houver.
+      fetch: (url: string | URL | Request, init?: RequestInit) =>
+        fetch(url, {
+          ...init,
+          signal: init?.signal ?? AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
+        }),
+    },
+  })
 }
 
 // ─────────────────────────────────────────────────────────────

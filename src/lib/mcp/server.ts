@@ -122,13 +122,50 @@ function fail(error: unknown): TextResult {
   }
 }
 
-/** Envolve o handler para que nenhuma exceção vaze como erro de protocolo. */
+/** Prazo padrão de uma ferramenta. Nenhuma escrita/leitura normal chega perto. */
+const DEFAULT_TOOL_BUDGET_MS = 120_000
+
+/**
+ * Corre a promessa contra um prazo. Se estourar, rejeita com uma mensagem clara
+ * em vez de pendurar. A operação em si segue rodando no fundo, mas o agente
+ * recebe uma RESPOSTA — nunca fica preso esperando pra sempre.
+ */
+async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `A ferramenta passou de ${Math.round(ms / 1000)}s e foi ` +
+              'interrompida para não travar o agente. Verifique o estado com ' +
+              'get_project_context e siga; não fique reesperando.',
+          ),
+        ),
+      ms,
+    )
+  })
+  try {
+    return await Promise.race([promise, deadline])
+  } finally {
+    clearTimeout(timer!)
+  }
+}
+
+/**
+ * Envolve o handler com duas garantias: exceção nenhuma vaza como erro de
+ * protocolo, e NENHUMA ferramenta pendura o agente — passou do prazo, devolve
+ * erro. É a rede que faz "o agente nunca trava" valer para qualquer ferramenta,
+ * inclusive as futuras. wait_for_checks passa um prazo maior porque espera de
+ * propósito; o resto usa o padrão.
+ */
 function guard<A>(
   handler: (args: A) => Promise<TextResult>,
+  budgetMs: number = DEFAULT_TOOL_BUDGET_MS,
 ): (args: A) => Promise<TextResult> {
   return async (args: A) => {
     try {
-      return await handler(args)
+      return await withDeadline(handler(args), budgetMs)
     } catch (error) {
       // Registrado no log do servidor com a causa real: quando um agente vê só
       // "Erro genérico", é aqui que se descobre o que de fato falhou.
@@ -545,7 +582,9 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
             ? 'Todos os gates verdes. Chame merge_when_green.'
             : 'Gate vermelho. Chame get_failed_logs, corrija e proponha de novo.',
       })
-    }),
+    // Espera de propósito (até timeoutSeconds, teto 900s): prazo maior que o
+    // padrão para o próprio wait não ser cortado pela rede de segurança.
+    }, 930_000),
   )
 
   server.registerTool(

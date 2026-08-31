@@ -13,7 +13,7 @@ import {
 import { createClient } from '@/lib/supabase/server'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
 import { ScaffoldForm } from '@/components/projects/scaffold-form'
-import { PreviewPanel } from '@/components/projects/preview-panel'
+import { WorkspaceTabs } from '@/components/projects/workspace-tabs'
 import {
   ActivityFeed,
   type ActivityItem,
@@ -193,26 +193,13 @@ export default async function ProjectPage({
             </section>
           </aside>
 
-          {/* Preview */}
+          {/* Painel principal: Preview · Banco · Testes */}
           <main className="min-h-0 flex-1">
-            {provisioned ? (
-              <PreviewPanel
-                repoFullName={project.github_repo_full_name}
-                projectId={project.id}
-              />
-            ) : (
-              <div className="bg-sunken flex h-full items-center justify-center rounded-[var(--radius-inner)]">
-                <div className="max-w-sm px-6 text-center">
-                  <Zap className="text-muted mx-auto mb-3 h-6 w-6" />
-                  <p className="text-sm font-medium">Nada publicado ainda</p>
-                  <p className="text-muted mt-1.5 text-sm">
-                    Provisione a infraestrutura ao lado. Depois disso o app
-                    aparece aqui, e o link pode ser mandado para qualquer
-                    pessoa.
-                  </p>
-                </div>
-              </div>
-            )}
+            <WorkspaceTabs
+              projectId={project.id}
+              repoFullName={project.github_repo_full_name}
+              provisioned={provisioned}
+            />
           </main>
         </div>
       </div>

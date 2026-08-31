@@ -2,21 +2,26 @@
 
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
-import { decryptToken } from '@/lib/crypto'
+import { freshGithubToken } from '@/lib/github-token'
 import {
+  closePullRequest,
+  deleteBranch,
   getChecks,
   getHeadSha,
   getFailedJobLogs,
+  getPullRequest,
   listOpenPullRequests,
+  mergePullRequest,
 } from '@/lib/mcp/github'
 import type { GithubCredentials } from '@/lib/mcp/repository'
 
 /**
- * Os gates rodando, ao vivo, dentro do Supremo.
+ * Os gates rodando, ao vivo, dentro do Supremo — e as ações do PR aqui mesmo.
  *
  * O CI vive no GitHub Actions; aqui a UI consulta o estado (o cliente chama de
  * poucos em poucos segundos) e, quando algo falha, busca o log com o contexto
- * do erro isolado — não o dump cru. Tudo read-only e só para o dono do projeto.
+ * do erro isolado. Mesclar e descartar o PR também acontecem por aqui, sem sair
+ * para o GitHub — o merge só com todos os gates verdes, como o do agente.
  */
 
 const PROJECT_COLUMNS =
@@ -41,7 +46,7 @@ async function resolveGithub(
 
   const { data: account } = await supabase
     .from('github_accounts')
-    .select('access_token_encrypted')
+    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
     .eq('id', accountId)
     .eq('user_id', user.id)
     .maybeSingle()
@@ -51,11 +56,21 @@ async function resolveGithub(
   const [owner, repo] = repoFullName.split('/')
   if (!owner || !repo) return { ok: false, error: 'Repositório inválido.' }
 
+  // Renova o token de 8h se expirou — senão o painel de Testes (que consulta a
+  // cada poucos segundos) e as ações de PR quebrariam com "Bad credentials".
+  const token = await freshGithubToken(account, (update) =>
+    supabase
+      .from('github_accounts')
+      .update(update)
+      .eq('id', accountId)
+      .eq('user_id', user.id),
+  )
+
   const defaultBranch = (project.default_branch as string | null) ?? 'main'
   return {
     ok: true,
     creds: {
-      token: decryptToken(account.access_token_encrypted as string),
+      token,
       repoFullName,
       owner,
       repo,
@@ -151,6 +166,74 @@ export async function getCheckLog(
 
     const log = await getFailedJobLogs(resolved.creds, ref)
     return { log: log || 'Nenhum log de falha — nada vermelho neste momento.' }
+  } catch (error) {
+    return { error: toActionError(error) }
+  }
+}
+
+/**
+ * Mescla o PR — mas só com TODOS os gates verdes. A checagem aqui é a mesma do
+ * merge_when_green do agente, e a proteção de branch do GitHub recusa por baixo
+ * de qualquer jeito. O botão no Supremo não afrouxa nada: falha fechada.
+ */
+export async function mergeProjectPr(
+  projectId: string,
+  prNumber: number,
+): Promise<{ ok?: true; error?: string }> {
+  if (!z.string().uuid().safeParse(projectId).success) {
+    return { error: 'ID inválido.' }
+  }
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    return { error: 'PR inválido.' }
+  }
+
+  try {
+    const resolved = await resolveGithub(projectId)
+    if (!resolved.ok) return { error: resolved.error }
+    const { creds } = resolved
+
+    const pr = await getPullRequest(creds, prNumber)
+    const checks = await getChecks(creds, pr.headSha)
+    if (checks.state !== 'passed') {
+      return {
+        error:
+          checks.state === 'failed'
+            ? 'Tem gate vermelho. Só dá para mesclar com tudo verde.'
+            : 'Os gates ainda estão rodando. Espere ficarem verdes.',
+      }
+    }
+
+    await mergePullRequest(creds, prNumber)
+    return { ok: true }
+  } catch (error) {
+    return { error: toActionError(error) }
+  }
+}
+
+/** Descarta o PR: fecha e apaga a branch. Não toca no main nem em gate nenhum. */
+export async function discardProjectPr(
+  projectId: string,
+  prNumber: number,
+): Promise<{ ok?: true; error?: string }> {
+  if (!z.string().uuid().safeParse(projectId).success) {
+    return { error: 'ID inválido.' }
+  }
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    return { error: 'PR inválido.' }
+  }
+
+  try {
+    const resolved = await resolveGithub(projectId)
+    if (!resolved.ok) return { error: resolved.error }
+    const { creds } = resolved
+
+    const pr = await getPullRequest(creds, prNumber)
+    if (pr.merged) return { error: 'Este PR já foi mesclado.' }
+
+    await closePullRequest(creds, prNumber)
+    // Branch de agente é descartável; apagá-la limpa a lista de PRs.
+    await deleteBranch(creds, pr.headRef)
+    return { ok: true }
   } catch (error) {
     return { error: toActionError(error) }
   }

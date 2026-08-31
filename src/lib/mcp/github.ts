@@ -428,6 +428,37 @@ export async function listOpenPullRequests(
   }))
 }
 
+/** Fecha o PR sem mesclar. Reversível: dá para reabrir enquanto a branch existe. */
+export async function closePullRequest(
+  creds: GithubCredentials,
+  prNumber: number,
+): Promise<void> {
+  const gh = octokitFor(creds)
+  await gh.pulls.update({
+    owner: creds.owner,
+    repo: creds.repo,
+    pull_number: prNumber,
+    state: 'closed',
+  })
+}
+
+/** Apaga a branch. Silencioso se ela já não existe. */
+export async function deleteBranch(
+  creds: GithubCredentials,
+  branch: string,
+): Promise<void> {
+  const gh = octokitFor(creds)
+  try {
+    await gh.git.deleteRef({
+      owner: creds.owner,
+      repo: creds.repo,
+      ref: `heads/${branch}`,
+    })
+  } catch {
+    // já não existe — nada a fazer
+  }
+}
+
 export async function mergePullRequest(
   creds: GithubCredentials,
   prNumber: number,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import {
   CheckCircle2,
   XCircle,
@@ -8,12 +8,17 @@ import {
   Clock,
   RefreshCw,
   Terminal,
+  GitMerge,
+  Trash2,
 } from 'lucide-react'
 import {
   getProjectChecks,
   getCheckLog,
+  mergeProjectPr,
+  discardProjectPr,
   type ProjectChecks,
 } from '@/actions/checks'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 /**
@@ -28,6 +33,7 @@ export function TestsPanel({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null)
   const [log, setLog] = useState<string | null>(null)
   const [loadingLog, setLoadingLog] = useState(false)
+  const [acting, startActing] = useTransition()
   // Muda para forçar um refetch manual (o botão de atualizar).
   const [nonce, setNonce] = useState(0)
 
@@ -65,6 +71,31 @@ export function TestsPanel({ projectId }: { projectId: string }) {
     setLog(result.error ? `Erro: ${result.error}` : (result.log ?? ''))
   }
 
+  function merge(prNumber: number) {
+    startActing(async () => {
+      const result = await mergeProjectPr(projectId, prNumber)
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+      toast.success('PR mesclado. A Vercel publica em instantes.')
+      setNonce((n) => n + 1)
+    })
+  }
+
+  function discard(prNumber: number) {
+    if (!confirm(`Descartar o PR #${prNumber}? A branch é apagada.`)) return
+    startActing(async () => {
+      const result = await discardProjectPr(projectId, prNumber)
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+      toast.success('PR descartado.')
+      setNonce((n) => n + 1)
+    })
+  }
+
   if (error) {
     return (
       <div className="bg-surface flex h-full flex-col items-center justify-center gap-3 rounded-[var(--radius-inner)] p-8 text-center">
@@ -92,13 +123,47 @@ export function TestsPanel({ projectId }: { projectId: string }) {
           <p className="truncate text-sm font-medium">{checks.summary}</p>
           <p className="text-muted truncate text-xs">{checks.source}</p>
         </div>
-        <button
-          onClick={() => setNonce((n) => n + 1)}
-          title="Atualizar"
-          className="text-muted hover:bg-sunken hover:text-ink ml-auto rounded-[var(--radius-control)] p-2"
-        >
-          <RefreshCw className="h-4 w-4" />
-        </button>
+
+        <div className="ml-auto flex items-center gap-2">
+          {/* Ações do PR, aqui mesmo — sem abrir o GitHub. */}
+          {checks.prNumber !== null && (
+            <>
+              <button
+                onClick={() => merge(checks.prNumber!)}
+                disabled={acting || checks.state !== 'passed'}
+                title={
+                  checks.state === 'passed'
+                    ? 'Mesclar na branch principal'
+                    : 'Só com todos os gates verdes'
+                }
+                className="bg-accent text-accent-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                {acting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <GitMerge className="h-4 w-4" />
+                )}
+                Mesclar
+              </button>
+              <button
+                onClick={() => discard(checks.prNumber!)}
+                disabled={acting}
+                title="Fechar o PR e apagar a branch"
+                className="text-muted hover:text-down-ink hover:bg-sunken inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-sm font-medium disabled:opacity-40"
+              >
+                <Trash2 className="h-4 w-4" />
+                Descartar
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => setNonce((n) => n + 1)}
+            title="Atualizar"
+            className="text-muted hover:bg-sunken hover:text-ink rounded-[var(--radius-control)] p-2"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Lista de gates */}
@@ -121,16 +186,17 @@ export function TestsPanel({ projectId }: { projectId: string }) {
                 <span className="flex-1 truncate text-sm font-medium">
                   {check.name}
                 </span>
-                {check.url && (
-                  <a
-                    href={check.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-muted hover:text-ink text-xs"
-                  >
-                    detalhes
-                  </a>
-                )}
+                {/* Detalhes aqui dentro: falhou → abre o log no Supremo. */}
+                {check.status === 'completed' &&
+                  check.conclusion !== 'success' &&
+                  check.conclusion !== 'skipped' && (
+                    <button
+                      onClick={() => openLog(checks.ref)}
+                      className="text-down-ink hover:underline text-xs font-medium"
+                    >
+                      detalhes
+                    </button>
+                  )}
               </li>
             ))
           )}

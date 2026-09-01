@@ -18,6 +18,8 @@ export interface GitCredentials {
   token: string
   repoFullName: string
   branch: string
+  /** Env PÚBLICAS do projeto (NEXT_PUBLIC_…), pro dev server não ficar branco. */
+  env?: Record<string, string>
 }
 
 export class Companion {
@@ -63,6 +65,7 @@ export class Companion {
               repoFullName: creds.repoFullName || cmd.repoFullName,
               branch: creds.branch || cmd.branch,
               cloneToken: creds.token,
+              env: creds.env,
             })
           } catch (error) {
             this.transport.send({

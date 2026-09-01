@@ -17098,6 +17098,10 @@ var ProjectManager = class {
         await this.deps.git.pull(s.dir, token).catch(() => {
         });
       }
+      if (cmd.env && Object.keys(cmd.env).length > 0) {
+        const body = Object.entries(cmd.env).map(([k, v]) => `${k}=${v}`).join("\n");
+        await writeFile(join2(s.dir, ".env.local"), body + "\n", "utf8");
+      }
       const files = await readdir(s.dir).catch(() => []);
       const pm = detectPackageManager(files);
       if (await this.needsInstall(s.dir)) {
@@ -36275,7 +36279,8 @@ var Companion = class {
               projectId: cmd.projectId,
               repoFullName: creds.repoFullName || cmd.repoFullName,
               branch: creds.branch || cmd.branch,
-              cloneToken: creds.token
+              cloneToken: creds.token,
+              env: creds.env
             });
           } catch (error61) {
             this.transport.send({

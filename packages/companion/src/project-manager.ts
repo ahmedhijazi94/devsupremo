@@ -85,6 +85,7 @@ export class ProjectManager {
     repoFullName: string
     branch: string
     cloneToken?: string
+    env?: Record<string, string>
   }): Promise<void> {
     const s = this.state(cmd.projectId)
 
@@ -112,6 +113,7 @@ export class ProjectManager {
     repoFullName: string
     branch: string
     cloneToken?: string
+    env?: Record<string, string>
   }): Promise<void> {
     const s = this.state(cmd.projectId)
     try {
@@ -127,6 +129,15 @@ export class ProjectManager {
         await this.deps.git.pull(s.dir, token).catch(() => {
           // pull falhou (offline/conflito): segue com o cache local
         })
+      }
+
+      // 1b. Env públicas do projeto → .env.local. Sem isto o app fica branco
+      // (o repo nunca traz .env). São só NEXT_PUBLIC_ (públicas por design).
+      if (cmd.env && Object.keys(cmd.env).length > 0) {
+        const body = Object.entries(cmd.env)
+          .map(([k, v]) => `${k}=${v}`)
+          .join('\n')
+        await writeFile(join(s.dir, '.env.local'), body + '\n', 'utf8')
       }
 
       // 2. Detecta o gerenciador e instala SÓ se necessário.

@@ -98,6 +98,7 @@ program
         token: string
         repoFullName: string
         branch: string
+        env?: Record<string, string>
       }
       return data
     }

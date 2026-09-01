@@ -1,9 +1,13 @@
 name: Publicar CLI
 
 # Publica supremo-cli no npm ao empurrar uma tag cli-vX.Y.Z.
-# O token vive como secret NPM_TOKEN do repositório — nunca no código.
-# Requer, uma vez: criar um Automation token em npmjs.com e adicioná-lo em
-#   Settings → Secrets and variables → Actions → NPM_TOKEN.
+#
+# Autenticação via npm Trusted Publishing (OIDC) — SEM NPM_TOKEN. O npm confia
+# neste workflow do GitHub Actions e emite a credencial de publicação na hora,
+# via OIDC. Nenhum token npm persistente vive no repositório ou nos secrets.
+#
+# Pré-requisito (uma vez, no npm): configurar o Trusted Publisher do package
+# `supremo-cli` apontando para este repo/owner/workflow (ver README/instruções).
 on:
   push:
     tags:
@@ -11,11 +15,11 @@ on:
 
 permissions:
   contents: read
-  id-token: write # habilita a proveniência (provenance) do npm
+  id-token: write # exigido pelo OIDC do Trusted Publishing + provenance
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # GitHub-hosted runner
     defaults:
       run:
         working-directory: packages/cli
@@ -25,8 +29,10 @@ jobs:
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
+      # Trusted Publishing exige npm >= 11.5.1 (mais novo que o padrão do runner).
+      - run: npm install -g npm@latest
       - run: npm install --no-audit --no-fund
       - run: npm run build
+      # Sem NODE_AUTH_TOKEN: o npm autentica por OIDC (Trusted Publisher) e anexa
+      # a proveniência automaticamente.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

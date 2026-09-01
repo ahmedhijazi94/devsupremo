@@ -80,23 +80,33 @@ function classify(paths) {
   return { level: 'quick', reason: 'Alteração de baixo risco.' }
 }
 
+// Os testes de RLS (*.rls.test.ts) exigem um Postgres real (service_role +
+// supabase local). Num bootstrap fresco isso não existe (por design: só env
+// pública chega). Então excluímos RLS do vitest padrão e só rodamos os testes
+// de RLS quando há Supabase local; senão, o gate "Políticas RLS" do CI cobre.
+const hasLocalDb = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)
+const UNIT = 'vitest run --exclude "**/*.rls.test.ts"'
+const rlsStep = hasLocalDb ? [['rls / isolamento', 'vitest run rls.test']] : []
+
 const STEPS = {
   quick: [
     ['typecheck', 'tsc --noEmit'],
     ['lint', 'eslint'],
-    ['testes afetados', 'vitest run --changed HEAD --passWithNoTests'],
+    ['testes afetados', 'vitest run --changed HEAD --passWithNoTests --exclude "**/*.rls.test.ts"'],
     ['secret scan', 'node scripts/security-audit.js --staged'],
   ],
   security: [
     ['typecheck', 'tsc --noEmit'],
     ['lint', 'eslint'],
-    ['unit + rls + security', 'vitest run'],
+    ['unit + integração', UNIT],
+    ...rlsStep,
     ['secret scan', 'node scripts/security-audit.js'],
   ],
   full: [
     ['typecheck', 'tsc --noEmit'],
     ['lint', 'eslint'],
-    ['todos os testes', 'vitest run'],
+    ['unit + integração', UNIT],
+    ...rlsStep,
     ['secret scan', 'node scripts/security-audit.js'],
     ['build', 'next build'],
   ],
@@ -122,6 +132,9 @@ for (const [label, cmd] of STEPS[level]) {
     console.error(\`\\n✗ verify \${level} falhou em: \${label}\\n\`)
     process.exit(1)
   }
+}
+if (!hasLocalDb && (level === 'security' || level === 'full')) {
+  console.log('  ℹ RLS pulado (sem Supabase local) — validado no gate "Políticas RLS" do CI. Para rodar local: npm run local:start && npm run test:rls')
 }
 console.log(\`\\n✓ verify \${level} passou em \${((Date.now() - t0) / 1000).toFixed(1)}s\\n\`)
 `

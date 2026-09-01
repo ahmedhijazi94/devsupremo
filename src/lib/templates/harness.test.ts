@@ -75,6 +75,15 @@ describe('harness generator', () => {
     expect(s['setup:local']).toBeDefined()
   })
 
+  it('verify exclui os testes de RLS e os gateia por Supabase local', () => {
+    const script = verifyScript()
+    // unit/integration NÃO roda *.rls.test.ts (precisam de Postgres real)
+    expect(script).toContain('vitest run --exclude "**/*.rls.test.ts"')
+    // RLS só entra quando há service_role (Supabase local); senão, fica pro CI
+    expect(script).toContain('SUPABASE_SERVICE_ROLE_KEY')
+    expect(script).toContain("vitest run rls.test")
+  })
+
   it('o verify.mjs gerado é JavaScript VÁLIDO (node --check)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'supremo-harness-'))
     const file = join(dir, 'verify.mjs')

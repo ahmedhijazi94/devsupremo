@@ -9,14 +9,23 @@ import {
   CI_JOB_NAMES,
   type ProjectKind,
   TEMPLATE_VERSION,
+  SECURITY_BASELINE_VERSION,
   type FileEntry,
 } from '@/lib/templates/project-files'
+import { capabilitiesForKind, inferSecurityProfile } from '@/lib/capabilities'
 import {
-  createProject as createVercelProject,
-  findProjectByName,
-  setEnvironmentVariables,
-  VercelError,
-} from '@/lib/vercel'
+  runProvisioning,
+  type ProvisioningSteps,
+  type StepDef,
+} from '@/lib/provisioning/engine'
+
+/**
+ * Vercel saiu do fluxo ativo do control plane v2: as integrações principais por
+ * projeto são GitHub + Supabase, e o preview de dev é localhost (via bootstrap).
+ * A integração NÃO foi deletada — `lib/vercel.ts` e as contas Vercel continuam
+ * existindo; só não são mais chamadas no provisioning. Para religar um deploy
+ * explícito, reintroduza a chamada aqui usando `lib/vercel.ts`.
+ */
 
 /**
  * Provisiona um projeto: cria o repositório, escreve o template completo,
@@ -66,9 +75,23 @@ export async function scaffoldProject(
     return await runScaffold(projectId)
   } catch (error) {
     console.error('[scaffold] falhou:', error)
-    return { error: toActionError(error) }
+    const message = toActionError(error)
+    // Best-effort: registra a falha na máquina de estados (não relança).
+    try {
+      const { user, supabase } = await requireUser()
+      await supabase
+        .from('projects')
+        .update({ provisioning_state: 'failed', provisioning_error: message })
+        .eq('id', projectId)
+        .eq('user_id', user.id)
+    } catch {
+      // sem sessão / sem acesso: nada a marcar
+    }
+    return { error: message }
   }
 }
+
+type ScaffoldCtx = Record<string, unknown>
 
 async function runScaffold(
   projectId: string,
@@ -84,7 +107,9 @@ async function runScaffold(
     .maybeSingle()
 
   if (!project) return { error: 'Projeto não encontrado.' }
-  if (project.github_repo_full_name) {
+  // Só bloqueia se REALMENTE concluído. Provisionamento a meio (failed/parcial)
+  // pode ser retomado — o motor pula os passos já feitos.
+  if (project.provisioning_state === 'ready' && project.github_repo_full_name) {
     return { error: 'Projeto já provisionado.' }
   }
   if (!project.github_accounts) {
@@ -94,154 +119,262 @@ async function runScaffold(
   const name = project.name as string
   const description = (project.description as string | null) ?? ''
   // O tipo escolhido na criação decide a migration e os arquivos. Projeto
-  // antigo, de antes da coluna existir, cai em 'solo' — o comportamento que
-  // ele já tinha.
+  // antigo, de antes da coluna existir, cai em 'solo'.
   const kind = ((project.kind as string | null) ?? 'solo') as ProjectKind
+  const capabilities = capabilitiesForKind(kind)
+  const securityProfile = inferSecurityProfile(capabilities, { kind })
   const githubToken = decryptToken(
     (project.github_accounts as { access_token_encrypted: string })
       .access_token_encrypted,
   )
-
-  // ── 1. Repositório ──────────────────────────────────────────
-  const repoResponse = await githubFetch('/user/repos', githubToken, {
-    method: 'POST',
-    body: JSON.stringify({
-      name,
-      description: description || `${name} — criado com Supremo`,
-      private: true,
-      auto_init: true,
-    }),
+  const supabaseAccountId = project.supabase_account_id as string | null
+  const files = buildProjectFiles({
+    projectName: name,
+    description,
+    kind,
+    capabilities,
+    projectId,
   })
 
-  if (!repoResponse.ok) {
-    if (repoResponse.status === 422) {
-      return {
-        error: `O repositório "${name}" já existe na sua conta GitHub.`,
+  // Passos já concluídos numa tentativa anterior (resume).
+  const persisted = ((project.provisioning_steps as ProvisioningSteps | null) ??
+    {}) as ProvisioningSteps
+
+  // ── Hooks de persistência ───────────────────────────────────
+  const setState = async (state: string): Promise<void> => {
+    await supabase
+      .from('projects')
+      .update({ provisioning_state: state, provisioning_error: null })
+      .eq('id', projectId)
+      .eq('user_id', user.id)
+  }
+
+  const persistStep = async (
+    stepName: string,
+    record: { status: 'pending' | 'done'; output?: Record<string, unknown> },
+  ): Promise<void> => {
+    persisted[stepName] = record
+    const out = record.output ?? {}
+    // Espelha os IDs externos nas colunas dedicadas (o resto do app lê delas).
+    const patch: Record<string, unknown> = { provisioning_steps: persisted }
+    if (stepName === 'github') {
+      if (out.repoFullName) patch.github_repo_full_name = out.repoFullName
+      if (out.repoId) patch.github_repo_id = out.repoId
+      if (out.branch) {
+        patch.default_branch = out.branch
+        patch.active_branch = out.branch
       }
     }
-    const detail = (await repoResponse.json()) as { message?: string }
-    return {
-      error: `Erro ao criar repositório: ${detail.message ?? repoResponse.status}`,
+    if (stepName === 'supabase') {
+      if (out.supabaseProjectRef)
+        patch.supabase_project_ref = out.supabaseProjectRef
+      if (out.dbPasswordEncrypted)
+        patch.db_password_encrypted = out.dbPasswordEncrypted
     }
+    await supabase
+      .from('projects')
+      .update(patch)
+      .eq('id', projectId)
+      .eq('user_id', user.id)
   }
 
-  const repo = (await repoResponse.json()) as GithubRepo
-  const branch = repo.default_branch || 'main'
-
-  // O GitHub leva um instante para materializar a ref do commit inicial.
-  const baseSha = await waitForBranch(repo.full_name, branch, githubToken)
-  if (!baseSha) {
-    return {
-      error: 'O repositório foi criado mas a branch inicial não apareceu.',
-    }
+  const markFailed = async (stepName: string, error: string): Promise<void> => {
+    await supabase
+      .from('projects')
+      .update({
+        provisioning_state: 'failed',
+        provisioning_error: `[${stepName}] ${error}`,
+      })
+      .eq('id', projectId)
+      .eq('user_id', user.id)
   }
 
-  // ── 2. Template ─────────────────────────────────────────────
-  const files = buildProjectFiles({ projectName: name, description, kind })
-  const commitSha = await commitTemplate(
-    repo.full_name,
-    branch,
-    baseSha,
-    githubToken,
-    files,
-  )
+  const markReady = async (): Promise<void> => {
+    // Projeto recém-provisionado vira o ativo (senão o MCP diz "nenhum ativo").
+    await supabase
+      .from('projects')
+      .update({ is_active: false })
+      .eq('user_id', user.id)
+      .neq('id', projectId)
+    await supabase
+      .from('projects')
+      .update({
+        is_active: true,
+        template_version: TEMPLATE_VERSION,
+        capabilities,
+        security_profile: securityProfile,
+        scaffold_version: TEMPLATE_VERSION,
+        security_baseline_version: SECURITY_BASELINE_VERSION,
+        provisioning_state: 'ready',
+        provisioning_error: null,
+        status: 'active',
+      })
+      .eq('id', projectId)
+      .eq('user_id', user.id)
 
-  // ── 3. Banco Supabase ───────────────────────────────────────
-  let supabaseProjectRef: string | null = null
-  let dbPasswordEncrypted: string | null = null
-
-  const supabaseAccountId = project.supabase_account_id as string | null
-
-  if (supabaseAccountId) {
-    const provisioned = await provisionSupabase(
-      supabase,
-      user.id,
-      supabaseAccountId,
-      name,
-      files,
-    )
-
-    supabaseProjectRef = provisioned.projectRef
-    dbPasswordEncrypted = provisioned.dbPasswordEncrypted
-    warnings.push(...provisioned.warnings)
-  } else {
-    warnings.push(
-      'Nenhuma conta Supabase vinculada — o projeto foi criado sem banco.',
-    )
-  }
-
-  // ── 4. Proteção de branch e análise estática ────────────────
-  const protectionError = await protectBranch(
-    repo.full_name,
-    branch,
-    githubToken,
-  )
-  if (protectionError) warnings.push(protectionError)
-
-  const scanningError = await enableCodeScanning(repo.full_name, githubToken)
-  if (scanningError) warnings.push(scanningError)
-
-  // ── 5. Preview na Vercel ────────────────────────────────────
-  const preview = await linkVercel(
-    supabase,
-    user.id,
-    name,
-    repo.full_name,
-    supabaseProjectRef,
-  )
-  warnings.push(...preview.warnings)
-
-  // ── 6. Persistência ─────────────────────────────────────────
-  // O projeto recém-provisionado passa a ser o ativo: é nele que o usuário
-  // vai trabalhar, e sem isso as ferramentas do MCP falham com "nenhum
-  // projeto ativo" logo depois de criar o primeiro projeto.
-  await supabase
-    .from('projects')
-    .update({ is_active: false })
-    .eq('user_id', user.id)
-    .neq('id', projectId)
-
-  const { error: updateError } = await supabase
-    .from('projects')
-    .update({
-      is_active: true,
-      github_repo_full_name: repo.full_name,
-      github_repo_id: repo.id,
-      default_branch: branch,
-      active_branch: branch,
-      supabase_project_ref: supabaseProjectRef,
-      db_password_encrypted: dbPasswordEncrypted,
-      vercel_account_id: preview.accountId,
-      vercel_project_id: preview.projectId,
-      template_version: TEMPLATE_VERSION,
-      status: 'active',
+    await supabase.from('audit_logs').insert({
+      user_id: user.id,
+      action: 'project.scaffold',
+      resource_type: 'project',
+      resource_id: projectId,
+      metadata: {
+        repo: persisted.github?.output?.repoFullName ?? null,
+        commit: persisted.scaffold?.output?.commitSha ?? null,
+        supabase_ref: persisted.supabase?.output?.supabaseProjectRef ?? null,
+        template_version: TEMPLATE_VERSION,
+        capabilities,
+        files: files.length,
+      },
+      ip_address: null,
     })
-    .eq('id', projectId)
-    .eq('user_id', user.id)
-
-  if (updateError) {
-    return {
-      error: 'Projeto criado no GitHub, mas falhou ao salvar no banco.',
-    }
+    revalidatePath('/', 'layout')
   }
 
-  await supabase.from('audit_logs').insert({
-    user_id: user.id,
-    action: 'project.scaffold',
-    resource_type: 'project',
-    resource_id: projectId,
-    metadata: {
-      repo: repo.full_name,
-      commit: commitSha,
-      supabase_ref: supabaseProjectRef,
-      template_version: TEMPLATE_VERSION,
-      files: files.length,
+  // ── Passos (ordem = estados: provisioning → scaffolding → validating) ──────
+  const steps: StepDef<ScaffoldCtx>[] = [
+    {
+      name: 'github',
+      state: 'provisioning',
+      run: async (ctx, persist) => {
+        // Reuso: se o repo já foi criado (persistido), NÃO recria — só reobtém
+        // o SHA base. Nunca tratamos 422 como fluxo normal.
+        if (ctx.repoFullName) {
+          const branch = (ctx.branch as string) || 'main'
+          const baseSha = await waitForBranch(
+            ctx.repoFullName as string,
+            branch,
+            githubToken,
+          )
+          if (!baseSha) throw new Error('A branch inicial não apareceu.')
+          return {
+            repoFullName: ctx.repoFullName,
+            repoId: ctx.repoId,
+            branch,
+            baseSha,
+          }
+        }
+        const repoResponse = await githubFetch('/user/repos', githubToken, {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            description: description || `${name} — criado com Supremo`,
+            private: true,
+            auto_init: true,
+          }),
+        })
+        if (!repoResponse.ok) {
+          if (repoResponse.status === 422) {
+            throw new Error(`O repositório "${name}" já existe na sua conta GitHub.`)
+          }
+          const detail = (await repoResponse.json()) as { message?: string }
+          throw new Error(
+            `Erro ao criar repositório: ${detail.message ?? repoResponse.status}`,
+          )
+        }
+        const repo = (await repoResponse.json()) as GithubRepo
+        const branch = repo.default_branch || 'main'
+        // Persiste o ID externo ASSIM QUE existe (antes de avançar/esperar).
+        await persist({ repoFullName: repo.full_name, repoId: repo.id, branch })
+        const baseSha = await waitForBranch(repo.full_name, branch, githubToken)
+        if (!baseSha) {
+          throw new Error('O repositório foi criado mas a branch inicial não apareceu.')
+        }
+        return { repoFullName: repo.full_name, repoId: repo.id, branch, baseSha }
+      },
     },
-    ip_address: null,
-  })
+    {
+      name: 'supabase',
+      state: 'provisioning',
+      run: async (ctx, persist) => {
+        if (!supabaseAccountId) {
+          warnings.push(
+            'Nenhuma conta Supabase vinculada — o projeto foi criado sem banco.',
+          )
+          return { supabaseSkipped: true }
+        }
+        const provisioned = await provisionSupabase(
+          supabase,
+          user.id,
+          supabaseAccountId,
+          name,
+          files,
+          {
+            existingRef: ctx.supabaseProjectRef as string | undefined,
+            existingPasswordEncrypted:
+              (ctx.dbPasswordEncrypted as string | undefined) ?? null,
+            // Persiste o ref do projeto Supabase assim que criado (antes de migrar).
+            onProjectCreated: async (ref, enc) => {
+              await persist({ supabaseProjectRef: ref, dbPasswordEncrypted: enc })
+            },
+          },
+        )
+        warnings.push(...provisioned.warnings)
+        return {
+          supabaseProjectRef: provisioned.projectRef,
+          dbPasswordEncrypted: provisioned.dbPasswordEncrypted,
+        }
+      },
+    },
+    {
+      name: 'scaffold',
+      state: 'scaffolding',
+      run: async (ctx) => {
+        const commitSha = await commitTemplate(
+          ctx.repoFullName as string,
+          ctx.branch as string,
+          ctx.baseSha as string,
+          githubToken,
+          files,
+        )
+        return { commitSha }
+      },
+    },
+    {
+      name: 'protection',
+      state: 'scaffolding',
+      run: async (ctx) => {
+        const protectionError = await protectBranch(
+          ctx.repoFullName as string,
+          ctx.branch as string,
+          githubToken,
+        )
+        if (protectionError) warnings.push(protectionError)
+        const scanningError = await enableCodeScanning(
+          ctx.repoFullName as string,
+          githubToken,
+        )
+        if (scanningError) warnings.push(scanningError)
+        return {}
+      },
+    },
+    {
+      name: 'validation',
+      state: 'validating',
+      run: async (ctx) => {
+        // Baseline de provisioning: o commit do scaffold está de fato no HEAD?
+        const head = await getBranchHead(
+          ctx.repoFullName as string,
+          ctx.branch as string,
+          githubToken,
+        )
+        if (!head) throw new Error('Não consegui ler o HEAD da branch.')
+        if (ctx.commitSha && head !== ctx.commitSha) {
+          throw new Error('O commit do scaffold não está no HEAD da branch.')
+        }
+        return { validated: true }
+      },
+    },
+  ]
 
-  revalidatePath('/', 'layout')
-  return warnings.length > 0 ? { warnings } : {}
+  const result = await runProvisioning(
+    steps,
+    persisted,
+    { setState, persistStep, markReady, markFailed },
+    {},
+  )
+
+  if (result.ok) return warnings.length > 0 ? { warnings } : {}
+  return { error: result.error ?? 'Falha no provisioning.' }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -265,6 +398,21 @@ async function waitForBranch(
     await sleep(1000 * (attempt + 1))
   }
   return null
+}
+
+/** Lê o SHA do HEAD da branch (uma vez, sem polling) — usado na validação. */
+async function getBranchHead(
+  repoFullName: string,
+  branch: string,
+  token: string,
+): Promise<string | null> {
+  const response = await githubFetch(
+    `/repos/${repoFullName}/git/ref/heads/${branch}`,
+    token,
+  )
+  if (!response.ok) return null
+  const data = (await response.json()) as { object: { sha: string } }
+  return data.object.sha
 }
 
 async function commitTemplate(
@@ -366,6 +514,16 @@ async function provisionSupabase(
   supabaseAccountId: string,
   name: string,
   files: FileEntry[],
+  opts: {
+    /** Ref de um projeto Supabase já criado (retry) — reutiliza, não recria. */
+    existingRef?: string | undefined
+    existingPasswordEncrypted?: string | null | undefined
+    /** Chamado assim que o projeto é criado, para persistir o ref na hora. */
+    onProjectCreated?: (
+      ref: string,
+      passwordEncrypted: string,
+    ) => Promise<void>
+  } = {},
 ): Promise<SupabaseProvisionResult> {
   const warnings: string[] = []
 
@@ -378,90 +536,97 @@ async function provisionSupabase(
 
   if (!account) {
     return {
-      projectRef: null,
-      dbPasswordEncrypted: null,
+      projectRef: opts.existingRef ?? null,
+      dbPasswordEncrypted: opts.existingPasswordEncrypted ?? null,
       warnings: ['Conta Supabase não encontrada.'],
     }
   }
 
   const token = decryptToken(account.access_token_encrypted as string)
 
-  const orgsResponse = await fetch(`${SUPABASE_API}/v1/organizations`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+  // Reuso idempotente: se já existe um ref (retry), NÃO cria outro projeto.
+  let ref = opts.existingRef ?? null
+  let dbPasswordEncrypted = opts.existingPasswordEncrypted ?? null
 
-  if (!orgsResponse.ok) {
-    return {
-      projectRef: null,
-      dbPasswordEncrypted: null,
-      warnings: ['Não foi possível listar as organizações do Supabase.'],
+  if (!ref) {
+    const orgsResponse = await fetch(`${SUPABASE_API}/v1/organizations`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+
+    if (!orgsResponse.ok) {
+      return {
+        projectRef: null,
+        dbPasswordEncrypted: null,
+        warnings: ['Não foi possível listar as organizações do Supabase.'],
+      }
+    }
+
+    const orgs = (await orgsResponse.json()) as Array<{
+      id: string
+      slug: string
+    }>
+    const org =
+      orgs.find((candidate) => candidate.slug === account.org_slug) ?? orgs[0]
+
+    if (!org) {
+      return {
+        projectRef: null,
+        dbPasswordEncrypted: null,
+        warnings: ['Nenhuma organização disponível no Supabase.'],
+      }
+    }
+
+    // A senha do banco é do usuário. A versão anterior gerava e descartava,
+    // deixando o dono sem acesso direto ao próprio Postgres.
+    const dbPassword = generateDbPassword()
+
+    const createResponse = await fetch(`${SUPABASE_API}/v1/projects`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name,
+        organization_id: org.id,
+        region: 'us-east-1',
+        db_pass: dbPassword,
+      }),
+    })
+
+    if (!createResponse.ok) {
+      const detail = await createResponse.text()
+      throw new Error(`Falha ao criar projeto Supabase: ${detail.slice(0, 160)}`)
+    }
+
+    const created = (await createResponse.json()) as { ref: string }
+    ref = created.ref
+    dbPasswordEncrypted = encryptToken(dbPassword)
+    // Persiste o ref IMEDIATAMENTE — se algo falhar depois, o retry reusa.
+    if (opts.onProjectCreated) {
+      await opts.onProjectCreated(ref, dbPasswordEncrypted)
     }
   }
 
-  const orgs = (await orgsResponse.json()) as Array<{
-    id: string
-    slug: string
-  }>
-  const org =
-    orgs.find((candidate) => candidate.slug === account.org_slug) ?? orgs[0]
-
-  if (!org) {
-    return {
-      projectRef: null,
-      dbPasswordEncrypted: null,
-      warnings: ['Nenhuma organização disponível no Supabase.'],
-    }
-  }
-
-  // A senha do banco é do usuário. A versão anterior gerava e descartava,
-  // deixando o dono sem acesso direto ao próprio Postgres.
-  const dbPassword = generateDbPassword()
-
-  const createResponse = await fetch(`${SUPABASE_API}/v1/projects`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name,
-      organization_id: org.id,
-      region: 'us-east-1',
-      db_pass: dbPassword,
-    }),
-  })
-
-  if (!createResponse.ok) {
-    const detail = await createResponse.text()
-    return {
-      projectRef: null,
-      dbPasswordEncrypted: null,
-      warnings: [`Falha ao criar projeto Supabase: ${detail.slice(0, 160)}`],
-    }
-  }
-
-  const created = (await createResponse.json()) as { ref: string }
-  const dbPasswordEncrypted = encryptToken(dbPassword)
-
-  const ready = await waitForSupabaseProject(created.ref, token)
+  const ready = await waitForSupabaseProject(ref, token)
 
   if (!ready) {
     warnings.push(
       'O banco Supabase ainda estava provisionando. Aplique a migration inicial ' +
         'pelo painel ou rode a ferramenta apply_migration quando ele ficar pronto.',
     )
-    return { projectRef: created.ref, dbPasswordEncrypted, warnings }
+    return { projectRef: ref, dbPasswordEncrypted, warnings }
   }
 
-  // A mesma migration que foi versionada no repositório é a que roda aqui —
-  // repositório e banco não divergem.
+  // A mesma migration versionada no repositório é a que roda aqui — repositório
+  // e banco não divergem.
   const migration = files.find((file) =>
     file.path.startsWith('supabase/migrations/'),
   )
 
   if (migration) {
     const migrationResponse = await fetch(
-      `${SUPABASE_API}/v1/projects/${created.ref}/database/query`,
+      `${SUPABASE_API}/v1/projects/${ref}/database/query`,
       {
         method: 'POST',
         headers: {
@@ -481,7 +646,7 @@ async function provisionSupabase(
     }
   }
 
-  return { projectRef: created.ref, dbPasswordEncrypted, warnings }
+  return { projectRef: ref, dbPasswordEncrypted, warnings }
 }
 
 async function waitForSupabaseProject(
@@ -546,92 +711,6 @@ async function protectBranch(
   }
 
   return `Não foi possível proteger a branch ${branch} (HTTP ${response.status}).`
-}
-
-interface VercelLinkResult {
-  accountId: string | null
-  projectId: string | null
-  warnings: string[]
-}
-
-/**
- * Cria o projeto na Vercel ligado ao repositório.
- *
- * A partir daí a Vercel publica sozinha: cada branch vira um preview com URL
- * própria, e a branch principal vira produção. É o que substituiu o preview
- * em navegador — aquele não sobrevivia ao Next 16 e nunca gerou link que
- * pudesse ser compartilhado.
- */
-async function linkVercel(
-  supabase: Awaited<ReturnType<typeof requireUser>>['supabase'],
-  userId: string,
-  name: string,
-  repoFullName: string,
-  supabaseProjectRef: string | null,
-): Promise<VercelLinkResult> {
-  const { data: account } = await supabase
-    .from('vercel_accounts')
-    .select('id, team_id, access_token_encrypted')
-    .eq('user_id', userId)
-    .limit(1)
-    .maybeSingle()
-
-  if (!account) {
-    return {
-      accountId: null,
-      projectId: null,
-      warnings: [
-        'Sem conta Vercel conectada — o projeto ficou sem preview. ' +
-          'Conecte uma em Contas; depois disso, o próximo projeto já nasce ' +
-          'com preview.',
-      ],
-    }
-  }
-
-  const token = decryptToken(account.access_token_encrypted as string)
-  const teamId = (account.team_id as string | null) ?? null
-
-  try {
-    // Nome já usado é caso comum ao recriar um projeto; reaproveitar é
-    // melhor que falhar o provisionamento inteiro por causa disso.
-    const existing = await findProjectByName(token, teamId, name)
-    const project =
-      existing ?? (await createVercelProject(token, teamId, name, repoFullName))
-
-    if (supabaseProjectRef) {
-      await setEnvironmentVariables(token, teamId, project.id, {
-        NEXT_PUBLIC_SUPABASE_URL: `https://${supabaseProjectRef}.supabase.co`,
-      })
-    }
-
-    return {
-      accountId: account.id as string,
-      projectId: project.id,
-      warnings: existing
-        ? [`Reaproveitado o projeto "${name}" que já existia na Vercel.`]
-        : [],
-    }
-  } catch (error) {
-    const detail = error instanceof VercelError ? error.message : String(error)
-
-    // "repository couldn't be found" quase nunca é erro de digitação: é a
-    // Vercel sem acesso àquela conta do GitHub. A mensagem crua manda o
-    // usuário procurar typo e ele não acha nada.
-    const owner = repoFullName.split('/')[0] ?? ''
-    const noAccess = /couldn't be found|not found|no access/i.test(detail)
-
-    return {
-      accountId: account.id as string,
-      projectId: null,
-      warnings: [
-        noAccess
-          ? `A Vercel não enxerga o repositório ${repoFullName}. ` +
-            `Ela precisa de acesso à conta GitHub "${owner}" — instale o app ` +
-            `da Vercel nessa conta em github.com/apps/vercel e provisione de novo.`
-          : `Não foi possível criar o projeto na Vercel: ${detail}`,
-      ],
-    }
-  }
 }
 
 /**

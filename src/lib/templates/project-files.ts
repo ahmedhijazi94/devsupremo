@@ -1,6 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
+import { harnessFiles, harnessPackageScripts } from './harness'
+import {
+  capabilitiesForKind,
+  inferSecurityProfile,
+  type CapabilityId,
+} from '@/lib/capabilities'
 
 /**
  * Manifesto de arquivos de um projeto novo.
@@ -20,7 +26,12 @@ import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
 // moderno descarta o cookie de terceira-parte no iframe mesmo com SameSite=None,
 // e o login não persistia no preview. 2.1.0 trouxe SameSite=None, o inspector e
 // o CI adaptativo. Projeto atrás mostra o cartão "Atualizar base".
-export const TEMPLATE_VERSION = '2.1.2'
+// 2.2.0: scaffold v2 — local dev harness (verify adaptativo, setup:local, git
+// hooks), identidade do projeto em .supremo/project.json e capabilities.
+export const TEMPLATE_VERSION = '2.2.0'
+
+/** Versão do baseline de segurança embutido no scaffold. */
+export const SECURITY_BASELINE_VERSION = '2.0.0'
 
 export interface FileEntry {
   path: string
@@ -47,6 +58,13 @@ export interface TemplateOptions {
   description: string
   /** Padrão: 'solo'. Ver ProjectKind. */
   kind?: ProjectKind
+  /**
+   * Capabilities habilitadas (CORE + capabilities). Se omitido, deriva do kind
+   * (ponte legada). Capability desligada não deixa rastro no scaffold.
+   */
+  capabilities?: CapabilityId[]
+  /** Id do projeto no Supremo — vai para .supremo/project.json (não sensível). */
+  projectId?: string
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -170,6 +188,11 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
   const kind = options.kind ?? 'solo'
   const auth = kind !== 'public'
 
+  // Capabilities: explícitas ou derivadas do kind (ponte legada). O perfil de
+  // segurança é inferido delas (kind é só sinal). Vão para .supremo/project.json.
+  const capabilities = options.capabilities ?? capabilitiesForKind(kind)
+  const securityProfile = inferSecurityProfile(capabilities, { kind })
+
   // A migration segue o tipo de app: público não tem tabela de dono; solo tem
   // dados por usuário; team tem organizações, sócios e recursos de tenant.
   const migration =
@@ -248,7 +271,26 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'agents.md', content: agentsMd(projectName, summary) },
     { path: 'CLAUDE.md', content: claudeMd(projectName) },
     { path: 'SECURITY.md', content: securityMd(projectName) },
+
+    // ── Identidade do projeto (metadata NÃO sensível) ─────────
+    {
+      path: '.supremo/project.json',
+      content: supremoProjectJson({
+        capabilities,
+        securityProfile,
+        ...(options.projectId ? { projectId: options.projectId } : {}),
+      }),
+    },
   ]
+
+  // ── Local dev harness (verify adaptativo, setup:local, git hooks) ─────────
+  for (const [p, content] of Object.entries(harnessFiles())) {
+    files.push({
+      path: p,
+      content,
+      mode: p.startsWith('.githooks/') ? '100755' : '100644',
+    })
+  }
 
   if (auth) {
     // O cliente de navegador e o servidor só fazem sentido com login. App
@@ -311,6 +353,11 @@ export const MANAGED_PATHS: ReadonlySet<string> = new Set([
   '.github/workflows/ci.yml',
   '.github/dependabot.yml',
   'scripts/security-audit.js',
+  // Local dev harness (base infra do Supremo)
+  'scripts/verify.mjs',
+  'scripts/setup-local.mjs',
+  '.githooks/pre-commit',
+  '.githooks/pre-push',
 ])
 
 /** Este arquivo é rail (o Supremo reescreve) ou scaffold (só cria se faltar)? */
@@ -323,15 +370,40 @@ export function isManagedPath(path: string): boolean {
 // ═════════════════════════════════════════════════════════════
 
 function packageJson(projectName: string): string {
+  // O harness (verify adaptativo, setup:local, local:start/stop, security:*)
+  // entra junto dos scripts base. Chaves existentes vencem em conflito.
+  const scripts = { ...harnessPackageScripts(), ...SCRIPTS }
   return `${JSON.stringify(
     {
       name: projectName,
       version: '0.1.0',
       private: true,
       engines: { node: '>=20' },
-      scripts: SCRIPTS,
+      scripts,
       dependencies: DEPENDENCIES,
       devDependencies: DEV_DEPENDENCIES,
+    },
+    null,
+    2,
+  )}\n`
+}
+
+/**
+ * Identidade do projeto — metadata NÃO sensível (seção 25). NUNCA token, secret,
+ * service_role ou chave. Registra versão do scaffold/baseline e capabilities.
+ */
+function supremoProjectJson(opts: {
+  projectId?: string
+  capabilities: CapabilityId[]
+  securityProfile: string
+}): string {
+  return `${JSON.stringify(
+    {
+      ...(opts.projectId ? { projectId: opts.projectId } : {}),
+      scaffoldVersion: TEMPLATE_VERSION,
+      securityBaselineVersion: SECURITY_BASELINE_VERSION,
+      securityProfile: opts.securityProfile,
+      capabilities: opts.capabilities,
     },
     null,
     2,

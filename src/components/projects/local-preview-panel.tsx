@@ -24,6 +24,9 @@ export function LocalPreviewPanel({ projectId }: { projectId: string }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [detail, setDetail] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Embutir localhost num app https costuma ser bloqueado; por padrão mostramos
+  // o botão "Abrir preview" (sempre funciona) e deixamos embutir sob demanda.
+  const [embed, setEmbed] = useState(false)
   const channelRef = useRef<ReturnType<
     ReturnType<typeof createClient>['channel']
   > | null>(null)
@@ -158,11 +161,15 @@ export function LocalPreviewPanel({ projectId }: { projectId: string }) {
         {!companionOnline ? (
           <OfflineHelp />
         ) : phase === 'online' && previewUrl ? (
-          <iframe
-            src={previewUrl}
-            title="Preview local"
-            className="h-full w-full border-0 bg-white"
-          />
+          embed ? (
+            <iframe
+              src={previewUrl}
+              title="Preview local"
+              className="h-full w-full border-0 bg-white"
+            />
+          ) : (
+            <OnlineCard url={previewUrl} onEmbed={() => setEmbed(true)} />
+          )
         ) : phase === 'error' ? (
           <div className="text-down-ink flex h-full items-center justify-center p-6 text-center text-sm">
             {detail ?? 'Falhou ao iniciar o preview local.'}
@@ -178,6 +185,30 @@ export function LocalPreviewPanel({ projectId }: { projectId: string }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function OnlineCard({ url, onEmbed }: { url: string; onEmbed: () => void }) {
+  return (
+    <div className="text-muted mx-auto flex h-full max-w-md flex-col items-center justify-center gap-3 px-6 text-center">
+      <p className="text-ink text-sm font-medium">Preview local no ar 🚀</p>
+      <p className="font-mono text-xs">{url}</p>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="bg-accent text-accent-ink inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-4 py-2 text-sm font-medium"
+      >
+        <ExternalLink className="h-4 w-4" /> Abrir preview
+      </a>
+      <p className="text-xs">
+        Embutir aqui costuma ser bloqueado pelo navegador (https ↔ localhost).
+        Abrir em aba sempre funciona.{' '}
+        <button onClick={onEmbed} className="text-accent hover:underline">
+          tentar embutir mesmo assim
+        </button>
+      </p>
     </div>
   )
 }

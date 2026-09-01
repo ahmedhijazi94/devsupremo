@@ -49,7 +49,7 @@ function buildEnvFile(env) {
 }
 function targetDir(repoFullName, baseDir) {
   const name = repoFullName.split("/").pop() || "projeto";
-  return import_node_path2.default.join(baseDir ?? import_node_path2.default.join(import_node_os.default.homedir(), "Supremo"), name);
+  return import_node_path2.default.join(baseDir ?? process.cwd(), name);
 }
 function cleanRemoteUrl(repoFullName) {
   return `https://github.com/${repoFullName}.git`;
@@ -157,13 +157,12 @@ Projeto pronto:
 `);
   }
 }
-var import_node_child_process2, import_node_fs2, import_node_os, import_node_path2, sleep, run, ok;
+var import_node_child_process2, import_node_fs2, import_node_path2, sleep, run, ok;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
     import_node_child_process2 = require("node:child_process");
     import_node_fs2 = __toESM(require("node:fs"));
-    import_node_os = __toESM(require("node:os"));
     import_node_path2 = __toESM(require("node:path"));
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     run = (cmd, args, cwd, env) => (0, import_node_child_process2.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
@@ -3653,14 +3652,14 @@ var program = new Command();
 // src/bin.ts
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_path3 = __toESM(require("node:path"));
-var import_node_os2 = __toESM(require("node:os"));
+var import_node_os = __toESM(require("node:os"));
 var program2 = new Command();
 program2.name("supremo").description("Ponte MCP do Supremo para agentes de IA").version("2.0.0");
 var DEFAULT_URL = "https://supremo.app/api/mcp";
 function claudeDesktopConfigPath() {
   if (process.platform === "darwin") {
     return import_node_path3.default.join(
-      import_node_os2.default.homedir(),
+      import_node_os.default.homedir(),
       "Library",
       "Application Support",
       "Claude",
@@ -3669,12 +3668,12 @@ function claudeDesktopConfigPath() {
   }
   if (process.platform === "win32") {
     return import_node_path3.default.join(
-      process.env.APPDATA ?? import_node_os2.default.homedir(),
+      process.env.APPDATA ?? import_node_os.default.homedir(),
       "Claude",
       "claude_desktop_config.json"
     );
   }
-  return import_node_path3.default.join(import_node_os2.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
+  return import_node_path3.default.join(import_node_os.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
 }
 program2.command("connect").description("Configura o Claude Desktop para usar o Supremo remoto").requiredOption("-t, --token <token>", "Token gerado em /mcps").option("-u, --url <url>", "Endpoint MCP do Supremo", DEFAULT_URL).action((options) => {
   if (!options.token.startsWith("sup_")) {
@@ -3706,7 +3705,7 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
   console.log(`Endpoint: ${options.url}`);
   console.log("Reinicie o Claude Desktop para carregar a conex\xE3o.");
 });
-program2.command("bootstrap <project-id>").description("Prepara o workspace local do projeto (autoriza no navegador)").requiredOption("-u, --url <url>", "URL do Supremo, ex.: https://supremo.app").option("-d, --dir <dir>", "Diret\xF3rio-alvo (padr\xE3o: ~/Supremo/<repo>)").option("--start", "Inicia o dev server ao final").action(
+program2.command("bootstrap <project-id>").description("Prepara o workspace local do projeto (autoriza no navegador)").requiredOption("-u, --url <url>", "URL do Supremo, ex.: https://supremo.app").option("-d, --dir <dir>", "Pasta-base onde criar o projeto (padr\xE3o: pasta atual)").option("--start", "Inicia o dev server ao final").action(
   async (projectId, options) => {
     const { runBootstrap: runBootstrap2 } = await Promise.resolve().then(() => (init_bootstrap(), bootstrap_exports));
     try {

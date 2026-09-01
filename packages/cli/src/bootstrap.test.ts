@@ -1,4 +1,3 @@
-import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -25,9 +24,9 @@ describe('buildEnvFile', () => {
 })
 
 describe('targetDir', () => {
-  it('padrão ~/Supremo/<repo>', () => {
+  it('padrão: pasta atual + nome do repo (cria automaticamente)', () => {
     expect(targetDir('ahmed/sistema-x')).toBe(
-      path.join(os.homedir(), 'Supremo', 'sistema-x'),
+      path.join(process.cwd(), 'sistema-x'),
     )
   })
 

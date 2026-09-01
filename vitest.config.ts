@@ -26,6 +26,13 @@ export default defineConfig({
         'src/lib/auth.ts',           // depende de cookies de requisição
         'src/lib/mcp/server.ts',     // registro de ferramentas de I/O;
                                      // a parte pura (slugToBranch) tem teste
+        // Adaptadores de I/O do provisioning/bootstrap v2: falam com GitHub API,
+        // Supabase Management API e Postgres. Cobertura real vem do E2E (repo +
+        // projeto Supabase reais); a LÓGICA pura vive testada à parte (engine,
+        // capabilities, codes, command, buildAppJwt, verify-classifier, harness).
+        'src/lib/provisioning/provision.ts', // core: GitHub+Supabase+DB
+        'src/lib/bootstrap/config.ts',       // resolve credenciais/env
+        'src/lib/bootstrap/git-clone-token.ts', // installation token (API do App)
       ],
       // Threshold que falha o build. Cobertura reportada e não exigida
       // não é gate — é decoração.

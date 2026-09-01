@@ -82,14 +82,14 @@ program
   .command('bootstrap <project-id>')
   .description('Prepara o workspace local do projeto (autoriza no navegador)')
   .requiredOption('-u, --url <url>', 'URL do Supremo, ex.: https://supremo.app')
-  .option('-d, --dir <dir>', 'Diretório-alvo (padrão: ~/Supremo/<repo>)')
+  .option('-d, --dir <dir>', 'Pasta-base onde criar o projeto (padrão: pasta atual)')
   .option('--start', 'Inicia o dev server ao final')
   .action(
     async (
       projectId: string,
       options: { url: string; dir?: string; start?: boolean },
     ) => {
-      const { runBootstrap } = await import('./bootstrap.js')
+      const { runBootstrap } = await import('./bootstrap')
       try {
         await runBootstrap({
           projectId,
@@ -110,7 +110,7 @@ program
   .command('mcp', { isDefault: true })
   .description('Roda a ponte MCP (o cliente chama isto automaticamente)')
   .action(async () => {
-    await import('./index.js')
+    await import('./index')
   })
 
 program.parse()

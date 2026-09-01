@@ -1,0 +1,32 @@
+name: Publicar CLI
+
+# Publica supremo-cli no npm ao empurrar uma tag cli-vX.Y.Z.
+# O token vive como secret NPM_TOKEN do repositório — nunca no código.
+# Requer, uma vez: criar um Automation token em npmjs.com e adicioná-lo em
+#   Settings → Secrets and variables → Actions → NPM_TOKEN.
+on:
+  push:
+    tags:
+      - 'cli-v*'
+
+permissions:
+  contents: read
+  id-token: write # habilita a proveniência (provenance) do npm
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/cli
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

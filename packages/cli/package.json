@@ -1,20 +1,37 @@
 {
-  "name": "@supremo/cli",
+  "name": "supremo-cli",
   "version": "1.0.0",
+  "description": "CLI do Supremo — prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
+  "license": "MIT",
+  "author": "Supremo",
+  "homepage": "https://supremo-three.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ahmedhijazi94/devsupremo.git",
+    "directory": "packages/cli"
+  },
+  "keywords": ["supremo", "bootstrap", "scaffold", "cli", "mcp", "device-flow"],
   "bin": {
     "supremo": "./dist/bin.js"
   },
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/index.js && esbuild src/bootstrap.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/bootstrap.js && esbuild src/bin.ts --bundle --platform=node --target=node18 --outfile=dist/bin.js",
+    "build": "esbuild src/bin.ts --bundle --platform=node --target=node18 --outfile=dist/bin.js",
+    "prepublishOnly": "npm run build",
     "start": "node dist/bin.js",
     "test": "vitest run"
   },
-  "dependencies": {
+  "//": "Sem dependencies de runtime: o esbuild empacota tudo em dist/bin.js (self-contained), então o npx só baixa o bundle. Estas ficam em devDependencies porque o build precisa empacotá-las.",
+  "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.1",
     "commander": "^12.1.0",
-    "dotenv": "^16.4.5"
-  },
-  "devDependencies": {
+    "dotenv": "^16.4.5",
     "@types/node": "^20.12.7",
     "esbuild": "^0.20.2",
     "typescript": "^5.4.5"

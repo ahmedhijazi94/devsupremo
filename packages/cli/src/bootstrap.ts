@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 
 /**
@@ -37,9 +36,14 @@ export function buildEnvFile(env: Record<string, string>): string {
   )
 }
 
+/**
+ * Diretório-alvo do clone. Por padrão, a PASTA ATUAL (o dev roda o comando dentro
+ * da pasta onde guarda os projetos) + o nome do repo — criado automaticamente, sem
+ * precisar criar a pasta antes. `--dir` sobrescreve a base.
+ */
 export function targetDir(repoFullName: string, baseDir?: string): string {
   const name = repoFullName.split('/').pop() || 'projeto'
-  return path.join(baseDir ?? path.join(os.homedir(), 'Supremo'), name)
+  return path.join(baseDir ?? process.cwd(), name)
 }
 
 export function cleanRemoteUrl(repoFullName: string): string {

@@ -66,7 +66,7 @@ program
     config.mcpServers = config.mcpServers ?? {}
     config.mcpServers.supremo = {
       command: 'npx',
-      args: ['-y', '@supremo/cli', 'mcp'],
+      args: ['-y', 'supremo-cli', 'mcp'],
       env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token },
     }
 

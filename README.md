@@ -31,7 +31,7 @@ claude mcp add --transport http supremo https://SEU_APP/api/mcp --header "Author
 Clientes sem suporte a MCP remoto usam a ponte:
 
 ```bash
-npx -y @supremo/cli connect --token sup_...
+npx -y supremo-cli connect --token sup_...
 ```
 
 Nada é instalado de forma permanente e nenhum segredo fica na máquina além do

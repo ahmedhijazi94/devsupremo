@@ -144,6 +144,12 @@ export function ConnectionGenerator({
   const snippet = agent.build(mcpUrl, value)
   const Icon = ICON[agent.kind]
 
+  // Preview local: o companion precisa da URL base do Supremo (sem /api/mcp).
+  const baseUrl = mcpUrl.replace(/\/api\/mcp\/?$/, '')
+  const companionSnippet =
+    `node packages/companion/dist/bin.js login --url ${baseUrl} --token ${value}\n` +
+    `node packages/companion/dist/bin.js run`
+
   return (
     <div className="space-y-4">
       {!token && (
@@ -220,6 +226,28 @@ export function ConnectionGenerator({
           </pre>
           <CopyButton
             value={FIRST_PROMPT + '[descreva a funcionalidade aqui]'}
+            className="absolute top-2.5 right-2.5"
+          />
+        </div>
+      </div>
+
+      {/* Preview local — o companion na máquina do dev, com o token já preenchido */}
+      <div className="space-y-2">
+        <div className="text-ink flex items-center gap-2">
+          <Rocket className="h-4 w-4" />
+          <h4 className="text-sm font-semibold">Preview local (companion)</h4>
+        </div>
+        <p className="text-muted text-xs">
+          Roda o Next real na sua máquina, com HMR. Cole no Terminal, dentro da
+          pasta do Supremo. O token e a URL já vão preenchidos — o primeiro
+          comando salva, o segundo mantém o companion rodando.
+        </p>
+        <div className="relative">
+          <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs whitespace-pre">
+            {companionSnippet}
+          </pre>
+          <CopyButton
+            value={companionSnippet}
             className="absolute top-2.5 right-2.5"
           />
         </div>

@@ -14,6 +14,10 @@ var __esm = (fn, res, err) => function __init() {
     throw err = [e], e;
   }
 };
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
     for (let key of __getOwnPropNames(from))
@@ -30,6 +34,151 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
+
+// src/bootstrap.ts
+var bootstrap_exports = {};
+__export(bootstrap_exports, {
+  buildEnvFile: () => buildEnvFile,
+  cleanRemoteUrl: () => cleanRemoteUrl,
+  gitCloneArgs: () => gitCloneArgs,
+  runBootstrap: () => runBootstrap,
+  targetDir: () => targetDir
+});
+function buildEnvFile(env) {
+  return Object.entries(env).map(([k, v]) => `${k}=${v}`).join("\n") + "\n";
+}
+function targetDir(repoFullName, baseDir) {
+  const name = repoFullName.split("/").pop() || "projeto";
+  return import_node_path2.default.join(baseDir ?? import_node_path2.default.join(import_node_os.default.homedir(), "Supremo"), name);
+}
+function cleanRemoteUrl(repoFullName) {
+  return `https://github.com/${repoFullName}.git`;
+}
+function gitCloneArgs(repoFullName, branch, dest) {
+  const helper = `!f() { test "$1" = get && printf 'username=x-access-token\\npassword=%s\\n' "$SUPREMO_GIT_TOKEN"; }; f`;
+  return [
+    "-c",
+    "credential.helper=",
+    "-c",
+    `credential.helper=${helper}`,
+    "clone",
+    "--branch",
+    branch,
+    cleanRemoteUrl(repoFullName),
+    dest
+  ];
+}
+function openBrowser(url) {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  try {
+    (0, import_node_child_process2.spawn)(cmd, args, { stdio: "ignore", detached: true }).unref();
+  } catch {
+  }
+}
+async function startDeviceFlow(baseUrl, projectId) {
+  const res = await fetch(`${baseUrl}/api/bootstrap/device/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId })
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? `N\xE3o iniciou o bootstrap (${res.status}).`);
+  }
+  return await res.json();
+}
+async function pollForConfig(baseUrl, deviceCode, intervalSec, expiresAt) {
+  const deadline = Date.parse(expiresAt);
+  while (Date.now() < deadline) {
+    await sleep(intervalSec * 1e3);
+    const res = await fetch(`${baseUrl}/api/bootstrap/device/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceCode })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.status === "ready" && data.config) return data.config;
+    if (data.status === "pending") continue;
+    if (data.status === "expired") throw new Error("Autoriza\xE7\xE3o expirou.");
+    if (data.status === "denied") throw new Error("Autoriza\xE7\xE3o negada.");
+    if (data.status === "error") throw new Error(data.error ?? "Falha no bootstrap.");
+    throw new Error("Autoriza\xE7\xE3o inv\xE1lida. Rode o comando de novo.");
+  }
+  throw new Error("Tempo de autoriza\xE7\xE3o esgotado.");
+}
+async function runBootstrap(opts) {
+  const baseUrl = opts.url.replace(/\/$/, "");
+  console.log("\nSupremo Bootstrap\n");
+  const flow = await startDeviceFlow(baseUrl, opts.projectId);
+  console.log("Abra no navegador para autorizar esta m\xE1quina:\n");
+  console.log(`  ${flow.verificationUriComplete}`);
+  console.log(`
+  C\xF3digo: ${flow.userCode}
+`);
+  openBrowser(flow.verificationUriComplete);
+  console.log("Aguardando autoriza\xE7\xE3o\u2026");
+  const config = await pollForConfig(
+    baseUrl,
+    flow.deviceCode,
+    flow.intervalSec,
+    flow.expiresAt
+  );
+  ok("Autoriza\xE7\xE3o concedida");
+  ok(`Projeto: ${config.project.name}`);
+  const dest = targetDir(config.repo.fullName, opts.dir);
+  if (import_node_fs2.default.existsSync(dest)) {
+    throw new Error(`J\xE1 existe ${dest} \u2014 remova ou use --dir para outro caminho.`);
+  }
+  import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(dest), { recursive: true });
+  run("git", gitCloneArgs(config.repo.fullName, config.repo.branch, dest), void 0, {
+    ...process.env,
+    SUPREMO_GIT_TOKEN: config.gitToken
+  });
+  ok(`Repository clonado (token ${config.gitTokenScope}, ef\xEAmero)`);
+  import_node_fs2.default.writeFileSync(import_node_path2.default.join(dest, ".env.local"), buildEnvFile(config.env), {
+    mode: 384
+  });
+  ok(
+    `Environment configurado (${Object.keys(config.env).length} vari\xE1vel(is) p\xFAblica(s))`
+  );
+  run("npm", ["ci"], dest);
+  ok("Depend\xEAncias instaladas");
+  try {
+    run("npm", ["run", "setup:local"], dest);
+    ok("Setup local + baseline");
+  } catch {
+    console.log('\u2022 setup:local pulado (rode "npm run setup:local" manualmente)');
+  }
+  console.log(`
+Projeto pronto:
+
+  ${dest}
+`);
+  if (opts.start) {
+    console.log("Iniciando o dev server (Ctrl+C para sair)\u2026\n");
+    run("npm", ["run", "dev"], dest);
+  } else {
+    console.log(`Agora:
+
+  cd ${dest}
+  npm run dev
+`);
+  }
+}
+var import_node_child_process2, import_node_fs2, import_node_os, import_node_path2, sleep, run, ok;
+var init_bootstrap = __esm({
+  "src/bootstrap.ts"() {
+    "use strict";
+    import_node_child_process2 = require("node:child_process");
+    import_node_fs2 = __toESM(require("node:fs"));
+    import_node_os = __toESM(require("node:os"));
+    import_node_path2 = __toESM(require("node:path"));
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    run = (cmd, args, cwd, env) => (0, import_node_child_process2.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
+    ok = (label) => console.log(`\u2713 ${label}`);
+  }
+});
 
 // src/index.ts
 var index_exports = {};
@@ -3253,9 +3402,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
    * @param {string} [path]
    * @return {(string|null|Command)}
    */
-  executableDir(path3) {
-    if (path3 === void 0) return this._executableDir;
-    this._executableDir = path3;
+  executableDir(path4) {
+    if (path4 === void 0) return this._executableDir;
+    this._executableDir = path4;
     return this;
   }
   /**
@@ -3511,16 +3660,16 @@ function useColor() {
 var program = new Command();
 
 // src/bin.ts
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_path2 = __toESM(require("node:path"));
-var import_node_os = __toESM(require("node:os"));
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_path3 = __toESM(require("node:path"));
+var import_node_os2 = __toESM(require("node:os"));
 var program2 = new Command();
 program2.name("supremo").description("Ponte MCP do Supremo para agentes de IA").version("2.0.0");
 var DEFAULT_URL = "https://supremo.app/api/mcp";
 function claudeDesktopConfigPath() {
   if (process.platform === "darwin") {
-    return import_node_path2.default.join(
-      import_node_os.default.homedir(),
+    return import_node_path3.default.join(
+      import_node_os2.default.homedir(),
       "Library",
       "Application Support",
       "Claude",
@@ -3528,13 +3677,13 @@ function claudeDesktopConfigPath() {
     );
   }
   if (process.platform === "win32") {
-    return import_node_path2.default.join(
-      process.env.APPDATA ?? import_node_os.default.homedir(),
+    return import_node_path3.default.join(
+      process.env.APPDATA ?? import_node_os2.default.homedir(),
       "Claude",
       "claude_desktop_config.json"
     );
   }
-  return import_node_path2.default.join(import_node_os.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
+  return import_node_path3.default.join(import_node_os2.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
 }
 program2.command("connect").description("Configura o Claude Desktop para usar o Supremo remoto").requiredOption("-t, --token <token>", "Token gerado em /mcps").option("-u, --url <url>", "Endpoint MCP do Supremo", DEFAULT_URL).action((options) => {
   if (!options.token.startsWith("sup_")) {
@@ -3543,9 +3692,9 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
   }
   const configPath = claudeDesktopConfigPath();
   let config = {};
-  if (import_node_fs2.default.existsSync(configPath)) {
+  if (import_node_fs3.default.existsSync(configPath)) {
     try {
-      config = JSON.parse(import_node_fs2.default.readFileSync(configPath, "utf8"));
+      config = JSON.parse(import_node_fs3.default.readFileSync(configPath, "utf8"));
     } catch {
       console.error(
         `${configPath} existe mas n\xE3o \xE9 JSON v\xE1lido. Corrija ou remova o arquivo antes de continuar.`
@@ -3559,13 +3708,33 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
     args: ["-y", "@supremo/cli", "mcp"],
     env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token }
   };
-  import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(configPath), { recursive: true });
-  import_node_fs2.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
+  import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(configPath), { recursive: true });
+  import_node_fs3.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
 `);
   console.log(`Configurado em ${configPath}`);
   console.log(`Endpoint: ${options.url}`);
   console.log("Reinicie o Claude Desktop para carregar a conex\xE3o.");
 });
+program2.command("bootstrap <project-id>").description("Prepara o workspace local do projeto (autoriza no navegador)").requiredOption("-u, --url <url>", "URL do Supremo, ex.: https://supremo.app").option("-d, --dir <dir>", "Diret\xF3rio-alvo (padr\xE3o: ~/Supremo/<repo>)").option("--start", "Inicia o dev server ao final").action(
+  async (projectId, options) => {
+    const { runBootstrap: runBootstrap2 } = await Promise.resolve().then(() => (init_bootstrap(), bootstrap_exports));
+    try {
+      await runBootstrap2({
+        projectId,
+        url: options.url,
+        dir: options.dir,
+        start: options.start
+      });
+    } catch (error) {
+      console.error(
+        `
+\u2717 ${error instanceof Error ? error.message : String(error)}
+`
+      );
+      process.exit(1);
+    }
+  }
+);
 program2.command("mcp", { isDefault: true }).description("Roda a ponte MCP (o cliente chama isto automaticamente)").action(async () => {
   await Promise.resolve().then(() => (init_index(), index_exports));
 });

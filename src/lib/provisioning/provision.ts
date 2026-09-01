@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { randomInt } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decryptToken, encryptToken } from '@/lib/crypto'
 import {
@@ -731,11 +731,11 @@ async function enableCodeScanning(
 function generateDbPassword(): string {
   // Alfabeto sem ambiguidade visual e sem caracteres que quebram URL de conexão.
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
-  const bytes = randomBytes(32)
 
   let password = ''
-  for (const byte of bytes) {
-    password += alphabet[byte % alphabet.length]
+  for (let i = 0; i < 32; i++) {
+    // randomInt é uniforme — módulo sobre bytes enviesaria o alfabeto.
+    password += alphabet[randomInt(alphabet.length)]
   }
 
   // Garante as classes que o Supabase exige.

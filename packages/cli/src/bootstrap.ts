@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -84,20 +84,6 @@ interface StartResponse {
   intervalSec: number
 }
 
-function openBrowser(url: string): void {
-  const cmd =
-    process.platform === 'darwin'
-      ? 'open'
-      : process.platform === 'win32'
-        ? 'cmd'
-        : 'xdg-open'
-  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url]
-  try {
-    spawn(cmd, args, { stdio: 'ignore', detached: true }).unref()
-  } catch {
-    // sem navegador: o usuário abre manualmente (URL impressa)
-  }
-}
 
 async function startDeviceFlow(
   baseUrl: string,
@@ -160,10 +146,9 @@ export async function runBootstrap(opts: {
   console.log('\nSupremo Bootstrap\n')
 
   const flow = await startDeviceFlow(baseUrl, opts.projectId)
-  console.log('Abra no navegador para autorizar esta máquina:\n')
+  console.log('Abra este link no navegador para autorizar esta máquina:\n')
   console.log(`  ${flow.verificationUriComplete}`)
   console.log(`\n  Código: ${flow.userCode}\n`)
-  openBrowser(flow.verificationUriComplete)
   console.log('Aguardando autorização…')
 
   const config = await pollForConfig(

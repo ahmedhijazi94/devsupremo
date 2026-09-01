@@ -1,5 +1,5 @@
 // src/bootstrap.ts
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,14 +28,6 @@ function gitCloneArgs(repoFullName, branch, dest) {
   ];
 }
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function openBrowser(url) {
-  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-  try {
-    spawn(cmd, args, { stdio: "ignore", detached: true }).unref();
-  } catch {
-  }
-}
 async function startDeviceFlow(baseUrl, projectId) {
   const res = await fetch(`${baseUrl}/api/bootstrap/device/start`, {
     method: "POST",
@@ -73,12 +65,11 @@ async function runBootstrap(opts) {
   const baseUrl = opts.url.replace(/\/$/, "");
   console.log("\nSupremo Bootstrap\n");
   const flow = await startDeviceFlow(baseUrl, opts.projectId);
-  console.log("Abra no navegador para autorizar esta m\xE1quina:\n");
+  console.log("Abra este link no navegador para autorizar esta m\xE1quina:\n");
   console.log(`  ${flow.verificationUriComplete}`);
   console.log(`
   C\xF3digo: ${flow.userCode}
 `);
-  openBrowser(flow.verificationUriComplete);
   console.log("Aguardando autoriza\xE7\xE3o\u2026");
   const config = await pollForConfig(
     baseUrl,

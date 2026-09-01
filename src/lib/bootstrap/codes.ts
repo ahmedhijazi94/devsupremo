@@ -37,10 +37,10 @@ export function isDeviceCode(value: string): boolean {
 
 /** Código curto humano, formatado XXXX-XXXX. */
 export function generateUserCode(): string {
-  const bytes = crypto.randomBytes(USER_CODE_LEN)
   let out = ''
   for (let i = 0; i < USER_CODE_LEN; i++) {
-    out += USER_CODE_ALPHABET[bytes[i]! % USER_CODE_ALPHABET.length]
+    // randomInt é uniforme — módulo sobre bytes enviesaria o alfabeto.
+    out += USER_CODE_ALPHABET[crypto.randomInt(USER_CODE_ALPHABET.length)]
     if (i === 3) out += '-'
   }
   return out

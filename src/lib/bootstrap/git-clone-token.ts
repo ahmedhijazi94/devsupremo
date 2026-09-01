@@ -1,19 +1,17 @@
 import crypto from 'crypto'
-import type { ProjectRecord } from '@/lib/mcp/repository'
 
 /**
- * Token efêmero de clone para o bootstrap.
+ * Lógica pura do token de clone do bootstrap: construção do JWT RS256 do GitHub
+ * App e detecção de se a chave do App está configurada. O I/O (chamar a API do
+ * GitHub App para emitir o installation token, e a escolha installation vs
+ * fallback) vive em `config.ts`, que é adapter e roda coberto pelo E2E.
  *
- * PREFERÊNCIA (least privilege): GitHub App **installation token** repo-scoped e
- * de curta duração (≤1h), emitido só para o repo do projeto. Isso exige a chave
- * privada do App (GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY) no ambiente.
- *
- * FALLBACK: se a chave do App não estiver configurada, usa o token user-to-server
- * do GitHub App (8h, já renovado pelo refresh) que o Supremo guarda. Em ambos os
- * casos o token só é entregue pelo canal seguro do bootstrap e o CLI o usa sem
- * jamais colocá-lo em URL, argv, .git/config, stdout/stderr ou log.
+ * PREFERÊNCIA (least privilege): installation token repo-scoped, curto (≤1h),
+ * emitido só para o repo do projeto (exige GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY).
+ * FALLBACK: token user-to-server (8h) que o Supremo já guarda. Em ambos os casos
+ * o token só é entregue pelo canal seguro e o CLI o usa sem colocá-lo em URL,
+ * argv, .git/config, stdout/stderr ou log.
  */
-const GITHUB_API = 'https://api.github.com'
 
 export interface CloneToken {
   token: string
@@ -27,8 +25,8 @@ export function appAuthConfigured(): boolean {
   return Boolean(process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY)
 }
 
-function normalizePrivateKey(raw: string): string {
-  // Vercel/CI costumam guardar a chave com \n literais.
+/** Vercel/CI costumam guardar a chave com \n literais — normaliza para PEM real. */
+export function normalizePrivateKey(raw: string): string {
   return raw.includes('\\n') ? raw.replace(/\\n/g, '\n') : raw
 }
 
@@ -50,71 +48,4 @@ export function buildAppJwt(
     .update(signingInput)
     .sign(normalizePrivateKey(privateKeyPem))
   return `${signingInput}.${b64url(signature)}`
-}
-
-async function ghApp<T>(path: string, jwt: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${GITHUB_API}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...(init?.headers ?? {}),
-    },
-    signal: AbortSignal.timeout(20_000),
-  })
-  if (!res.ok) {
-    throw new Error(`GitHub App API ${path} → ${res.status}`)
-  }
-  return (await res.json()) as T
-}
-
-/** Emite um installation token repo-scoped (contents:read) para owner/repo. */
-async function installationTokenForRepo(
-  repoFullName: string,
-): Promise<{ token: string; expiresAt: string }> {
-  const [owner, repo] = repoFullName.split('/')
-  if (!owner || !repo) throw new Error(`repo inválido: ${repoFullName}`)
-
-  const jwt = buildAppJwt(
-    process.env.GITHUB_APP_ID!,
-    process.env.GITHUB_APP_PRIVATE_KEY!,
-  )
-  const installation = await ghApp<{ id: number }>(
-    `/repos/${owner}/${repo}/installation`,
-    jwt,
-  )
-  const result = await ghApp<{ token: string; expires_at: string }>(
-    `/app/installations/${installation.id}/access_tokens`,
-    jwt,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        repositories: [repo],
-        permissions: { contents: 'read' },
-      }),
-    },
-  )
-  return { token: result.token, expiresAt: result.expires_at }
-}
-
-/**
- * Resolve o token de clone: installation token repo-scoped se possível, senão
- * o fallback (token user-to-server que o chamador fornece).
- */
-export async function resolveCloneToken(
-  project: ProjectRecord,
-  fallback: () => Promise<string>,
-): Promise<CloneToken> {
-  if (appAuthConfigured() && project.github_repo_full_name) {
-    try {
-      const { token, expiresAt } = await installationTokenForRepo(
-        project.github_repo_full_name,
-      )
-      return { token, scope: 'installation', expiresAt }
-    } catch {
-      // App configurado mas falhou (repo sem o App instalado, etc.): fallback.
-    }
-  }
-  return { token: await fallback(), scope: 'user', expiresAt: null }
 }

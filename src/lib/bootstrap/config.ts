@@ -2,10 +2,83 @@ import {
   getGithubCredentials,
   getSupabaseCredentials,
   resolveProject,
+  type ProjectRecord,
 } from '@/lib/mcp/repository'
 import { getSupabaseAnonKey } from '@/lib/preview'
 import type { BootstrapScope } from './codes'
-import { resolveCloneToken } from './git-clone-token'
+import {
+  appAuthConfigured,
+  buildAppJwt,
+  type CloneToken,
+} from './git-clone-token'
+
+const GITHUB_API = 'https://api.github.com'
+
+// ── Emissão do installation token (I/O; coberto pelo E2E) ────────────────────
+
+async function ghApp<T>(path: string, jwt: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${GITHUB_API}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(init?.headers ?? {}),
+    },
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) throw new Error(`GitHub App API ${path} → ${res.status}`)
+  return (await res.json()) as T
+}
+
+/** Installation token repo-scoped (contents:read) para owner/repo. */
+async function installationTokenForRepo(
+  repoFullName: string,
+): Promise<{ token: string; expiresAt: string }> {
+  const [owner, repo] = repoFullName.split('/')
+  if (!owner || !repo) throw new Error(`repo inválido: ${repoFullName}`)
+  const jwt = buildAppJwt(
+    process.env.GITHUB_APP_ID!,
+    process.env.GITHUB_APP_PRIVATE_KEY!,
+  )
+  const installation = await ghApp<{ id: number }>(
+    `/repos/${owner}/${repo}/installation`,
+    jwt,
+  )
+  const result = await ghApp<{ token: string; expires_at: string }>(
+    `/app/installations/${installation.id}/access_tokens`,
+    jwt,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        repositories: [repo],
+        permissions: { contents: 'read' },
+      }),
+    },
+  )
+  return { token: result.token, expiresAt: result.expires_at }
+}
+
+/**
+ * Resolve o token de clone: installation token repo-scoped se o App estiver
+ * configurado; senão, o fallback user-to-server.
+ */
+async function resolveCloneToken(
+  project: ProjectRecord,
+  fallback: () => Promise<string>,
+): Promise<CloneToken> {
+  if (appAuthConfigured() && project.github_repo_full_name) {
+    try {
+      const { token, expiresAt } = await installationTokenForRepo(
+        project.github_repo_full_name,
+      )
+      return { token, scope: 'installation', expiresAt }
+    } catch {
+      // App configurado mas falhou (repo sem o App instalado, etc.): fallback.
+    }
+  }
+  return { token: await fallback(), scope: 'user', expiresAt: null }
+}
 
 /**
  * Config entregue à máquina local após um resgate de bootstrap válido.

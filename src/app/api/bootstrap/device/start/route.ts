@@ -1,7 +1,8 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { mcpDataClient } from '@/lib/mcp/tokens'
-import { startDeviceGrant, supabaseBootstrapStore } from '@/lib/bootstrap/codes'
+import { startDeviceGrant } from '@/lib/bootstrap/codes'
+import { supabaseBootstrapStore } from '@/lib/bootstrap/supabase-store'
 
 /**
  * Início do device flow do bootstrap. Não é autenticado: qualquer um pode

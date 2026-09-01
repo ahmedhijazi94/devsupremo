@@ -1,7 +1,8 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { mcpDataClient } from '@/lib/mcp/tokens'
-import { pollDeviceGrant, supabaseBootstrapStore } from '@/lib/bootstrap/codes'
+import { pollDeviceGrant } from '@/lib/bootstrap/codes'
+import { supabaseBootstrapStore } from '@/lib/bootstrap/supabase-store'
 import { resolveBootstrapConfig } from '@/lib/bootstrap/config'
 
 /**

@@ -4,11 +4,8 @@ import { headers } from 'next/headers'
 import { requireUser } from '@/lib/auth'
 import { resolveProject } from '@/lib/mcp/repository'
 import { mcpDataClient } from '@/lib/mcp/tokens'
-import {
-  approveDeviceGrant,
-  lookupGrant,
-  supabaseBootstrapStore,
-} from '@/lib/bootstrap/codes'
+import { approveDeviceGrant, lookupGrant } from '@/lib/bootstrap/codes'
+import { supabaseBootstrapStore } from '@/lib/bootstrap/supabase-store'
 import { bootstrapCommand } from '@/lib/bootstrap/command'
 
 /**

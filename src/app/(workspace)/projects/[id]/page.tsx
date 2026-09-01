@@ -9,18 +9,19 @@ import {
   Loader2,
   TriangleAlert,
   Database,
+  ShieldCheck,
+  Boxes,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
 import { ScaffoldForm } from '@/components/projects/scaffold-form'
-import { WorkspaceTabs } from '@/components/projects/workspace-tabs'
-import { WorkspaceShell } from '@/components/projects/workspace-shell'
 import { LiveGateBadge } from '@/components/projects/live-gate-badge'
 import { TemplateUpdateCard } from '@/components/projects/template-update-card'
 import { SecretsCard } from '@/components/projects/secrets-card'
 import { LocalDevCard } from '@/components/projects/local-dev-card'
 import { bootstrapCommand } from '@/lib/bootstrap/command'
 import { TEMPLATE_VERSION } from '@/lib/templates/project-files'
+import { CAPABILITIES, type CapabilityId } from '@/lib/capabilities'
 import {
   ActivityFeed,
   type ActivityItem,
@@ -32,17 +33,37 @@ import {
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/database'
 
-/** Formato das relações que o select traz junto do projeto. */
+/**
+ * Página do projeto — control plane, NÃO IDE. Mostra o estado do projeto e a
+ * única ação de desenvolvimento: o comando local. O desenvolvimento acontece na
+ * máquina do dev (Claude/Codex + localhost), não aqui: por isso não há editor,
+ * preview, terminal, companion nem controles de deploy.
+ */
 interface ProjectWithAccounts extends Project {
   github_accounts: { login: string; avatar_url: string | null } | null
   supabase_accounts: { org_name: string } | null
+  provisioning_state?: string | null
+  capabilities?: string[] | null
+  security_profile?: string | null
+  scaffold_version?: string | null
+  security_baseline_version?: string | null
 }
 
-const STATUS = {
-  active: { icon: CheckCircle2, label: 'Ativo', tone: 'text-up-ink' },
-  creating: { icon: Loader2, label: 'Criando', tone: 'text-wait-ink' },
-  error: { icon: AlertCircle, label: 'Erro', tone: 'text-down-ink' },
-  archived: { icon: AlertCircle, label: 'Arquivado', tone: 'text-muted' },
+const PROFILE_LABEL: Record<string, string> = {
+  simple: 'Simples',
+  standard: 'Padrão',
+  multitenant: 'Multi-tenant',
+  sensitive: 'Sensível',
+}
+
+/** Selo do estado de provisioning (independente do status funcional). */
+const PSTATE = {
+  ready: { label: 'READY', tone: 'text-up-ink', icon: CheckCircle2, spin: false },
+  provisioning: { label: 'Provisionando', tone: 'text-wait-ink', icon: Loader2, spin: true },
+  scaffolding: { label: 'Gerando scaffold', tone: 'text-wait-ink', icon: Loader2, spin: true },
+  validating: { label: 'Validando', tone: 'text-wait-ink', icon: Loader2, spin: true },
+  failed: { label: 'Falhou', tone: 'text-down-ink', icon: AlertCircle, spin: false },
+  draft: { label: 'Rascunho', tone: 'text-muted', icon: AlertCircle, spin: false },
 } as const
 
 export default async function ProjectPage({
@@ -83,7 +104,13 @@ export default async function ProjectPage({
 
   const project = data as unknown as ProjectWithAccounts
   const provisioned = Boolean(project.github_repo_full_name)
-  const status = STATUS[project.status] ?? STATUS.active
+  const pstate = (project.provisioning_state ??
+    (provisioned ? 'ready' : 'draft')) as keyof typeof PSTATE
+  const state = PSTATE[pstate] ?? PSTATE.draft
+  const templateBehind =
+    provisioned && project.template_version !== TEMPLATE_VERSION
+
+  const capabilities = (project.capabilities ?? []) as CapabilityId[]
 
   // Comando de bootstrap (device flow) — só o project-id, nada sensível.
   const configuredUrl = process.env.NEXT_PUBLIC_APP_URL
@@ -92,61 +119,46 @@ export default async function ProjectPage({
     ? configuredUrl.replace(/\/$/, '')
     : `${host.startsWith('localhost') ? 'http' : 'https'}://${host}`
   const bootstrapCmd = bootstrapCommand(project.id, baseUrl)
-  // A versão gravada é o gatilho barato do selo; a conferência precisa vem só
-  // quando o usuário abre o cartão. Projeto antigo (versão nula) também está
-  // atrás, por definição.
-  const templateBehind =
-    provisioned && project.template_version !== TEMPLATE_VERSION
+
+  const supabaseDashUrl = project.supabase_project_ref
+    ? `https://supabase.com/dashboard/project/${project.supabase_project_ref}`
+    : null
+  const githubUrl = project.github_repo_full_name
+    ? `https://github.com/${project.github_repo_full_name}`
+    : null
 
   return (
-    // Tela cheia. h-dvh (não h-screen) para o celular não esconder o rodapé
-    // atrás da barra do navegador.
-    <div className="h-dvh p-3 sm:p-4">
-      <div className="bg-surface flex h-full flex-col gap-3 rounded-[var(--radius-card)] p-3 sm:gap-4 sm:p-4">
+    <div className="min-h-dvh p-3 sm:p-4">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 sm:gap-4">
         {/* Cabeçalho */}
-        <header className="flex shrink-0 items-center gap-4 px-2 pt-1">
+        <header className="flex items-center gap-4 px-1">
           <Link
             href="/dashboard"
-            className="bg-sunken inline-flex shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors hover:opacity-80"
+            className="bg-surface inline-flex shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors hover:opacity-80"
           >
             <ArrowLeft className="h-4 w-4" />
             Dashboard
           </Link>
-
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="truncate text-base font-semibold">
-                {project.name}
-              </h1>
+              <h1 className="truncate text-base font-semibold">{project.name}</h1>
               <span
                 className={cn(
-                  'inline-flex items-center gap-1 text-xs font-medium',
-                  status.tone,
+                  'inline-flex items-center gap-1 text-xs font-semibold',
+                  state.tone,
                 )}
               >
-                <status.icon
-                  className={cn(
-                    'h-3.5 w-3.5',
-                    project.status === 'creating' && 'animate-spin',
-                  )}
+                <state.icon
+                  className={cn('h-3.5 w-3.5', state.spin && 'animate-spin')}
                 />
-                {status.label}
+                {state.label}
               </span>
               {provisioned && <LiveGateBadge projectId={project.id} />}
             </div>
-            {project.github_repo_full_name && (
-              <a
-                href={`https://github.com/${project.github_repo_full_name}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-muted hover:text-ink inline-flex items-center gap-1 text-xs transition-colors"
-              >
-                {project.github_repo_full_name}
-                <ExternalLink className="h-3 w-3" />
-              </a>
+            {project.description && (
+              <p className="text-muted truncate text-xs">{project.description}</p>
             )}
           </div>
-
           <div className="ml-auto">
             <DeleteProjectDialog
               projectId={project.id}
@@ -155,120 +167,178 @@ export default async function ProjectPage({
           </div>
         </header>
 
-        {/* Workspace — lado a lado no desktop, abas no celular. */}
-        <WorkspaceShell
-          sidebar={
-            <>
-              {!provisioned && (
-              <ProvisionCard
-                projectId={project.id}
-                githubOwner={project.github_accounts?.login ?? null}
-                ready={Boolean(project.github_accounts)}
-              />
-            )}
+        {/* Provisionar (só antes de existir o repo) */}
+        {!provisioned && (
+          <ProvisionCard
+            projectId={project.id}
+            ready={Boolean(project.github_accounts)}
+            failed={pstate === 'failed'}
+          />
+        )}
 
-            <IntegrationCard
-              title="GitHub"
-              subtitle="Repositório do código"
-              connected={Boolean(project.github_accounts)}
-              detail={
-                project.github_accounts
-                  ? (project.github_repo_full_name ??
-                    project.github_accounts.login)
-                  : null
-              }
-              action={async () => {
-                'use server'
-                await connectGithubAccount(id)
-              }}
-              actionLabel="Conectar GitHub"
-            />
+        {/* Integrações principais: GitHub + Supabase */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <IntegrationCard
+            title="GitHub"
+            subtitle="Repositório do código"
+            connected={Boolean(project.github_accounts)}
+            detail={
+              project.github_accounts
+                ? (project.github_repo_full_name ?? project.github_accounts.login)
+                : null
+            }
+            href={githubUrl}
+            linkLabel="Ver GitHub"
+            action={async () => {
+              'use server'
+              await connectGithubAccount(id)
+            }}
+            actionLabel="Conectar GitHub"
+          />
+          <IntegrationCard
+            title="Supabase"
+            subtitle="Banco de dados e login"
+            connected={Boolean(project.supabase_accounts)}
+            detail={
+              project.supabase_accounts
+                ? (project.supabase_project_ref ??
+                  project.supabase_accounts.org_name)
+                : null
+            }
+            href={supabaseDashUrl}
+            linkLabel="Ver Supabase"
+            action={async () => {
+              'use server'
+              await connectSupabaseAccount(id)
+            }}
+            actionLabel="Conectar Supabase"
+          />
+        </div>
 
-            <IntegrationCard
-              title="Supabase"
-              subtitle="Banco de dados e login"
-              connected={Boolean(project.supabase_accounts)}
-              detail={
-                project.supabase_accounts
-                  ? (project.supabase_project_ref ??
-                    project.supabase_accounts.org_name)
-                  : null
-              }
-              action={async () => {
-                'use server'
-                await connectSupabaseAccount(id)
-              }}
-              actionLabel="Conectar Supabase"
-            />
+        {/* Identidade do scaffold: capabilities, perfil, versões */}
+        {provisioned && (
+          <ProjectInfoCard
+            capabilities={capabilities}
+            securityProfile={project.security_profile ?? null}
+            scaffoldVersion={project.scaffold_version ?? project.template_version}
+            securityBaseline={project.security_baseline_version ?? null}
+          />
+        )}
 
-            {templateBehind && (
-              <TemplateUpdateCard
-                projectId={project.id}
-                projectVersion={project.template_version}
-                latestVersion={TEMPLATE_VERSION}
-              />
-            )}
+        {/* Desenvolvimento local: o único caminho de dev */}
+        {provisioned && <LocalDevCard command={bootstrapCmd} />}
 
-            {provisioned && <LocalDevCard command={bootstrapCmd} />}
+        {templateBehind && (
+          <TemplateUpdateCard
+            projectId={project.id}
+            projectVersion={project.template_version}
+            latestVersion={TEMPLATE_VERSION}
+          />
+        )}
 
-            {provisioned && <SecretsCard projectId={project.id} />}
+        {provisioned && <SecretsCard projectId={project.id} />}
 
-            <section className="bg-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">
-              <div className="mb-3 shrink-0">
-                <h2 className="text-sm font-semibold">Atividade</h2>
-                <p className="text-muted text-xs">
-                  Cada proposta do agente, com o pull request e os gates.
-                </p>
-              </div>
-              {/* A lista rola dentro do cartão, sem vazar pela borda. */}
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                <ActivityFeed
-                  items={(activity ?? []) as unknown as ActivityItem[]}
-                  repoFullName={project.github_repo_full_name}
-                />
-              </div>
-            </section>
-            </>
-          }
-          workspace={
-            <WorkspaceTabs
-              projectId={project.id}
+        {/* Atividade */}
+        <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">
+          <div className="mb-3 shrink-0">
+            <h2 className="text-sm font-semibold">Atividade</h2>
+            <p className="text-muted text-xs">
+              Cada proposta do agente, com o pull request e os gates.
+            </p>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <ActivityFeed
+              items={(activity ?? []) as unknown as ActivityItem[]}
               repoFullName={project.github_repo_full_name}
-              provisioned={provisioned}
             />
-          }
-        />
+          </div>
+        </section>
       </div>
     </div>
   )
 }
 
-function ProvisionCard({
-  projectId,
-  githubOwner,
-  ready,
+function ProjectInfoCard({
+  capabilities,
+  securityProfile,
+  scaffoldVersion,
+  securityBaseline,
 }: {
-  projectId: string
-  githubOwner: string | null
-  ready: boolean
+  capabilities: CapabilityId[]
+  securityProfile: string | null
+  scaffoldVersion: string | null
+  securityBaseline: string | null
 }) {
   return (
     <section className="bg-surface rounded-[var(--radius-inner)] p-4">
-      <h2 className="text-sm font-semibold">Provisionar</h2>
+      <h2 className="mb-3 text-sm font-semibold">Projeto</h2>
+      <dl className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <dt className="text-muted mb-1 flex items-center gap-1.5 text-xs">
+            <Boxes className="h-3.5 w-3.5" /> Capabilities
+          </dt>
+          <dd className="flex flex-wrap gap-1.5">
+            {capabilities.length === 0 ? (
+              <span className="text-ink text-sm">só o CORE</span>
+            ) : (
+              capabilities.map((id) => (
+                <span
+                  key={id}
+                  className="bg-sunken text-ink rounded-full px-2 py-0.5 text-xs font-medium"
+                >
+                  {CAPABILITIES[id]?.title ?? id}
+                </span>
+              ))
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted mb-1 flex items-center gap-1.5 text-xs">
+            <ShieldCheck className="h-3.5 w-3.5" /> Perfil de segurança
+          </dt>
+          <dd className="text-ink text-sm font-medium">
+            {securityProfile ? (PROFILE_LABEL[securityProfile] ?? securityProfile) : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted mb-1 text-xs">Scaffold</dt>
+          <dd className="text-ink font-mono text-sm">{scaffoldVersion ?? '—'}</dd>
+        </div>
+        <div>
+          <dt className="text-muted mb-1 text-xs">Security baseline</dt>
+          <dd className="text-ink font-mono text-sm">{securityBaseline ?? '—'}</dd>
+        </div>
+      </dl>
+    </section>
+  )
+}
+
+function ProvisionCard({
+  projectId,
+  ready,
+  failed,
+}: {
+  projectId: string
+  ready: boolean
+  failed: boolean
+}) {
+  return (
+    <section className="bg-surface rounded-[var(--radius-inner)] p-4">
+      <h2 className="text-sm font-semibold">
+        {failed ? 'Retomar provisionamento' : 'Provisionar'}
+      </h2>
       <p className="text-muted mt-1 mb-3 text-xs">
-        Cria o repositório, o banco com RLS, os gates do CI e o preview.
+        {failed
+          ? 'Uma etapa anterior falhou. Retomar continua do ponto que parou, sem recriar o que já existe.'
+          : 'Cria o repositório, o banco com RLS, os gates do CI e o baseline de segurança.'}
       </p>
 
-      <ScaffoldForm
-        projectId={projectId}
-        disabled={!ready}
-        githubOwner={githubOwner}
-      />
+      <ScaffoldForm projectId={projectId} disabled={!ready} />
 
       {!ready && (
         <p className="text-wait-ink mt-2.5 flex items-start gap-1.5 text-xs">
           <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Conecte o GitHub abaixo para habilitar.
+          Conecte o GitHub para habilitar.
         </p>
       )}
     </section>
@@ -280,6 +350,8 @@ function IntegrationCard({
   subtitle,
   connected,
   detail,
+  href,
+  linkLabel,
   action,
   actionLabel,
 }: {
@@ -287,6 +359,8 @@ function IntegrationCard({
   subtitle: string
   connected: boolean
   detail: string | null
+  href: string | null
+  linkLabel: string
   action: () => Promise<void>
   actionLabel: string
 }) {
@@ -297,7 +371,6 @@ function IntegrationCard({
           <h3 className="text-sm font-medium">{title}</h3>
           <p className="text-muted text-xs">{subtitle}</p>
         </div>
-
         {connected ? (
           <span className="text-up-ink inline-flex shrink-0 items-center gap-1 text-xs font-medium">
             <CheckCircle2 className="h-3.5 w-3.5" />
@@ -309,9 +382,24 @@ function IntegrationCard({
       </div>
 
       {connected ? (
-        detail && (
-          <p className="text-muted mt-2 truncate font-mono text-xs">{detail}</p>
-        )
+        <div className="mt-2 flex items-center justify-between gap-2">
+          {detail && (
+            <p className="text-muted min-w-0 truncate font-mono text-xs">
+              {detail}
+            </p>
+          )}
+          {href && (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-muted hover:text-ink inline-flex shrink-0 items-center gap-1 text-xs font-medium"
+            >
+              {linkLabel}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+        </div>
       ) : (
         <form action={action} className="mt-3">
           <button

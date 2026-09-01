@@ -5,17 +5,13 @@ import { Database } from 'lucide-react'
 import { formatRelativeTime } from '@/lib/utils'
 import { ConnectGithubButton } from '@/components/accounts/connect-github-button'
 import { ConnectSupabaseButton } from '@/components/accounts/connect-supabase-button'
-import { ConnectVercelModal } from '@/components/accounts/connect-vercel-modal'
-import { isVercelOAuthAvailable } from '@/actions/vercel'
 import { isSupabaseOAuthAvailable } from '@/actions/accounts'
-import { DisconnectVercelButton } from '@/components/accounts/disconnect-vercel-button'
 import { DisconnectAccountButton } from '@/components/accounts/disconnect-account-button'
 import { ReconnectButton } from '@/components/accounts/reconnect-button'
 import { HealthBadge } from '@/components/accounts/health-badge'
 import {
   checkGithubToken,
   checkSupabaseToken,
-  checkVercelToken,
   type AccountHealth,
 } from '@/lib/account-health'
 import { AccountsToastHandler } from '@/components/accounts/accounts-toast-handler'
@@ -33,7 +29,7 @@ export default async function AccountsPage({
   } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [githubResponse, supabaseResponse, vercelResponse] = await Promise.all([
+  const [githubResponse, supabaseResponse] = await Promise.all([
     supabase
       .from('github_accounts')
       .select('*')
@@ -44,20 +40,11 @@ export default async function AccountsPage({
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false }),
-    supabase
-      .from('vercel_accounts')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false }),
   ])
 
   const githubAccounts = githubResponse.data ?? []
   const supabaseAccounts = supabaseResponse.data ?? []
-  const vercelAccounts = vercelResponse.data ?? []
-  const [vercelOAuth, supabaseOAuth] = await Promise.all([
-    isVercelOAuthAvailable(),
-    isSupabaseOAuthAvailable(),
-  ])
+  const supabaseOAuth = await isSupabaseOAuthAvailable()
 
   // Perguntamos a cada provedor se o token ainda vale. Dizer"Conectado"
   // com token morto faz o usuário caçar a causa em outro lugar quando algo
@@ -75,12 +62,6 @@ export default async function AccountsPage({
       health.set(
         `supabase:${account.id}`,
         await checkSupabaseToken(account.access_token_encrypted),
-      )
-    }),
-    ...vercelAccounts.map(async (account) => {
-      health.set(
-        `vercel:${account.id}`,
-        await checkVercelToken(account.access_token_encrypted, account.team_id),
       )
     }),
   ])
@@ -227,79 +208,6 @@ export default async function AccountsPage({
                   />
                   <ReconnectButton provider="supabase" label={acc.org_name} />
                   <DisconnectAccountButton type="supabase" accountId={acc.id} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* Vercel */}
-      <Card className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="bg-sunken flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)]">
-              <svg
-                className="h-4 w-4"
-                viewBox="0 0 76 65"
-                fill="currentColor"
-                aria-hidden
-              >
-                <path d="M37.59.25l36.95 64H.64l36.95-64z" />
-              </svg>
-            </div>
-            <div>
-              <h2 className="text-base font-semibold">Vercel</h2>
-              <p className="text-muted text-xs">
-                Para publicar o preview de cada mudança
-              </p>
-            </div>
-          </div>
-          <ConnectVercelModal oauthAvailable={vercelOAuth} />
-        </div>
-
-        {vercelAccounts.length === 0 ? (
-          <div className="space-y-2 rounded-[var(--radius-inner)] p-10 text-center">
-            <p className="text-sm font-medium">
-              Nenhuma conta Vercel conectada
-            </p>
-            <p className="text-muted mx-auto max-w-sm text-xs">
-              Sem ela os projetos ficam sem preview publicado — você continua
-              vendo o código, mas não tem link para abrir o app nem para mandar
-              para outra pessoa.
-            </p>
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            {vercelAccounts.map((acc) => (
-              <div
-                key={acc.id}
-                className="bg-sunken flex items-center justify-between rounded-[var(--radius-inner)] p-4"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="bg-sunken flex h-10 w-10 items-center justify-center rounded-full">
-                    <svg
-                      className="h-4 w-4"
-                      viewBox="0 0 76 65"
-                      fill="currentColor"
-                      aria-hidden
-                    >
-                      <path d="M37.59.25l36.95 64H.64l36.95-64z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">{acc.account_name}</p>
-                    <p className="text-muted text-xs">
-                      {acc.team_id ? 'Time' : 'Conta pessoal'} · conectada{' '}
-                      {formatRelativeTime(acc.created_at)}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <HealthBadge
-                    health={health.get(`vercel:${acc.id}`) ?? 'unknown'}
-                  />
-                  <DisconnectVercelButton accountId={acc.id} />
                 </div>
               </div>
             ))}

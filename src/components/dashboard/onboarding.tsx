@@ -3,7 +3,6 @@ import { Check, ArrowRight, ExternalLink } from 'lucide-react'
 import {
   connectGithubFromOnboarding,
   connectSupabaseFromOnboarding,
-  connectVercelFromOnboarding,
 } from '@/actions/onboarding'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
@@ -11,13 +10,11 @@ import { Card } from '@/components/ui/card'
 export interface OnboardingStatus {
   github: boolean
   supabase: boolean
-  vercel: boolean
   supabaseOAuth: boolean
-  vercelOAuth: boolean
 }
 
 interface Step {
-  key: 'github' | 'supabase' | 'vercel'
+  key: 'github' | 'supabase'
   title: string
   description: string
   done: boolean
@@ -28,10 +25,10 @@ interface Step {
 /**
  * Passo a passo de conexão.
  *
- * A ordem importa: sem GitHub não há onde pôr o código, sem Supabase não há
- * banco, e sem Vercel não há preview. Cada passo é uma autorização — quem
- * conecta nunca precisa gerar token, desde que os apps OAuth estejam
- * configurados no ambiente.
+ * As integrações principais são GitHub (onde o código mora) e Supabase (banco +
+ * auth). Cada passo é uma autorização — quem conecta nunca precisa gerar token,
+ * desde que os apps OAuth estejam configurados no ambiente. O preview de dev é
+ * localhost (via bootstrap), então não há passo de deploy aqui.
  */
 export function Onboarding({ status }: { status: OnboardingStatus }) {
   const steps: Step[] = [
@@ -50,14 +47,6 @@ export function Onboarding({ status }: { status: OnboardingStatus }) {
       done: status.supabase,
       oauth: status.supabaseOAuth,
       action: connectSupabaseFromOnboarding,
-    },
-    {
-      key: 'vercel',
-      title: 'Vercel',
-      description: 'Publica o preview de cada mudança',
-      done: status.vercel,
-      oauth: status.vercelOAuth,
-      action: connectVercelFromOnboarding,
     },
   ]
 

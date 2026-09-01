@@ -28,7 +28,10 @@ import {
 // o CI adaptativo. Projeto atrás mostra o cartão "Atualizar base".
 // 2.2.0: scaffold v2 — local dev harness (verify adaptativo, setup:local, git
 // hooks), identidade do projeto em .supremo/project.json e capabilities.
-export const TEMPLATE_VERSION = '2.2.0'
+// 2.3.0: banco online via Supabase CLI — o bootstrap linka o checkout ao remoto;
+// regras de agente (migration = fonte da verdade, guarda de op destrutiva) e
+// supabase/.temp gitignored.
+export const TEMPLATE_VERSION = '2.3.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -681,6 +684,11 @@ test-results/
 
 .env*
 !.env.example
+
+# Supabase CLI: estado do link (project-ref etc.) e branches locais. O ref não é
+# segredo, mas é por-máquina e não deve ir ao Git (cada checkout linka o seu).
+supabase/.temp/
+supabase/.branches/
 
 *.log
 .DS_Store
@@ -2584,6 +2592,34 @@ exigida pelo CI — não é sugestão.
 3. Espere os gates. Se algum falhar, leia o log e corrija.
 4. Merge só com tudo verde.
 
+## Banco de dados online (Supabase CLI)
+
+Este checkout está **linkado ao Supabase remoto DESTE projeto** — o \`project-ref\`
+fica em \`supabase/.temp/project-ref\`. Você opera o banco online direto pela CLI
+oficial, sem depender do MCP:
+
+- **Sincronizar do remoto:** \`supabase db pull\`
+- **Mudar schema (tabela, coluna, RLS, policy, função SQL, trigger):**
+  1. \`supabase migration new <nome>\` — cria a migration versionada
+  2. escreva o SQL (toda tabela nova com RLS ativa + teste de isolamento)
+  3. \`supabase db push\` — aplica no remoto
+- **Edge Functions:** \`supabase functions new|deploy|list\`
+
+**Migration é a fonte da verdade.** Nunca altere o schema "invisível" só no banco
+(SQL solto no dashboard): mudança de schema vira migration versionada, validada e
+aplicada por \`supabase db push\`. Assim o repositório e o banco nunca divergem.
+
+### Operações destrutivas no remoto — PARE e confirme
+\`supabase db reset\`, \`DROP\`, \`TRUNCATE\`, \`DELETE\` em massa e afins são
+irreversíveis no banco online. Antes de rodar qualquer uma:
+1. **Mostre o \`project-ref\` alvo:** \`cat supabase/.temp/project-ref\`.
+2. **Peça confirmação explícita** ao humano, nomeando esse ref.
+3. Só então execute. Nunca rode uma operação destrutiva de forma autônoma.
+
+Credenciais (o token do \`supabase login\` e a senha do banco) vivem no **keychain
+do sistema**, gravadas pela própria CLI. Nunca as imprima, escreva em arquivo nem
+faça commit. O \`supabase/.temp/\` é gitignored — não versione o estado do link.
+
 Este projeto é gerenciado pelo Supremo. O MCP remoto expõe estas regras via
 \`get_project_context\` — elas valem de qualquer máquina.
 `
@@ -2599,6 +2635,8 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 - Implementar do servidor para fora
 - Ativar RLS em toda tabela nova **e escrever o teste de isolamento**
 - Validar entrada com Zod no servidor
+- Mudar o schema do banco online só por **migration versionada + \`supabase db push\`**
+  (nunca SQL solto no dashboard). Ver "Banco de dados online" no \`agents.md\`.
 - Rodar \`npm run typecheck && npm run lint && npm test\` antes de propor mudança
 
 ## Nunca
@@ -2609,6 +2647,8 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 - Segredo em código
 - Validação de acesso no cliente
 - Commit direto na \`main\`
+- Rodar destrutivo no remoto (\`supabase db reset\`, \`DROP\`, \`TRUNCATE\`, \`DELETE\`
+  em massa) sem confirmação explícita do humano + mostrar o \`project-ref\` alvo
 
 ## Commits
 \`feat:\` \`fix:\` \`refactor:\` \`test:\` \`security:\` \`docs:\` \`chore:\`

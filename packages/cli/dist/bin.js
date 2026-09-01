@@ -41,7 +41,10 @@ __export(bootstrap_exports, {
   buildEnvFile: () => buildEnvFile,
   cleanRemoteUrl: () => cleanRemoteUrl,
   gitCloneArgs: () => gitCloneArgs,
+  projectListHasRef: () => projectListHasRef,
   runBootstrap: () => runBootstrap,
+  supabaseLinkArgs: () => supabaseLinkArgs,
+  supabaseLinkEnv: () => supabaseLinkEnv,
   targetDir: () => targetDir
 });
 function buildEnvFile(env) {
@@ -67,6 +70,15 @@ function gitCloneArgs(repoFullName, branch, dest) {
     cleanRemoteUrl(repoFullName),
     dest
   ];
+}
+function supabaseLinkArgs(projectRef) {
+  return ["link", "--project-ref", projectRef];
+}
+function supabaseLinkEnv(base, dbPassword) {
+  return dbPassword ? { ...base, SUPABASE_DB_PASSWORD: dbPassword } : { ...base };
+}
+function projectListHasRef(projectsListOutput, projectRef) {
+  return projectsListOutput.includes(projectRef);
 }
 async function startDeviceFlow(baseUrl, projectId) {
   const res = await fetch(`${baseUrl}/api/bootstrap/device/start`, {
@@ -98,6 +110,68 @@ async function pollForConfig(baseUrl, deviceCode, intervalSec, expiresAt) {
     throw new Error("Autoriza\xE7\xE3o inv\xE1lida. Rode o comando de novo.");
   }
   throw new Error("Tempo de autoriza\xE7\xE3o esgotado.");
+}
+function linkSupabaseRemote(dest, supabase) {
+  const { projectRef, dbPassword } = supabase;
+  const manual = `cd ${dest} && supabase link --project-ref ${projectRef}`;
+  if (!tryExec("supabase", ["--version"])) {
+    console.log(
+      `
+\u2022 Supabase CLI n\xE3o encontrado \u2014 pulei o link do banco online.
+  Instale (macOS: brew install supabase/tap/supabase) e rode:
+    ${manual}
+`
+    );
+    return;
+  }
+  let projects = tryExecOut("supabase", ["projects", "list"]);
+  if (projects === null) {
+    console.log("\nAutentique o Supabase CLI (abre no navegador)\u2026");
+    try {
+      run("supabase", ["login"], dest);
+    } catch {
+      console.log(
+        `\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
+  Rode depois: supabase login && ( ${manual} )
+`
+      );
+      return;
+    }
+    projects = tryExecOut("supabase", ["projects", "list"]);
+  }
+  if (projects === null) {
+    console.log(`\u2022 N\xE3o consegui listar projetos do Supabase \u2014 pulei o link.
+    ${manual}
+`);
+    return;
+  }
+  ok("Supabase CLI autenticado");
+  if (!projectListHasRef(projects, projectRef)) {
+    console.log(
+      `
+\u2022 A conta logada no Supabase CLI n\xE3o tem acesso ao projeto ${projectRef}.
+  Fa\xE7a login com a conta Supabase que voc\xEA conectou ao Supremo (a dona
+  deste projeto) e rode o link:
+    supabase login
+    ${manual}
+`
+    );
+    return;
+  }
+  try {
+    (0, import_node_child_process2.execFileSync)("supabase", supabaseLinkArgs(projectRef), {
+      cwd: dest,
+      env: supabaseLinkEnv(process.env, dbPassword),
+      stdio: ["ignore", "ignore", "inherit"]
+    });
+  } catch {
+    console.log(`\u2022 N\xE3o consegui linkar automaticamente. Rode:
+    ${manual}
+`);
+    return;
+  }
+  ok(`Supabase remoto linkado: ${projectRef}`);
+  ok("Agente pronto para trabalhar no banco online");
 }
 async function runBootstrap(opts) {
   const baseUrl = opts.url.replace(/\/$/, "");
@@ -141,6 +215,9 @@ async function runBootstrap(opts) {
   } catch {
     console.log('\u2022 setup:local pulado (rode "npm run setup:local" manualmente)');
   }
+  if (config.supabase?.projectRef) {
+    linkSupabaseRemote(dest, config.supabase);
+  }
   console.log(`
 Projeto pronto:
 
@@ -157,7 +234,7 @@ Projeto pronto:
 `);
   }
 }
-var import_node_child_process2, import_node_fs2, import_node_path2, sleep, run, ok;
+var import_node_child_process2, import_node_fs2, import_node_path2, sleep, run, ok, tryExec, tryExecOut;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
@@ -167,6 +244,24 @@ var init_bootstrap = __esm({
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     run = (cmd, args, cwd, env) => (0, import_node_child_process2.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
     ok = (label) => console.log(`\u2713 ${label}`);
+    tryExec = (cmd, args) => {
+      try {
+        (0, import_node_child_process2.execFileSync)(cmd, args, { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    tryExecOut = (cmd, args) => {
+      try {
+        return (0, import_node_child_process2.execFileSync)(cmd, args, {
+          stdio: ["ignore", "pipe", "ignore"],
+          encoding: "utf8"
+        });
+      } catch {
+        return null;
+      }
+    };
   }
 });
 
@@ -3695,7 +3790,7 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
   config.mcpServers = config.mcpServers ?? {};
   config.mcpServers.supremo = {
     command: "npx",
-    args: ["-y", "@supremo/cli", "mcp"],
+    args: ["-y", "supremo-cli", "mcp"],
     env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token }
   };
   import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(configPath), { recursive: true });

@@ -24,6 +24,15 @@ export interface BootstrapConfig {
   gitToken: string
   gitTokenScope: 'installation' | 'user'
   env: Record<string, string>
+  /**
+   * Presente quando o projeto tem Supabase. Usado para `supabase link`. A
+   * `dbPassword` (quando vem) é injetada só na env do processo do link e gravada
+   * pela CLI oficial no keychain do SO — nunca em .env.local/Git/argv/log/stdout.
+   */
+  supabase?: {
+    projectRef: string
+    dbPassword?: string
+  }
 }
 
 // ── Helpers puros (testáveis) ───────────────────────────────────────────────
@@ -73,6 +82,41 @@ export function gitCloneArgs(
     cleanRemoteUrl(repoFullName),
     dest,
   ]
+}
+
+/**
+ * Args do `supabase link` — SEM a senha. A senha do banco jamais entra em argv
+ * (visível em `ps`): ela vai só pela env do processo (ver supabaseLinkEnv), que
+ * a CLI oficial lê e grava no keychain do SO.
+ */
+export function supabaseLinkArgs(projectRef: string): string[] {
+  return ['link', '--project-ref', projectRef]
+}
+
+/**
+ * Env do processo do `supabase link`: injeta SUPABASE_DB_PASSWORD só quando há
+ * senha, para o link ser não-interativo e a CLI persistir a senha no keychain.
+ * A senha nunca é logada nem escrita em arquivo por nós.
+ */
+export function supabaseLinkEnv(
+  base: NodeJS.ProcessEnv,
+  dbPassword?: string,
+): NodeJS.ProcessEnv {
+  return dbPassword ? { ...base, SUPABASE_DB_PASSWORD: dbPassword } : { ...base }
+}
+
+/**
+ * A conta logada no CLI tem acesso a este projeto? `supabase projects list`
+ * imprime uma linha por projeto com o REFERENCE ID; se o ref aparece, a conta é
+ * dona/membro. Usado para detectar divergência de conta (o Supremo pode ter
+ * criado o projeto numa conta Supabase diferente da que está logada no CLI) sem
+ * jamais enviar o token do backend para a máquina.
+ */
+export function projectListHasRef(
+  projectsListOutput: string,
+  projectRef: string,
+): boolean {
+  return projectsListOutput.includes(projectRef)
 }
 
 // ── Orquestração ────────────────────────────────────────────────────────────
@@ -140,6 +184,108 @@ const run = (cmd: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv)
 
 const ok = (label: string) => console.log(`✓ ${label}`)
 
+/** Roda um comando silenciosamente e diz se saiu 0 (para detecção, sem poluir). */
+const tryExec = (cmd: string, args: string[]): boolean => {
+  try {
+    execFileSync(cmd, args, { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Roda um comando e devolve o stdout, ou null se falhou. stderr é silenciado. */
+const tryExecOut = (cmd: string, args: string[]): string | null => {
+  try {
+    return execFileSync(cmd, args, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Linka o checkout ao Supabase remoto do projeto, via CLI oficial, para o agente
+ * (Claude/Codex) operar o banco online sem depender do MCP.
+ *
+ *   • reaproveita o `supabase login` se já autenticado; senão conduz o login
+ *     oficial (browser) — o token fica no keychain do SO, nunca por nós;
+ *   • `supabase link --project-ref <ref>` grava o ref em `supabase/.temp`
+ *     (gitignored), prendendo o checkout SÓ a este projeto (sem risco de aplicar
+ *     migration no projeto errado);
+ *   • a senha do banco (quando vem) vai só pela env do processo → a CLI a grava
+ *     no keychain. Nunca em `.env.local`, Git, argv, log ou stdout.
+ *
+ * Falha aqui não quebra o bootstrap: o app local já está pronto; o link é o extra
+ * para operar o banco online. Sempre imprime o comando manual em caso de erro.
+ */
+function linkSupabaseRemote(
+  dest: string,
+  supabase: { projectRef: string; dbPassword?: string },
+): void {
+  const { projectRef, dbPassword } = supabase
+  const manual = `cd ${dest} && supabase link --project-ref ${projectRef}`
+
+  if (!tryExec('supabase', ['--version'])) {
+    console.log(
+      `\n• Supabase CLI não encontrado — pulei o link do banco online.\n` +
+        `  Instale (macOS: brew install supabase/tap/supabase) e rode:\n    ${manual}\n`,
+    )
+    return
+  }
+
+  // Autenticação: reaproveita se já logado; senão, login oficial (browser). Uma
+  // única chamada a `projects list` serve para detectar login E verificar acesso.
+  let projects = tryExecOut('supabase', ['projects', 'list'])
+  if (projects === null) {
+    console.log('\nAutentique o Supabase CLI (abre no navegador)…')
+    try {
+      run('supabase', ['login'], dest)
+    } catch {
+      console.log(
+        `• Login do Supabase não concluído — pulei o link.\n` +
+          `  Rode depois: supabase login && ( ${manual} )\n`,
+      )
+      return
+    }
+    projects = tryExecOut('supabase', ['projects', 'list'])
+  }
+  if (projects === null) {
+    console.log(`• Não consegui listar projetos do Supabase — pulei o link.\n    ${manual}\n`)
+    return
+  }
+  ok('Supabase CLI autenticado')
+
+  // Divergência de conta: o Supremo pode ter criado o projeto numa conta Supabase
+  // diferente da que está logada no CLI. Nesse caso NÃO enviamos nenhum token —
+  // orientamos o dev a logar na conta certa (a que ele conectou ao Supremo).
+  if (!projectListHasRef(projects, projectRef)) {
+    console.log(
+      `\n• A conta logada no Supabase CLI não tem acesso ao projeto ${projectRef}.\n` +
+        `  Faça login com a conta Supabase que você conectou ao Supremo (a dona\n` +
+        `  deste projeto) e rode o link:\n` +
+        `    supabase login\n    ${manual}\n`,
+    )
+    return
+  }
+
+  // Link: senha só na env (nunca em argv); ref grava em supabase/.temp.
+  try {
+    execFileSync('supabase', supabaseLinkArgs(projectRef), {
+      cwd: dest,
+      env: supabaseLinkEnv(process.env, dbPassword),
+      stdio: ['ignore', 'ignore', 'inherit'],
+    })
+  } catch {
+    console.log(`• Não consegui linkar automaticamente. Rode:\n    ${manual}\n`)
+    return
+  }
+  ok(`Supabase remoto linkado: ${projectRef}`)
+  ok('Agente pronto para trabalhar no banco online')
+}
+
 export async function runBootstrap(opts: {
   projectId: string
   url: string
@@ -193,6 +339,11 @@ export async function runBootstrap(opts: {
     ok('Setup local + baseline')
   } catch {
     console.log('• setup:local pulado (rode "npm run setup:local" manualmente)')
+  }
+
+  // Linka o checkout ao Supabase remoto para o agente operar o banco online.
+  if (config.supabase?.projectRef) {
+    linkSupabaseRemote(dest, config.supabase)
   }
 
   console.log(`\nProjeto pronto:\n\n  ${dest}\n`)

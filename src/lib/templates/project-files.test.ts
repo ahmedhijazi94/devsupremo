@@ -856,3 +856,94 @@ describe('design system — apps nascem bonitos', () => {
     expect(home).toContain('<Card>')
   })
 })
+
+describe('scaffold v2 — local dev harness', () => {
+  it('emite o harness (verify, setup:local, git hooks)', () => {
+    expect(file('scripts/verify.mjs')).toContain('classify')
+    expect(file('scripts/setup-local.mjs')).toContain('core.hooksPath')
+    expect(file('.githooks/pre-commit')).toContain('verify.mjs')
+    expect(file('.githooks/pre-push')).toContain('verify.mjs')
+  })
+
+  it('os git hooks são executáveis (mode 100755)', () => {
+    const hook = files.find((f) => f.path === '.githooks/pre-commit')
+    expect(hook?.mode).toBe('100755')
+  })
+
+  it('o package.json expõe verify em três níveis + setup:local', () => {
+    for (const s of [
+      'verify',
+      'verify:quick',
+      'verify:security',
+      'verify:full',
+      'setup:local',
+    ]) {
+      expect(Object.keys(packageJson.scripts)).toContain(s)
+    }
+  })
+
+  it('não quebra os scripts base (test com exclude de rls continua)', () => {
+    expect(packageJson.scripts.test).toContain('--exclude')
+    expect(packageJson.scripts['dev:preview']).toBe('next dev --webpack')
+  })
+})
+
+describe('scaffold v2 — identidade do projeto', () => {
+  const identity = JSON.parse(file('.supremo/project.json')) as {
+    scaffoldVersion: string
+    securityBaselineVersion: string
+    securityProfile: string
+    capabilities: string[]
+    projectId?: string
+  }
+
+  it('registra versão do scaffold, baseline e perfil', () => {
+    expect(identity.scaffoldVersion).toBeTruthy()
+    expect(identity.securityBaselineVersion).toBeTruthy()
+    expect(identity.securityProfile).toBe('standard') // solo → auth → standard
+  })
+
+  it('solo deriva capability auth', () => {
+    expect(identity.capabilities).toEqual(['auth'])
+  })
+
+  it('NUNCA carrega segredo (seção 25)', () => {
+    const raw = file('.supremo/project.json').toLowerCase()
+    for (const forbidden of [
+      'token',
+      'secret',
+      'service_role',
+      'password',
+      'private_key',
+      'anon',
+    ]) {
+      expect(raw).not.toContain(forbidden)
+    }
+  })
+
+  it('team infere multitenant e deriva auth + multitenant', () => {
+    const team = buildProjectFiles({
+      projectName: 'time-x',
+      description: 'SaaS',
+      kind: 'team',
+    })
+    const id = JSON.parse(
+      team.find((f) => f.path === '.supremo/project.json')!.content,
+    ) as { securityProfile: string; capabilities: string[] }
+    expect(id.securityProfile).toBe('multitenant')
+    expect(id.capabilities).toEqual(['auth', 'multitenant'])
+  })
+
+  it('public é CORE puro (sem capabilities), perfil simple', () => {
+    const pub = buildProjectFiles({
+      projectName: 'site',
+      description: 'landing',
+      kind: 'public',
+    })
+    const id = JSON.parse(
+      pub.find((f) => f.path === '.supremo/project.json')!.content,
+    ) as { securityProfile: string; capabilities: string[] }
+    expect(id.capabilities).toEqual([])
+    expect(id.securityProfile).toBe('simple')
+  })
+})

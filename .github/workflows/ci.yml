@@ -109,7 +109,10 @@ jobs:
   build:
     name: Build de produção
     runs-on: ubuntu-latest
-    needs: [quality, test]
+    # Independente da cobertura: uma falha de "Testes e cobertura" não pode
+    # esconder o resultado do build. Depende só de tipos/lint (pré-requisito
+    # real para compilar). Ambos seguem obrigatórios para o merge.
+    needs: [quality]
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co' }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder' }}

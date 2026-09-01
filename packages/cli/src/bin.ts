@@ -79,6 +79,34 @@ program
   })
 
 program
+  .command('bootstrap <project-id>')
+  .description('Prepara o workspace local do projeto (autoriza no navegador)')
+  .requiredOption('-u, --url <url>', 'URL do Supremo, ex.: https://supremo.app')
+  .option('-d, --dir <dir>', 'Diretório-alvo (padrão: ~/Supremo/<repo>)')
+  .option('--start', 'Inicia o dev server ao final')
+  .action(
+    async (
+      projectId: string,
+      options: { url: string; dir?: string; start?: boolean },
+    ) => {
+      const { runBootstrap } = await import('./bootstrap.js')
+      try {
+        await runBootstrap({
+          projectId,
+          url: options.url,
+          dir: options.dir,
+          start: options.start,
+        })
+      } catch (error) {
+        console.error(
+          `\n✗ ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+        process.exit(1)
+      }
+    },
+  )
+
+program
   .command('mcp', { isDefault: true })
   .description('Roda a ponte MCP (o cliente chama isto automaticamente)')
   .action(async () => {

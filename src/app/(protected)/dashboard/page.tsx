@@ -14,7 +14,6 @@ import { Pill } from '@/components/ui/pill'
 import { ProjectCard } from '@/components/dashboard/project-card'
 import { Onboarding } from '@/components/dashboard/onboarding'
 import { isSupabaseOAuthAvailable } from '@/actions/accounts'
-import { isVercelOAuthAvailable } from '@/actions/vercel'
 import { formatRelativeTime } from '@/lib/utils'
 
 export default async function DashboardPage() {
@@ -29,10 +28,8 @@ export default async function DashboardPage() {
     { data: projects },
     github,
     supabaseAccounts,
-    vercel,
     { data: changes },
     supabaseOAuth,
-    vercelOAuth,
   ] = await Promise.all([
     supabase
       .from('projects')
@@ -48,32 +45,25 @@ export default async function DashboardPage() {
       .select('id', { count: 'exact', head: true })
       .eq('user_id', user.id),
     supabase
-      .from('vercel_accounts')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', user.id),
-    supabase
       .from('messages')
       .select('id, content, pipeline_status, created_at, project_id, pr_number')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(6),
     isSupabaseOAuthAvailable(),
-    isVercelOAuthAvailable(),
   ])
 
   const projectList = projects ?? []
   const changeList = changes ?? []
 
+  // Integrações principais do control plane v2: GitHub + Supabase.
   const connections = {
     github: (github.count ?? 0) > 0,
     supabase: (supabaseAccounts.count ?? 0) > 0,
-    vercel: (vercel.count ?? 0) > 0,
     supabaseOAuth,
-    vercelOAuth,
   }
 
-  const needsSetup =
-    !connections.github || !connections.supabase || !connections.vercel
+  const needsSetup = !connections.github || !connections.supabase
 
   const provisioned = projectList.filter((p) => p.github_repo_full_name).length
   const green = changeList.filter((c) => c.pipeline_status === 'passed').length
@@ -138,9 +128,7 @@ export default async function DashboardPage() {
         <Stat
           label="Contas conectadas"
           value={
-            (connections.github ? 1 : 0) +
-            (connections.supabase ? 1 : 0) +
-            (connections.vercel ? 1 : 0)
+            (connections.github ? 1 : 0) + (connections.supabase ? 1 : 0)
           }
           icon={<ShieldCheck className="h-5 w-5" />}
           footer={

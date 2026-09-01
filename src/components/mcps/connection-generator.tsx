@@ -144,14 +144,6 @@ export function ConnectionGenerator({
   const snippet = agent.build(mcpUrl, value)
   const Icon = ICON[agent.kind]
 
-  // Preview local: o companion precisa da URL base do Supremo (sem /api/mcp).
-  // É UM arquivo só (bundle standalone) — baixa e roda, sem clonar o repo.
-  const baseUrl = mcpUrl.replace(/\/api\/mcp\/?$/, '')
-  const companionSnippet =
-    `curl -fsSL ${baseUrl}/companion/supremo-runtime.mjs -o supremo-runtime.mjs\n` +
-    `node supremo-runtime.mjs login --url ${baseUrl} --token ${value}\n` +
-    `node supremo-runtime.mjs run`
-
   return (
     <div className="space-y-4">
       {!token && (
@@ -228,28 +220,6 @@ export function ConnectionGenerator({
           </pre>
           <CopyButton
             value={FIRST_PROMPT + '[descreva a funcionalidade aqui]'}
-            className="absolute top-2.5 right-2.5"
-          />
-        </div>
-      </div>
-
-      {/* Preview local — o companion na máquina do dev, com o token já preenchido */}
-      <div className="space-y-2">
-        <div className="text-ink flex items-center gap-2">
-          <Rocket className="h-4 w-4" />
-          <h4 className="text-sm font-semibold">Preview local (companion)</h4>
-        </div>
-        <p className="text-muted text-xs">
-          Roda o Next real na sua máquina, com HMR. Cole no Terminal em QUALQUER
-          pasta — é um arquivo só, não precisa clonar nada. Baixa, salva o login
-          (token e URL já preenchidos) e mantém o companion rodando.
-        </p>
-        <div className="relative">
-          <pre className="bg-sunken text-ink overflow-x-auto rounded-[var(--radius-control)] p-3 pr-12 font-mono text-xs whitespace-pre">
-            {companionSnippet}
-          </pre>
-          <CopyButton
-            value={companionSnippet}
             className="absolute top-2.5 right-2.5"
           />
         </div>

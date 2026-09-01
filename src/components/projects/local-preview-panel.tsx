@@ -198,16 +198,16 @@ function OfflineHelp() {
     <div className="text-muted mx-auto flex h-full max-w-md flex-col items-center justify-center gap-3 px-6 text-center text-sm">
       <p className="text-ink font-medium">Companion offline</p>
       <p>
-        O preview local roda um dev server na sua máquina. Ligue o companion (uma
-        vez) e ele conecta sozinho:
+        O preview local roda um dev server na sua máquina. É um arquivo só — não
+        precisa clonar nada. Pegue o comando pronto (com o seu token já dentro)
+        em <span className="text-ink font-medium">/mcps</span>, bloco “Preview
+        local (companion)”, cole no Terminal e deixe rodando:
       </p>
       <pre className="bg-surface text-ink w-full overflow-x-auto rounded-[var(--radius-control)] p-3 text-left font-mono text-xs">
-        npx @supremo/companion login --url {'<url>'} --token {'<token>'}
-        {'\n'}npx @supremo/companion run
+        curl -fsSL .../companion/supremo-runtime.mjs -o supremo-runtime.mjs
+        {'\n'}node supremo-runtime.mjs login --url ... --token ...
+        {'\n'}node supremo-runtime.mjs run
       </pre>
-      <p className="text-xs">
-        A URL e o token estão em <span className="font-medium">/mcps</span>.
-      </p>
     </div>
   )
 }

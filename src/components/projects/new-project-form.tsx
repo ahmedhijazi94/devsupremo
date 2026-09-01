@@ -6,8 +6,21 @@ import { Loader2, Globe, User, Building2, Check } from 'lucide-react'
 import { createEmptyProject } from '@/actions/projects'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import {
+  CAPABILITIES,
+  capabilitiesForKind,
+  inferSecurityProfile,
+  type SecurityProfile,
+} from '@/lib/capabilities'
 
 type Kind = 'public' | 'solo' | 'team'
+
+const PROFILE_LABEL: Record<SecurityProfile, string> = {
+  simple: 'Simples',
+  standard: 'Padrão',
+  multitenant: 'Multi-tenant',
+  sensitive: 'Sensível',
+}
 
 const KINDS: {
   id: Kind
@@ -45,6 +58,10 @@ export function NewProjectForm() {
   const [kind, setKind] = useState<Kind>('solo')
 
   const [nameError, setNameError] = useState('')
+
+  // Preview honesto do que o kind gera (capabilities + perfil inferido).
+  const capabilities = capabilitiesForKind(kind)
+  const profile = inferSecurityProfile(capabilities, { kind })
 
   // Generate slug dynamically
   const slug = form.name
@@ -173,6 +190,28 @@ export function NewProjectForm() {
               </button>
             )
           })}
+        </div>
+
+        {/* Preview do que o Supremo vai gerar — inferido, sem opção manual. */}
+        <div className="bg-sunken mt-1 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-xs">
+          <span className="text-muted">Nasce com:</span>
+          {capabilities.length === 0 ? (
+            <span className="text-ink font-medium">só o CORE</span>
+          ) : (
+            capabilities.map((id) => (
+              <span
+                key={id}
+                className="bg-surface text-ink rounded-full px-2 py-0.5 font-medium"
+              >
+                {CAPABILITIES[id].title}
+              </span>
+            ))
+          )}
+          <span className="text-muted">·</span>
+          <span className="text-muted">
+            perfil de segurança{' '}
+            <span className="text-ink font-medium">{PROFILE_LABEL[profile]}</span>
+          </span>
         </div>
       </div>
 

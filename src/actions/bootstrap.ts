@@ -9,6 +9,7 @@ import {
   lookupGrant,
   supabaseBootstrapStore,
 } from '@/lib/bootstrap/codes'
+import { bootstrapCommand } from '@/lib/bootstrap/command'
 
 /**
  * Bootstrap por device flow. O comando local carrega só o project-id (não é
@@ -34,9 +35,7 @@ export async function createBootstrapCommand(projectId: string): Promise<
     const { user } = await requireUser()
     await resolveProject(user.id, projectId) // dono? senão lança
     const baseUrl = await resolveBaseUrl()
-    return {
-      command: `npx @supremo/cli@latest bootstrap ${projectId} --url ${baseUrl}`,
-    }
+    return { command: bootstrapCommand(projectId, baseUrl) }
   } catch (error) {
     return {
       error:

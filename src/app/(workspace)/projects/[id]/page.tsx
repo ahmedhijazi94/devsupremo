@@ -1,4 +1,5 @@
 import { notFound, redirect } from 'next/navigation'
+import { headers } from 'next/headers'
 import Link from 'next/link'
 import {
   ArrowLeft,
@@ -17,6 +18,8 @@ import { WorkspaceShell } from '@/components/projects/workspace-shell'
 import { LiveGateBadge } from '@/components/projects/live-gate-badge'
 import { TemplateUpdateCard } from '@/components/projects/template-update-card'
 import { SecretsCard } from '@/components/projects/secrets-card'
+import { LocalDevCard } from '@/components/projects/local-dev-card'
+import { bootstrapCommand } from '@/lib/bootstrap/command'
 import { TEMPLATE_VERSION } from '@/lib/templates/project-files'
 import {
   ActivityFeed,
@@ -81,6 +84,14 @@ export default async function ProjectPage({
   const project = data as unknown as ProjectWithAccounts
   const provisioned = Boolean(project.github_repo_full_name)
   const status = STATUS[project.status] ?? STATUS.active
+
+  // Comando de bootstrap (device flow) — só o project-id, nada sensível.
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL
+  const host = (await headers()).get('host') ?? 'localhost:3000'
+  const baseUrl = configuredUrl
+    ? configuredUrl.replace(/\/$/, '')
+    : `${host.startsWith('localhost') ? 'http' : 'https'}://${host}`
+  const bootstrapCmd = bootstrapCommand(project.id, baseUrl)
   // A versão gravada é o gatilho barato do selo; a conferência precisa vem só
   // quando o usuário abre o cartão. Projeto antigo (versão nula) também está
   // atrás, por definição.
@@ -197,6 +208,8 @@ export default async function ProjectPage({
                 latestVersion={TEMPLATE_VERSION}
               />
             )}
+
+            {provisioned && <LocalDevCard command={bootstrapCmd} />}
 
             {provisioned && <SecretsCard projectId={project.id} />}
 

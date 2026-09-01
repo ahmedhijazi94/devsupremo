@@ -44181,7 +44181,7 @@ async function handshake(config2) {
     );
   }
   const data = await res.json();
-  if (!data.userId || !data.supabaseUrl || !data.supabaseAnonKey || !data.realtimeToken || !data.channel) {
+  if (!data.userId || !data.supabaseUrl || !data.supabaseAnonKey || !data.session?.accessToken || !data.session?.refreshToken || !data.channel) {
     throw new Error("Handshake devolveu sess\xE3o incompleta.");
   }
   return data;
@@ -44198,9 +44198,16 @@ var SupabaseRealtimeTransport = class {
   }
   async start() {
     this.client = createClient(this.session.supabaseUrl, this.session.supabaseAnonKey, {
-      auth: { persistSession: false }
+      auth: { persistSession: false, autoRefreshToken: true }
     });
-    this.client.realtime.setAuth(this.session.realtimeToken);
+    await this.client.auth.setSession({
+      access_token: this.session.session.accessToken,
+      refresh_token: this.session.session.refreshToken
+    });
+    this.client.realtime.setAuth(this.session.session.accessToken);
+    this.client.auth.onAuthStateChange((_event, session) => {
+      if (session?.access_token) this.client?.realtime.setAuth(session.access_token);
+    });
     const channel = this.client.channel(this.session.channel, {
       // private: RLS em realtime.messages garante que só o dono entra no canal.
       config: { private: true, broadcast: { self: false }, presence: { key: "companion" } }
@@ -44261,7 +44268,8 @@ program2.command("run", { isDefault: true }).description("Conecta ao Supremo e f
     logger.error(`N\xE3o conectou: ${error61 instanceof Error ? error61.message : error61}`);
     process.exit(1);
   }
-  logger.addSecret(session.realtimeToken);
+  logger.addSecret(session.session.accessToken);
+  logger.addSecret(session.session.refreshToken);
   const transport = new SupabaseRealtimeTransport(session);
   const manager = new ProjectManager({
     userId: session.userId,

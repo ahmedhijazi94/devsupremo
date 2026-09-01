@@ -55,7 +55,8 @@ program
       logger.error(`Não conectou: ${error instanceof Error ? error.message : error}`)
       process.exit(1)
     }
-    logger.addSecret(session.realtimeToken)
+    logger.addSecret(session.session.accessToken)
+    logger.addSecret(session.session.refreshToken)
 
     const transport = new SupabaseRealtimeTransport(session)
     const manager = new ProjectManager({

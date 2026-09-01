@@ -20,11 +20,12 @@ export interface CompanionSession {
   userId: string
   supabaseUrl: string
   supabaseAnonKey: string
-  realtimeToken: string
+  /** Sessão real de Supabase Auth (JWKS) — sem JWT secret legado. */
+  session: { accessToken: string; refreshToken: string }
   channel: string
 }
 
-/** Troca o token sup_ por uma sessão de Realtime escopada ao usuário. */
+/** Troca o token sup_ por uma SESSÃO real de Supabase Auth escopada ao usuário. */
 export async function handshake(
   config: CompanionConfig,
 ): Promise<CompanionSession> {
@@ -42,7 +43,14 @@ export async function handshake(
     )
   }
   const data = (await res.json()) as Partial<CompanionSession>
-  if (!data.userId || !data.supabaseUrl || !data.supabaseAnonKey || !data.realtimeToken || !data.channel) {
+  if (
+    !data.userId ||
+    !data.supabaseUrl ||
+    !data.supabaseAnonKey ||
+    !data.session?.accessToken ||
+    !data.session?.refreshToken ||
+    !data.channel
+  ) {
     throw new Error('Handshake devolveu sessão incompleta.')
   }
   return data as CompanionSession
@@ -61,9 +69,18 @@ export class SupabaseRealtimeTransport implements Transport {
 
   async start(): Promise<void> {
     this.client = createClient(this.session.supabaseUrl, this.session.supabaseAnonKey, {
-      auth: { persistSession: false },
+      auth: { persistSession: false, autoRefreshToken: true },
     })
-    this.client.realtime.setAuth(this.session.realtimeToken)
+    // Sessão real de Supabase Auth; o cliente renova sozinho. Ao renovar,
+    // reautentica o Realtime com o token novo.
+    await this.client.auth.setSession({
+      access_token: this.session.session.accessToken,
+      refresh_token: this.session.session.refreshToken,
+    })
+    this.client.realtime.setAuth(this.session.session.accessToken)
+    this.client.auth.onAuthStateChange((_event, session) => {
+      if (session?.access_token) this.client?.realtime.setAuth(session.access_token)
+    })
 
     const channel = this.client.channel(this.session.channel, {
       // private: RLS em realtime.messages garante que só o dono entra no canal.

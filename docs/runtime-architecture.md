@@ -72,7 +72,17 @@ dois lados; nenhuma mensagem carrega token de admin/service_role.
 
 Vercel serverless não hospeda servidor WebSocket. Escolha: **Supabase Realtime**
 (já está na stack, custo zero, conexão persistente autenticada). Companion e web
-entram num canal por projeto; comandos descem, eventos sobem. (Fase seguinte.)
+entram no canal privado `runtime:<userId>`; o servidor transmite comandos
+(service_role, sem socket), companion e web recebem eventos.
+
+**Auth do companion (modelo moderno, sem JWT secret legado):** o companion é um
+CLI (só tem o token sup_). No handshake `/api/companion/connect`, o Supremo emite
+uma **sessão real de Supabase Auth** para o usuário (server-side, via Admin API
+com o service_role que já existe — generateLink + verifyOtp) e a entrega ao
+companion. Os tokens são assinados pelas **chaves do próprio Supabase (JWKS)**;
+o Supremo **não assina nada** e **não precisa de `SUPABASE_JWT_SECRET`**. O
+service_role nunca sai do servidor. A credencial de git vem por
+`/api/companion/git-credentials` (curta duração), nunca no canal nem no browser.
 
 ## Segurança (mesmo modelo + a superfície nova)
 

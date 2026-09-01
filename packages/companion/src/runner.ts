@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createServer } from 'node:net'
+import { createServer, connect } from 'node:net'
 
 /**
  * Execução de processos filhos: install/git (roda até sair) e dev server
@@ -53,8 +53,34 @@ function isFree(port: number): Promise<boolean> {
   })
 }
 
-// Next imprime a URL local quando sobe; usamos isso para "pronto de verdade".
-const READY_RE = /(https?:\/\/localhost:\d+)|✓\s*Ready|ready in/i
+/** Consegue conectar na porta (IPv4 ou IPv6)? A verdade sobre "está no ar". */
+function canConnect(port: number, host: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = connect({ port, host })
+    const done = (ok: boolean) => {
+      sock.destroy()
+      resolve(ok)
+    }
+    sock.once('connect', () => done(true))
+    sock.once('error', () => done(false))
+    setTimeout(() => done(false), 1_000)
+  })
+}
+
+/**
+ * Espera a porta ACEITAR conexão de verdade — não só o dev imprimir "pronto".
+ * Elimina a corrida em que o preview carregava antes do servidor aceitar
+ * (localhost recusado). Tenta 127.0.0.1 e ::1 (macOS resolve localhost p/ IPv6).
+ */
+async function waitForPort(port: number, deadline: number): Promise<boolean> {
+  while (Date.now() < deadline) {
+    if ((await canConnect(port, '127.0.0.1')) || (await canConnect(port, '::1'))) {
+      return true
+    }
+    await new Promise((r) => setTimeout(r, 400))
+  }
+  return false
+}
 
 export class RealRunner implements Runner {
   exec(
@@ -94,37 +120,32 @@ export class RealRunner implements Runner {
 
       const handle: DevHandle = {
         port,
-        url: `http://localhost:${port}`,
+        // 127.0.0.1 explícito: evita o localhost→IPv6 do macOS dar "recusada".
+        url: `http://127.0.0.1:${port}`,
         stop: () => stopTree(child),
         onExit: (cb) => exitCbs.push(cb),
       }
 
-      const timeout = setTimeout(() => {
-        if (!settled) {
-          settled = true
-          void stopTree(child)
-          reject(new Error('Dev server não ficou pronto a tempo.'))
-        }
-      }, 180_000)
+      pipeLines(child, (line) => onLine?.(line))
 
-      pipeLines(child, (line) => {
-        onLine?.(line)
-        if (!settled && READY_RE.test(line)) {
-          settled = true
-          clearTimeout(timeout)
-          resolve(handle)
+      // "Pronto" = a porta ACEITA conexão (não só o dev imprimir algo).
+      void waitForPort(port, Date.now() + 180_000).then((ok) => {
+        if (settled) return
+        settled = true
+        if (ok) resolve(handle)
+        else {
+          void stopTree(child)
+          reject(new Error('Dev server não abriu a porta a tempo.'))
         }
       })
 
       child.on('error', (err) => {
         if (!settled) {
           settled = true
-          clearTimeout(timeout)
           reject(err)
         }
       })
       child.on('exit', (code) => {
-        clearTimeout(timeout)
         for (const cb of exitCbs) cb(code)
         if (!settled) {
           settled = true

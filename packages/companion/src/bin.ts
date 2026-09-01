@@ -66,7 +66,19 @@ program
       workspaceBase: config.workspaceBase,
       runner: new RealRunner(),
       git: new RealGit(new RealRunner()),
-      emit: (event) => transport.send(event),
+      emit: (event) => {
+        transport.send(event)
+        // Espelha no terminal (redigido) pra você acompanhar o progresso.
+        if (event.type === 'log') logger.info(`[${event.stream}] ${event.line}`)
+        else if (event.type === 'runtime_status')
+          logger.info(
+            `status: ${event.status}${event.detail ? ` — ${event.detail}` : ''}`,
+          )
+        else if (event.type === 'preview_ready')
+          logger.info(`preview pronto: ${event.url}`)
+        else if (event.type === 'error')
+          logger.error(`erro (${event.kind}): ${event.message}`)
+      },
     })
     // Busca a credencial de git no Supremo (autenticado com o token do dev).
     const fetchGitCredentials = async (projectId: string) => {

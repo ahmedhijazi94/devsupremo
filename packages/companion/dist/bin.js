@@ -16871,7 +16871,7 @@ import { dirname as dirname2, join as join2 } from "node:path";
 
 // src/runner.ts
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
+import { createServer, connect } from "node:net";
 async function findFreePort(preferred, tries = 50) {
   for (let port = preferred; port < preferred + tries; port++) {
     if (await isFree(port)) return port;
@@ -16886,7 +16886,27 @@ function isFree(port) {
     srv.listen(port, "127.0.0.1");
   });
 }
-var READY_RE = /(https?:\/\/localhost:\d+)|✓\s*Ready|ready in/i;
+function canConnect(port, host) {
+  return new Promise((resolve) => {
+    const sock = connect({ port, host });
+    const done = (ok) => {
+      sock.destroy();
+      resolve(ok);
+    };
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+    setTimeout(() => done(false), 1e3);
+  });
+}
+async function waitForPort(port, deadline) {
+  while (Date.now() < deadline) {
+    if (await canConnect(port, "127.0.0.1") || await canConnect(port, "::1")) {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
 var RealRunner = class {
   exec(cmd, cwd, env, onLine) {
     return new Promise((resolve, reject) => {
@@ -16911,34 +16931,28 @@ var RealRunner = class {
       const exitCbs = [];
       const handle = {
         port,
-        url: `http://localhost:${port}`,
+        // 127.0.0.1 explícito: evita o localhost→IPv6 do macOS dar "recusada".
+        url: `http://127.0.0.1:${port}`,
         stop: () => stopTree(child),
         onExit: (cb) => exitCbs.push(cb)
       };
-      const timeout = setTimeout(() => {
-        if (!settled) {
-          settled = true;
+      pipeLines(child, (line) => onLine?.(line));
+      void waitForPort(port, Date.now() + 18e4).then((ok) => {
+        if (settled) return;
+        settled = true;
+        if (ok) resolve(handle);
+        else {
           void stopTree(child);
-          reject(new Error("Dev server n\xE3o ficou pronto a tempo."));
-        }
-      }, 18e4);
-      pipeLines(child, (line) => {
-        onLine?.(line);
-        if (!settled && READY_RE.test(line)) {
-          settled = true;
-          clearTimeout(timeout);
-          resolve(handle);
+          reject(new Error("Dev server n\xE3o abriu a porta a tempo."));
         }
       });
       child.on("error", (err) => {
         if (!settled) {
           settled = true;
-          clearTimeout(timeout);
           reject(err);
         }
       });
       child.on("exit", (code) => {
-        clearTimeout(timeout);
         for (const cb of exitCbs) cb(code);
         if (!settled) {
           settled = true;
@@ -44294,7 +44308,18 @@ program2.command("run", { isDefault: true }).description("Conecta ao Supremo e f
     workspaceBase: config2.workspaceBase,
     runner: new RealRunner(),
     git: new RealGit(new RealRunner()),
-    emit: (event) => transport.send(event)
+    emit: (event) => {
+      transport.send(event);
+      if (event.type === "log") logger.info(`[${event.stream}] ${event.line}`);
+      else if (event.type === "runtime_status")
+        logger.info(
+          `status: ${event.status}${event.detail ? ` \u2014 ${event.detail}` : ""}`
+        );
+      else if (event.type === "preview_ready")
+        logger.info(`preview pronto: ${event.url}`);
+      else if (event.type === "error")
+        logger.error(`erro (${event.kind}): ${event.message}`);
+    }
   });
   const fetchGitCredentials = async (projectId) => {
     const res = await fetch(`${config2.supremoUrl}/api/companion/git-credentials`, {

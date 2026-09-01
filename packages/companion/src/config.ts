@@ -1,11 +1,12 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 
 /**
  * Config do companion. Vem de env (CI/avançado) ou de ~/.supremo/companion.json
  * (login normal). O token é ESCOPADO do usuário (sup_…), nunca de admin —
- * o companion troca ele por acesso ao Realtime pelo próprio Supremo.
+ * o companion troca ele por uma SESSÃO dedicada de dispositivo pelo Supremo.
  */
 
 export interface CompanionConfig {
@@ -15,6 +16,8 @@ export interface CompanionConfig {
   token: string
   /** Onde os workspaces isolados dos projetos vivem. */
   workspaceBase: string
+  /** Chave estável deste dispositivo — identidade própria do companion. */
+  deviceKey: string
 }
 
 export function configPath(): string {
@@ -49,7 +52,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CompanionConfi
     supremoUrl: supremoUrl.replace(/\/$/, ''),
     token,
     workspaceBase,
+    deviceKey: env.SUPREMO_DEVICE_KEY ?? ensureDeviceKey(fileCfg?.deviceKey),
   }
+}
+
+/** Chave estável do dispositivo: reusa a salva, ou cria e persiste uma vez. */
+function ensureDeviceKey(existing: string | undefined): string {
+  if (existing) return existing
+  const deviceKey = randomUUID()
+  const path = configPath()
+  try {
+    const current = existsSync(path)
+      ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>)
+      : {}
+    mkdirSync(join(homedir(), '.supremo'), { recursive: true })
+    writeFileSync(path, JSON.stringify({ ...current, deviceKey }, null, 2))
+  } catch {
+    // sem disco: usa em memória nesta execução (identidade nova no próximo run)
+  }
+  return deviceKey
 }
 
 function readConfigFile(): Partial<CompanionConfig> | null {

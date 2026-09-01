@@ -79,6 +79,31 @@ export interface Database {
           Database['public']['Tables']['secret_requests']['Insert']
         >
       }
+      companion_devices: {
+        Row: {
+          id: string
+          owner_user_id: string
+          auth_user_id: string
+          device_key: string
+          device_label: string | null
+          last_seen_at: string | null
+          revoked_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          owner_user_id: string
+          auth_user_id: string
+          device_key: string
+          device_label?: string | null
+          last_seen_at?: string | null
+          revoked_at?: string | null
+          created_at?: string
+        }
+        Update: Partial<
+          Database['public']['Tables']['companion_devices']['Insert']
+        >
+      }
       projects: {
         Row: {
           id: string

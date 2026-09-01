@@ -16735,14 +16735,16 @@ var {
 } = import_index.default;
 
 // src/bin.ts
-import { mkdirSync as mkdirSync2, writeFileSync } from "node:fs";
+import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { randomUUID as randomUUID2 } from "node:crypto";
 import { dirname as dirname3, join as join3 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 
 // src/config.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 function configPath() {
   return join(homedir(), ".supremo", "companion.json");
 }
@@ -16767,8 +16769,21 @@ function loadConfig(env = process.env) {
   return {
     supremoUrl: supremoUrl.replace(/\/$/, ""),
     token,
-    workspaceBase
+    workspaceBase,
+    deviceKey: env.SUPREMO_DEVICE_KEY ?? ensureDeviceKey(fileCfg?.deviceKey)
   };
+}
+function ensureDeviceKey(existing) {
+  if (existing) return existing;
+  const deviceKey = randomUUID();
+  const path = configPath();
+  try {
+    const current = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+    mkdirSync(join(homedir(), ".supremo"), { recursive: true });
+    writeFileSync(path, JSON.stringify({ ...current, deviceKey }, null, 2));
+  } catch {
+  }
+  return deviceKey;
 }
 function readConfigFile() {
   const path = configPath();
@@ -16781,7 +16796,7 @@ function readConfigFile() {
 }
 
 // src/logger.ts
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync2 } from "node:fs";
 import { dirname } from "node:path";
 
 // src/redact.ts
@@ -16821,7 +16836,7 @@ var Logger = class {
   constructor(filePath) {
     this.filePath = filePath;
     try {
-      mkdirSync(dirname(filePath), { recursive: true });
+      mkdirSync2(dirname(filePath), { recursive: true });
     } catch {
     }
   }
@@ -44173,6 +44188,7 @@ async function handshake(config2) {
       Authorization: `Bearer ${config2.token}`,
       "Content-Type": "application/json"
     },
+    body: JSON.stringify({ deviceKey: config2.deviceKey }),
     signal: AbortSignal.timeout(3e4)
   });
   if (!res.ok) {
@@ -44242,14 +44258,16 @@ var program2 = new Command();
 program2.name("supremo-runtime").description("Runtime local do Supremo \u2014 roda o preview Next real na sua m\xE1quina.");
 program2.command("login").description("Salva a URL do Supremo e seu token (uma vez).").requiredOption("--url <url>", "URL do Supremo, ex.: https://supremo-three.vercel.app").requiredOption("--token <token>", "Seu token pessoal (sup_\u2026), gerado em /mcps").action((opts) => {
   const path = configPath();
-  mkdirSync2(dirname3(path), { recursive: true });
-  writeFileSync(
+  mkdirSync3(dirname3(path), { recursive: true });
+  writeFileSync2(
     path,
     JSON.stringify(
       {
         supremoUrl: opts.url.replace(/\/$/, ""),
         token: opts.token,
-        workspaceBase: join3(homedir2(), ".supremo", "workspaces")
+        workspaceBase: join3(homedir2(), ".supremo", "workspaces"),
+        deviceKey: randomUUID2()
+        // identidade estável deste dispositivo
       },
       null,
       2

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { configPath, loadConfig } from './config'
@@ -31,6 +32,7 @@ program
           supremoUrl: opts.url.replace(/\/$/, ''),
           token: opts.token,
           workspaceBase: join(homedir(), '.supremo', 'workspaces'),
+          deviceKey: randomUUID(), // identidade estável deste dispositivo
         },
         null,
         2,

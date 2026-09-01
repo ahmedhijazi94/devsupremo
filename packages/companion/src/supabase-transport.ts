@@ -35,6 +35,7 @@ export async function handshake(
       Authorization: `Bearer ${config.token}`,
       'Content-Type': 'application/json',
     },
+    body: JSON.stringify({ deviceKey: config.deviceKey }),
     signal: AbortSignal.timeout(30_000),
   })
   if (!res.ok) {

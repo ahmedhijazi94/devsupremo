@@ -4,6 +4,8 @@ import {
   buildProjectFiles,
   CI_INVOKED_SCRIPTS,
   TEMPLATE_VERSION,
+  GITLEAKS_VERSION,
+  GITLEAKS_SHA256_LINUX_X64,
 } from './project-files'
 import { inferTablesFromMigration, generateRlsTest } from './rls-tests'
 
@@ -171,24 +173,13 @@ describe('migrations — nome que o CLI do Supabase aceita', () => {
   })
 })
 
-describe('dependabot — não propõe salto que quebra o projeto novo', () => {
-  const config = file('.github/dependabot.yml')
-
-  // Um projeto recém-criado recebeu na primeira semana um PR subindo o
-  // TypeScript para 7.0, que o eslint-config-next ainda não suporta. O gate
-  // barrou corretamente, mas o usuário vê um PR vermelho no dia um.
-  it.each(['typescript', 'eslint-config-next', 'next', 'react'])(
-    'ignora salto de versão maior de %s',
-    (dependency) => {
-      const block = config.slice(config.indexOf('ignore:'))
-      expect(block).toContain(`dependency-name: ${dependency}`)
-    },
-  )
-
-  it('continua propondo correções de patch e minor', () => {
-    expect(config).toContain('interval: weekly')
-    expect(config).toContain('version-update:semver-major')
-    expect(config).not.toContain('version-update:semver-patch')
+describe('dependabot — v3.3.0: sem version-update PRs por padrão (não gera fila de manutenção)', () => {
+  // Um projeto recém-criado ganhava SEIS PRs automáticos do Dependabot em
+  // minutos — o usuário não pediu isso. npm audit (job "dependencies") e os
+  // alertas nativos de segurança do GitHub continuam cobrindo vulnerabilidade
+  // real, sem o arquivo.
+  it('NÃO gera .github/dependabot.yml', () => {
+    expect(files.map((f) => f.path)).not.toContain('.github/dependabot.yml')
   })
 })
 
@@ -260,12 +251,14 @@ describe('CI — actions em versão suportada', () => {
   })
 
   it('concede as permissões que os jobs realmente usam', () => {
-    // gitleaks lê /pulls/N/commits; sem pull-requests: read recebe 403 e
-    // o job falha sem ter escaneado nada — falso vermelho que treina a
-    // equipe a ignorar o gate.
-    expect(ci).toMatch(/pull-requests:\s*read/)
     expect(ci).toMatch(/security-events:\s*write/)
     expect(ci).toMatch(/contents:\s*read/)
+  })
+
+  it('NÃO pede pull-requests:read (a CLI do gitleaks lê o checkout local, não a API)', () => {
+    // v3.3.0: trocamos gitleaks/gitleaks-action (que lia /pulls/N/commits) pela
+    // CLI oficial rodando sobre `fetch-depth: 0` — sem chamada à API de PR.
+    expect(ci).not.toMatch(/pull-requests:\s*read/)
   })
 
   it('não usa actions em depreciação de Node 20', () => {
@@ -280,6 +273,32 @@ describe('CI — actions em versão suportada', () => {
     expect(ci).toMatch(/node-version:\s*'22'/)
     expect(ci).not.toMatch(/node-version:\s*'20'/)
     expect(file('.nvmrc').trim()).toBe('22')
+  })
+})
+
+describe('gitleaks — CLI oficial pinada, scaffold nasce verde sem licença', () => {
+  const ci = file('.github/workflows/ci.yml')
+
+  it('NÃO usa a Action (exige GITLEAKS_LICENSE mesmo em repo privado de Organization)', () => {
+    // O nome da Action pode aparecer num COMENTÁRIO explicando a troca; o que
+    // não pode existir é um passo `uses:` rodando-a, nem exigir a env da licença.
+    expect(ci).not.toMatch(/uses:\s*gitleaks\/gitleaks-action/)
+    expect(ci).not.toMatch(/GITLEAKS_LICENSE\s*:/) // nunca referenciada como env/secret
+  })
+
+  it('baixa a CLI oficial pinada por versão E confere o checksum antes de rodar', () => {
+    expect(ci).toContain(`gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/`)
+    expect(ci).toContain(GITLEAKS_SHA256_LINUX_X64)
+    expect(ci).toMatch(/sha256sum -c/)
+  })
+
+  it('roda `gitleaks detect` e falha de verdade se achar segredo (--exit-code 1)', () => {
+    expect(ci).toMatch(/\.\/gitleaks detect/)
+    expect(ci).toMatch(/--exit-code 1/)
+  })
+
+  it('não exige nenhum secret manual (nenhuma referência a secrets.GITLEAKS)', () => {
+    expect(ci).not.toMatch(/secrets\.GITLEAKS/i)
   })
 })
 
@@ -486,8 +505,8 @@ describe('workflow v3.1 item 4 — checkpoint/push silencioso (daemon)', () => {
   const claude = file('CLAUDE.md')
   const projectJson = JSON.parse(file('.supremo/project.json')) as Record<string, unknown>
 
-  it('template 3.2.0 (checkpoint daemon)', () => {
-    expect(TEMPLATE_VERSION).toBe('3.2.0')
+  it('template >= 3.2.0 (checkpoint daemon)', () => {
+    expect(TEMPLATE_VERSION >= '3.2.0').toBe(true)
   })
 
   it('package.json expõe checkpoint + daemon:ensure/status/stop (via CLI)', () => {
@@ -522,6 +541,35 @@ describe('workflow v3.1 item 4 — checkpoint/push silencioso (daemon)', () => {
     expect(claude).toMatch(/AGENTS\.md/)
     // ambos proíbem git push manual (o daemon é quem empurra)
     expect(claude).toMatch(/git push/)
+  })
+})
+
+describe('finalização v3.1 — browser integrado × QA visual, checkpoint 100% offline', () => {
+  const agents = file('AGENTS.md')
+  const claude = file('CLAUDE.md')
+
+  it('regra canônica: preview é do usuário, validação de código é do agente', () => {
+    expect(agents).toMatch(/preview pertence ao usuário/i)
+    expect(agents).toMatch(/validação automatizada pertence\s+a você/i)
+  })
+
+  it('proíbe QA visual manual por padrão (clicar/navegar/tour), permite exceções explícitas', () => {
+    expect(agents).toMatch(/NÃO DEVE, por padrão/)
+    expect(agents).toMatch(/mover o mouse|clicar em botão|preencher formulário/)
+    expect(agents).toMatch(/usuário pedir explicitamente/i)
+    expect(claude).toMatch(/QA visual manual/i)
+  })
+
+  it('deixar o preview DISPONÍVEL (browser integrado) continua desejável', () => {
+    expect(agents).toMatch(/deixe o preview disponível/i)
+    expect(claude).toMatch(/[Dd]eixar o preview disponível/)
+  })
+
+  it('checkpoint local nunca depende de SUPREMO_URL/rede; erro nesse sentido = CLI desatualizada', () => {
+    expect(agents).toMatch(/nunca depende de rede/i)
+    expect(agents).toMatch(/modo avião/i)
+    expect(agents).toMatch(/SUPREMO_URL/)
+    expect(agents).toMatch(/não\*\*\s*\n?tente configurar nada nem exportar variável/i)
   })
 })
 

@@ -51,12 +51,23 @@ import {
 // sobrevive ao turno). Fast dev loop por RISCO (LOW/MEDIUM/HIGH; pesado em background).
 // Checkpoint por pedido + push assíncrono do Supremo (agente não pede push/merge).
 // AGENTS/CLAUDE: preview:ensure, hot path, anti-churn de infra em microfeature.
-// 3.2.0 (v3.1 item 4): checkpoint/push SILENCIOSO. O agente só faz `checkpoint`
-// LOCAL; o checkpoint daemon empurra em background com token efêmero escopado ao
-// repo (contents:write; +workflows:write só em diff de workflows), emitido sob
-// demanda pelo Supremo, nunca persistido/logado. Identidade da máquina no keychain
-// (device flow do bootstrap; revogável). O agente NUNCA faz git push/branch/PR.
-export const TEMPLATE_VERSION = '3.2.0'
+// 3.2.0 (v3.1 item 4, endurecido): checkpoint/publish SILENCIOSO. O agente só faz
+// `checkpoint` LOCAL (sem rede); o daemon NUNCA recebe token GitHub — ele envia um
+// CHANGESET content-addressed ao Control Plane, que publica server-side (token
+// efêmero contents:write, +workflows:write só em diff de workflows; nunca
+// retornado/persistido/logado). Identidade da máquina no keychain (device flow do
+// bootstrap; revogável). O agente NUNCA faz git push/branch/PR.
+// 3.3.0 (finalização pós-E2E): fila local do checkpoint funciona 100% offline (o
+// erro de SUPREMO_URL vinha de uma CLI publicada desatualizada caindo na ponte MCP
+// por engano — corrigido com um guard de comando desconhecido). daemon --status/
+// --ensure/--stop; bootstrap só declara "pronto" se checkpoint/daemon realmente
+// funcionam (roda o mesmo check que o script gerado rodaria). Preview intacto.
+// Browser integrado é do USUÁRIO — o agente valida por código, não navegando à
+// toa. Gitleaks via CLI pinada (sem GITLEAKS_LICENSE); sem dependabot.yml por
+// padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
+// nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
+// próprio Supremo (migration 017, NÃO aplicada).
+export const TEMPLATE_VERSION = '3.3.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -291,7 +302,12 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
 
     // ── Gates ─────────────────────────────────────────────────
     { path: '.github/workflows/ci.yml', content: ciWorkflow(projectName) },
-    { path: '.github/dependabot.yml', content: dependabotConfig() },
+    // v3.3.0: SEM dependabot.yml por padrão — version-update PRs viravam uma
+    // fila de manutenção que o usuário nunca pediu (6 PRs num scaffold recém
+    // criado). `npm audit` (job "dependencies") + os alertas nativos de
+    // segurança do GitHub (independentes deste arquivo) continuam cobrindo
+    // vulnerabilidade real; manutenção de rotina fica para uma feature futura
+    // do Supremo, não para o repositório do usuário.
     {
       path: 'scripts/security-audit.js',
       content: securityAuditScript(),
@@ -383,7 +399,6 @@ export const MANAGED_PATHS: ReadonlySet<string> = new Set([
   'app/auth/signout/route.ts',
   // Gates e segurança
   '.github/workflows/ci.yml',
-  '.github/dependabot.yml',
   'scripts/security-audit.js',
   // Local dev harness (base infra do Supremo)
   'scripts/verify.mjs',
@@ -2188,6 +2203,17 @@ test.describe('smoke', () => {${authTests}
 // Gates
 // ═════════════════════════════════════════════════════════════
 
+/**
+ * CLI oficial do Gitleaks (release pinado + checksum do binário linux_x64),
+ * baixada diretamente no CI — NUNCA a Action (\`gitleaks/gitleaks-action@v2\`),
+ * que hoje recusa rodar em repo privado de Organization sem GITLEAKS_LICENSE.
+ * A CLI em si é sempre gratuita (só a Action tem esse gate de licença). Checksum
+ * conferido contra o checksums.txt oficial do release — nunca baixa sem validar.
+ */
+export const GITLEAKS_VERSION = '8.21.2'
+export const GITLEAKS_SHA256_LINUX_X64 =
+  '5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba'
+
 function ciWorkflow(projectName: string): string {
   return `name: Gates — ${projectName}
 
@@ -2204,9 +2230,6 @@ concurrency:
 permissions:
   contents: read
   security-events: write
-  # gitleaks lê os commits do PR para varrer só o que mudou; sem isto ele
-  # recebe 403 em /pulls/N/commits e o job falha sem ter escaneado nada.
-  pull-requests: read
   actions: read
 
 # ------------------------------------------------------------------
@@ -2363,9 +2386,19 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+      # CLI oficial do Gitleaks, pinada por versão + checksum — NÃO a Action
+      # (gitleaks/gitleaks-action@v2), que hoje EXIGE GITLEAKS_LICENSE mesmo em
+      # repo privado de Organization. A CLI é sempre gratuita; scaffold novo nasce
+      # verde sem nenhuma licença/secret manual.
+      - name: Instalar Gitleaks (CLI oficial, pinada, sem licença)
+        run: |
+          set -euo pipefail
+          curl -sSfL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          echo "${GITLEAKS_SHA256_LINUX_X64}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+      - name: Rodar Gitleaks
+        run: ./gitleaks detect --source . --redact --exit-code 1 --no-banner
 
   build:
     name: Build de produção
@@ -2433,41 +2466,6 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
-`
-}
-
-function dependabotConfig(): string {
-  return `version: 2
-updates:
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      dev-dependencies:
-        dependency-type: development
-    ignore:
-      # Estas ferramentas sobem de versão maior em conjunto: o ESLint do Next
-      # precisa suportar a versão do TypeScript, e o React precisa casar com
-      # o Next. Um salto automático de uma delas quebra o CI de um projeto
-      # recém-criado — atualize as quatro de uma vez, de propósito.
-      - dependency-name: typescript
-        update-types: [version-update:semver-major]
-      - dependency-name: eslint
-        update-types: [version-update:semver-major]
-      - dependency-name: eslint-config-next
-        update-types: [version-update:semver-major]
-      - dependency-name: next
-        update-types: [version-update:semver-major]
-      - dependency-name: react
-        update-types: [version-update:semver-major]
-      - dependency-name: react-dom
-        update-types: [version-update:semver-major]
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: monthly
 `
 }
 
@@ -2641,7 +2639,30 @@ No início de todo pedido, garanta o preview com **\`npm run preview:ensure\`**.
 INFRAESTRUTURA da sessão (processo desacoplado, porta estável, HMR) — reusa se já está
 saudável, reinicia se morreu. **NUNCA** rode \`npm run dev\` à mão: um dev efêmero morre
 quando seu comando/turno termina e o preview cai. Não mate/recrie o preview a cada
-prompt; o HMR reflete as mudanças no mesmo servidor.
+prompt; o HMR reflete as mudanças no mesmo servidor. Fim de turno, checkpoint, daemon,
+push (server-side) e CI **não** derrubam o preview — ele sobrevive ao ciclo inteiro.
+
+### Browser integrado × QA visual manual (v3.1 finalização)
+**Regra canônica: o preview pertence ao usuário; a validação automatizada pertence
+a você.** ("Preview belongs to the user. Agent owns code validation.")
+
+Se o host tiver um browser/preview pane integrado, **deixe o preview disponível** para
+o usuário olhar — isso é desejável, é a experiência tipo Lovable. Mas disponibilizar o
+preview é diferente de **você** navegar nele:
+
+Você DEVE: manter o preview no ar; deixar o HMR atualizar; validar por CÓDIGO —
+typecheck, lint, testes afetados, RLS, auth, migration, segurança; rodar build quando o
+risco pedir.
+
+Você NÃO DEVE, por padrão: mover o mouse, clicar em botão, preencher formulário, fazer
+login manual, navegar pelas telas, testar estética/responsividade clicando, ou fazer um
+"tour" pelo app depois que o código/testes/RLS já passaram. Isso é QA visual redundante,
+gasta tempo e tokens, e não é sua responsabilidade — quem aceita a aparência é o usuário,
+olhando o preview que você deixou no ar.
+
+Interação com o browser SÓ quando: (1) o usuário pedir explicitamente; (2) reproduzir um
+bug relatado realmente exigir; (3) uma validação funcional crítica não tiver alternativa
+automatizada. Mesmo nesses casos, interação MÍNIMA — não um tour.
 
 ### Hot path × integração — por RISCO (v3.1)
 Separe o que BLOQUEIA a resposta (hot path, proporcional ao risco) do que roda em
@@ -2674,6 +2695,14 @@ pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/
 
 Um checkpoint por pedido concluído — **nunca** agrupe vários pedidos num só, nunca
 deixe um pedido sem checkpoint. É a base do "voltar para antes desta mensagem".
+
+**O checkpoint LOCAL nunca depende de rede, do Supremo ou do GitHub — funciona até em
+modo avião.** Se o comando falhar mencionando \`SUPREMO_URL\` ou "não configurado", **não**
+tente configurar nada nem exportar variável — isso indica CLI desatualizada; rode de
+novo com \`npx --yes supremo-cli@latest\` (o \`npm run checkpoint\` já faz isso) e, se
+persistir, avise no seu resumo em vez de inventar configuração manual. O checkpoint em
+si nunca precisa de \`.env\`, token ou configuração além do que o bootstrap já deixou em
+\`.supremo/project.json\`.
 
 ### Publicação é INFRAESTRUTURA — não é você (v3.1 item 4)
 Depois do \`checkpoint\`, o **checkpoint daemon** (processo de background, como o preview)
@@ -2783,14 +2812,16 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   "Banco de dados online" no \`AGENTS.md\`.
 - Garantir o preview com **\`npm run preview:ensure\`** no início do pedido (persistente,
   HMR); **nunca** \`npm run dev\` à mão (mata o preview). Ver "Preview PERSISTENTE".
+- **Deixar o preview disponível** ao usuário (browser integrado do host, se houver) —
+  mas validar por CÓDIGO, não navegando você mesmo. Ver "Browser integrado × QA visual".
 - **Rodar \`npm run verify\`** — comando padrão, adaptativo, **proporcional ao risco**
   (LOW só lint/typecheck do que mudou + testes relacionados; HIGH/SECURITY gates fortes).
   **Não** use lista fixa nem rode \`verify:full\` em toda microalteração — o pesado
   (build/suíte/RLS/CodeQL) roda em background/CI.
 - Fechar cada pedido concluído com **\`npm run checkpoint -- "<resumo>"\`** (checkpoint
-  LOCAL) e **devolver o controle imediatamente** — push/PR/CI/auto-merge são feitos pelo
-  **checkpoint daemon** + Control Plane, em background
-- **Continuar desenvolvendo enquanto o daemon integra em background** (é assíncrono)
+  LOCAL, **sem rede**) e **devolver o controle imediatamente** — o daemon envia o
+  changeset e o **Control Plane** publica/abre PR/CI/auto-merge, em background
+- **Continuar desenvolvendo enquanto o daemon/Control Plane integram em background**
 
 ## Nunca
 - \`any\` no TypeScript
@@ -2804,6 +2835,9 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - **Abrir/atualizar PR, sincronizar com a \`main\` na mão, ou tratar corrida de
   auto-merge você mesmo** — o daemon rotaciona a branch e integra só o delta sozinho
 - **Rodar \`npm run dev\` à mão** (mata o preview persistente) — use \`preview:ensure\`
+- **Fazer QA visual manual por padrão** (clicar, navegar telas, testar responsividade,
+  "tour" pelo app) — o preview pertence ao usuário; você valida por código. Só interaja
+  se o usuário pedir, para reproduzir um bug, ou sem alternativa automatizada
 - **"Melhorar" infra numa microfeature LOW** (AGENTS.md/CLAUDE.md/tsconfig/CI/package.json/
   migrations/config) sem necessidade técnica concreta — evite churn de infraestrutura
 - **Esperar ou pollar a CI depois de um checkpoint** — é assíncrona; continue

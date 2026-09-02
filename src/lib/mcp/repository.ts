@@ -293,6 +293,126 @@ export async function getSupabaseDbPassword(
 }
 
 // ─────────────────────────────────────────────────────────────
+// Workflow v3 — merge assíncrono (worker de background)
+//
+// O worker (webhook + reconciliation) NÃO tem sessão de usuário: identifica o
+// projeto pelo REPO vindo do webhook autenticado (assinatura já validada) e usa o
+// service role. Os campos de integração (migration 014) são lidos/escritos por
+// consultas DEDICADAS e best-effort: se a coluna ainda não existe (migration não
+// aplicada), o código NÃO quebra — assume o modo GERENCIADO (fail-safe).
+// ─────────────────────────────────────────────────────────────
+
+export interface WorkerProject {
+  id: string
+  userId: string
+  repoFullName: string
+  defaultBranch: string
+  activeBranch: string
+}
+
+/** Localiza o projeto pelo repo (worker, sem userId). Só colunas base seguras. */
+export async function getProjectByRepoFullName(
+  repoFullName: string,
+): Promise<WorkerProject | null> {
+  const { data, error } = await db()
+    .from('projects')
+    .select('id, user_id, github_repo_full_name, default_branch, active_branch')
+    .eq('github_repo_full_name', repoFullName)
+    .maybeSingle<{
+      id: string
+      user_id: string
+      github_repo_full_name: string
+      default_branch: string | null
+      active_branch: string | null
+    }>()
+  if (error || !data) return null
+  return {
+    id: data.id,
+    userId: data.user_id,
+    repoFullName: data.github_repo_full_name,
+    defaultBranch: data.default_branch || 'main',
+    activeBranch: data.active_branch || data.default_branch || 'main',
+  }
+}
+
+export interface IntegrationMeta {
+  mergeMode: 'native' | 'supremo_managed' | null
+  protectionLevel: 'github_native' | 'supremo_managed' | null
+  integrationState: string | null
+}
+
+/** Lê o modo/estado de integração (best-effort; null se a migration não rodou). */
+export async function readIntegrationMeta(projectId: string): Promise<IntegrationMeta> {
+  const empty: IntegrationMeta = {
+    mergeMode: null,
+    protectionLevel: null,
+    integrationState: null,
+  }
+  try {
+    const { data, error } = await db()
+      .from('projects')
+      .select('github_merge_mode, protection_level, integration_state')
+      .eq('id', projectId)
+      .maybeSingle<{
+        github_merge_mode: IntegrationMeta['mergeMode']
+        protection_level: IntegrationMeta['protectionLevel']
+        integration_state: string | null
+      }>()
+    if (error || !data) return empty
+    return {
+      mergeMode: data.github_merge_mode ?? null,
+      protectionLevel: data.protection_level ?? null,
+      integrationState: data.integration_state ?? null,
+    }
+  } catch {
+    return empty
+  }
+}
+
+/** Grava modo/estado de integração (best-effort; ignora se a coluna não existe). */
+export async function writeIntegrationMeta(
+  projectId: string,
+  patch: Partial<{
+    github_merge_mode: string
+    protection_level: string
+    integration_state: string
+  }>,
+): Promise<void> {
+  try {
+    await db().from('projects').update(patch).eq('id', projectId)
+  } catch {
+    // migration 014 ainda não aplicada — segue sem persistir (fail-safe).
+  }
+}
+
+/**
+ * Projetos candidatos ao fallback periódico de reconciliation: só os que estão
+ * num estado de integração relevante. Best-effort: [] se a migration não rodou.
+ */
+export async function listProjectsForReconcile(
+  states: readonly string[],
+): Promise<WorkerProject[]> {
+  try {
+    const { data, error } = await db()
+      .from('projects')
+      .select('id, user_id, github_repo_full_name, default_branch, active_branch, integration_state')
+      .in('integration_state', states as string[])
+      .not('github_repo_full_name', 'is', null)
+      .limit(200)
+    if (error || !data) return []
+    return (data as Array<Record<string, unknown>>).map((d) => ({
+      id: d.id as string,
+      userId: d.user_id as string,
+      repoFullName: d.github_repo_full_name as string,
+      defaultBranch: (d.default_branch as string) || 'main',
+      activeBranch: (d.active_branch as string) || (d.default_branch as string) || 'main',
+    }))
+  } catch {
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Histórico e auditoria
 // ─────────────────────────────────────────────────────────────
 

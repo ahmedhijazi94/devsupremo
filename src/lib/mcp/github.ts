@@ -314,6 +314,24 @@ export async function openOrUpdatePullRequest(
   }
 }
 
+/**
+ * Nº da PR aberta cujo head é `branch`, ou null. Usado pelo fallback de
+ * reconciliation para achar a PR de desenvolvimento sem CRIAR nada (idempotente).
+ */
+export async function getOpenPullRequestNumber(
+  creds: GithubCredentials,
+  branch: string,
+): Promise<number | null> {
+  const gh = octokitFor(creds)
+  const { data } = await gh.pulls.list({
+    owner: creds.owner,
+    repo: creds.repo,
+    head: `${creds.owner}:${branch}`,
+    state: 'open',
+  })
+  return data[0]?.number ?? null
+}
+
 export async function getPullRequest(
   creds: GithubCredentials,
   prNumber: number,

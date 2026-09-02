@@ -104,7 +104,7 @@ describe('reconcileMerge — modo SUPREMO_MANAGED', () => {
 
   it('checks de um SHA diferente do HEAD não liberam merge', async () => {
     const gw = gateway({ headSha: SHA, checksHeadSha: SHA2 }) // checks pertencem a outro SHA
-    const r = await reconcileMerge(gw, { prNumber: 7, requiredChecks: REQUIRED, mode: 'supremo_managed' })
+    await reconcileMerge(gw, { prNumber: 7, requiredChecks: REQUIRED, mode: 'supremo_managed' })
     expect(gw.merge).not.toHaveBeenCalled()
   })
 

@@ -63,10 +63,14 @@ function prNumbersFrom(list: unknown): number[] {
  * Decide se um evento dispara reconciliation e extrai o alvo. Devolve null para
  * eventos/ações irrelevantes (nada a fazer). Eventos considerados:
  *   • pull_request: opened/reopened/synchronize/ready_for_review → reconciliar a PR;
- *   • check_suite / check_run (completed) → reconciliar as PRs associadas;
- *   • workflow_run (completed) → reconciliar as PRs associadas.
+ *   • check_suite / check_run (completed) → reconciliar as PRs associadas.
+ *
+ * NÃO usamos `workflow_run`: os jobs da CI aparecem como check-runs, então o fim da
+ * CI já chega por check_suite/check_run — e `workflow_run` exigiria `Actions: read`
+ * sem trazer gatilho novo. Least privilege: só `Checks: read` + `Pull requests`.
  * Não confia em nada além dos IDENTIFICADORES (repo/installation/prNumber); o
- * SHA/conclusão do payload é só dica de auditoria.
+ * SHA/conclusão do payload é só dica de auditoria. Evento perdido → o Vercel Cron
+ * (fallback) recupera.
  */
 export function parseWebhookForReconcile(
   event: string,
@@ -110,13 +114,7 @@ export function parseWebhookForReconcile(
     return { ...base, prNumbers, headShaHint: str(suite?.head_sha) }
   }
 
-  if (event === 'workflow_run') {
-    if (action !== 'completed') return null
-    const run = payload.workflow_run as Json | undefined
-    const prNumbers = prNumbersFrom(run?.pull_requests)
-    if (prNumbers.length === 0) return null
-    return { ...base, prNumbers, headShaHint: str(run?.head_sha) }
-  }
-
+  // workflow_run NÃO é tratado de propósito (exigiria Actions:read sem trazer
+  // gatilho novo — ver comentário acima).
   return null
 }

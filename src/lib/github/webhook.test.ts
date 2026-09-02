@@ -79,14 +79,16 @@ describe('parseWebhookForReconcile — só dispara, não autoriza', () => {
     expect(t!.prNumbers).toEqual([9])
   })
 
-  it('workflow_run completed → PRs associadas', () => {
+  it('workflow_run é IGNORADO (least privilege: evita exigir Actions:read)', () => {
+    // Os jobs da CI já chegam por check_suite/check_run; workflow_run não traz
+    // gatilho novo e pediria Actions:read. Deve retornar null.
     const t = parseWebhookForReconcile('workflow_run', {
       action: 'completed',
       installation,
       repository: repo,
       workflow_run: { head_sha: 'x', pull_requests: [{ number: 11 }] },
     })
-    expect(t!.prNumbers).toEqual([11])
+    expect(t).toBeNull()
   })
 
   it('sem installation/repository → null (não dá para reler com segurança)', () => {

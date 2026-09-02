@@ -3,12 +3,14 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { CheckpointRecord } from './checkpoint'
 import type { CommitReader } from './changeset'
+import type { RestoreDeps } from './restore'
 import {
   AuthError,
   ConflictError,
   NetworkError,
   backoffDelayMs,
   processCheckpoint,
+  processRestores,
   selectNextPending,
   type DaemonContext,
   type DaemonHttp,
@@ -166,5 +168,107 @@ describe('daemon NUNCA fala com o GitHub nem manipula token (testes 1,13,19)', (
     expect(src).toContain('publish(input: PublishInput)')
     expect(src).not.toContain('requestGrant')
     expect(src).not.toContain('revokeToken')
+  })
+})
+
+describe('processRestores — restore no próprio Supremo (v3.1 finalização)', () => {
+  const cfg = { projectId: 'proj-1', apiBaseUrl: 'https://x', cwd: '/tmp/x' }
+
+  function fakeHttp(opts: {
+    pending?: Array<{ restoreRequestId: string; targetCheckpointId: string; targetSummary: string }>
+    pollThrows?: boolean
+  }): { http: DaemonHttp; applied: unknown[]; failed: unknown[] } {
+    const applied: unknown[] = []
+    const failed: unknown[] = []
+    const http: DaemonHttp = {
+      publish: async () => ({ prNumber: 0 }),
+      pollRestores: async () => {
+        if (opts.pollThrows) throw new NetworkError('offline')
+        return opts.pending ?? []
+      },
+      reportRestoreApplied: async (input) => {
+        applied.push(input)
+      },
+      reportRestoreFailed: async (input) => {
+        failed.push(input)
+      },
+    }
+    return { http, applied, failed }
+  }
+
+  it('sem device secret → não faz nada (0)', async () => {
+    const { http } = fakeHttp({})
+    const n = await processRestores({ ...cfg, getSecret: () => null }, { http })
+    expect(n).toBe(0)
+  })
+
+  it('offline no poll → 0, sem lançar (o daemon continua vivo)', async () => {
+    const { http } = fakeHttp({ pollThrows: true })
+    const n = await processRestores({ ...cfg, getSecret: () => 'sup_dev_ckpt_x' }, { http })
+    expect(n).toBe(0)
+  })
+
+  it('nada pendente → 0', async () => {
+    const { http } = fakeHttp({ pending: [] })
+    const n = await processRestores({ ...cfg, getSecret: () => 'sup_dev_ckpt_x' }, { http })
+    expect(n).toBe(0)
+  })
+
+  it('aplica e reporta "applied" com o checkpoint E resultante', async () => {
+    const { http, applied } = fakeHttp({
+      pending: [{ restoreRequestId: 'req-1', targetCheckpointId: 'cpB', targetSummary: 'home minimalista' }],
+    })
+    const deps: RestoreDeps = {
+      git: (args) => (args[0] === 'diff' ? 'diff --git a/x b/x\n@@' : args[0] === 'rev-parse' ? 'sha-E\n' : ''),
+      readQueue: () => [
+        {
+          checkpointId: 'cpB',
+          projectId: 'proj-1',
+          commitSha: 'sha-B',
+          parentCheckpointId: null,
+          createdAt: 't',
+          summary: 'home minimalista',
+          riskLevel: 'low',
+          migrations: [],
+          changedPaths: [],
+          pushStatus: 'published',
+          attempts: 0,
+        },
+      ],
+      appendQueue: () => {},
+      notifyDaemon: () => {},
+      now: () => 't',
+      uuid: () => 'cpE',
+      applyPatch: () => {},
+    }
+    const n = await processRestores(
+      { ...cfg, getSecret: () => 'sup_dev_ckpt_x' },
+      { http, deps },
+    )
+    expect(n).toBe(1)
+    expect(applied).toHaveLength(1)
+    expect(applied[0]).toMatchObject({ restoreRequestId: 'req-1', resultCheckpointId: 'cpE' })
+  })
+
+  it('alvo não encontrado localmente → reporta "failed", nunca trava o daemon', async () => {
+    const { http, failed } = fakeHttp({
+      pending: [{ restoreRequestId: 'req-2', targetCheckpointId: 'cp-inexistente', targetSummary: 'x' }],
+    })
+    const deps: RestoreDeps = {
+      git: () => '',
+      readQueue: () => [], // checkpoint não existe nesta máquina
+      appendQueue: () => {},
+      notifyDaemon: () => {},
+      now: () => 't',
+      uuid: () => 'cpE',
+      applyPatch: () => {},
+    }
+    const n = await processRestores(
+      { ...cfg, getSecret: () => 'sup_dev_ckpt_x' },
+      { http, deps },
+    )
+    expect(n).toBe(1)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toMatchObject({ restoreRequestId: 'req-2' })
   })
 })

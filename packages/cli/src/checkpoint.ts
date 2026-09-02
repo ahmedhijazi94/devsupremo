@@ -35,6 +35,12 @@ export interface CheckpointRecord {
   attempts: number
   prNumber?: number
   integrationBranch?: string
+  /** Presente quando este checkpoint é o "E" resultante de um restore (para B). */
+  restoredFromCheckpointId?: string
+  /** Metadata de origem (Histórico), quando o HOST do agente fornecer. Opcional. */
+  conversationId?: string
+  messageId?: string
+  originAgent?: string
 }
 
 // ── Puro ─────────────────────────────────────────────────────────────────────
@@ -103,6 +109,10 @@ export function buildCheckpointRecord(input: {
   createdAt: string
   summary: string
   changedPaths: readonly string[]
+  restoredFromCheckpointId?: string
+  conversationId?: string
+  messageId?: string
+  originAgent?: string
 }): CheckpointRecord {
   return {
     checkpointId: input.checkpointId,
@@ -116,6 +126,12 @@ export function buildCheckpointRecord(input: {
     changedPaths: [...input.changedPaths],
     pushStatus: 'local',
     attempts: 0,
+    ...(input.restoredFromCheckpointId
+      ? { restoredFromCheckpointId: input.restoredFromCheckpointId }
+      : {}),
+    ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    ...(input.messageId ? { messageId: input.messageId } : {}),
+    ...(input.originAgent ? { originAgent: input.originAgent } : {}),
   }
 }
 
@@ -170,6 +186,7 @@ export function runCheckpoint(
   summary: string,
   projectId: string,
   deps: CheckpointDeps,
+  origin: { conversationId?: string; messageId?: string; originAgent?: string } = {},
 ): CheckpointRecord {
   const porcelain = deps.git(['status', '--porcelain'])
   if (!hasChanges(porcelain)) throw new NothingToCheckpointError()
@@ -189,6 +206,7 @@ export function runCheckpoint(
     createdAt: deps.now(),
     summary,
     changedPaths,
+    ...origin,
   })
 
   deps.appendQueue(record)

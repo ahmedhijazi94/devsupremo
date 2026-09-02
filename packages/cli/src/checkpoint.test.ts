@@ -105,6 +105,23 @@ describe('runCheckpoint — LOCAL, sem rede (testes 1, 2)', () => {
     expect(calls.map((c) => c[0])).toEqual(['status'])
   })
 
+  it('metadata de origem (conversationId/messageId/originAgent) é opcional e propagada quando o host fornece', () => {
+    const { deps } = makeDeps(' M app/page.tsx\n', ['abcdef1'])
+    const withOrigin = runCheckpoint('x', 'proj-1', deps, {
+      conversationId: 'conv-1',
+      messageId: 'msg-9',
+      originAgent: 'claude',
+    })
+    expect(withOrigin.conversationId).toBe('conv-1')
+    expect(withOrigin.messageId).toBe('msg-9')
+    expect(withOrigin.originAgent).toBe('claude')
+
+    const { deps: deps2 } = makeDeps(' M app/page.tsx\n', ['abcdef2'])
+    const withoutOrigin = runCheckpoint('y', 'proj-1', deps2)
+    expect(withoutOrigin.conversationId).toBeUndefined()
+    expect(withoutOrigin.messageId).toBeUndefined()
+  })
+
   it('dois checkpoints em sequência mantêm ORDEM e linkagem de parent (teste 15)', () => {
     const calls: string[][] = []
     const queue: CheckpointRecord[] = []

@@ -65,6 +65,12 @@ const bodySchema = z.object({
   riskLevel: z.enum(['low', 'medium', 'high']).default('low'),
   summary: z.string().min(1).max(500),
   migrations: z.array(z.string()).default([]),
+  // Histórico (v3.1 finalização) — opcionais; ausência não quebra nada.
+  conversationId: z.string().max(200).nullable().optional(),
+  messageId: z.string().max(200).nullable().optional(),
+  originAgent: z.string().max(50).nullable().optional(),
+  /** Presente quando este checkpoint é o "E" resultante de um restore. */
+  restoredFromCheckpointId: z.string().uuid().nullable().optional(),
 })
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -190,6 +196,10 @@ export async function POST(request: NextRequest): Promise<Response> {
       summary: body.summary,
       riskLevel: body.riskLevel,
       migrations: body.migrations,
+      conversationId: body.conversationId,
+      messageId: body.messageId,
+      originAgent: body.originAgent,
+      restoredFromCheckpointId: body.restoredFromCheckpointId,
     })
 
     const scoped = await mintRepoScopedToken({

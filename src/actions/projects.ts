@@ -5,6 +5,11 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { decryptToken } from '@/lib/crypto'
 import { deleteSharedPreview, sharedPreviewConfig } from '@/lib/preview'
+import {
+  getSelectableOwners,
+  isOwnerAllowed,
+  ownerTypeOf,
+} from '@/lib/github/owners'
 import type { ProjectKind } from '@/lib/templates/project-files'
 
 const activateProjectSchema = z.object({
@@ -317,10 +322,39 @@ export async function deleteProject(
   return warnings.length > 0 ? { warnings } : {}
 }
 
+/**
+ * Owners que o usuário pode escolher no form (interseção segura). Nunca expõe
+ * installation_id/token/plano — só login + tipo. Vazio se GitHub não conectado.
+ */
+export async function getOwnerChoices(): Promise<{
+  owners: { login: string; type: 'personal' | 'organization' }[]
+}> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { owners: [] }
+
+  const { data: gh } = await supabase
+    .from('github_accounts')
+    .select('login, access_token_encrypted')
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (!gh) return { owners: [] }
+
+  const owners = await getSelectableOwners(
+    decryptToken((gh as { access_token_encrypted: string }).access_token_encrypted),
+    (gh as { login: string }).login,
+  )
+  return { owners }
+}
+
 export async function createEmptyProject(
   name: string,
   description?: string,
   kind: ProjectKind = 'solo',
+  /** Login do owner escolhido (pessoal ou organização). Ausente → pessoal. */
+  owner?: string,
 ) {
   const supabase = await createClient()
   const {
@@ -335,6 +369,31 @@ export async function createEmptyProject(
   )
     ? kind
     : 'solo'
+
+  // v3 — AUTORIZAÇÃO DE OWNER (anti-forja): nunca confiar no owner cru do cliente.
+  // Recalcula no servidor a INTERSEÇÃO (orgs do usuário ∩ installations da App) e
+  // exige que o owner escolhido pertença a ela. Sem owner → fluxo pessoal atual.
+  let ownerLogin: string | null = null
+  let ownerType: 'personal' | 'organization' | null = null
+  if (owner) {
+    const { data: gh } = await supabase
+      .from('github_accounts')
+      .select('login, access_token_encrypted')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!gh) {
+      return { error: 'Conecte uma conta GitHub antes de escolher onde criar o repo.' }
+    }
+    const owners = await getSelectableOwners(
+      decryptToken((gh as { access_token_encrypted: string }).access_token_encrypted),
+      (gh as { login: string }).login,
+    )
+    if (!isOwnerAllowed(owners, owner)) {
+      return { error: 'Owner não autorizado para o seu usuário.' }
+    }
+    ownerLogin = owner
+    ownerType = ownerTypeOf(owners, owner)
+  }
 
   const { data, error } = await supabase
     .from('projects')
@@ -353,6 +412,15 @@ export async function createEmptyProject(
       return { error: 'Você já tem um projeto com este nome.' }
     }
     return { error: 'Falha ao criar o projeto.' }
+  }
+
+  // Persiste o owner escolhido (best-effort: colunas da migration 015; se ainda
+  // não aplicada, o erro é ignorado e o projeto cai no fluxo pessoal padrão).
+  if (ownerLogin) {
+    await supabase
+      .from('projects')
+      .update({ github_owner_login: ownerLogin, github_owner_type: ownerType })
+      .eq('id', (data as { id: string }).id)
   }
 
   revalidatePath('/', 'layout')

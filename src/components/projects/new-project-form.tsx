@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Globe, User, Building2, Check } from 'lucide-react'
-import { createEmptyProject } from '@/actions/projects'
+import { createEmptyProject, getOwnerChoices } from '@/actions/projects'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import {
@@ -57,6 +57,23 @@ export function NewProjectForm() {
   })
   const [kind, setKind] = useState<Kind>('solo')
 
+  // v3: owners onde o repo pode ser criado (pessoal + orgs autorizadas com a App).
+  // Vem da interseção segura no servidor; o cliente só exibe login + tipo.
+  type OwnerChoice = { login: string; type: 'personal' | 'organization' }
+  const [owners, setOwners] = useState<OwnerChoice[]>([])
+  const [selectedOwner, setSelectedOwner] = useState<string>('')
+  useEffect(() => {
+    let alive = true
+    void getOwnerChoices().then(({ owners }) => {
+      if (!alive) return
+      setOwners(owners)
+      if (owners.length > 0) setSelectedOwner(owners[0]!.login) // 1 owner → auto
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const [nameError, setNameError] = useState('')
 
   // Preview honesto do que o kind gera (capabilities + perfil inferido).
@@ -90,6 +107,7 @@ export function NewProjectForm() {
         slug,
         form.description,
         kind,
+        selectedOwner || undefined,
       )
 
       if (error) {
@@ -150,6 +168,31 @@ export function NewProjectForm() {
           className="bg-sunken focus:ring-ink w-full rounded-[var(--radius-control)] px-3 py-2 text-sm focus:ring-2 focus:outline-none"
         />
       </div>
+
+      {/* Onde criar o repositório — pessoal vs organização (interseção segura) */}
+      {owners.length > 0 && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Onde criar o repositório</label>
+          {owners.length === 1 ? (
+            <p className="text-muted text-sm">
+              <span className="text-ink font-mono">{owners[0]!.login}</span>
+              {owners[0]!.type === 'organization' ? ' — Organização' : ' — Pessoal'}
+            </p>
+          ) : (
+            <select
+              value={selectedOwner}
+              onChange={(e) => setSelectedOwner(e.target.value)}
+              className="bg-sunken focus:ring-ink w-full rounded-[var(--radius-control)] px-3 py-2 text-sm focus:ring-2 focus:outline-none"
+            >
+              {owners.map((o) => (
+                <option key={o.login} value={o.login}>
+                  {o.login} — {o.type === 'organization' ? 'Organização' : 'Pessoal'}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
 
       {/* Tipo de app — decide login, tabelas e RLS antes de gerar */}
       <div className="space-y-2">

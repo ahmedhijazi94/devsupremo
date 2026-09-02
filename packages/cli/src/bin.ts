@@ -111,6 +111,99 @@ program
   )
 
 program
+  .command('checkpoint <summary...>')
+  .description('Cria um checkpoint LOCAL do pedido concluído (sem rede)')
+  .action(async (summaryParts: string[]) => {
+    const { runCheckpoint, defaultCheckpointDeps, readProjectId, NothingToCheckpointError } =
+      await import('./checkpoint')
+    const cwd = process.cwd()
+    const projectId = readProjectId(cwd)
+    if (!projectId) {
+      console.error('✗ .supremo/project.json ausente — rode o bootstrap primeiro.')
+      process.exit(1)
+    }
+    const summary = summaryParts.join(' ').trim()
+    if (!summary) {
+      console.error('✗ Informe um resumo: supremo checkpoint "home minimalista"')
+      process.exit(1)
+    }
+    try {
+      // Garante o daemon vivo (idempotente) antes de enfileirar — push assíncrono.
+      const { ensureDaemon } = await import('./daemon')
+      try {
+        ensureDaemon(cwd)
+      } catch {
+        // sem daemon: o checkpoint local ainda é válido; o daemon sobe depois
+      }
+      const record = runCheckpoint(summary, projectId, defaultCheckpointDeps(cwd))
+      console.log(
+        `✓ checkpoint ${record.checkpointId.slice(0, 8)} (${record.riskLevel}) — ` +
+          `push em background. Pode pedir a próxima mudança.`,
+      )
+    } catch (error) {
+      if (error instanceof NothingToCheckpointError) {
+        console.log('• Nada mudou — nenhum checkpoint criado.')
+        return
+      }
+      console.error(`✗ ${error instanceof Error ? error.message : String(error)}`)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('daemon')
+  .description('Checkpoint daemon: envia checkpoints em background (push/PR)')
+  .option('--ensure', 'Garante o daemon vivo (sobe desacoplado se preciso)')
+  .option('--status', 'Mostra se o daemon está rodando')
+  .option('--stop', 'Para o daemon')
+  .option('--once', 'Drena a fila uma vez e sai (debug/CI)')
+  .action(
+    async (options: {
+      ensure?: boolean
+      status?: boolean
+      stop?: boolean
+      once?: boolean
+    }) => {
+      const daemon = await import('./daemon')
+      const cwd = process.cwd()
+      if (options.status) {
+        const s = daemon.daemonStatus(cwd)
+        console.log(s.running ? `daemon ativo (pid ${s.pid})` : 'daemon parado')
+        return
+      }
+      if (options.stop) {
+        daemon.stopDaemon(cwd)
+        console.log('daemon parado.')
+        return
+      }
+      if (options.ensure) {
+        const r = daemon.ensureDaemon(cwd)
+        console.log(r === 'reuse' ? '✓ daemon já ativo' : '✓ daemon iniciado')
+        return
+      }
+      if (options.once) {
+        const cfg = daemon.readProjectConfig(cwd)
+        if (!cfg) {
+          console.error('✗ .supremo/project.json ausente/incompleto.')
+          process.exit(1)
+        }
+        const { resolveKeychain } = await import('./keychain')
+        const kc = resolveKeychain()
+        const n = await daemon.drainOnce({
+          projectId: cfg.projectId,
+          apiBaseUrl: cfg.apiBaseUrl,
+          cwd,
+          getSecret: () => kc.get(cfg.projectId),
+        })
+        console.log(`processados: ${n}`)
+        return
+      }
+      // Sem flags: é o processo detached — roda o loop persistente.
+      await daemon.runDaemonLoop(cwd)
+    },
+  )
+
+program
   .command('mcp', { isDefault: true })
   .description('Roda a ponte MCP (o cliente chama isto automaticamente)')
   .action(async () => {

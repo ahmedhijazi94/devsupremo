@@ -12,6 +12,9 @@ import {
   buildAppJwt,
   type CloneToken,
 } from './git-clone-token'
+import { mcpDataClient } from '@/lib/mcp/tokens'
+import { registerDevice } from '@/lib/checkpoint/devices'
+import { supabaseCheckpointDeviceStore } from '@/lib/checkpoint/store'
 
 const GITHUB_API = 'https://api.github.com'
 
@@ -119,6 +122,13 @@ export interface BootstrapConfig {
     /** Major do Postgres do projeto remoto, para o CLI alinhar o config.toml. */
     majorVersion?: number
   }
+  /**
+   * Identidade da MÁQUINA para o checkpoint daemon (v3.1 item 4). Emitida pela
+   * MESMA autorização do device flow (uma vez por máquina). O `deviceSecret` é
+   * devolvido AQUI só uma vez, para o CLI gravá-lo no keychain do SO — NUNCA vai
+   * para .env.local, Git, argv, log ou stdout. O banco guarda só o hash.
+   */
+  daemon?: { deviceId: string; deviceSecret: string }
 }
 
 /**
@@ -176,6 +186,20 @@ export async function resolveBootstrapConfig(
     // projeto sem Supabase: segue sem as env públicas nem o link
   }
 
+  // Identidade da máquina para o checkpoint daemon: registra (só o hash vai ao
+  // banco) e devolve o secret UMA vez para o CLI guardar no keychain. Best-effort:
+  // uma falha aqui não impede o bootstrap do workspace (o daemon é reprovisionável).
+  let daemon: { deviceId: string; deviceSecret: string } | undefined
+  try {
+    const reg = await registerDevice(
+      supabaseCheckpointDeviceStore(mcpDataClient()),
+      { ownerUserId: scope.userId, label: `bootstrap ${project.name}` },
+    )
+    daemon = { deviceId: reg.deviceId, deviceSecret: reg.deviceSecret }
+  } catch {
+    // sem daemon nesta máquina: o CLI cai no aviso e o dev pode re-bootstrapar
+  }
+
   const row = project as unknown as Record<string, unknown>
   return {
     project: {
@@ -196,5 +220,6 @@ export async function resolveBootstrapConfig(
     gitTokenScope: clone.scope,
     env,
     ...(supabase ? { supabase } : {}),
+    ...(daemon ? { daemon } : {}),
   }
 }

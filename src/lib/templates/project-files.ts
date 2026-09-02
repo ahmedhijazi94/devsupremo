@@ -51,7 +51,12 @@ import {
 // sobrevive ao turno). Fast dev loop por RISCO (LOW/MEDIUM/HIGH; pesado em background).
 // Checkpoint por pedido + push assíncrono do Supremo (agente não pede push/merge).
 // AGENTS/CLAUDE: preview:ensure, hot path, anti-churn de infra em microfeature.
-export const TEMPLATE_VERSION = '3.1.0'
+// 3.2.0 (v3.1 item 4): checkpoint/push SILENCIOSO. O agente só faz `checkpoint`
+// LOCAL; o checkpoint daemon empurra em background com token efêmero escopado ao
+// repo (contents:write; +workflows:write só em diff de workflows), emitido sob
+// demanda pelo Supremo, nunca persistido/logado. Identidade da máquina no keychain
+// (device flow do bootstrap; revogável). O agente NUNCA faz git push/branch/PR.
+export const TEMPLATE_VERSION = '3.2.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -427,6 +432,8 @@ function supremoProjectJson(opts: {
   return `${JSON.stringify(
     {
       ...(opts.projectId ? { projectId: opts.projectId } : {}),
+      // API do Supremo que o checkpoint daemon chama (push-grant/ensure-pr).
+      supremoUrl: supremoOrigin(),
       scaffoldVersion: TEMPLATE_VERSION,
       securityBaselineVersion: SECURITY_BASELINE_VERSION,
       securityProfile: opts.securityProfile,
@@ -717,6 +724,11 @@ supabase/.branches/
 # Supremo v3.1: estado por-máquina do supervisor de preview (não versionar).
 .supremo/preview.pid
 .supremo/preview.log
+
+# Supremo v3.1: estado por-máquina do checkpoint daemon — fila de checkpoints,
+# pid/log do daemon e worktree efêmera de integração. NUNCA guarda secret (o
+# secret da máquina fica no keychain do SO). Tudo por-máquina; fora do Git.
+.supremo/checkpoints/
 
 *.log
 .DS_Store
@@ -2646,70 +2658,69 @@ BACKGROUND (a CI é a barreira definitiva antes da main):
 e **não** rode \`verify:full\` em toda microalteração. LOW não é inseguro: o trabalho
 pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/CI.
 
-### Passos de cada pedido normal
-1. \`npm run preview:ensure\` (garante o preview) e sincronize só o Git necessário.
-2. Cheque UMA vez, sem bloquear, se há falha de CI ANTERIOR relevante (RUNNING → siga;
-   FAILED → classifique; SUCCESS → já pôde auto-mergear).
-3. **Implemente** a mudança; veja no preview (HMR).
-4. Crie/atualize **só os testes relacionados** (escritos junto).
-5. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
-6. Corrija falhas locais do hot path.
-7. **Checkpoint**: um commit lógico por pedido concluído (\`feat:\`/\`fix:\`/…). O
-   push/PR/CI/auto-merge é infraestrutura do Supremo, assíncrona — ver abaixo.
-8. **Devolva o controle ao usuário IMEDIATAMENTE.** Não espere CI, não peça merge.
+### Passos de cada pedido normal (v3.1)
+1. \`npm run preview:ensure\` — garante o preview persistente (reusa se vivo).
+2. **Implemente** a mudança; veja no preview (o HMR reflete na hora).
+3. Crie/atualize **só os testes relacionados** (escritos junto).
+4. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
+5. Corrija falhas locais do hot path.
+6. **Feche o pedido com UM checkpoint LOCAL** (o resumo é curto, uma linha):
+   \`\`\`
+   npm run checkpoint -- "<resumo do que mudou>"
+   \`\`\`
+   (equivale a \`supremo checkpoint "<resumo>"\`). Ele valida que há mudança, cria o
+   commit do checkpoint, ENFILEIRA o envio e retorna na hora — **sem rede**.
+7. **Devolva o controle ao usuário IMEDIATAMENTE.** O próximo pedido já pode começar.
 
-### NUNCA (v3)
-- **NUNCA espere a CI depois de um push normal.** Não faça polling, não fique abrindo
-  o GitHub, não gaste tokens acompanhando jobs, não bloqueie o usuário.
-- **NUNCA** faça bypass de required checks.
-- **NUNCA** faça push direto na \`main\`. **NUNCA** force push na \`main\`.
-- **NUNCA** desative/comente teste, afrouxe threshold, altere ruleset ou remova gate
-  para "ficar verde". Se um gate falha, corrija o CÓDIGO (ou o teste, se ele estiver
-  errado) — nunca remova a barreira.
-- **NUNCA** faça merge só porque você "acha que terminou": quem libera é o GitHub.
+Um checkpoint por pedido concluído — **nunca** agrupe vários pedidos num só, nunca
+deixe um pedido sem checkpoint. É a base do "voltar para antes desta mensagem".
+
+### Publicação é INFRAESTRUTURA — não é você (v3.1 item 4)
+Depois do \`checkpoint\`, o **checkpoint daemon** (processo de background, como o preview)
+autentica com a identidade DESTA máquina e ENVIA o checkpoint ao Supremo — **nenhuma
+credencial GitHub existe nesta máquina**. O **backend** do Supremo é quem publica: deriva
+a branch de integração, escreve com um token da App usado e revogado no servidor, garante
+a PR — e o Control Plane faz CI e auto-merge na \`main\`. **Você não faz, não vê e não
+espera nada disso; nem o daemon toca no GitHub diretamente.**
+
+### O que o AGENTE NUNCA faz (v3.1)
+- **NUNCA** rode \`git push\` (nem \`git commit\` de entrega — use \`checkpoint\`),
+  \`git branch\`, \`git checkout -b\`, \`git merge\`, \`git rebase\` ou \`git push --force\`.
+  Empurrar é trabalho do daemon; você só faz o checkpoint LOCAL.
+- **NUNCA** abra/atualize/feche PR, nem sincronize a branch com a \`main\` na mão.
+- **NUNCA** trate corrida de auto-merge você mesmo: se a PR anterior mergeou enquanto
+  você editava, o **Supremo** detecta, rotaciona a branch de integração e integra só o
+  delta ainda não integrado — sozinho, sem tocar o seu worktree e sem perder nada.
+- **NUNCA espere a CI**; não faça polling. **NUNCA** peça push/merge ao usuário.
+- **NUNCA** faça push direto na \`main\`; **NUNCA** faça force push na \`main\` (você nem
+  empurra — quem publica é o backend do Supremo, sempre em branch de trabalho; a \`main\`
+  é protegida e inalcançável pelo caminho normal).
+- **NUNCA** faça bypass de required checks nem desative/afrouxe teste, threshold,
+  ruleset ou gate para "ficar verde". Gate falhou → corrija o CÓDIGO (ou o teste, se
+  ele estiver errado), nunca remova a barreira.
 - **NUNCA** rode \`npm run dev\` à mão (mata o preview persistente) — use \`preview:ensure\`.
 - **NUNCA** "melhore" infraestrutura numa microfeature (LOW): não edite \`AGENTS.md\`,
   \`CLAUDE.md\`, \`tsconfig*\`, CI, \`package.json\`, migrations ou config estrutural sem
   necessidade técnica concreta do pedido. Ler as regras é ok; mexer por impulso não.
 
-### SEMPRE (v3)
-- **Continue desenvolvendo enquanto a CI roda de forma assíncrona.**
-- Só o **HEAD atual validado** pode ser auto-mergeado; **resultado verde de um SHA
-  antigo nunca libera um SHA novo**.
+### SEMPRE (v3.1)
+- **Continue desenvolvendo enquanto a CI roda** e o daemon integra em background.
+- Só o **HEAD atual validado** é auto-mergeado; verde de um SHA
+  antigo nunca libera um SHA novo (o daemon preserva essa trava HEAD/SHA).
 - Uma **falha crítica de segurança** (RLS, auth, isolamento tenant, migration inválida,
   secret leak, IDOR, quebra estrutural de build) deve ser **corrigida antes** de
   construir trabalho dependente sobre ela.
-- **Antes de cada commit/push, re-cheque se a PR de desenvolvimento ativa ainda está
-  aberta** (pode ter sido auto-mergeada enquanto você editava).
+
+### Falha de CI de um checkpoint anterior
+Se um checkpoint anterior falhou na CI, no próximo pedido você recebe um **resumo barato**
+da falha relevante. Corrija no código (se aplicável) e feche com um **novo checkpoint** —
+sem polling, sem administrar Git. O merge fica bloqueado até ficar verde; isso não te
+impede de seguir desenvolvendo.
 
 ### Auto-merge é do GitHub, não seu
-Você empurra código; o GitHub valida os required checks do HEAD atual e só então
-auto-mergeia na \`main\`. Não trate um clique humano em "Merge" como barreira — a
-segurança está nos gates automatizados. Você não tem caminho para ignorá-los.
-
-### Corrida de auto-merge durante a edição
-CI e auto-merge são assíncronos: a PR pode ser auto-mergeada enquanto você implementa o
-próximo pedido. **Imediatamente antes de cada commit/push**, verifique se a branch/PR de
-desenvolvimento ainda está aberta. Se ela já foi auto-mergeada:
-1. **preserve** as alterações locais atuais (não perca, não descarte, não sobrescreva);
-2. **sincronize** com a \`main\` recém-atualizada;
-3. crie uma **NOVA branch de desenvolvimento** a partir da \`main\`;
-4. **aplique** com segurança as alterações locais nela (resolva conflito se houver);
-5. rode o **verify** apropriado; **commit**; **push**;
-6. deixe a nova PR/CI/auto-merge seguir em background; devolva o controle.
-
-**NUNCA faça push direto na \`main\` nessa transição.** É transparente para o usuário —
-não peça que ele administre Git.
-
-### Início de um novo prompt
-Se a revisão anterior já foi auto-mergeada, **detecte, sincronize com a \`main\`, crie
-uma nova branch de desenvolvimento** e siga o pedido — sem envolver o usuário. Se a CI
-anterior **falhou**: crítica → corrija primeiro; não-crítica → corrija dentro do novo
-ciclo. Depois do novo push, **não espere de novo**.
-
-### Branch/PR contínua
-Não abra uma PR nova por microfeature. Enquanto a branch de desenvolvimento não foi
-integrada, novos pedidos continuam nela — cada push atualiza o HEAD.
+O daemon empurra código; o GitHub valida os required checks do HEAD atual e só então
+auto-mergeia na \`main\`. A segurança está nos gates automatizados — não há caminho para
+ignorá-los, e você não precisa nem tentar.
 
 Hooks de git, os required checks e a proteção da \`main\` são o enforcement independente:
 se você ignorar estas instruções, eles reprovam. Você NÃO tem caminho para desativar
@@ -2776,12 +2787,10 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   (LOW só lint/typecheck do que mudou + testes relacionados; HIGH/SECURITY gates fortes).
   **Não** use lista fixa nem rode \`verify:full\` em toda microalteração — o pesado
   (build/suíte/RLS/CodeQL) roda em background/CI.
-- Fazer um **checkpoint** (commit lógico) por pedido concluído e **devolver o controle
-  imediatamente** — push/PR/CI/auto-merge são infraestrutura assíncrona do Supremo
-- **Continuar desenvolvendo enquanto a CI roda em background** (ela é assíncrona)
-- **Antes de cada commit/push, re-checar se a PR de desenvolvimento foi auto-mergeada
-  durante a edição** — se sim: preservar o local, criar nova branch a partir da \`main\`,
-  reaplicar e dar push (nunca push direto na \`main\`)
+- Fechar cada pedido concluído com **\`npm run checkpoint -- "<resumo>"\`** (checkpoint
+  LOCAL) e **devolver o controle imediatamente** — push/PR/CI/auto-merge são feitos pelo
+  **checkpoint daemon** + Control Plane, em background
+- **Continuar desenvolvendo enquanto o daemon integra em background** (é assíncrono)
 
 ## Nunca
 - \`any\` no TypeScript
@@ -2790,11 +2799,15 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - Tabela sem RLS
 - Segredo em código
 - Validação de acesso no cliente
+- **Rodar \`git push\`/\`git merge\`/\`git branch\`/\`git rebase\`/\`git push --force\` ou
+  \`git commit\` de entrega** — você só faz \`checkpoint\` LOCAL; o daemon empurra
+- **Abrir/atualizar PR, sincronizar com a \`main\` na mão, ou tratar corrida de
+  auto-merge você mesmo** — o daemon rotaciona a branch e integra só o delta sozinho
 - **Rodar \`npm run dev\` à mão** (mata o preview persistente) — use \`preview:ensure\`
 - **"Melhorar" infra numa microfeature LOW** (AGENTS.md/CLAUDE.md/tsconfig/CI/package.json/
   migrations/config) sem necessidade técnica concreta — evite churn de infraestrutura
-- **Esperar ou pollar a CI depois de um push normal** — a CI é assíncrona; continue
-- **Commit direto na \`main\`; force push na \`main\`; bypass de required checks**
+- **Esperar ou pollar a CI depois de um checkpoint** — é assíncrona; continue
+- **Push direto na \`main\`; force push na \`main\`; bypass de required checks**
 - **Desativar/comentar teste, afrouxar threshold, alterar ruleset ou remover gate para
   "ficar verde"** — corrija o código (ou o teste, se errado), nunca a barreira
 - **Fazer merge por conta própria** — quem libera a \`main\` é o GitHub, só com todos os

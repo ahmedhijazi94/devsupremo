@@ -36,6 +36,12 @@ export interface BootstrapConfig {
     /** Major do Postgres do projeto remoto, para alinhar o supabase/config.toml. */
     majorVersion?: number
   }
+  /**
+   * Identidade da MÁQUINA para o checkpoint daemon (v3.1). O `deviceSecret` chega
+   * SÓ por este canal e é gravado no keychain do SO — nunca em .env.local, Git,
+   * argv, log ou stdout. O banco guarda só o hash.
+   */
+  daemon?: { deviceId: string; deviceSecret: string }
 }
 
 // ── Helpers puros (testáveis) ───────────────────────────────────────────────
@@ -467,6 +473,24 @@ export async function runBootstrap(opts: {
   }
 
   if (linked) ok('Claude/Codex prontos para trabalhar no Supabase online')
+
+  // v3.1 item 4: identidade da máquina no keychain (nunca no projeto) + daemon de
+  // checkpoint pronto. Assim o push é silencioso — o agente só faz checkpoint local.
+  if (config.daemon) {
+    try {
+      const { resolveKeychain } = await import('./keychain')
+      resolveKeychain().save(config.project.id, config.daemon.deviceSecret)
+      ok('Máquina autorizada (checkpoint daemon) — identidade no keychain')
+      const { ensureDaemon } = await import('./daemon')
+      ensureDaemon(dest)
+      ok('Checkpoint daemon no ar — push/PR em background (npm run daemon:status)')
+    } catch {
+      console.log(
+        '• Não consegui preparar o checkpoint daemon automaticamente.\n' +
+          '  Rode depois: npm run daemon:ensure\n',
+      )
+    }
+  }
 
   console.log(`\nProjeto pronto:\n\n  ${dest}\n`)
   if (opts.start) {

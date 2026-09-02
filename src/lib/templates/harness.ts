@@ -32,6 +32,13 @@ export function harnessPackageScripts(): Record<string, string> {
     'preview:ensure': 'node scripts/preview.mjs ensure',
     'preview:status': 'node scripts/preview.mjs status',
     'preview:stop': 'node scripts/preview.mjs stop',
+    // v3.1 item 4 — checkpoint LOCAL (o agente só faz isto ao concluir um pedido)
+    // e o checkpoint daemon (push/PR assíncronos; o agente NUNCA faz git push).
+    // A CLI vem por npx (mesma entrega do bootstrap), sem tocar o lockfile.
+    checkpoint: 'npx --yes supremo-cli checkpoint',
+    'daemon:ensure': 'npx --yes supremo-cli daemon --ensure',
+    'daemon:status': 'npx --yes supremo-cli daemon --status',
+    'daemon:stop': 'npx --yes supremo-cli daemon --stop',
     'security:audit': 'node scripts/security-audit.js --deep',
     'security:report': 'node scripts/security-audit.js --report',
   }

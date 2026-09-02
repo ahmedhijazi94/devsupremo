@@ -15,9 +15,9 @@ import path from 'node:path'
 export type RiskLevel = 'low' | 'medium' | 'high'
 export type PushStatus =
   | 'local'
-  | 'push_pending'
-  | 'pushing'
-  | 'pushed'
+  | 'upload_pending'
+  | 'publishing'
+  | 'published'
   | 'integrated'
   | 'push_failed'
 

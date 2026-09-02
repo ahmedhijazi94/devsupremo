@@ -2675,11 +2675,13 @@ pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/
 Um checkpoint por pedido concluído — **nunca** agrupe vários pedidos num só, nunca
 deixe um pedido sem checkpoint. É a base do "voltar para antes desta mensagem".
 
-### Push/PR/CI/merge são INFRAESTRUTURA — não é você (v3.1 item 4)
+### Publicação é INFRAESTRUTURA — não é você (v3.1 item 4)
 Depois do \`checkpoint\`, o **checkpoint daemon** (processo de background, como o preview)
-autentica com a identidade DESTA máquina, pede ao Supremo um token efêmero escopado ao
-repo, empurra a branch de integração, garante a PR e descarta o token — e o Control Plane
-faz CI e auto-merge na \`main\`. **Você não faz, não vê e não espera nada disso.**
+autentica com a identidade DESTA máquina e ENVIA o checkpoint ao Supremo — **nenhuma
+credencial GitHub existe nesta máquina**. O **backend** do Supremo é quem publica: deriva
+a branch de integração, escreve com um token da App usado e revogado no servidor, garante
+a PR — e o Control Plane faz CI e auto-merge na \`main\`. **Você não faz, não vê e não
+espera nada disso; nem o daemon toca no GitHub diretamente.**
 
 ### O que o AGENTE NUNCA faz (v3.1)
 - **NUNCA** rode \`git push\` (nem \`git commit\` de entrega — use \`checkpoint\`),
@@ -2687,11 +2689,12 @@ faz CI e auto-merge na \`main\`. **Você não faz, não vê e não espera nada d
   Empurrar é trabalho do daemon; você só faz o checkpoint LOCAL.
 - **NUNCA** abra/atualize/feche PR, nem sincronize a branch com a \`main\` na mão.
 - **NUNCA** trate corrida de auto-merge você mesmo: se a PR anterior mergeou enquanto
-  você editava, o **daemon** detecta, rotaciona a branch de integração e integra só o
+  você editava, o **Supremo** detecta, rotaciona a branch de integração e integra só o
   delta ainda não integrado — sozinho, sem tocar o seu worktree e sem perder nada.
 - **NUNCA espere a CI**; não faça polling. **NUNCA** peça push/merge ao usuário.
 - **NUNCA** faça push direto na \`main\`; **NUNCA** faça force push na \`main\` (você nem
-  empurra — o daemon empurra só em branch de trabalho; a \`main\` é protegida).
+  empurra — quem publica é o backend do Supremo, sempre em branch de trabalho; a \`main\`
+  é protegida e inalcançável pelo caminho normal).
 - **NUNCA** faça bypass de required checks nem desative/afrouxe teste, threshold,
   ruleset ou gate para "ficar verde". Gate falhou → corrija o CÓDIGO (ou o teste, se
   ele estiver errado), nunca remova a barreira.

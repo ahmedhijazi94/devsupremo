@@ -1,19 +1,20 @@
 -- ============================================================
 -- SUPREMO — Migration 016
 --
--- Workflow v3.1 (item 4): checkpoint/push SILENCIOSO.
+-- Workflow v3.1 (item 4, ENDURECIDO): checkpoint/publish SILENCIOSO.
 --
 -- O agente termina cada pedido com um CHECKPOINT LOCAL (commit). Um daemon local
--- envia o checkpoint em background, autenticado por uma IDENTIDADE DE MÁQUINA que
--- o usuário autoriza UMA vez (device flow existente). O backend emite, sob
--- demanda, um installation token da GitHub App escopado ao repo do projeto e o
--- descarta após o push. Nada disso pede autorização por turno.
+-- ENVIA o checkpoint (changeset content-addressed) ao Control Plane do Supremo,
+-- autenticado por uma IDENTIDADE DE MÁQUINA que o usuário autoriza UMA vez (device
+-- flow existente). NENHUMA credencial GitHub com write sai do backend: o daemon
+-- NUNCA recebe installation token. O BACKEND publica em uma branch de integração
+-- derivada server-side, garante a PR, e revoga o token — tudo server-side.
 --
 -- Esta migration adiciona:
 --   1. checkpoint_devices — identidade revogável da máquina (só o HASH do secret);
---   2. checkpoints        — metadata de cada checkpoint (base do "voltar para
---                           antes da mensagem N");
---   3. projects.github_repo_id — id numérico do repo (backfill p/ token por id).
+--   2. checkpoints        — metadata + SHA local e SHA publicado (base do "voltar
+--                           para antes da mensagem N");
+--   3. projects.github_repo_id — id numérico do repo (token por id exato, server-side).
 --
 -- Idempotente. NÃO edita migrations já aplicadas. Só adiciona.
 -- ============================================================
@@ -55,17 +56,22 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   id UUID PRIMARY KEY,
   project_id UUID REFERENCES projects(id) ON DELETE CASCADE NOT NULL,
   device_id UUID REFERENCES checkpoint_devices(id) ON DELETE SET NULL,
-  -- SHA do commit local do checkpoint.
+  -- SHA do commit LOCAL do checkpoint (na máquina do dev).
   commit_sha TEXT NOT NULL,
+  -- SHA do commit PUBLICADO pelo backend na branch de integração (recriado via
+  -- Git Data API; pode divergir do local — o vínculo estável é o checkpoint_id).
+  published_sha TEXT,
   parent_checkpoint_id UUID REFERENCES checkpoints(id) ON DELETE SET NULL,
   summary TEXT NOT NULL,
   risk_level TEXT NOT NULL DEFAULT 'low'
     CHECK (risk_level IN ('low', 'medium', 'high')),
   -- Migrations tocadas por este checkpoint (paths), para o modelo de restore.
   migrations JSONB NOT NULL DEFAULT '[]'::jsonb,
-  -- Estado do envio: local → pushing → pushed → integrated | push_failed.
-  push_status TEXT NOT NULL DEFAULT 'local'
-    CHECK (push_status IN ('local', 'pushing', 'pushed', 'integrated', 'push_failed')),
+  -- Estado do envio (server-side): publishing → published → integrated | failed.
+  -- 'local'/'upload_pending' vivem só na fila do daemon (offline); a linha no
+  -- banco nasce quando o backend começa a publicar.
+  push_status TEXT NOT NULL DEFAULT 'publishing'
+    CHECK (push_status IN ('publishing', 'published', 'integrated', 'failed')),
   -- Estado de CI/merge (reusa a semântica da v3; preenchido server-side).
   integration_status TEXT,
   -- PR aberta para este checkpoint (quando já garantida server-side).

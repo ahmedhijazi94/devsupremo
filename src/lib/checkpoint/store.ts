@@ -74,7 +74,36 @@ export interface CheckpointUpsert {
   migrations: string[]
 }
 
-/** Grava/atualiza a metadata do checkpoint (idempotente por id). */
+/** Estado do checkpoint (para idempotência do publish). */
+export interface CheckpointStateRow {
+  id: string
+  pushStatus: string
+  prNumber: number | null
+  integrationBranch: string | null
+  publishedSha: string | null
+}
+
+/** Lê o estado de um checkpoint (idempotência: já publicado?). */
+export async function getCheckpointState(
+  client: SupabaseClient,
+  id: string,
+): Promise<CheckpointStateRow | null> {
+  const { data } = await client
+    .from('checkpoints')
+    .select('id, push_status, pr_number, integration_branch, published_sha')
+    .eq('id', id)
+    .maybeSingle()
+  if (!data) return null
+  return {
+    id: data.id as string,
+    pushStatus: data.push_status as string,
+    prNumber: (data.pr_number as number | null) ?? null,
+    integrationBranch: (data.integration_branch as string | null) ?? null,
+    publishedSha: (data.published_sha as string | null) ?? null,
+  }
+}
+
+/** Cria/atualiza a metadata do checkpoint em estado 'publishing' (idempotente). */
 export async function upsertCheckpoint(
   client: SupabaseClient,
   input: CheckpointUpsert,
@@ -89,6 +118,7 @@ export async function upsertCheckpoint(
       summary: input.summary,
       risk_level: input.riskLevel,
       migrations: input.migrations,
+      push_status: 'publishing',
     },
     { onConflict: 'id' },
   )
@@ -98,8 +128,13 @@ export async function upsertCheckpoint(
 export async function setCheckpointPushStatus(
   client: SupabaseClient,
   id: string,
-  status: 'pushing' | 'pushed' | 'integrated' | 'push_failed',
-  extra?: { prNumber?: number; integrationBranch?: string; integrationStatus?: string },
+  status: 'publishing' | 'published' | 'integrated' | 'failed',
+  extra?: {
+    prNumber?: number
+    integrationBranch?: string
+    integrationStatus?: string
+    publishedSha?: string
+  },
 ): Promise<void> {
   await client
     .from('checkpoints')
@@ -108,6 +143,7 @@ export async function setCheckpointPushStatus(
       ...(extra?.prNumber != null ? { pr_number: extra.prNumber } : {}),
       ...(extra?.integrationBranch ? { integration_branch: extra.integrationBranch } : {}),
       ...(extra?.integrationStatus ? { integration_status: extra.integrationStatus } : {}),
+      ...(extra?.publishedSha ? { published_sha: extra.publishedSha } : {}),
     })
     .eq('id', id)
 }

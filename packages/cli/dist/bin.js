@@ -394,25 +394,143 @@ var init_checkpoint = __esm({
   }
 });
 
+// src/changeset.ts
+function sha256Hex(buf) {
+  return import_node_crypto2.default.createHash("sha256").update(buf).digest("hex");
+}
+function computeChangesetSha256(cs) {
+  const files = [...cs.files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const canonical = JSON.stringify({
+    checkpointId: cs.checkpointId,
+    parentCheckpointId: cs.parentCheckpointId,
+    message: cs.message,
+    files: files.map((f) => ({
+      path: f.path,
+      op: f.op,
+      sha256: f.sha256 ?? null,
+      mode: f.mode ?? "100644"
+    }))
+  });
+  return sha256Hex(canonical);
+}
+function buildChangeset(record, reader) {
+  const sha = record.commitSha;
+  const meta = reader.meta(sha);
+  const files = [];
+  for (const ch of reader.changes(sha)) {
+    const st = ch.status[0] ?? "";
+    if (st === "D") {
+      files.push({ path: ch.path, op: "delete" });
+      continue;
+    }
+    if (st === "R" && ch.oldPath && ch.oldPath !== ch.path) {
+      files.push({ path: ch.oldPath, op: "delete" });
+    }
+    const buf = reader.content(sha, ch.path);
+    if (buf === null) {
+      files.push({ path: ch.path, op: "delete" });
+      continue;
+    }
+    files.push({
+      path: ch.path,
+      op: st === "A" || st === "R" || st === "C" ? "add" : "modify",
+      contentBase64: buf.toString("base64"),
+      sha256: sha256Hex(buf),
+      mode: reader.executable(sha, ch.path) ? "100755" : "100644"
+    });
+  }
+  return {
+    checkpointId: record.checkpointId,
+    commitSha: sha,
+    parentCheckpointId: record.parentCheckpointId,
+    message: meta.message,
+    authorName: meta.authorName,
+    authorEmail: meta.authorEmail,
+    files
+  };
+}
+function defaultCommitReader(cwd) {
+  const text = (args) => (0, import_node_child_process5.execFileSync)("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const hasParent = (sha) => {
+    try {
+      (0, import_node_child_process5.execFileSync)("git", ["rev-parse", "--verify", `${sha}^`], {
+        cwd,
+        stdio: "ignore"
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+  return {
+    changes: (sha) => {
+      const base = hasParent(sha) ? `${sha}^` : EMPTY_TREE;
+      const out = text(["diff", "--name-status", "-z", base, sha]);
+      const parts = out.split("\0").filter((p) => p.length > 0);
+      const changes = [];
+      for (let i = 0; i < parts.length; ) {
+        const status = parts[i++] ?? "";
+        if (status.startsWith("R") || status.startsWith("C")) {
+          const oldPath = parts[i++] ?? "";
+          const path7 = parts[i++] ?? "";
+          changes.push({ status, path: path7, oldPath });
+        } else {
+          const path7 = parts[i++] ?? "";
+          changes.push({ status, path: path7 });
+        }
+      }
+      return changes;
+    },
+    content: (sha, path7) => {
+      try {
+        return (0, import_node_child_process5.execFileSync)("git", ["show", `${sha}:${path7}`], {
+          cwd,
+          stdio: ["ignore", "pipe", "ignore"],
+          maxBuffer: 64 * 1024 * 1024
+        });
+      } catch {
+        return null;
+      }
+    },
+    meta: (sha) => {
+      const message = text(["show", "-s", "--format=%B", sha]).replace(/\n+$/, "\n").trimEnd();
+      const authorName = text(["show", "-s", "--format=%an", sha]).trim();
+      const authorEmail = text(["show", "-s", "--format=%ae", sha]).trim();
+      return { message: message || "checkpoint", authorName, authorEmail };
+    },
+    executable: (sha, path7) => {
+      try {
+        const line = text(["ls-tree", sha, path7]);
+        return line.slice(0, 6) === "100755";
+      } catch {
+        return false;
+      }
+    }
+  };
+}
+var import_node_child_process5, import_node_crypto2;
+var init_changeset = __esm({
+  "src/changeset.ts"() {
+    "use strict";
+    import_node_child_process5 = require("node:child_process");
+    import_node_crypto2 = __toESM(require("node:crypto"));
+  }
+});
+
 // src/daemon.ts
 var daemon_exports = {};
 __export(daemon_exports, {
   AuthError: () => AuthError,
+  ConflictError: () => ConflictError,
   DAEMON_LOG_FILE: () => DAEMON_LOG_FILE,
   DAEMON_PID_FILE: () => DAEMON_PID_FILE,
-  MAIN_BRANCHES: () => MAIN_BRANCHES,
   NetworkError: () => NetworkError,
-  assertNotMain: () => assertNotMain,
   backoffDelayMs: () => backoffDelayMs,
-  cleanRemoteUrl: () => cleanRemoteUrl,
   daemonStatus: () => daemonStatus,
-  defaultDaemonGit: () => defaultDaemonGit,
   defaultDaemonHttp: () => defaultDaemonHttp,
   drainOnce: () => drainOnce,
   ensureDaemon: () => ensureDaemon,
-  gitCredentialArgs: () => gitCredentialArgs,
-  gitCredentialHelper: () => gitCredentialHelper,
-  gitPushArgs: () => gitPushArgs,
   processCheckpoint: () => processCheckpoint,
   readProjectConfig: () => readProjectConfig,
   runDaemonLoop: () => runDaemonLoop,
@@ -429,29 +547,6 @@ function backoffDelayMs(attempts, baseMs = 2e3, maxMs = 6e4) {
   const n = Math.max(0, attempts);
   return Math.min(maxMs, baseMs * 2 ** n);
 }
-function assertNotMain(branch) {
-  if (MAIN_BRANCHES.has(branch)) {
-    throw new Error(`Recusado: push na branch protegida "${branch}".`);
-  }
-}
-function cleanRemoteUrl(repoFullName) {
-  return `https://github.com/${repoFullName}.git`;
-}
-function gitCredentialHelper() {
-  return `!f() { test "$1" = get && printf 'username=x-access-token\\npassword=%s\\n' "$SUPREMO_GIT_TOKEN"; }; f`;
-}
-function gitCredentialArgs() {
-  return ["-c", "credential.helper=", "-c", `credential.helper=${gitCredentialHelper()}`];
-}
-function gitPushArgs(repoFullName, srcSha, branch) {
-  assertNotMain(branch);
-  return [
-    ...gitCredentialArgs(),
-    "push",
-    cleanRemoteUrl(repoFullName),
-    `${srcSha}:refs/heads/${branch}`
-  ];
-}
 function withStatus(record, status, patch = {}) {
   return { ...record, pushStatus: status, ...patch };
 }
@@ -467,13 +562,29 @@ async function processCheckpoint(record, ctx) {
       reason: "device_not_provisioned"
     };
   }
-  let grant;
+  const changeset = buildChangeset(record, ctx.reader);
+  if (changeset.files.length === 0) {
+    return {
+      record: withStatus(record, "push_failed"),
+      result: "failed",
+      reason: "empty_changeset"
+    };
+  }
+  const changesetSha256 = computeChangesetSha256(changeset);
   try {
-    grant = await ctx.http.requestGrant({
+    const { prNumber } = await ctx.http.publish({
       deviceSecret: secret,
       projectId: ctx.projectId,
-      record
+      changeset,
+      changesetSha256,
+      riskLevel: record.riskLevel,
+      summary: record.summary,
+      migrations: record.migrations
     });
+    return {
+      record: withStatus(record, "published", { prNumber }),
+      result: "done"
+    };
   } catch (err) {
     if (err instanceof AuthError) {
       return {
@@ -482,206 +593,35 @@ async function processCheckpoint(record, ctx) {
         reason: "unauthorized"
       };
     }
+    const reason = err instanceof ConflictError ? "conflict" : "network";
     return {
-      record: withStatus(record, "push_pending", { attempts: record.attempts + 1 }),
+      record: withStatus(record, "upload_pending", { attempts: record.attempts + 1 }),
       result: "deferred",
-      reason: "network"
+      reason
     };
   }
-  const { plan, token: token2, repoFullName } = grant;
-  assertNotMain(plan.branch);
-  try {
-    if (plan.action === "reuse") {
-      ctx.git.pushReuse(repoFullName, plan.pushSha ?? record.commitSha, plan.branch, token2);
-    } else {
-      const observedMain = ctx.git.fetchMainSha(repoFullName, token2);
-      if (observedMain !== plan.expectedBaseSha) {
-        await ctx.http.revokeToken(token2);
-        return {
-          record: withStatus(record, "push_pending", {
-            attempts: record.attempts + 1
-          }),
-          result: "deferred",
-          reason: "stale_base"
-        };
-      }
-      ctx.git.pushRotate(
-        repoFullName,
-        {
-          branch: plan.branch,
-          baseSha: plan.expectedBaseSha,
-          fromSha: plan.deltaRange?.fromSha ?? null,
-          toSha: plan.deltaRange?.toSha ?? record.commitSha
-        },
-        token2
-      );
-    }
-  } catch {
-    await ctx.http.revokeToken(token2);
-    return {
-      record: withStatus(record, "push_pending", { attempts: record.attempts + 1 }),
-      result: "deferred",
-      reason: "push_error"
-    };
-  }
-  await ctx.http.revokeToken(token2);
-  const pushed = withStatus(record, "pushing", { integrationBranch: plan.branch });
-  try {
-    const pr = await ctx.http.ensurePr({
-      deviceSecret: secret,
-      projectId: ctx.projectId,
-      checkpointId: record.checkpointId,
-      branch: plan.branch,
-      summary: record.summary
-    });
-    return {
-      record: withStatus(record, "pushed", {
-        integrationBranch: plan.branch,
-        prNumber: pr.prNumber
-      }),
-      result: "done"
-    };
-  } catch {
-    return { record: pushed, result: "deferred", reason: "ensure_pr_network" };
-  }
-}
-function gitWithToken(args, cwd, token2) {
-  return (0, import_node_child_process5.execFileSync)("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, SUPREMO_GIT_TOKEN: token2 }
-  });
-}
-function defaultDaemonGit(cwd) {
-  return {
-    fetchMainSha: (repoFullName, token2) => {
-      gitWithToken(
-        [...gitCredentialArgs(), "fetch", cleanRemoteUrl(repoFullName), "main"],
-        cwd,
-        token2
-      );
-      return gitWithToken(["rev-parse", "FETCH_HEAD"], cwd, token2).trim();
-    },
-    pushReuse: (repoFullName, pushSha, branch, token2) => {
-      gitWithToken(gitPushArgs(repoFullName, pushSha, branch), cwd, token2);
-    },
-    pushRotate: (repoFullName, plan, token2) => {
-      assertNotMain(plan.branch);
-      const wt = import_node_path4.default.join(cwd, ".supremo/checkpoints/wt");
-      try {
-        gitWithToken(["worktree", "remove", "--force", wt], cwd, token2);
-      } catch {
-      }
-      gitWithToken(["worktree", "add", "--detach", wt, plan.baseSha], cwd, token2);
-      try {
-        const from = plan.fromSha ?? plan.baseSha;
-        (0, import_node_child_process5.execFileSync)("git", ["rebase", "--onto", plan.baseSha, from, plan.toSha], {
-          cwd: wt,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, SUPREMO_GIT_TOKEN: token2 }
-        });
-        gitWithToken(
-          [
-            ...gitCredentialArgs(),
-            "push",
-            cleanRemoteUrl(repoFullName),
-            `HEAD:refs/heads/${plan.branch}`
-          ],
-          wt,
-          token2
-        );
-      } finally {
-        try {
-          gitWithToken(["worktree", "remove", "--force", wt], cwd, token2);
-        } catch {
-        }
-      }
-    }
-  };
 }
 function defaultDaemonHttp(apiBaseUrl) {
   const base = apiBaseUrl.replace(/\/$/, "");
-  const postJson = async (route, body) => {
-    let res;
-    try {
-      res = await fetch(`${base}${route}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-    } catch {
-      throw new NetworkError("offline");
-    }
-    if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`);
-    if (!res.ok) throw new NetworkError(`${res.status}`);
-    return res.json().catch(() => ({}));
-  };
   return {
-    requestGrant: async ({ deviceSecret, projectId, record }) => {
-      const data = await postJson("/api/checkpoint/push-grant", {
-        deviceSecret,
-        projectId,
-        checkpointId: record.checkpointId,
-        commitSha: record.commitSha,
-        parentCheckpointId: record.parentCheckpointId,
-        summary: record.summary,
-        riskLevel: record.riskLevel,
-        changedPaths: record.changedPaths,
-        migrations: record.migrations
-      });
-      return data;
-    },
-    ensurePr: async ({ deviceSecret, projectId, checkpointId, branch, summary }) => {
-      const data = await postJson("/api/checkpoint/ensure-pr", {
-        deviceSecret,
-        projectId,
-        checkpointId,
-        branch,
-        summary
-      });
-      return data;
-    },
-    revokeToken: async (token2) => {
+    publish: async (input) => {
+      let res;
       try {
-        await fetch(`${GITHUB_API}/installation/token`, {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${token2}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28"
-          }
+        res = await fetch(`${base}/api/checkpoint/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input)
         });
       } catch {
+        throw new NetworkError("offline");
       }
+      if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`);
+      if (res.status === 409) throw new ConflictError("conflict");
+      if (!res.ok) throw new NetworkError(`${res.status}`);
+      const data = await res.json().catch(() => ({}));
+      return { prNumber: data.prNumber ?? 0 };
     }
   };
-}
-async function drainOnce(config) {
-  const queuePath = import_node_path4.default.join(config.cwd, QUEUE_FILE);
-  let queue;
-  try {
-    queue = parseQueue(import_node_fs4.default.readFileSync(queuePath, "utf8"));
-  } catch {
-    return 0;
-  }
-  const ctx = {
-    projectId: config.projectId,
-    getSecret: config.getSecret,
-    http: defaultDaemonHttp(config.apiBaseUrl),
-    git: defaultDaemonGit(config.cwd)
-  };
-  let processed = 0;
-  for (; ; ) {
-    const next = selectNextPending(queue);
-    if (!next) break;
-    const outcome = await processCheckpoint(next, ctx);
-    queue = upsertQueue(queue, outcome.record);
-    import_node_fs4.default.writeFileSync(queuePath, serializeQueue(queue));
-    processed++;
-    if (outcome.result !== "done") break;
-  }
-  return processed;
 }
 function readProjectConfig(cwd) {
   try {
@@ -717,7 +657,7 @@ function ensureDaemon(cwd) {
   const logPath = import_node_path4.default.join(cwd, DAEMON_LOG_FILE);
   const out = import_node_fs4.default.openSync(logPath, "a");
   const binPath = process.argv[1] ?? "";
-  const child = (0, import_node_child_process5.spawn)(process.execPath, [binPath, "daemon"], {
+  const child = (0, import_node_child_process6.spawn)(process.execPath, [binPath, "daemon"], {
     cwd,
     detached: true,
     stdio: ["ignore", out, out]
@@ -755,6 +695,32 @@ function minPendingAttempts(queue) {
   }
   return min;
 }
+async function drainOnce(config) {
+  const queuePath = import_node_path4.default.join(config.cwd, QUEUE_FILE);
+  let queue;
+  try {
+    queue = parseQueue(import_node_fs4.default.readFileSync(queuePath, "utf8"));
+  } catch {
+    return 0;
+  }
+  const ctx = {
+    projectId: config.projectId,
+    getSecret: config.getSecret,
+    http: defaultDaemonHttp(config.apiBaseUrl),
+    reader: defaultCommitReader(config.cwd)
+  };
+  let processed = 0;
+  for (; ; ) {
+    const next = selectNextPending(queue);
+    if (!next) break;
+    const outcome = await processCheckpoint(next, ctx);
+    queue = upsertQueue(queue, outcome.record);
+    import_node_fs4.default.writeFileSync(queuePath, serializeQueue(queue));
+    processed++;
+    if (outcome.result !== "done") break;
+  }
+  return processed;
+}
 async function runDaemonLoop(cwd, opts = {}) {
   const config = readProjectConfig(cwd);
   if (!config) {
@@ -788,26 +754,27 @@ async function runDaemonLoop(cwd, opts = {}) {
     await sleep(attempts != null ? backoffDelayMs(attempts) : idleMs);
   }
 }
-var import_node_child_process5, import_node_fs4, import_node_path4, RETRIABLE, MAIN_BRANCHES, NetworkError, AuthError, GITHUB_API, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
+var import_node_child_process6, import_node_fs4, import_node_path4, RETRIABLE, NetworkError, AuthError, ConflictError, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
-    import_node_child_process5 = require("node:child_process");
+    import_node_child_process6 = require("node:child_process");
     import_node_fs4 = __toESM(require("node:fs"));
     import_node_path4 = __toESM(require("node:path"));
     init_checkpoint();
+    init_changeset();
     init_keychain();
     RETRIABLE = /* @__PURE__ */ new Set([
       "local",
-      "push_pending",
-      "pushing"
+      "upload_pending",
+      "publishing"
     ]);
-    MAIN_BRANCHES = /* @__PURE__ */ new Set(["main", "master"]);
     NetworkError = class extends Error {
     };
     AuthError = class extends Error {
     };
-    GITHUB_API = "https://api.github.com";
+    ConflictError = class extends Error {
+    };
     DAEMON_PID_FILE = `${CHECKPOINT_DIR}/daemon.pid`;
     DAEMON_LOG_FILE = `${CHECKPOINT_DIR}/daemon.log`;
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -818,7 +785,7 @@ var init_daemon = __esm({
 var bootstrap_exports = {};
 __export(bootstrap_exports, {
   buildEnvFile: () => buildEnvFile,
-  cleanRemoteUrl: () => cleanRemoteUrl2,
+  cleanRemoteUrl: () => cleanRemoteUrl,
   gitCloneArgs: () => gitCloneArgs,
   migrationDryRunSynced: () => migrationDryRunSynced,
   patchConfigMajorVersion: () => patchConfigMajorVersion,
@@ -836,7 +803,7 @@ function targetDir(repoFullName, baseDir) {
   const name = repoFullName.split("/").pop() || "projeto";
   return import_node_path5.default.join(baseDir ?? process.cwd(), name);
 }
-function cleanRemoteUrl2(repoFullName) {
+function cleanRemoteUrl(repoFullName) {
   return `https://github.com/${repoFullName}.git`;
 }
 function gitCloneArgs(repoFullName, branch, dest) {
@@ -849,7 +816,7 @@ function gitCloneArgs(repoFullName, branch, dest) {
     "clone",
     "--branch",
     branch,
-    cleanRemoteUrl2(repoFullName),
+    cleanRemoteUrl(repoFullName),
     dest
   ];
 }
@@ -972,7 +939,7 @@ async function linkSupabaseRemote(dest, supabase) {
     }
   }
   try {
-    (0, import_node_child_process6.execFileSync)(sb, supabaseLinkArgs(projectRef), {
+    (0, import_node_child_process7.execFileSync)(sb, supabaseLinkArgs(projectRef), {
       cwd: dest,
       env: supabaseLinkEnv(process.env, dbPassword),
       stdio: ["ignore", "ignore", "inherit"]
@@ -1095,20 +1062,20 @@ Projeto pronto:
 `);
   }
 }
-var import_node_child_process6, import_node_fs5, import_node_path5, sleep2, run, ok, tryExec, tryExecOut;
+var import_node_child_process7, import_node_fs5, import_node_path5, sleep2, run, ok, tryExec, tryExecOut;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
-    import_node_child_process6 = require("node:child_process");
+    import_node_child_process7 = require("node:child_process");
     import_node_fs5 = __toESM(require("node:fs"));
     import_node_path5 = __toESM(require("node:path"));
     init_auth();
     sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
-    run = (cmd, args, cwd, env) => (0, import_node_child_process6.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
+    run = (cmd, args, cwd, env) => (0, import_node_child_process7.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
     ok = (label) => console.log(`\u2713 ${label}`);
     tryExec = (cmd, args) => {
       try {
-        (0, import_node_child_process6.execFileSync)(cmd, args, { stdio: "ignore" });
+        (0, import_node_child_process7.execFileSync)(cmd, args, { stdio: "ignore" });
         return true;
       } catch {
         return false;
@@ -1116,7 +1083,7 @@ var init_bootstrap = __esm({
     };
     tryExecOut = (cmd, args) => {
       try {
-        return (0, import_node_child_process6.execFileSync)(cmd, args, {
+        return (0, import_node_child_process7.execFileSync)(cmd, args, {
           stdio: ["ignore", "pipe", "ignore"],
           encoding: "utf8"
         });

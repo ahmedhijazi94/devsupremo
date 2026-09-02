@@ -436,6 +436,49 @@ describe('banco online — regras do agente para o Supabase via CLI', () => {
   })
 })
 
+describe('workflow v3.1 — preview persistente + fast dev loop', () => {
+  const paths = files.map((f) => f.path)
+  const pkg = JSON.parse(file('package.json')) as { scripts: Record<string, string> }
+  const agents = file('AGENTS.md')
+  const claude = file('CLAUDE.md')
+
+  it('gera o supervisor de preview (scripts/preview.mjs)', () => {
+    expect(paths).toContain('scripts/preview.mjs')
+  })
+
+  it('package.json expõe preview:ensure/status/stop', () => {
+    expect(pkg.scripts['preview:ensure']).toBe('node scripts/preview.mjs ensure')
+    expect(pkg.scripts['preview:status']).toBe('node scripts/preview.mjs status')
+    expect(pkg.scripts['preview:stop']).toBe('node scripts/preview.mjs stop')
+  })
+
+  it('.gitignore ignora o estado por-máquina do preview (não versiona pid/log)', () => {
+    const ignore = file('.gitignore')
+    expect(ignore).toContain('.supremo/preview.pid')
+    expect(ignore).toContain('.supremo/preview.log')
+  })
+
+  it('AGENTS.md manda usar preview:ensure (persistente), não npm run dev à mão', () => {
+    expect(agents).toContain('preview:ensure')
+    expect(agents).toMatch(/NUNCA.*npm run dev|npm run dev.*mata o preview/i)
+  })
+
+  it('AGENTS.md define hot path por risco (LOW/MEDIUM/HIGH; pesado em background)', () => {
+    expect(agents).toMatch(/\bLOW\b/)
+    expect(agents).toMatch(/HIGH\/SECURITY|HIGH/)
+    expect(agents).toMatch(/background/i)
+  })
+
+  it('AGENTS.md proíbe churn de infra em microfeature (não mexer em tsconfig/CI/etc.)', () => {
+    expect(agents).toMatch(/tsconfig/)
+    expect(agents).toMatch(/microfeature|microaltera/i)
+  })
+
+  it('CLAUDE.md segue o mesmo contrato (preview:ensure)', () => {
+    expect(claude).toContain('preview:ensure')
+  })
+})
+
 describe('workflow v3 — contrato assíncrono do agente (AGENTS.md/CLAUDE.md)', () => {
   const paths = files.map((f) => f.path)
   const agents = file('AGENTS.md')
@@ -470,7 +513,8 @@ describe('workflow v3 — contrato assíncrono do agente (AGENTS.md/CLAUDE.md)',
   it('preview persistente + HMR fazem parte do development loop', () => {
     expect(agents).toMatch(/HMR/)
     expect(agents).toMatch(/preview/i)
-    expect(agents).toMatch(/dev server\/preview VIVO/i)
+    expect(agents).toMatch(/preview:ensure/) // v3.1: supervisor persistente
+    expect(agents).toMatch(/persistente/i)
   })
 
   it('npm run verify continua adaptativo e FULL não é ritual de toda microfeature', () => {

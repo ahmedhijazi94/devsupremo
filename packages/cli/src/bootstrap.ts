@@ -470,9 +470,11 @@ export async function runBootstrap(opts: {
 
   console.log(`\nProjeto pronto:\n\n  ${dest}\n`)
   if (opts.start) {
-    console.log('Iniciando o dev server (Ctrl+C para sair)…\n')
-    run('npm', ['run', 'dev'], dest)
+    // v3.1: preview PERSISTENTE (detached) — sobrevive aos turnos do agente.
+    console.log('Subindo o preview persistente…\n')
+    run('npm', ['run', 'preview:ensure'], dest)
+    ok('Preview no ar — reutilizado a cada mudança (npm run preview:status)')
   } else {
-    console.log(`Agora:\n\n  cd ${dest}\n  npm run dev\n`)
+    console.log(`Agora:\n\n  cd ${dest}\n  npm run preview:ensure\n`)
   }
 }

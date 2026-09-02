@@ -36,7 +36,10 @@ import {
 // --linked, confirmar o project-ref antes de qualquer mutação remota).
 // 2.5.0: Supabase CLI pinada como devDependency (npx supabase local, nunca a
 // global) — versão idêntica em qualquer máquina/agente; agents/CLAUDE usam npx.
-export const TEMPLATE_VERSION = '2.5.0'
+// 2.6.0: agents.md -> AGENTS.md (nome canônico p/ descoberta por Codex & cia);
+// ciclo obrigatório explícito (implementa→testa→migration/RLS→npm run verify→
+// branch/commit/push/PR→CI verde→nunca merge sem autorização) em AGENTS/CLAUDE.
+export const TEMPLATE_VERSION = '2.6.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -280,7 +283,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
 
     // ── Documentação e regras ─────────────────────────────────
     { path: 'README.md', content: readme(projectName, summary) },
-    { path: 'agents.md', content: agentsMd(projectName, summary) },
+    { path: 'AGENTS.md', content: agentsMd(projectName, summary) },
     { path: 'CLAUDE.md', content: claudeMd(projectName) },
     { path: 'SECURITY.md', content: securityMd(projectName) },
 
@@ -1900,7 +1903,7 @@ enable_confirmations = false
  * Migration inicial versionada no repositório.
  *
  * O template anterior aplicava o SQL direto pela API e não versionava nada,
- * contrariando a própria regra que escrevia no agents.md.
+ * contrariando a própria regra que escrevia no AGENTS.md.
  */
 function initialMigration(): string {
   return `-- ============================================================
@@ -2554,7 +2557,7 @@ o CI reprova o PR sem isso.
 
 ## Arquitetura
 
-Leia [agents.md](./agents.md) para o contexto completo e as regras que valem
+Leia [AGENTS.md](./AGENTS.md) para o contexto completo e as regras que valem
 neste repositório.
 `
 }
@@ -2598,11 +2601,33 @@ ${description}
 Escreva o teste junto com o código, não depois. Cobertura mínima de 70%,
 exigida pelo CI — não é sugestão.
 
-## Fluxo de trabalho
-1. Trabalhe em branch, nunca na \`main\`.
-2. Abra pull request.
-3. Espere os gates. Se algum falhar, leia o log e corrija.
-4. Merge só com tudo verde.
+## Ciclo obrigatório de TODA tarefa (código, banco ou infraestrutura)
+
+Toda mudança segue este ciclo, sem pular etapas:
+
+1. **Entenda** as regras e capabilities do projeto (este \`AGENTS.md\`, \`CLAUDE.md\`,
+   \`SECURITY.md\`).
+2. **Implemente** a mudança.
+3. **Escreva os testes junto** com a mudança — nunca depois.
+4. **Banco:** sempre por **migration versionada** (\`npx supabase migration new\`) +
+   **RLS quando aplicável** + o teste de isolamento correspondente.
+5. **Rode \`npm run verify\`** — é o comando PADRÃO de validação. O harness escolhe o
+   nível (QUICK / SECURITY / FULL) conforme o risco da mudança; **não** troque por uma
+   lista fixa como \`npm run typecheck && npm run lint && npm test\`.
+6. **Corrija** qualquer falha causada pela sua mudança.
+7. Trabalhe em **branch própria** — **nunca** commite direto na \`main\`.
+8. Faça um **commit descritivo** (\`feat:\`/\`fix:\`/\`refactor:\`/\`test:\`/\`security:\`/
+   \`docs:\`/\`chore:\`).
+9. **Push** da branch.
+10. **Abra ou atualize o PR**.
+11. **Aguarde todos os checks obrigatórios da CI**.
+12. Se a CI **falhar por causa da sua mudança**: corrija → \`npm run verify\` → novo
+    commit/push → **aguarde a CI de novo**.
+13. **Só declare a tarefa concluída quando a CI obrigatória estiver VERDE.**
+14. **NUNCA faça merge na \`main\` sem autorização explícita do usuário.**
+
+Hooks de git e a CI do GitHub são o enforcement: se você ignorar estas instruções,
+eles reprovam a mudança.
 
 ## Banco de dados online (Supabase CLI)
 
@@ -2647,17 +2672,24 @@ Este projeto é gerenciado pelo Supremo. O MCP remoto expõe estas regras via
 function claudeMd(projectName: string): string {
   return `# CLAUDE.md — ${projectName}
 
-Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
+Leia \`AGENTS.md\` primeiro — o **ciclo obrigatório de toda tarefa** está lá. Este
+arquivo complementa com comportamento.
 
 ## Sempre
-- Ler \`agents.md\` e \`SECURITY.md\` antes de escrever código
+- Ler \`AGENTS.md\` e \`SECURITY.md\` antes de escrever código
+- Seguir o **ciclo obrigatório** do \`AGENTS.md\` em toda mudança de código/banco/infra
 - Implementar do servidor para fora
 - Ativar RLS em toda tabela nova **e escrever o teste de isolamento**
 - Validar entrada com Zod no servidor
 - Mudar o schema do banco online só por **migration versionada + \`npx supabase db
   push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
-  "Banco de dados online" no \`agents.md\`.
-- Rodar \`npm run typecheck && npm run lint && npm test\` antes de propor mudança
+  "Banco de dados online" no \`AGENTS.md\`.
+- **Rodar \`npm run verify\`** antes de propor a mudança — é o comando padrão. O
+  harness escolhe o nível QUICK/SECURITY/FULL conforme o risco; **não** use uma lista
+  fixa como \`npm run typecheck && npm run lint && npm test\`.
+- Trabalhar em **branch própria**, com **commit descritivo**, **push**, **abrir/atualizar
+  o PR** e **aguardar todos os checks obrigatórios da CI**
+- Só considerar a tarefa **concluída quando a CI obrigatória estiver verde**
 
 ## Nunca
 - \`any\` no TypeScript
@@ -2667,6 +2699,8 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 - Segredo em código
 - Validação de acesso no cliente
 - Commit direto na \`main\`
+- **Fazer merge na \`main\` sem autorização explícita do usuário**
+- Declarar a tarefa concluída com a CI vermelha ou sem esperar os checks
 - Rodar destrutivo no remoto (\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\`,
   \`DELETE\` em massa) sem confirmação explícita do humano + mostrar o \`project-ref\`
 
@@ -2676,9 +2710,10 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 Um commit por mudança lógica.
 
 ## Quando um gate falha
-Leia o log do job, corrija a causa, proponha de novo. Não desabilite o teste,
-não use \`skip\`, não afrouxe o threshold. Se o gate está errado, corrija o
-gate num PR separado e explique por quê.
+Se a CI falhar por causa da sua mudança: leia o log do job, corrija a causa, rode
+\`npm run verify\`, faça novo commit/push e **aguarde a CI de novo**. Não desabilite o
+teste, não use \`skip\`, não afrouxe o threshold. Se o gate está errado, corrija o gate
+num PR separado e explique por quê.
 `
 }
 

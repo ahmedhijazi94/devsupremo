@@ -1,6 +1,6 @@
 {
   "name": "supremo-cli",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "CLI do Supremo — prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
   "license": "MIT",
   "author": "Supremo",

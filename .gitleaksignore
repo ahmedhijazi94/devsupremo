@@ -3,27 +3,23 @@
 # antes de entrar aqui). O scan roda sobre o HISTÓRICO INTEIRO (fetch-depth:0),
 # então achados de commits antigos, já revisados, voltariam a cada rodada sem
 # isto — sem enfraquecer a varredura de commits NOVOS, que continua completa.
+# (Artefatos de build como packages/cli/dist/** ficam fora do scan por path,
+# em .gitleaks.toml — não listados aqui, porque mudam de commit/linha a cada
+# rebuild e o fingerprint deste arquivo é por commit+linha exatos.)
 #
 # Formato: <commit>:<file>:<rule>:<line> (gerado pelo próprio gitleaks —
 # `gitleaks detect --report-format json` imprime o Fingerprint de cada achado).
 
-# packages/cli/dist/bin.js — bundle do esbuild: destructuring de import
-# dinâmico ("const { resolveKeychain: resolveKeychain2 } = await import(...)")
-# batendo no heurístico de generic-api-key. Zero conteúdo de segredo — é
-# sintaxe de módulo gerada pelo bundler.
-1ba330574fc12cc264eb68ed933931364dedc67d:packages/cli/dist/bin.js:generic-api-key:1069
-1ba330574fc12cc264eb68ed933931364dedc67d:packages/cli/dist/bin.js:generic-api-key:4785
-
 # src/lib/realtime-token.test.ts — constante de teste explicitamente rotulada
-# ("test-jwt-secret-0123456789") para assinar/verificar JWT no unit test.
+# para assinar/verificar JWT no unit test; nunca foi uma credencial real.
 333b9d0c363e684a0bcab06929efdc4c4be59fe3:src/lib/realtime-token.test.ts:generic-api-key:4
 
-# packages/companion/src/config.test.ts — valor de fixture ("sup_teste123456")
-# só para testar o parsing de env; nunca existiu como credencial real.
+# packages/companion/src/config.test.ts — valor de fixture só para testar o
+# parsing de env; nunca existiu como credencial real.
 706a0ce8df052c9704f32c74fe41c91003b0e6d2:packages/companion/src/config.test.ts:generic-api-key:8
 
 # packages/companion/src/redact.test.ts — o PRÓPRIO arquivo testa a função que
-# MASCARA segredos de log; os valores são exemplos fabricados (padrão
-# sequencial "0123456789...") só para provar que a redação funciona.
+# mascara segredos de log; os valores são exemplos fabricados só para provar
+# que a redação funciona (nunca foram credenciais reais).
 706a0ce8df052c9704f32c74fe41c91003b0e6d2:packages/companion/src/redact.test.ts:generic-api-key:6
 706a0ce8df052c9704f32c74fe41c91003b0e6d2:packages/companion/src/redact.test.ts:github-pat:9

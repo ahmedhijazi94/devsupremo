@@ -64,12 +64,14 @@ export function NewProjectForm() {
   const [owners, setOwners] = useState<OwnerChoice[]>([])
   const [selectedOwner, setSelectedOwner] = useState<string>('')
   const [needsReconnect, setNeedsReconnect] = useState(false)
+  const [appUnavailable, setAppUnavailable] = useState(false)
   useEffect(() => {
     let alive = true
-    void getOwnerChoices().then(({ owners, needsReconnect }) => {
+    void getOwnerChoices().then(({ owners, needsReconnect, appUnavailable }) => {
       if (!alive) return
       setOwners(owners)
       setNeedsReconnect(needsReconnect)
+      setAppUnavailable(appUnavailable)
       if (owners.length > 0) setSelectedOwner(owners[0]!.login) // 1 owner → auto
     })
     return () => {
@@ -178,9 +180,7 @@ export function NewProjectForm() {
           <label className="text-sm font-medium">Onde criar o repositório</label>
           {needsReconnect && (
             <div className="bg-sunken rounded-[var(--radius-control)] p-3 text-xs">
-              <p className="text-ink font-medium">
-                Só a conta pessoal aparece.
-              </p>
+              <p className="text-ink font-medium">Só a conta pessoal aparece.</p>
               <p className="text-muted mt-1">
                 Para criar numa organização, reconecte o GitHub concedendo acesso a
                 organizações (read:org).
@@ -192,6 +192,18 @@ export function NewProjectForm() {
               >
                 Reconectar GitHub →
               </button>
+            </div>
+          )}
+          {!needsReconnect && appUnavailable && (
+            <div className="bg-sunken rounded-[var(--radius-control)] p-3 text-xs">
+              <p className="text-ink font-medium">
+                Organizações indisponíveis no momento.
+              </p>
+              <p className="text-muted mt-1">
+                A GitHub App do Supremo não pôde ser consultada (configuração
+                pendente). Só a conta pessoal está disponível — tente de novo em
+                instantes ou fale com o suporte.
+              </p>
             </div>
           )}
           {owners.length === 1 ? (

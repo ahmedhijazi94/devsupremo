@@ -333,19 +333,23 @@ export async function getOwnerChoices(): Promise<{
   needsReconnect: boolean
   /** true = nenhuma conta GitHub conectada ainda. */
   notConnected: boolean
+  /** true = a GitHub App não pôde ser consultada (não configurada/erro) → sem orgs. */
+  appUnavailable: boolean
 }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { owners: [], needsReconnect: false, notConnected: true }
+  if (!user)
+    return { owners: [], needsReconnect: false, notConnected: true, appUnavailable: false }
 
   const { data: gh } = await supabase
     .from('github_accounts')
     .select('login, access_token_encrypted, scopes')
     .eq('user_id', user.id)
     .maybeSingle()
-  if (!gh) return { owners: [], needsReconnect: false, notConnected: true }
+  if (!gh)
+    return { owners: [], needsReconnect: false, notConnected: true, appUnavailable: false }
 
   // Nunca esconder a falta de scope: uma conexão sem read:org lista só a conta
   // pessoal, então sinalizamos reconexão em vez de fingir que está completa.
@@ -353,11 +357,16 @@ export async function getOwnerChoices(): Promise<{
     (gh as { scopes: string[] | null }).scopes,
   )
 
-  const owners = await getSelectableOwners(
+  const { owners, appAvailable } = await getSelectableOwners(
     decryptToken((gh as { access_token_encrypted: string }).access_token_encrypted),
     (gh as { login: string }).login,
   )
-  return { owners, needsReconnect, notConnected: false }
+  return {
+    owners,
+    needsReconnect,
+    notConnected: false,
+    appUnavailable: !appAvailable, // sem fallback silencioso: a UI avisa
+  }
 }
 
 export async function createEmptyProject(
@@ -395,7 +404,7 @@ export async function createEmptyProject(
     if (!gh) {
       return { error: 'Conecte uma conta GitHub antes de escolher onde criar o repo.' }
     }
-    const owners = await getSelectableOwners(
+    const { owners } = await getSelectableOwners(
       decryptToken((gh as { access_token_encrypted: string }).access_token_encrypted),
       (gh as { login: string }).login,
     )

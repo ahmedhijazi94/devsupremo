@@ -89,10 +89,22 @@ interface GithubAccountRow {
  * usuário (com o TOKEN DELE, prova de acesso) e cruza com as installations da App.
  * Falhas de rede degradam com segurança (só a conta pessoal, ou vazio).
  */
+export interface SelectableOwnersResult {
+  owners: Owner[]
+  /**
+   * false = a descoberta de installations da GitHub App falhou (App não
+   * configurada — GITHUB_APP_ID/PRIVATE_KEY ausentes — ou erro). Nesse caso NÃO
+   * dá para resolver organizações; sinalizamos em vez de fingir "só pessoal".
+   */
+  appAvailable: boolean
+  /** Quantas orgs o token do usuário listou (para diagnóstico honesto). */
+  userOrgCount: number
+}
+
 export async function getSelectableOwners(
   userOauthToken: string,
   userLogin: string,
-): Promise<Owner[]> {
+): Promise<SelectableOwnersResult> {
   let userOrgLogins: string[] = []
   try {
     const res = await fetch('https://api.github.com/user/orgs?per_page=100', {
@@ -111,14 +123,21 @@ export async function getSelectableOwners(
     userOrgLogins = []
   }
 
+  // Installations da App. Se FALHAR (App não configurada/erro), NÃO caímos em
+  // silêncio para "só pessoal": marcamos appAvailable=false para a UI avisar.
   let appInstallations: AppInstallation[] = []
+  let appAvailable = true
   try {
     appInstallations = await listAppInstallations()
   } catch {
-    appInstallations = [] // sem App/erro: só a conta pessoal fica selecionável
+    appAvailable = false
   }
 
-  return resolveSelectableOwners({ userLogin, userOrgLogins, appInstallations })
+  return {
+    owners: resolveSelectableOwners({ userLogin, userOrgLogins, appInstallations }),
+    appAvailable,
+    userOrgCount: userOrgLogins.length,
+  }
 }
 
 export type { GithubAccountRow }

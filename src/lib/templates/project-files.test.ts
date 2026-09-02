@@ -416,6 +416,12 @@ describe('banco online — regras do agente para o Supabase via CLI', () => {
     expect(claude).toContain('supabase db reset')
     expect(claude).toMatch(/project-ref/)
   })
+
+  it('config.toml nasce no Postgres 17 (casa com o default do Supabase)', () => {
+    const cfg = file('supabase/config.toml')
+    expect(cfg).toMatch(/major_version\s*=\s*17/)
+    expect(cfg).not.toMatch(/major_version\s*=\s*15/)
+  })
 })
 
 describe('primeira tela — o app abre antes de configurar nada', () => {

@@ -31,7 +31,10 @@ import {
 // 2.3.0: banco online via Supabase CLI — o bootstrap linka o checkout ao remoto;
 // regras de agente (migration = fonte da verdade, guarda de op destrutiva) e
 // supabase/.temp gitignored.
-export const TEMPLATE_VERSION = '2.3.0'
+// 2.4.0: config.toml nasce em Postgres 17 (default atual do Supabase; o bootstrap
+// ainda ajusta à versão real do remoto); regras de agente refinadas (db reset
+// --linked, confirmar o project-ref antes de qualquer mutação remota).
+export const TEMPLATE_VERSION = '2.4.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -1871,7 +1874,10 @@ max_rows = 1000
 
 [db]
 port = 54322
-major_version = 15
+# Casa com o default atual do Supabase (Postgres 17) para o checkout linkado não
+# acusar "Local database version differs". O bootstrap ajusta este valor à versão
+# real do projeto remoto, caso o Supremo tenha provisionado outra.
+major_version = 17
 
 [auth]
 enabled = true
@@ -2606,12 +2612,15 @@ oficial, sem depender do MCP:
 - **Edge Functions:** \`supabase functions new|deploy|list\`
 
 **Migration é a fonte da verdade.** Nunca altere o schema "invisível" só no banco
-(SQL solto no dashboard): mudança de schema vira migration versionada, validada e
-aplicada por \`supabase db push\`. Assim o repositório e o banco nunca divergem.
+(SQL solto no dashboard): mudança de schema/RLS vira migration versionada, validada
+e aplicada por \`supabase db push\` no remoto linkado. Repositório e banco nunca
+divergem. **Antes de QUALQUER mutação remota, confirme o alvo:**
+\`cat supabase/.temp/project-ref\`.
 
 ### Operações destrutivas no remoto — PARE e confirme
-\`supabase db reset\`, \`DROP\`, \`TRUNCATE\`, \`DELETE\` em massa e afins são
-irreversíveis no banco online. Antes de rodar qualquer uma:
+\`supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\` de estrutura existente,
+\`DELETE\` em massa e exclusões massivas são irreversíveis no banco online. Antes
+de rodar qualquer uma:
 1. **Mostre o \`project-ref\` alvo:** \`cat supabase/.temp/project-ref\`.
 2. **Peça confirmação explícita** ao humano, nomeando esse ref.
 3. Só então execute. Nunca rode uma operação destrutiva de forma autônoma.
@@ -2647,8 +2656,8 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 - Segredo em código
 - Validação de acesso no cliente
 - Commit direto na \`main\`
-- Rodar destrutivo no remoto (\`supabase db reset\`, \`DROP\`, \`TRUNCATE\`, \`DELETE\`
-  em massa) sem confirmação explícita do humano + mostrar o \`project-ref\` alvo
+- Rodar destrutivo no remoto (\`supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\`,
+  \`DELETE\` em massa) sem confirmação explícita do humano + mostrar o \`project-ref\`
 
 ## Commits
 \`feat:\` \`fix:\` \`refactor:\` \`test:\` \`security:\` \`docs:\` \`chore:\`

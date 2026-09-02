@@ -4,6 +4,8 @@ import {
   buildEnvFile,
   cleanRemoteUrl,
   gitCloneArgs,
+  migrationDryRunSynced,
+  patchConfigMajorVersion,
   projectListHasRef,
   supabaseLinkArgs,
   supabaseLinkEnv,
@@ -104,5 +106,51 @@ describe('detecção de divergência de conta (projectListHasRef)', () => {
 
   it('false quando o projeto é de outra conta (ref ausente)', () => {
     expect(projectListHasRef(output, 'mkdzmimexvnhkcjjlhvr')).toBe(false)
+  })
+})
+
+describe('config.toml — alinhar versão do Postgres', () => {
+  const toml = `project_id = "app"
+
+[db]
+port = 54322
+major_version = 15
+
+[auth]
+enabled = true
+`
+
+  it('troca o major_version para a versão do remoto', () => {
+    const out = patchConfigMajorVersion(toml, 17)
+    expect(out).toContain('major_version = 17')
+    expect(out).not.toContain('major_version = 15')
+  })
+
+  it('mexe só na linha do major_version (resto intacto)', () => {
+    const out = patchConfigMajorVersion(toml, 17)
+    expect(out).toContain('project_id = "app"')
+    expect(out).toContain('port = 54322')
+    expect(out).toContain('[auth]')
+  })
+
+  it('sem a linha, devolve o conteúdo intacto', () => {
+    const semDb = 'project_id = "x"\n'
+    expect(patchConfigMajorVersion(semDb, 17)).toBe(semDb)
+  })
+})
+
+describe('migration history — dry-run sincronizado', () => {
+  it('true quando a CLI diz que está up to date', () => {
+    expect(migrationDryRunSynced('Remote database is up to date.')).toBe(true)
+  })
+
+  it('true quando não lista nenhuma migration pendente', () => {
+    expect(migrationDryRunSynced('Connecting to remote database...\n')).toBe(true)
+  })
+
+  it('false quando há migration pendente (nome com timestamp)', () => {
+    expect(
+      migrationDryRunSynced('Would push:\n  20260901230657_e2e_widgets.sql'),
+    ).toBe(false)
   })
 })

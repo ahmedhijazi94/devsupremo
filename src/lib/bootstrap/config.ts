@@ -116,6 +116,31 @@ export interface BootstrapConfig {
   supabase?: {
     projectRef: string
     dbPassword?: string
+    /** Major do Postgres do projeto remoto, para o CLI alinhar o config.toml. */
+    majorVersion?: number
+  }
+}
+
+/**
+ * Major do Postgres do projeto remoto (ex.: 17), lido do Management API.
+ * Best-effort: se falhar, o CLI usa o default do template. Sem isso o checkout
+ * linkado acusa "Local database version differs from linked project".
+ */
+async function getSupabaseMajorVersion(
+  token: string,
+  projectRef: string,
+): Promise<number | null> {
+  try {
+    const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as { database?: { version?: string } }
+    const major = Number.parseInt(data.database?.version?.split('.')[0] ?? '', 10)
+    return Number.isFinite(major) ? major : null
+  } catch {
+    return null
   }
 }
 
@@ -141,9 +166,11 @@ export async function resolveBootstrapConfig(
     const anon = await getSupabaseAnonKey(supa.token, supa.projectRef)
     if (anon) env.NEXT_PUBLIC_SUPABASE_ANON_KEY = anon
     const dbPassword = await getSupabaseDbPassword(scope.userId, project)
+    const majorVersion = await getSupabaseMajorVersion(supa.token, supa.projectRef)
     supabase = {
       projectRef: supa.projectRef,
       ...(dbPassword ? { dbPassword } : {}),
+      ...(majorVersion ? { majorVersion } : {}),
     }
   } catch {
     // projeto sem Supabase: segue sem as env públicas nem o link

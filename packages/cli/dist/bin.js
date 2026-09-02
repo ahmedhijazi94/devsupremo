@@ -41,6 +41,8 @@ __export(bootstrap_exports, {
   buildEnvFile: () => buildEnvFile,
   cleanRemoteUrl: () => cleanRemoteUrl,
   gitCloneArgs: () => gitCloneArgs,
+  migrationDryRunSynced: () => migrationDryRunSynced,
+  patchConfigMajorVersion: () => patchConfigMajorVersion,
   projectListHasRef: () => projectListHasRef,
   runBootstrap: () => runBootstrap,
   supabaseLinkArgs: () => supabaseLinkArgs,
@@ -80,6 +82,18 @@ function supabaseLinkEnv(base, dbPassword) {
 function projectListHasRef(projectsListOutput, projectRef) {
   return projectsListOutput.includes(projectRef);
 }
+function patchConfigMajorVersion(configToml, major) {
+  return configToml.replace(
+    /^(\s*major_version\s*=\s*)\d+/m,
+    `$1${major}`
+  );
+}
+function migrationDryRunSynced(dryRunOutput) {
+  if (/up to date|no schema changes|nothing to push/i.test(dryRunOutput)) {
+    return true;
+  }
+  return !/\b\d{14}_/.test(dryRunOutput);
+}
 async function startDeviceFlow(baseUrl, projectId) {
   const res = await fetch(`${baseUrl}/api/bootstrap/device/start`, {
     method: "POST",
@@ -112,7 +126,7 @@ async function pollForConfig(baseUrl, deviceCode, intervalSec, expiresAt) {
   throw new Error("Tempo de autoriza\xE7\xE3o esgotado.");
 }
 function linkSupabaseRemote(dest, supabase) {
-  const { projectRef, dbPassword } = supabase;
+  const { projectRef, dbPassword, majorVersion } = supabase;
   const manual = `cd ${dest} && supabase link --project-ref ${projectRef}`;
   if (!tryExec("supabase", ["--version"])) {
     console.log(
@@ -122,41 +136,59 @@ function linkSupabaseRemote(dest, supabase) {
     ${manual}
 `
     );
-    return;
+    return false;
   }
-  let projects = tryExecOut("supabase", ["projects", "list"]);
-  if (projects === null) {
-    console.log("\nAutentique o Supabase CLI (abre no navegador)\u2026");
+  ok("Supabase CLI dispon\xEDvel");
+  const login = () => {
+    console.log("\nAutorize o Supabase no navegador (login oficial)\u2026");
     try {
       run("supabase", ["login"], dest);
+      return true;
     } catch {
-      console.log(
-        `\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
-  Rode depois: supabase login && ( ${manual} )
-`
-      );
-      return;
+      return false;
+    }
+  };
+  let projects = tryExecOut("supabase", ["projects", "list"]);
+  if (projects === null) {
+    if (!login()) {
+      console.log(`\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
+    ${manual}
+`);
+      return false;
+    }
+    projects = tryExecOut("supabase", ["projects", "list"]);
+  } else if (!projectListHasRef(projects, projectRef)) {
+    console.log("\n\u2022 A conta Supabase logada n\xE3o \xE9 dona deste projeto \u2014 trocando de conta.");
+    tryExec("supabase", ["logout"]);
+    if (!login()) {
+      console.log(`\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
+    ${manual}
+`);
+      return false;
     }
     projects = tryExecOut("supabase", ["projects", "list"]);
   }
-  if (projects === null) {
-    console.log(`\u2022 N\xE3o consegui listar projetos do Supabase \u2014 pulei o link.
-    ${manual}
-`);
-    return;
-  }
-  ok("Supabase CLI autenticado");
-  if (!projectListHasRef(projects, projectRef)) {
+  if (projects === null || !projectListHasRef(projects, projectRef)) {
     console.log(
       `
-\u2022 A conta logada no Supabase CLI n\xE3o tem acesso ao projeto ${projectRef}.
-  Fa\xE7a login com a conta Supabase que voc\xEA conectou ao Supremo (a dona
-  deste projeto) e rode o link:
-    supabase login
-    ${manual}
+\u2022 A conta logada ainda n\xE3o tem acesso ao projeto ${projectRef}.
+  Entre com a MESMA conta Supabase que voc\xEA conectou ao Supremo (a dona
+  deste projeto): supabase login && ( ${manual} )
 `
     );
-    return;
+    return false;
+  }
+  ok("Conta Supabase autorizada");
+  ok("Projeto remoto confirmado");
+  if (majorVersion) {
+    try {
+      const cfgPath = import_node_path2.default.join(dest, "supabase", "config.toml");
+      const cfg = import_node_fs2.default.readFileSync(cfgPath, "utf8");
+      const patched = patchConfigMajorVersion(cfg, majorVersion);
+      if (patched !== cfg) import_node_fs2.default.writeFileSync(cfgPath, patched);
+      ok("PostgreSQL/config alinhados");
+    } catch {
+    }
   }
   try {
     (0, import_node_child_process2.execFileSync)("supabase", supabaseLinkArgs(projectRef), {
@@ -168,10 +200,30 @@ function linkSupabaseRemote(dest, supabase) {
     console.log(`\u2022 N\xE3o consegui linkar automaticamente. Rode:
     ${manual}
 `);
-    return;
+    return false;
   }
-  ok(`Supabase remoto linkado: ${projectRef}`);
-  ok("Agente pronto para trabalhar no banco online");
+  const linkedRef = readLinkedRef(dest);
+  if (linkedRef !== projectRef) {
+    console.log(
+      `
+\u2022 Diverg\xEAncia no link: esperado ${projectRef}, mas supabase/.temp/project-ref = ${linkedRef ?? "(vazio)"}. Parei antes de qualquer opera\xE7\xE3o no banco.
+`
+    );
+    return false;
+  }
+  ok(`Supabase linkado: ${projectRef}`);
+  const dry = tryExecOut("supabase", ["db", "push", "--dry-run"]);
+  if (dry !== null && migrationDryRunSynced(dry)) {
+    ok("Migration history sincronizado");
+  }
+  return true;
+}
+function readLinkedRef(dest) {
+  try {
+    return import_node_fs2.default.readFileSync(import_node_path2.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
+  } catch {
+    return null;
+  }
 }
 async function runBootstrap(opts) {
   const baseUrl = opts.url.replace(/\/$/, "");
@@ -189,8 +241,8 @@ async function runBootstrap(opts) {
     flow.intervalSec,
     flow.expiresAt
   );
-  ok("Autoriza\xE7\xE3o concedida");
-  ok(`Projeto: ${config.project.name}`);
+  ok("Supremo autorizado");
+  console.log(`  Projeto: ${config.project.name}`);
   const dest = targetDir(config.repo.fullName, opts.dir);
   if (import_node_fs2.default.existsSync(dest)) {
     throw new Error(`J\xE1 existe ${dest} \u2014 remova ou use --dir para outro caminho.`);
@@ -200,24 +252,21 @@ async function runBootstrap(opts) {
     ...process.env,
     SUPREMO_GIT_TOKEN: config.gitToken
   });
-  ok(`Repository clonado (token ${config.gitTokenScope}, ef\xEAmero)`);
+  ok("Repository clonado");
   import_node_fs2.default.writeFileSync(import_node_path2.default.join(dest, ".env.local"), buildEnvFile(config.env), {
     mode: 384
   });
-  ok(
-    `Environment configurado (${Object.keys(config.env).length} vari\xE1vel(is) p\xFAblica(s))`
-  );
+  ok("Environment p\xFAblico configurado");
   run("npm", ["ci"], dest);
   ok("Depend\xEAncias instaladas");
+  const linked = config.supabase?.projectRef ? linkSupabaseRemote(dest, config.supabase) : false;
   try {
     run("npm", ["run", "setup:local"], dest);
-    ok("Setup local + baseline");
+    ok("Verify passou");
   } catch {
     console.log('\u2022 setup:local pulado (rode "npm run setup:local" manualmente)');
   }
-  if (config.supabase?.projectRef) {
-    linkSupabaseRemote(dest, config.supabase);
-  }
+  if (linked) ok("Claude/Codex prontos para trabalhar no Supabase online");
   console.log(`
 Projeto pronto:
 

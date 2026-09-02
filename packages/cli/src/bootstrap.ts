@@ -32,6 +32,8 @@ export interface BootstrapConfig {
   supabase?: {
     projectRef: string
     dbPassword?: string
+    /** Major do Postgres do projeto remoto, para alinhar o supabase/config.toml. */
+    majorVersion?: number
   }
 }
 
@@ -117,6 +119,35 @@ export function projectListHasRef(
   projectRef: string,
 ): boolean {
   return projectsListOutput.includes(projectRef)
+}
+
+/**
+ * Ajusta `major_version` no supabase/config.toml para casar com o Postgres do
+ * projeto remoto, evitando o aviso "Local database version differs". Só mexe na
+ * linha do bloco [db]; se não achar, devolve o conteúdo intacto.
+ */
+export function patchConfigMajorVersion(
+  configToml: string,
+  major: number,
+): string {
+  return configToml.replace(
+    /^(\s*major_version\s*=\s*)\d+/m,
+    `$1${major}`,
+  )
+}
+
+/**
+ * `supabase db push --dry-run` diz que o histórico está sincronizado? Verdadeiro
+ * quando a CLI reporta "up to date" ou não lista nenhuma migration pendente
+ * (nome com timestamp de 14 dígitos). Usado só para reportar o estado; nunca
+ * dispara mutação.
+ */
+export function migrationDryRunSynced(dryRunOutput: string): boolean {
+  if (/up to date|no schema changes|nothing to push/i.test(dryRunOutput)) {
+    return true
+  }
+  // Se não menciona nenhuma migration com timestamp, não há nada pendente.
+  return !/\b\d{14}_/.test(dryRunOutput)
 }
 
 // ── Orquestração ────────────────────────────────────────────────────────────
@@ -207,25 +238,27 @@ const tryExecOut = (cmd: string, args: string[]): string | null => {
 }
 
 /**
- * Linka o checkout ao Supabase remoto do projeto, via CLI oficial, para o agente
- * (Claude/Codex) operar o banco online sem depender do MCP.
+ * Deixa o checkout pronto para o agente (Claude/Codex) operar o Supabase ONLINE
+ * de forma AUTOMÁTICA, sem MCP e sem comando manual:
  *
- *   • reaproveita o `supabase login` se já autenticado; senão conduz o login
- *     oficial (browser) — o token fica no keychain do SO, nunca por nós;
- *   • `supabase link --project-ref <ref>` grava o ref em `supabase/.temp`
- *     (gitignored), prendendo o checkout SÓ a este projeto (sem risco de aplicar
- *     migration no projeto errado);
- *   • a senha do banco (quando vem) vai só pela env do processo → a CLI a grava
- *     no keychain. Nunca em `.env.local`, Git, argv, log ou stdout.
+ *   • garante a CONTA CERTA — reaproveita o `supabase login` se já for a dona do
+ *     projeto; se não estiver logado OU estiver na conta errada, conduz o login
+ *     oficial no browser (você só autoriza), trocando de conta;
+ *   • alinha `major_version` do supabase/config.toml à versão real do Postgres;
+ *   • `supabase link --project-ref <ref>` (senha só na env do processo → keychain;
+ *     nunca em .env.local/Git/argv/log/stdout) e VALIDA `supabase/.temp/project-ref`
+ *     antes de considerar pronto (se divergir, para antes de qualquer mutação);
+ *   • NUNCA usa o token OAuth do backend do Supremo — a credencial local é a do
+ *     `supabase login` do dev, gerida pela CLI oficial no keychain do SO.
  *
- * Falha aqui não quebra o bootstrap: o app local já está pronto; o link é o extra
- * para operar o banco online. Sempre imprime o comando manual em caso de erro.
+ * Retorna true só quando o checkout ficou linkado e validado. Falha aqui não
+ * quebra o bootstrap (o app local já está pronto); sempre imprime o passo manual.
  */
 function linkSupabaseRemote(
   dest: string,
-  supabase: { projectRef: string; dbPassword?: string },
-): void {
-  const { projectRef, dbPassword } = supabase
+  supabase: { projectRef: string; dbPassword?: string; majorVersion?: number },
+): boolean {
+  const { projectRef, dbPassword, majorVersion } = supabase
   const manual = `cd ${dest} && supabase link --project-ref ${projectRef}`
 
   if (!tryExec('supabase', ['--version'])) {
@@ -233,42 +266,61 @@ function linkSupabaseRemote(
       `\n• Supabase CLI não encontrado — pulei o link do banco online.\n` +
         `  Instale (macOS: brew install supabase/tap/supabase) e rode:\n    ${manual}\n`,
     )
-    return
+    return false
   }
+  ok('Supabase CLI disponível')
 
-  // Autenticação: reaproveita se já logado; senão, login oficial (browser). Uma
-  // única chamada a `projects list` serve para detectar login E verificar acesso.
-  let projects = tryExecOut('supabase', ['projects', 'list'])
-  if (projects === null) {
-    console.log('\nAutentique o Supabase CLI (abre no navegador)…')
+  const login = (): boolean => {
+    console.log('\nAutorize o Supabase no navegador (login oficial)…')
     try {
       run('supabase', ['login'], dest)
+      return true
     } catch {
-      console.log(
-        `• Login do Supabase não concluído — pulei o link.\n` +
-          `  Rode depois: supabase login && ( ${manual} )\n`,
-      )
-      return
+      return false
+    }
+  }
+
+  // Conta certa: uma chamada a `projects list` detecta login E acesso ao projeto.
+  let projects = tryExecOut('supabase', ['projects', 'list'])
+  if (projects === null) {
+    // não autenticado → login guiado
+    if (!login()) {
+      console.log(`• Login do Supabase não concluído — pulei o link.\n    ${manual}\n`)
+      return false
+    }
+    projects = tryExecOut('supabase', ['projects', 'list'])
+  } else if (!projectListHasRef(projects, projectRef)) {
+    // autenticado na conta ERRADA → troca de conta automaticamente (login no browser)
+    console.log('\n• A conta Supabase logada não é dona deste projeto — trocando de conta.')
+    tryExec('supabase', ['logout'])
+    if (!login()) {
+      console.log(`• Login do Supabase não concluído — pulei o link.\n    ${manual}\n`)
+      return false
     }
     projects = tryExecOut('supabase', ['projects', 'list'])
   }
-  if (projects === null) {
-    console.log(`• Não consegui listar projetos do Supabase — pulei o link.\n    ${manual}\n`)
-    return
-  }
-  ok('Supabase CLI autenticado')
-
-  // Divergência de conta: o Supremo pode ter criado o projeto numa conta Supabase
-  // diferente da que está logada no CLI. Nesse caso NÃO enviamos nenhum token —
-  // orientamos o dev a logar na conta certa (a que ele conectou ao Supremo).
-  if (!projectListHasRef(projects, projectRef)) {
+  if (projects === null || !projectListHasRef(projects, projectRef)) {
     console.log(
-      `\n• A conta logada no Supabase CLI não tem acesso ao projeto ${projectRef}.\n` +
-        `  Faça login com a conta Supabase que você conectou ao Supremo (a dona\n` +
-        `  deste projeto) e rode o link:\n` +
-        `    supabase login\n    ${manual}\n`,
+      `\n• A conta logada ainda não tem acesso ao projeto ${projectRef}.\n` +
+        `  Entre com a MESMA conta Supabase que você conectou ao Supremo (a dona\n` +
+        `  deste projeto): supabase login && ( ${manual} )\n`,
     )
-    return
+    return false
+  }
+  ok('Conta Supabase autorizada')
+  ok('Projeto remoto confirmado')
+
+  // Alinha a versão do Postgres no config.toml (evita "Local database version differs").
+  if (majorVersion) {
+    try {
+      const cfgPath = path.join(dest, 'supabase', 'config.toml')
+      const cfg = fs.readFileSync(cfgPath, 'utf8')
+      const patched = patchConfigMajorVersion(cfg, majorVersion)
+      if (patched !== cfg) fs.writeFileSync(cfgPath, patched)
+      ok('PostgreSQL/config alinhados')
+    } catch {
+      // sem config.toml legível: segue (o link ainda funciona)
+    }
   }
 
   // Link: senha só na env (nunca em argv); ref grava em supabase/.temp.
@@ -280,10 +332,39 @@ function linkSupabaseRemote(
     })
   } catch {
     console.log(`• Não consegui linkar automaticamente. Rode:\n    ${manual}\n`)
-    return
+    return false
   }
-  ok(`Supabase remoto linkado: ${projectRef}`)
-  ok('Agente pronto para trabalhar no banco online')
+
+  // Valida o ref linkado ANTES de considerar pronto — nada de projeto errado.
+  const linkedRef = readLinkedRef(dest)
+  if (linkedRef !== projectRef) {
+    console.log(
+      `\n• Divergência no link: esperado ${projectRef}, mas ` +
+        `supabase/.temp/project-ref = ${linkedRef ?? '(vazio)'}. Parei antes de ` +
+        `qualquer operação no banco.\n`,
+    )
+    return false
+  }
+  ok(`Supabase linkado: ${projectRef}`)
+
+  // Confirma o histórico sincronizado (dry-run, SEM mutação).
+  const dry = tryExecOut('supabase', ['db', 'push', '--dry-run'])
+  if (dry !== null && migrationDryRunSynced(dry)) {
+    ok('Migration history sincronizado')
+  }
+
+  return true
+}
+
+/** Lê o ref que o `supabase link` gravou em supabase/.temp, para validar o alvo. */
+function readLinkedRef(dest: string): string | null {
+  try {
+    return fs
+      .readFileSync(path.join(dest, 'supabase', '.temp', 'project-ref'), 'utf8')
+      .trim()
+  } catch {
+    return null
+  }
 }
 
 export async function runBootstrap(opts: {
@@ -307,8 +388,8 @@ export async function runBootstrap(opts: {
     flow.intervalSec,
     flow.expiresAt,
   )
-  ok('Autorização concedida')
-  ok(`Projeto: ${config.project.name}`)
+  ok('Supremo autorizado')
+  console.log(`  Projeto: ${config.project.name}`)
 
   const dest = targetDir(config.repo.fullName, opts.dir)
   if (fs.existsSync(dest)) {
@@ -321,30 +402,32 @@ export async function runBootstrap(opts: {
     ...process.env,
     SUPREMO_GIT_TOKEN: config.gitToken,
   })
-  ok(`Repository clonado (token ${config.gitTokenScope}, efêmero)`)
+  ok('Repository clonado')
 
-  // .env.local (gitignored no scaffold). Nunca imprimimos o conteúdo.
+  // .env.local (gitignored no scaffold). Nunca imprimimos o conteúdo. Só públicas.
   fs.writeFileSync(path.join(dest, '.env.local'), buildEnvFile(config.env), {
     mode: 0o600,
   })
-  ok(
-    `Environment configurado (${Object.keys(config.env).length} variável(is) pública(s))`,
-  )
+  ok('Environment público configurado')
 
   run('npm', ['ci'], dest)
   ok('Dependências instaladas')
 
+  // Linka o checkout ao Supabase remoto (auth guiada + link + validação do ref),
+  // para o agente operar o banco online. Antes do baseline: a experiência final
+  // mostra os passos do Supabase e só então "Verify passou".
+  const linked = config.supabase?.projectRef
+    ? linkSupabaseRemote(dest, config.supabase)
+    : false
+
   try {
     run('npm', ['run', 'setup:local'], dest)
-    ok('Setup local + baseline')
+    ok('Verify passou')
   } catch {
     console.log('• setup:local pulado (rode "npm run setup:local" manualmente)')
   }
 
-  // Linka o checkout ao Supabase remoto para o agente operar o banco online.
-  if (config.supabase?.projectRef) {
-    linkSupabaseRemote(dest, config.supabase)
-  }
+  if (linked) ok('Claude/Codex prontos para trabalhar no Supabase online')
 
   console.log(`\nProjeto pronto:\n\n  ${dest}\n`)
   if (opts.start) {

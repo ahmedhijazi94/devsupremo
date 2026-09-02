@@ -396,16 +396,16 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
 })
 
 describe('banco online — regras do agente para o Supabase via CLI', () => {
-  it('agents.md ensina o fluxo de migration como fonte da verdade', () => {
-    const agents = file('agents.md')
+  it('AGENTS.md ensina o fluxo de migration como fonte da verdade', () => {
+    const agents = file('AGENTS.md')
     expect(agents).toContain('Banco de dados online')
     expect(agents).toContain('supabase migration new')
     expect(agents).toContain('supabase db push')
     expect(agents).toContain('supabase/.temp/project-ref')
   })
 
-  it('agents.md exige confirmação + ref antes de operação destrutiva remota', () => {
-    const agents = file('agents.md')
+  it('AGENTS.md exige confirmação + ref antes de operação destrutiva remota', () => {
+    const agents = file('AGENTS.md')
     expect(agents).toMatch(/destrutiv/i)
     expect(agents).toContain('supabase db reset')
     expect(agents).toContain('confirmação explícita')
@@ -430,9 +430,60 @@ describe('banco online — regras do agente para o Supabase via CLI', () => {
     expect(supabase).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
-  it('agents.md manda usar a CLI local (npx supabase), não a global', () => {
-    expect(file('agents.md')).toContain('npx supabase')
+  it('AGENTS.md manda usar a CLI local (npx supabase), não a global', () => {
+    expect(file('AGENTS.md')).toContain('npx supabase')
     expect(file('CLAUDE.md')).toContain('npx supabase')
+  })
+})
+
+describe('ciclo obrigatório do agente — gerador (AGENTS.md/CLAUDE.md)', () => {
+  const paths = files.map((f) => f.path)
+  const agents = file('AGENTS.md')
+  const claude = file('CLAUDE.md')
+
+  it('gera AGENTS.md (maiúsculo, canônico) e NÃO gera agents.md', () => {
+    expect(paths).toContain('AGENTS.md')
+    expect(paths).not.toContain('agents.md')
+  })
+
+  it('CLAUDE.md referencia AGENTS.md', () => {
+    expect(claude).toContain('AGENTS.md')
+  })
+
+  it('npm run verify é a validação PADRÃO (adaptativa), não uma lista fixa', () => {
+    expect(agents).toContain('npm run verify')
+    expect(claude).toContain('npm run verify')
+    // deixa explícito que o harness escolhe o nível conforme o risco
+    expect(agents).toMatch(/QUICK/)
+    expect(agents).toMatch(/FULL/)
+  })
+
+  it('traz o ciclo branch → commit → push → PR → CI', () => {
+    expect(agents).toMatch(/branch/i)
+    expect(agents).toMatch(/commit/i)
+    expect(agents).toMatch(/push/i)
+    expect(agents).toMatch(/\bPR\b|pull request/i)
+    expect(agents).toMatch(/\bCI\b|checks/i)
+  })
+
+  it('só conclui a tarefa com a CI obrigatória verde', () => {
+    expect(agents).toMatch(/conclu[íi]da? quando a CI.*verde/i)
+  })
+
+  it('nunca faz merge na main sem autorização explícita do usuário', () => {
+    expect(agents).toMatch(/merge/i)
+    expect(agents).toContain('autorização explícita')
+    expect(claude).toContain('autorização explícita')
+  })
+
+  it('preserva as regras-chave (Supabase local, migration, RLS, ref, secrets, destrutivo, server-side)', () => {
+    expect(agents).toContain('npx supabase') // CLI local pinada
+    expect(agents).toContain('migration') // source of truth
+    expect(agents).toMatch(/RLS/) // RLS
+    expect(agents).toContain('project-ref') // ref
+    expect(agents).toMatch(/keychain/i) // secrets
+    expect(agents).toMatch(/destrutiv/i) // operações destrutivas
+    expect(agents).toMatch(/no servidor|do servidor/i) // segurança server-side
   })
 })
 
@@ -661,7 +712,7 @@ describe('documentação — sem promessa vazia', () => {
   })
 
   it('gera as regras que o MCP lê remotamente', () => {
-    expect(() => file('agents.md')).not.toThrow()
+    expect(() => file('AGENTS.md')).not.toThrow()
     expect(() => file('CLAUDE.md')).not.toThrow()
     expect(() => file('SECURITY.md')).not.toThrow()
   })

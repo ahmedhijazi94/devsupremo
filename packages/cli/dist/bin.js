@@ -44,6 +44,7 @@ __export(bootstrap_exports, {
   migrationDryRunSynced: () => migrationDryRunSynced,
   patchConfigMajorVersion: () => patchConfigMajorVersion,
   projectListHasRef: () => projectListHasRef,
+  resolveSupabaseBin: () => resolveSupabaseBin,
   runBootstrap: () => runBootstrap,
   supabaseLinkArgs: () => supabaseLinkArgs,
   supabaseLinkEnv: () => supabaseLinkEnv,
@@ -127,28 +128,30 @@ async function pollForConfig(baseUrl, deviceCode, intervalSec, expiresAt) {
 }
 function linkSupabaseRemote(dest, supabase) {
   const { projectRef, dbPassword, majorVersion } = supabase;
-  const manual = `cd ${dest} && supabase link --project-ref ${projectRef}`;
-  if (!tryExec("supabase", ["--version"])) {
+  const { bin: sb, local } = resolveSupabaseBin(dest);
+  const manual = `cd ${dest} && npx supabase link --project-ref ${projectRef}`;
+  const version = tryExecOut(sb, ["--version"]);
+  if (version === null) {
     console.log(
       `
-\u2022 Supabase CLI n\xE3o encontrado \u2014 pulei o link do banco online.
-  Instale (macOS: brew install supabase/tap/supabase) e rode:
+\u2022 Supabase CLI n\xE3o dispon\xEDvel \u2014 pulei o link do banco online.
+  A CLI \xE9 uma devDependency pinada; garanta o "npm ci" e rode:
     ${manual}
 `
     );
     return false;
   }
-  ok("Supabase CLI dispon\xEDvel");
+  ok(`Supabase CLI dispon\xEDvel (${local ? "local pinada" : "global"} v${version.trim()})`);
   const login = () => {
     console.log("\nAutorize o Supabase no navegador (login oficial)\u2026");
     try {
-      run("supabase", ["login"], dest);
+      run(sb, ["login"], dest);
       return true;
     } catch {
       return false;
     }
   };
-  let projects = tryExecOut("supabase", ["projects", "list"]);
+  let projects = tryExecOut(sb, ["projects", "list"]);
   if (projects === null) {
     if (!login()) {
       console.log(`\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
@@ -156,24 +159,24 @@ function linkSupabaseRemote(dest, supabase) {
 `);
       return false;
     }
-    projects = tryExecOut("supabase", ["projects", "list"]);
+    projects = tryExecOut(sb, ["projects", "list"]);
   } else if (!projectListHasRef(projects, projectRef)) {
     console.log("\n\u2022 A conta Supabase logada n\xE3o \xE9 dona deste projeto \u2014 trocando de conta.");
-    tryExec("supabase", ["logout"]);
+    tryExec(sb, ["logout"]);
     if (!login()) {
       console.log(`\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
     ${manual}
 `);
       return false;
     }
-    projects = tryExecOut("supabase", ["projects", "list"]);
+    projects = tryExecOut(sb, ["projects", "list"]);
   }
   if (projects === null || !projectListHasRef(projects, projectRef)) {
     console.log(
       `
 \u2022 A conta logada ainda n\xE3o tem acesso ao projeto ${projectRef}.
   Entre com a MESMA conta Supabase que voc\xEA conectou ao Supremo (a dona
-  deste projeto): supabase login && ( ${manual} )
+  deste projeto): npx supabase login && ( ${manual} )
 `
     );
     return false;
@@ -191,7 +194,7 @@ function linkSupabaseRemote(dest, supabase) {
     }
   }
   try {
-    (0, import_node_child_process2.execFileSync)("supabase", supabaseLinkArgs(projectRef), {
+    (0, import_node_child_process2.execFileSync)(sb, supabaseLinkArgs(projectRef), {
       cwd: dest,
       env: supabaseLinkEnv(process.env, dbPassword),
       stdio: ["ignore", "ignore", "inherit"]
@@ -212,11 +215,15 @@ function linkSupabaseRemote(dest, supabase) {
     return false;
   }
   ok(`Supabase linkado: ${projectRef}`);
-  const dry = tryExecOut("supabase", ["db", "push", "--dry-run"]);
+  const dry = tryExecOut(sb, ["db", "push", "--dry-run"]);
   if (dry !== null && migrationDryRunSynced(dry)) {
     ok("Migration history sincronizado");
   }
   return true;
+}
+function resolveSupabaseBin(dest) {
+  const localBin = import_node_path2.default.join(dest, "node_modules", ".bin", "supabase");
+  return import_node_fs2.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
 }
 function readLinkedRef(dest) {
   try {

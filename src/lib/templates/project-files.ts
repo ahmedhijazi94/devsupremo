@@ -34,7 +34,9 @@ import {
 // 2.4.0: config.toml nasce em Postgres 17 (default atual do Supabase; o bootstrap
 // ainda ajusta à versão real do remoto); regras de agente refinadas (db reset
 // --linked, confirmar o project-ref antes de qualquer mutação remota).
-export const TEMPLATE_VERSION = '2.4.0'
+// 2.5.0: Supabase CLI pinada como devDependency (npx supabase local, nunca a
+// global) — versão idêntica em qualquer máquina/agente; agents/CLAUDE usam npx.
+export const TEMPLATE_VERSION = '2.5.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -104,6 +106,10 @@ const DEV_DEPENDENCIES = {
   eslint: '^9.39.5',
   'eslint-config-next': '16.3.3',
   jsdom: '^25.0.1',
+  // CLI do Supabase PINADA no projeto: o bootstrap e o agente usam esta versão
+  // local (node_modules/.bin/supabase), nunca uma instalação global arbitrária —
+  // dois computadores/agentes se comportam igual.
+  supabase: '2.116.0',
   tailwindcss: '^4.3.3',
   typescript: '^5.9.3',
   vitest: '^3.2.7',
@@ -2601,24 +2607,28 @@ exigida pelo CI — não é sugestão.
 ## Banco de dados online (Supabase CLI)
 
 Este checkout está **linkado ao Supabase remoto DESTE projeto** — o \`project-ref\`
-fica em \`supabase/.temp/project-ref\`. Você opera o banco online direto pela CLI
-oficial, sem depender do MCP:
+fica em \`supabase/.temp/project-ref\`. Você opera o banco online direto pela CLI,
+sem depender do MCP.
 
-- **Sincronizar do remoto:** \`supabase db pull\`
+**Use SEMPRE a CLI local pinada do projeto: \`npx supabase …\`** (é uma
+devDependency versionada, instalada pelo \`npm ci\`). Nunca use uma instalação
+global — ela pode ter outra versão e dar comportamento diferente entre máquinas.
+
+- **Sincronizar do remoto:** \`npx supabase db pull\` / \`npx supabase db diff\`
 - **Mudar schema (tabela, coluna, RLS, policy, função SQL, trigger):**
-  1. \`supabase migration new <nome>\` — cria a migration versionada
+  1. \`npx supabase migration new <nome>\` — cria a migration versionada
   2. escreva o SQL (toda tabela nova com RLS ativa + teste de isolamento)
-  3. \`supabase db push\` — aplica no remoto
-- **Edge Functions:** \`supabase functions new|deploy|list\`
+  3. \`npx supabase db push\` — aplica no remoto
+- **Edge Functions:** \`npx supabase functions new|deploy|list\`
 
 **Migration é a fonte da verdade.** Nunca altere o schema "invisível" só no banco
 (SQL solto no dashboard): mudança de schema/RLS vira migration versionada, validada
-e aplicada por \`supabase db push\` no remoto linkado. Repositório e banco nunca
+e aplicada por \`npx supabase db push\` no remoto linkado. Repositório e banco nunca
 divergem. **Antes de QUALQUER mutação remota, confirme o alvo:**
 \`cat supabase/.temp/project-ref\`.
 
 ### Operações destrutivas no remoto — PARE e confirme
-\`supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\` de estrutura existente,
+\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\` de estrutura existente,
 \`DELETE\` em massa e exclusões massivas são irreversíveis no banco online. Antes
 de rodar qualquer uma:
 1. **Mostre o \`project-ref\` alvo:** \`cat supabase/.temp/project-ref\`.
@@ -2644,8 +2654,9 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 - Implementar do servidor para fora
 - Ativar RLS em toda tabela nova **e escrever o teste de isolamento**
 - Validar entrada com Zod no servidor
-- Mudar o schema do banco online só por **migration versionada + \`supabase db push\`**
-  (nunca SQL solto no dashboard). Ver "Banco de dados online" no \`agents.md\`.
+- Mudar o schema do banco online só por **migration versionada + \`npx supabase db
+  push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
+  "Banco de dados online" no \`agents.md\`.
 - Rodar \`npm run typecheck && npm run lint && npm test\` antes de propor mudança
 
 ## Nunca
@@ -2656,7 +2667,7 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 - Segredo em código
 - Validação de acesso no cliente
 - Commit direto na \`main\`
-- Rodar destrutivo no remoto (\`supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\`,
+- Rodar destrutivo no remoto (\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\`,
   \`DELETE\` em massa) sem confirmação explícita do humano + mostrar o \`project-ref\`
 
 ## Commits

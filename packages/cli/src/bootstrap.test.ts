@@ -1,5 +1,7 @@
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import {
   buildEnvFile,
   cleanRemoteUrl,
@@ -7,6 +9,7 @@ import {
   migrationDryRunSynced,
   patchConfigMajorVersion,
   projectListHasRef,
+  resolveSupabaseBin,
   supabaseLinkArgs,
   supabaseLinkEnv,
   targetDir,
@@ -152,5 +155,23 @@ describe('migration history — dry-run sincronizado', () => {
     expect(
       migrationDryRunSynced('Would push:\n  20260901230657_e2e_widgets.sql'),
     ).toBe(false)
+  })
+})
+
+describe('CLI Supabase local pinada (resolveSupabaseBin)', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bin-'))
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
+
+  it('sem node_modules → cai na global (último recurso)', () => {
+    expect(resolveSupabaseBin(tmp)).toEqual({ bin: 'supabase', local: false })
+  })
+
+  it('com a CLI instalada → usa a LOCAL pinada, não a global', () => {
+    const bin = path.join(tmp, 'node_modules', '.bin')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(bin, 'supabase'), '#!/bin/sh\n')
+    const r = resolveSupabaseBin(tmp)
+    expect(r.local).toBe(true)
+    expect(r.bin).toBe(path.join(tmp, 'node_modules', '.bin', 'supabase'))
   })
 })

@@ -259,21 +259,25 @@ function linkSupabaseRemote(
   supabase: { projectRef: string; dbPassword?: string; majorVersion?: number },
 ): boolean {
   const { projectRef, dbPassword, majorVersion } = supabase
-  const manual = `cd ${dest} && supabase link --project-ref ${projectRef}`
+  // CLI LOCAL PINADA do projeto (node_modules/.bin/supabase) — nunca a global.
+  // Assim a versão é a mesma em qualquer máquina/agente.
+  const { bin: sb, local } = resolveSupabaseBin(dest)
+  const manual = `cd ${dest} && npx supabase link --project-ref ${projectRef}`
 
-  if (!tryExec('supabase', ['--version'])) {
+  const version = tryExecOut(sb, ['--version'])
+  if (version === null) {
     console.log(
-      `\n• Supabase CLI não encontrado — pulei o link do banco online.\n` +
-        `  Instale (macOS: brew install supabase/tap/supabase) e rode:\n    ${manual}\n`,
+      `\n• Supabase CLI não disponível — pulei o link do banco online.\n` +
+        `  A CLI é uma devDependency pinada; garanta o "npm ci" e rode:\n    ${manual}\n`,
     )
     return false
   }
-  ok('Supabase CLI disponível')
+  ok(`Supabase CLI disponível (${local ? 'local pinada' : 'global'} v${version.trim()})`)
 
   const login = (): boolean => {
     console.log('\nAutorize o Supabase no navegador (login oficial)…')
     try {
-      run('supabase', ['login'], dest)
+      run(sb, ['login'], dest)
       return true
     } catch {
       return false
@@ -281,29 +285,29 @@ function linkSupabaseRemote(
   }
 
   // Conta certa: uma chamada a `projects list` detecta login E acesso ao projeto.
-  let projects = tryExecOut('supabase', ['projects', 'list'])
+  let projects = tryExecOut(sb, ['projects', 'list'])
   if (projects === null) {
     // não autenticado → login guiado
     if (!login()) {
       console.log(`• Login do Supabase não concluído — pulei o link.\n    ${manual}\n`)
       return false
     }
-    projects = tryExecOut('supabase', ['projects', 'list'])
+    projects = tryExecOut(sb, ['projects', 'list'])
   } else if (!projectListHasRef(projects, projectRef)) {
     // autenticado na conta ERRADA → troca de conta automaticamente (login no browser)
     console.log('\n• A conta Supabase logada não é dona deste projeto — trocando de conta.')
-    tryExec('supabase', ['logout'])
+    tryExec(sb, ['logout'])
     if (!login()) {
       console.log(`• Login do Supabase não concluído — pulei o link.\n    ${manual}\n`)
       return false
     }
-    projects = tryExecOut('supabase', ['projects', 'list'])
+    projects = tryExecOut(sb, ['projects', 'list'])
   }
   if (projects === null || !projectListHasRef(projects, projectRef)) {
     console.log(
       `\n• A conta logada ainda não tem acesso ao projeto ${projectRef}.\n` +
         `  Entre com a MESMA conta Supabase que você conectou ao Supremo (a dona\n` +
-        `  deste projeto): supabase login && ( ${manual} )\n`,
+        `  deste projeto): npx supabase login && ( ${manual} )\n`,
     )
     return false
   }
@@ -325,7 +329,7 @@ function linkSupabaseRemote(
 
   // Link: senha só na env (nunca em argv); ref grava em supabase/.temp.
   try {
-    execFileSync('supabase', supabaseLinkArgs(projectRef), {
+    execFileSync(sb, supabaseLinkArgs(projectRef), {
       cwd: dest,
       env: supabaseLinkEnv(process.env, dbPassword),
       stdio: ['ignore', 'ignore', 'inherit'],
@@ -348,12 +352,25 @@ function linkSupabaseRemote(
   ok(`Supabase linkado: ${projectRef}`)
 
   // Confirma o histórico sincronizado (dry-run, SEM mutação).
-  const dry = tryExecOut('supabase', ['db', 'push', '--dry-run'])
+  const dry = tryExecOut(sb, ['db', 'push', '--dry-run'])
   if (dry !== null && migrationDryRunSynced(dry)) {
     ok('Migration history sincronizado')
   }
 
   return true
+}
+
+/**
+ * Binário do Supabase CLI a usar: SEMPRE a versão local pinada do projeto
+ * (node_modules/.bin/supabase, instalada pelo npm ci) quando existir — uma
+ * instalação global arbitrária nunca decide a versão. Só cai na global como
+ * último recurso (npm ci não rodou), e o bootstrap sinaliza isso.
+ */
+export function resolveSupabaseBin(dest: string): { bin: string; local: boolean } {
+  const localBin = path.join(dest, 'node_modules', '.bin', 'supabase')
+  return fs.existsSync(localBin)
+    ? { bin: localBin, local: true }
+    : { bin: 'supabase', local: false }
 }
 
 /** Lê o ref que o `supabase link` gravou em supabase/.temp, para validar o alvo. */

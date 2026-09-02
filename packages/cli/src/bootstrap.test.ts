@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   buildEnvFile,
@@ -155,6 +156,21 @@ describe('migration history — dry-run sincronizado', () => {
     expect(
       migrationDryRunSynced('Would push:\n  20260901230657_e2e_widgets.sql'),
     ).toBe(false)
+  })
+})
+
+describe('--version reflete o package.json (sem hardcode)', () => {
+  const binSrc = fs.readFileSync(
+    fileURLToPath(new URL('./bin.ts', import.meta.url)),
+    'utf8',
+  )
+
+  it('bin.ts deriva a versão de pkg.version (fonte única)', () => {
+    expect(binSrc).toMatch(/\.version\(pkg\.version\)/)
+  })
+
+  it('nunca volta a hardcodar um literal de versão em .version()', () => {
+    expect(binSrc).not.toMatch(/\.version\(\s*['"][\d.]+['"]\s*\)/)
   })
 })
 

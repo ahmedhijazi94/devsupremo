@@ -10,6 +10,8 @@ import {
   type FileEntry,
 } from '@/lib/templates/project-files'
 import { capabilitiesForKind, inferSecurityProfile } from '@/lib/capabilities'
+import { chooseMergeMode, protectionLevelFor } from '@/lib/github/capabilities'
+import { writeIntegrationMeta } from '@/lib/mcp/repository'
 import {
   runProvisioning,
   type ProvisioningSteps,
@@ -325,7 +327,29 @@ export async function provisionProject(params: {
           githubToken,
         )
         if (scanningError) warnings.push(scanningError)
-        return {}
+
+        // v3: capability detection — decide o modo de integração REAL da main pela
+        // capacidade efetiva do repo (não pelo plano). branchProtection funcionou?
+        // allow_auto_merge é aceito? → native; senão → supremo_managed (fail-safe).
+        // Persistência best-effort (só grava se a migration 014 já rodou).
+        const branchProtectionApplied = protectionError === null
+        let autoMergeAvailable = false
+        try {
+          const r = await githubFetch(`/repos/${ctx.repoFullName as string}`, githubToken, {
+            method: 'PATCH',
+            body: JSON.stringify({ allow_auto_merge: true }),
+          })
+          autoMergeAvailable = r.ok
+        } catch {
+          autoMergeAvailable = false
+        }
+        const mergeMode = chooseMergeMode({ branchProtectionApplied, autoMergeAvailable })
+        await writeIntegrationMeta(projectId, {
+          github_merge_mode: mergeMode,
+          protection_level: protectionLevelFor(mergeMode),
+          integration_state: 'development',
+        })
+        return { mergeMode }
       },
     },
     {

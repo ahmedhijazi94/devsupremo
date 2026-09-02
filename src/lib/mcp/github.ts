@@ -258,6 +258,8 @@ export interface PullRequestInfo {
   state: string
   merged: boolean
   mergeable: boolean | null
+  /** node_id GraphQL — necessário para habilitar o auto-merge nativo. */
+  nodeId: string
 }
 
 export async function openOrUpdatePullRequest(
@@ -287,6 +289,7 @@ export async function openOrUpdatePullRequest(
       state: openPr.state,
       merged: false,
       mergeable: null,
+      nodeId: openPr.node_id,
     }
   }
 
@@ -307,6 +310,7 @@ export async function openOrUpdatePullRequest(
     state: created.state,
     merged: false,
     mergeable: created.mergeable,
+    nodeId: created.node_id,
   }
 }
 
@@ -329,6 +333,7 @@ export async function getPullRequest(
     state: data.state,
     merged: data.merged,
     mergeable: data.mergeable,
+    nodeId: data.node_id,
   }
 }
 
@@ -463,6 +468,13 @@ export async function mergePullRequest(
   creds: GithubCredentials,
   prNumber: number,
   commitTitle?: string,
+  /**
+   * SHA que o HEAD da PR PRECISA ter para o merge acontecer. Anti-TOCTOU (v3
+   * seção 3): se o HEAD andou entre a validação e o merge, o GitHub recusa com
+   * 409 e nada é mesclado — em vez de mesclar um SHA não validado. Sempre passe
+   * o SHA que foi validado.
+   */
+  expectedSha?: string,
 ): Promise<{ sha: string }> {
   const gh = octokitFor(creds)
   const { data } = await gh.pulls.merge({
@@ -471,6 +483,7 @@ export async function mergePullRequest(
     pull_number: prNumber,
     merge_method: 'squash',
     ...(commitTitle ? { commit_title: commitTitle } : {}),
+    ...(expectedSha ? { sha: expectedSha } : {}),
   })
 
   if (!data.merged) {
@@ -478,6 +491,53 @@ export async function mergePullRequest(
   }
 
   return { sha: data.sha }
+}
+
+/**
+ * Liga o "Allow auto-merge" no repositório (pré-requisito do auto-merge nativo).
+ * Devolve false quando o plano/permissão não permite (Free privado) — sinal para
+ * o capability detection cair no modo SUPREMO_MANAGED.
+ */
+export async function allowAutoMerge(creds: GithubCredentials): Promise<boolean> {
+  const gh = octokitFor(creds)
+  try {
+    await gh.repos.update({
+      owner: creds.owner,
+      repo: creds.repo,
+      allow_auto_merge: true,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Habilita o AUTO-MERGE NATIVO do GitHub na PR (modo NATIVE_GITHUB). O GitHub
+ * espera os required checks do HEAD atual e mescla sozinho quando ficam verdes —
+ * o agente não espera nada. Idempotente: se já está habilitado, o GitHub aceita.
+ * Squash, para casar com o merge do fluxo. Devolve false se o repo não suportar
+ * (aí o Merge Controller gerenciado assume). Usa GraphQL (única API do recurso).
+ */
+export async function enableNativeAutoMerge(
+  creds: GithubCredentials,
+  prNodeId: string,
+): Promise<boolean> {
+  const gh = octokitFor(creds)
+  try {
+    await gh.graphql(
+      `mutation($pr: ID!) {
+        enablePullRequestAutoMerge(input: { pullRequestId: $pr, mergeMethod: SQUASH }) {
+          pullRequest { autoMergeRequest { enabledAt } }
+        }
+      }`,
+      { pr: prNodeId },
+    )
+    return true
+  } catch {
+    // Repo sem auto-merge nativo, ou PR já mesclável na hora: não é erro fatal.
+    return false
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

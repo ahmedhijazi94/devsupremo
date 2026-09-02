@@ -683,10 +683,15 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
   server.registerTool(
     'merge_when_green',
     {
-      title: 'Merge com gates verdes',
+      title: 'Merge com gates verdes (LEGACY v2)',
       description:
-        'Faz squash merge do PR na branch principal. Recusa se qualquer gate ' +
-        'estiver vermelho ou ainda rodando.',
+        'LEGACY (workflow v2). No workflow v3 o merge é ASSÍNCRONO e independente do ' +
+        'agente: auto-merge nativo do GitHub (modo native) ou o Merge Controller do ' +
+        'Supremo (modo supremo_managed) integram na main quando os required checks do ' +
+        'HEAD atual ficam verdes. O agente v3 NÃO espera CI nem chama isto no fluxo ' +
+        'normal — empurre e siga. Mantido só para compatibilidade com integrações v2. ' +
+        'Faz squash merge com o SHA validado (recusa via 409 se o HEAD mudou — ' +
+        'anti-TOCTOU); recusa se algum gate estiver vermelho ou ainda rodando.',
       inputSchema: {
         prNumber: z.number().int().positive(),
         projectId: z.string().uuid().optional(),
@@ -706,7 +711,8 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
         )
       }
 
-      const merged = await gh.mergePullRequest(creds, prNumber)
+      // Anti-TOCTOU: só mescla se o HEAD ainda for o SHA cujos checks validamos.
+      const merged = await gh.mergePullRequest(creds, prNumber, undefined, pr.headSha)
 
       await repo.updateProject(ctx.userId, project.id, {
         active_branch: project.default_branch,

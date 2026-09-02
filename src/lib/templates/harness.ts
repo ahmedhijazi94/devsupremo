@@ -39,6 +39,9 @@ export function harnessPackageScripts(): Record<string, string> {
     'daemon:ensure': 'npx --yes supremo-cli daemon --ensure',
     'daemon:status': 'npx --yes supremo-cli daemon --status',
     'daemon:stop': 'npx --yes supremo-cli daemon --stop',
+    // Diagnóstico agregado (v3.1 finalização) — não é para o dev rodar no dia a
+    // dia; a UI do Supremo (Histórico) é o lugar humano. JSON machine-readable.
+    'supremo:status': 'node scripts/supremo-status.mjs',
     'security:audit': 'node scripts/security-audit.js --deep',
     'security:report': 'node scripts/security-audit.js --report',
   }
@@ -340,11 +343,43 @@ exec node scripts/verify.mjs
  * base é capability-agnóstico: o verify decide o nível pelo git diff em runtime,
  * então não precisa ser parametrizado por capability aqui.
  */
+/**
+ * Diagnóstico agregado (v3.1 finalização, seção 29) — junta o status do preview
+ * e do checkpoint daemon num JSON só. NÃO é para o dev comum rodar no dia a dia
+ * (a UI do Supremo/Histórico é o lugar humano); serve para depuração rápida.
+ * Best-effort: se um dos dois não responder, o outro ainda aparece.
+ */
+export function supremoStatusScript(): string {
+  return `#!/usr/bin/env node
+// GERADO pelo Supremo (v3.1) — diagnóstico agregado (preview + daemon).
+// Não é para uso diário; a UI do Supremo (Histórico) é o lugar humano.
+import { execFileSync } from 'node:child_process'
+
+function tryJson(cmd, args) {
+  try {
+    return JSON.parse(execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))
+  } catch {
+    return null
+  }
+}
+
+const preview = tryJson('node', ['scripts/preview.mjs', 'status']) ?? { running: false, healthy: false }
+const daemon = tryJson('npx', ['--yes', 'supremo-cli', 'daemon', '--status']) ?? { running: false, healthy: false, pendingCheckpoints: 0 }
+
+console.log(JSON.stringify({
+  preview: { running: !!preview.running, healthy: !!preview.healthy },
+  daemon: { running: !!daemon.running, healthy: !!daemon.healthy },
+  checkpoints: { pending: daemon.pendingCheckpoints ?? 0 },
+}))
+`
+}
+
 export function harnessFiles(): Record<string, string> {
   return {
     'scripts/verify.mjs': verifyScript(),
     'scripts/setup-local.mjs': setupLocalScript(),
     'scripts/preview.mjs': previewSupervisorScript(),
+    'scripts/supremo-status.mjs': supremoStatusScript(),
     '.githooks/pre-commit': preCommitHook,
     '.githooks/pre-push': prePushHook,
   }

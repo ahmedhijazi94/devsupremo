@@ -436,54 +436,128 @@ describe('banco online — regras do agente para o Supabase via CLI', () => {
   })
 })
 
-describe('ciclo obrigatório do agente — gerador (AGENTS.md/CLAUDE.md)', () => {
+describe('workflow v3 — contrato assíncrono do agente (AGENTS.md/CLAUDE.md)', () => {
   const paths = files.map((f) => f.path)
   const agents = file('AGENTS.md')
   const claude = file('CLAUDE.md')
+  const ciYml = file('.github/workflows/ci.yml')
 
   it('gera AGENTS.md (maiúsculo, canônico) e NÃO gera agents.md', () => {
     expect(paths).toContain('AGENTS.md')
     expect(paths).not.toContain('agents.md')
   })
 
-  it('CLAUDE.md referencia AGENTS.md', () => {
+  it('CLAUDE.md referencia AGENTS.md como regra canônica', () => {
     expect(claude).toContain('AGENTS.md')
+    expect(claude).toMatch(/canônica/i)
   })
 
-  it('npm run verify é a validação PADRÃO (adaptativa), não uma lista fixa', () => {
+  it('NÃO instrui a esperar a CI depois de um push normal', () => {
+    expect(agents).toMatch(/NUNCA espere a CI/i)
+    expect(claude).toMatch(/Esperar ou pollar a CI/i)
+  })
+
+  it('NÃO instrui a fazer polling contínuo do GitHub', () => {
+    expect(agents).toMatch(/não faça polling/i)
+  })
+
+  it('trata a CI como ASSÍNCRONA (segue desenvolvendo em background)', () => {
+    expect(agents).toMatch(/assíncron/i)
+    expect(agents).toMatch(/BACKGROUND/i)
+    expect(agents).toMatch(/Continue desenvolvendo enquanto a CI roda/i)
+  })
+
+  it('preview persistente + HMR fazem parte do development loop', () => {
+    expect(agents).toMatch(/HMR/)
+    expect(agents).toMatch(/preview/i)
+    expect(agents).toMatch(/dev server\/preview VIVO/i)
+  })
+
+  it('npm run verify continua adaptativo e FULL não é ritual de toda microfeature', () => {
     expect(agents).toContain('npm run verify')
     expect(claude).toContain('npm run verify')
-    // deixa explícito que o harness escolhe o nível conforme o risco
     expect(agents).toMatch(/QUICK/)
+    expect(agents).toMatch(/SECURITY/)
     expect(agents).toMatch(/FULL/)
+    expect(agents).toMatch(/verify:full[\s\S]{0,30}microaltera/i)
   })
 
-  it('traz o ciclo branch → commit → push → PR → CI', () => {
-    expect(agents).toMatch(/branch/i)
-    expect(agents).toMatch(/commit/i)
-    expect(agents).toMatch(/push/i)
-    expect(agents).toMatch(/\bPR\b|pull request/i)
-    expect(agents).toMatch(/\bCI\b|checks/i)
+  it('required checks continuam obrigatórios e só o HEAD atual é integrado', () => {
+    expect(agents).toMatch(/required checks/i)
+    expect(agents).toMatch(/HEAD atual/i)
   })
 
-  it('só conclui a tarefa com a CI obrigatória verde', () => {
-    expect(agents).toMatch(/conclu[íi]da? quando a CI.*verde/i)
+  it('SHA verde antigo NÃO libera SHA novo', () => {
+    expect(agents).toMatch(/SHA\s+antigo nunca libera um SHA novo/i)
   })
 
-  it('nunca faz merge na main sem autorização explícita do usuário', () => {
-    expect(agents).toMatch(/merge/i)
-    expect(agents).toContain('autorização explícita')
-    expect(claude).toContain('autorização explícita')
+  it('auto-merge é do GitHub e só após os gates verdes', () => {
+    expect(agents).toMatch(/auto-merge/i)
+    expect(agents).toMatch(/só então\s+auto-mergeia/i)
   })
 
-  it('preserva as regras-chave (Supabase local, migration, RLS, ref, secrets, destrutivo, server-side)', () => {
-    expect(agents).toContain('npx supabase') // CLI local pinada
-    expect(agents).toContain('migration') // source of truth
-    expect(agents).toMatch(/RLS/) // RLS
-    expect(agents).toContain('project-ref') // ref
-    expect(agents).toMatch(/keychain/i) // secrets
-    expect(agents).toMatch(/destrutiv/i) // operações destrutivas
-    expect(agents).toMatch(/no servidor|do servidor/i) // segurança server-side
+  it('proíbe push direto na main, force push e bypass', () => {
+    expect(agents).toMatch(/NUNCA.*push direto na .?main/i)
+    expect(agents).toMatch(/force push na .?main/i)
+    expect(agents).toMatch(/bypass de required checks/i)
+  })
+
+  it('proíbe enfraquecer teste/threshold/ruleset/gate para "ficar verde"', () => {
+    expect(agents).toMatch(/nunca remova a barreira/i)
+    expect(claude).toMatch(/ficar verde/i)
+  })
+
+  it('falha crítica de segurança é corrigida antes de trabalho dependente', () => {
+    expect(agents).toMatch(/falha crítica de segurança[\s\S]*corrigida antes/i)
+  })
+
+  it('falha não-crítica não força espera pela CI', () => {
+    expect(agents).toMatch(/não espere de novo/i)
+  })
+
+  it('trata a corrida de auto-merge durante a edição sem perder o local', () => {
+    expect(agents).toMatch(/Corrida de auto-merge/i)
+    expect(agents).toMatch(/re-cheque se a PR de desenvolvimento ativa ainda está/i)
+    // preserva o trabalho local
+    expect(agents).toMatch(/preserve[\s\S]{0,6}as alterações locais/i)
+    // cria nova branch a partir da main
+    expect(agents).toMatch(/NOVA branch de desenvolvimento[\s\S]{0,4}a partir da .{0,2}main/i)
+    // nunca vira push acidental para a main
+    expect(agents).toMatch(/push direto na[\s\S]{0,10}nessa transi/i)
+  })
+
+  it('detecta auto-merge entre prompts e cria nova branch a partir da main', () => {
+    expect(agents).toMatch(/Início de um novo prompt/i)
+    expect(agents).toMatch(/crie\s+uma nova branch de desenvolvimento/i)
+  })
+
+  it('ci.yml cancela runs obsoletos por branch/PR sem liberar HEAD não validado', () => {
+    expect(ciYml).toMatch(/concurrency:/)
+    expect(ciYml).toMatch(/cancel-in-progress:\s*true/)
+    expect(ciYml).toMatch(/github\.ref/)
+  })
+
+  it('operações destrutivas continuam exigindo humano (auto-merge não autoriza)', () => {
+    expect(agents).toMatch(/destrutiv/i)
+    expect(agents).toMatch(/confirmação explícita/i)
+    expect(claude).toMatch(/auto-merge de código NÃO autoriza operação destrutiva/i)
+  })
+
+  it('preserva as regras-chave de segurança (Supabase local, migration, RLS, ref, secrets, server-side)', () => {
+    expect(agents).toContain('npx supabase')
+    expect(agents).toContain('migration')
+    expect(agents).toMatch(/RLS/)
+    expect(agents).toContain('project-ref')
+    expect(agents).toMatch(/keychain/i)
+    expect(agents).toMatch(/no servidor|do servidor/i)
+  })
+
+  it('AGENTS.md e CLAUDE.md ficam alinhados (mesmo contrato v3)', () => {
+    for (const doc of [agents, claude]) {
+      expect(doc).toMatch(/assíncron/i)
+      expect(doc).toMatch(/HEAD atual|auto-merge/i)
+      expect(doc).toMatch(/npm run verify/)
+    }
   })
 })
 

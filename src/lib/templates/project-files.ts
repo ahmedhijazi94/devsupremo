@@ -39,7 +39,14 @@ import {
 // 2.6.0: agents.md -> AGENTS.md (nome canônico p/ descoberta por Codex & cia);
 // ciclo obrigatório explícito (implementa→testa→migration/RLS→npm run verify→
 // branch/commit/push/PR→CI verde→nunca merge sem autorização) em AGENTS/CLAUDE.
-export const TEMPLATE_VERSION = '2.6.0'
+// 3.0.0: WORKFLOW v3 — desenvolvimento rápido estilo Lovable. CI ASSÍNCRONA: o
+// agente NUNCA espera/polla a CI após um push normal; segue desenvolvendo. Auto-merge
+// é do GitHub (só o HEAD atual validado entra na main; SHA verde antigo não libera
+// SHA novo). Preview/HMR persistente no loop. verify adaptativo (FULL não é ritual).
+// Trata a corrida de auto-merge durante a edição (preserva local → nova branch da
+// main). main protegida (sem push direto/force/bypass). Destrutivo continua exigindo
+// humano. concurrency+cancel-in-progress já na ci.yml.
+export const TEMPLATE_VERSION = '3.0.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -2601,33 +2608,87 @@ ${description}
 Escreva o teste junto com o código, não depois. Cobertura mínima de 70%,
 exigida pelo CI — não é sugestão.
 
-## Ciclo obrigatório de TODA tarefa (código, banco ou infraestrutura)
+## Ciclo de desenvolvimento (v3 — rápido e assíncrono)
 
-Toda mudança segue este ciclo, sem pular etapas:
+O usuário NÃO acompanha branch/PR/CI/merge — isso é infraestrutura invisível. A
+experiência é: **usuário pede → você implementa → o preview atualiza → o usuário pede
+outra coisa**. A CI roda em BACKGROUND e o auto-merge acontece sozinho quando todos os
+required checks do HEAD atual ficam verdes.
 
-1. **Entenda** as regras e capabilities do projeto (este \`AGENTS.md\`, \`CLAUDE.md\`,
-   \`SECURITY.md\`).
-2. **Implemente** a mudança.
-3. **Escreva os testes junto** com a mudança — nunca depois.
-4. **Banco:** sempre por **migration versionada** (\`npx supabase migration new\`) +
-   **RLS quando aplicável** + o teste de isolamento correspondente.
-5. **Rode \`npm run verify\`** — é o comando PADRÃO de validação. O harness escolhe o
-   nível (QUICK / SECURITY / FULL) conforme o risco da mudança; **não** troque por uma
-   lista fixa como \`npm run typecheck && npm run lint && npm test\`.
-6. **Corrija** qualquer falha causada pela sua mudança.
-7. Trabalhe em **branch própria** — **nunca** commite direto na \`main\`.
-8. Faça um **commit descritivo** (\`feat:\`/\`fix:\`/\`refactor:\`/\`test:\`/\`security:\`/
-   \`docs:\`/\`chore:\`).
-9. **Push** da branch.
-10. **Abra ou atualize o PR**.
-11. **Aguarde todos os checks obrigatórios da CI**.
-12. Se a CI **falhar por causa da sua mudança**: corrija → \`npm run verify\` → novo
-    commit/push → **aguarde a CI de novo**.
-13. **Só declare a tarefa concluída quando a CI obrigatória estiver VERDE.**
-14. **NUNCA faça merge na \`main\` sem autorização explícita do usuário.**
+Para cada pedido normal:
 
-Hooks de git e a CI do GitHub são o enforcement: se você ignorar estas instruções,
-eles reprovam a mudança.
+1. Sincronize só o estado Git necessário (rápido, não bloqueante).
+2. Cheque UMA vez, sem bloquear, se há uma falha de CI ANTERIOR já concluída e
+   relevante. Se estiver \`RUNNING\`, ignore para fins de bloqueio e siga. Se
+   \`SUCCESS\`, já será/pôde ser auto-mergeada. Se \`FAILED\`, classifique (ver abaixo).
+3. **Implemente** a mudança.
+4. Mantenha o **dev server/preview VIVO** e reutilize — não mate/recrie a cada prompt.
+5. Use **HMR**; não rode build de produção nem re-setup já válido à toa.
+6. **Inspecione o preview** quando fizer sentido (mudança visual aparece em segundos).
+7. Crie/atualize **só os testes relacionados** à mudança (escritos junto, não depois).
+8. Rode **\`npm run verify\`** — comando PADRÃO, adaptativo. O harness escolhe o nível
+   (QUICK / SECURITY / FULL) pelo risco; **não** troque por uma lista fixa como
+   \`npm run typecheck && npm run lint && npm test\`, e **não** rode \`verify:full\` em
+   toda microalteração.
+9. Corrija falhas locais.
+10. Faça um **commit lógico** (\`feat:\`/\`fix:\`/\`refactor:\`/\`test:\`/\`security:\`/
+    \`docs:\`/\`chore:\`).
+11. **Push** — mas antes veja "Corrida de auto-merge" abaixo.
+12. Deixe o GitHub/CI seguir em **BACKGROUND**.
+13. **Devolva o controle ao usuário IMEDIATAMENTE.**
+
+### NUNCA (v3)
+- **NUNCA espere a CI depois de um push normal.** Não faça polling, não fique abrindo
+  o GitHub, não gaste tokens acompanhando jobs, não bloqueie o usuário.
+- **NUNCA** faça bypass de required checks.
+- **NUNCA** faça push direto na \`main\`. **NUNCA** force push na \`main\`.
+- **NUNCA** desative/comente teste, afrouxe threshold, altere ruleset ou remova gate
+  para "ficar verde". Se um gate falha, corrija o CÓDIGO (ou o teste, se ele estiver
+  errado) — nunca remova a barreira.
+- **NUNCA** faça merge só porque você "acha que terminou": quem libera é o GitHub.
+
+### SEMPRE (v3)
+- **Continue desenvolvendo enquanto a CI roda de forma assíncrona.**
+- Só o **HEAD atual validado** pode ser auto-mergeado; **resultado verde de um SHA
+  antigo nunca libera um SHA novo**.
+- Uma **falha crítica de segurança** (RLS, auth, isolamento tenant, migration inválida,
+  secret leak, IDOR, quebra estrutural de build) deve ser **corrigida antes** de
+  construir trabalho dependente sobre ela.
+- **Antes de cada commit/push, re-cheque se a PR de desenvolvimento ativa ainda está
+  aberta** (pode ter sido auto-mergeada enquanto você editava).
+
+### Auto-merge é do GitHub, não seu
+Você empurra código; o GitHub valida os required checks do HEAD atual e só então
+auto-mergeia na \`main\`. Não trate um clique humano em "Merge" como barreira — a
+segurança está nos gates automatizados. Você não tem caminho para ignorá-los.
+
+### Corrida de auto-merge durante a edição
+CI e auto-merge são assíncronos: a PR pode ser auto-mergeada enquanto você implementa o
+próximo pedido. **Imediatamente antes de cada commit/push**, verifique se a branch/PR de
+desenvolvimento ainda está aberta. Se ela já foi auto-mergeada:
+1. **preserve** as alterações locais atuais (não perca, não descarte, não sobrescreva);
+2. **sincronize** com a \`main\` recém-atualizada;
+3. crie uma **NOVA branch de desenvolvimento** a partir da \`main\`;
+4. **aplique** com segurança as alterações locais nela (resolva conflito se houver);
+5. rode o **verify** apropriado; **commit**; **push**;
+6. deixe a nova PR/CI/auto-merge seguir em background; devolva o controle.
+
+**NUNCA faça push direto na \`main\` nessa transição.** É transparente para o usuário —
+não peça que ele administre Git.
+
+### Início de um novo prompt
+Se a revisão anterior já foi auto-mergeada, **detecte, sincronize com a \`main\`, crie
+uma nova branch de desenvolvimento** e siga o pedido — sem envolver o usuário. Se a CI
+anterior **falhou**: crítica → corrija primeiro; não-crítica → corrija dentro do novo
+ciclo. Depois do novo push, **não espere de novo**.
+
+### Branch/PR contínua
+Não abra uma PR nova por microfeature. Enquanto a branch de desenvolvimento não foi
+integrada, novos pedidos continuam nela — cada push atualiza o HEAD.
+
+Hooks de git, os required checks e a proteção da \`main\` são o enforcement independente:
+se você ignorar estas instruções, eles reprovam. Você NÃO tem caminho para desativar
+ruleset, remover checks, reduzir proteção, dar bypass ou force push.
 
 ## Banco de dados online (Supabase CLI)
 
@@ -2672,24 +2733,28 @@ Este projeto é gerenciado pelo Supremo. O MCP remoto expõe estas regras via
 function claudeMd(projectName: string): string {
   return `# CLAUDE.md — ${projectName}
 
-Leia \`AGENTS.md\` primeiro — o **ciclo obrigatório de toda tarefa** está lá. Este
-arquivo complementa com comportamento.
+Leia \`AGENTS.md\` primeiro — o **ciclo de desenvolvimento v3** está lá (regra
+canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 
 ## Sempre
 - Ler \`AGENTS.md\` e \`SECURITY.md\` antes de escrever código
-- Seguir o **ciclo obrigatório** do \`AGENTS.md\` em toda mudança de código/banco/infra
+- Seguir o **ciclo de desenvolvimento v3** do \`AGENTS.md\`
 - Implementar do servidor para fora
 - Ativar RLS em toda tabela nova **e escrever o teste de isolamento**
 - Validar entrada com Zod no servidor
 - Mudar o schema do banco online só por **migration versionada + \`npx supabase db
   push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
   "Banco de dados online" no \`AGENTS.md\`.
-- **Rodar \`npm run verify\`** antes de propor a mudança — é o comando padrão. O
-  harness escolhe o nível QUICK/SECURITY/FULL conforme o risco; **não** use uma lista
-  fixa como \`npm run typecheck && npm run lint && npm test\`.
-- Trabalhar em **branch própria**, com **commit descritivo**, **push**, **abrir/atualizar
-  o PR** e **aguardar todos os checks obrigatórios da CI**
-- Só considerar a tarefa **concluída quando a CI obrigatória estiver verde**
+- **Rodar \`npm run verify\`** — comando padrão, adaptativo (o harness escolhe
+  QUICK/SECURITY/FULL pelo risco). **Não** use lista fixa como \`npm run typecheck &&
+  npm run lint && npm test\`, e **não** rode \`verify:full\` em toda microalteração.
+- Trabalhar em **branch própria**, com **commit lógico** e **push** — e então
+  **devolver o controle ao usuário imediatamente**
+- **Continuar desenvolvendo enquanto a CI roda em background** (ela é assíncrona)
+- Manter o **dev server/preview vivo** e usar **HMR** (não recriar a cada prompt)
+- **Antes de cada commit/push, re-checar se a PR de desenvolvimento foi auto-mergeada
+  durante a edição** — se sim: preservar o local, criar nova branch a partir da \`main\`,
+  reaplicar e dar push (nunca push direto na \`main\`)
 
 ## Nunca
 - \`any\` no TypeScript
@@ -2698,11 +2763,16 @@ arquivo complementa com comportamento.
 - Tabela sem RLS
 - Segredo em código
 - Validação de acesso no cliente
-- Commit direto na \`main\`
-- **Fazer merge na \`main\` sem autorização explícita do usuário**
-- Declarar a tarefa concluída com a CI vermelha ou sem esperar os checks
+- **Esperar ou pollar a CI depois de um push normal** — a CI é assíncrona; continue
+- **Commit direto na \`main\`; force push na \`main\`; bypass de required checks**
+- **Desativar/comentar teste, afrouxar threshold, alterar ruleset ou remover gate para
+  "ficar verde"** — corrija o código (ou o teste, se errado), nunca a barreira
+- **Fazer merge por conta própria** — quem libera a \`main\` é o GitHub, só com todos os
+  required checks do HEAD atual verdes (SHA verde antigo não libera SHA novo)
+- Construir trabalho dependente sobre uma **falha crítica de segurança** sem corrigi-la
 - Rodar destrutivo no remoto (\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\`,
-  \`DELETE\` em massa) sem confirmação explícita do humano + mostrar o \`project-ref\`
+  \`DELETE\` em massa, reset/exclusão de dados) sem **confirmação explícita do humano** +
+  mostrar o \`project-ref\` (auto-merge de código NÃO autoriza operação destrutiva)
 
 ## Commits
 \`feat:\` \`fix:\` \`refactor:\` \`test:\` \`security:\` \`docs:\` \`chore:\`
@@ -2710,10 +2780,13 @@ arquivo complementa com comportamento.
 Um commit por mudança lógica.
 
 ## Quando um gate falha
-Se a CI falhar por causa da sua mudança: leia o log do job, corrija a causa, rode
-\`npm run verify\`, faça novo commit/push e **aguarde a CI de novo**. Não desabilite o
-teste, não use \`skip\`, não afrouxe o threshold. Se o gate está errado, corrija o gate
-num PR separado e explique por quê.
+A CI é assíncrona — você descobre a falha na consulta rápida do INÍCIO do próximo
+ciclo, não esperando por ela. Ao encontrar uma falha da revisão anterior: leia só o
+erro necessário, corrija a causa, rode \`npm run verify\`, faça novo commit/push e
+**deixe a CI seguir em background — não espere**. Falha crítica de segurança (RLS,
+auth, tenant, migration, secret, IDOR, build) corrige-se ANTES de construir em cima.
+Não desabilite o teste, não use \`skip\`, não afrouxe o threshold, não mexa no ruleset.
+Se o gate está errado, corrija o gate legitimamente num commit separado e explique.
 `
 }
 

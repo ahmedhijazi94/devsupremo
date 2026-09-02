@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import {
   buildEnvFile,
   cleanRemoteUrl,
+  daemonCliOutputLooksValid,
   gitCloneArgs,
   migrationDryRunSynced,
   patchConfigMajorVersion,
@@ -14,6 +15,7 @@ import {
   supabaseLinkArgs,
   supabaseLinkEnv,
   targetDir,
+  validateLocalReadiness,
 } from './bootstrap'
 
 describe('buildEnvFile', () => {
@@ -189,5 +191,85 @@ describe('CLI Supabase local pinada (resolveSupabaseBin)', () => {
     const r = resolveSupabaseBin(tmp)
     expect(r.local).toBe(true)
     expect(r.bin).toBe(path.join(tmp, 'node_modules', '.bin', 'supabase'))
+  })
+})
+
+describe('daemonCliOutputLooksValid — detecta CLI publicada desatualizada', () => {
+  it('saída real (JSON machine-readable, {"running":bool,...}) é válida', () => {
+    expect(
+      daemonCliOutputLooksValid('{"running":true,"healthy":true,"pid":123,"pendingCheckpoints":0}'),
+    ).toBe(true)
+    expect(
+      daemonCliOutputLooksValid('{"running":false,"healthy":false,"pid":null,"pendingCheckpoints":0}'),
+    ).toBe(true)
+  })
+  it('falha ao rodar (null) é inválida', () => {
+    expect(daemonCliOutputLooksValid(null)).toBe(false)
+  })
+  it('JSON sem o campo "running" (formato inesperado) é inválido', () => {
+    expect(daemonCliOutputLooksValid('{"foo":"bar"}')).toBe(false)
+  })
+  it('saída da ponte MCP (CLI publicada sem "daemon", texto — não JSON) é inválida', () => {
+    expect(
+      daemonCliOutputLooksValid('[supremo] SUPREMO_URL não definido...\n'),
+    ).toBe(false)
+  })
+  it('erro de opção desconhecida é inválido', () => {
+    expect(daemonCliOutputLooksValid("error: unknown option '--status'\n")).toBe(false)
+  })
+})
+
+describe('validateLocalReadiness — bootstrap só declara "pronto" se for verdade', () => {
+  it('tudo certo → ok, sem issues', () => {
+    const r = validateLocalReadiness({
+      projectJsonOk: true,
+      hasDaemonIdentity: true,
+      daemonRunning: true,
+      npmScriptsCompatible: true,
+    })
+    expect(r).toEqual({ ok: true, issues: [] })
+  })
+
+  it('project.json ausente/incompleto → issue mesmo sem daemon', () => {
+    const r = validateLocalReadiness({
+      projectJsonOk: false,
+      hasDaemonIdentity: false,
+      daemonRunning: false,
+      npmScriptsCompatible: null,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.issues[0]).toMatch(/project\.json/)
+  })
+
+  it('daemon não subiu → issue (só quando há identidade de device)', () => {
+    const r = validateLocalReadiness({
+      projectJsonOk: true,
+      hasDaemonIdentity: true,
+      daemonRunning: false,
+      npmScriptsCompatible: true,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.issues.some((i) => i.includes('daemon não subiu'))).toBe(true)
+  })
+
+  it('CLI publicada incompatível → issue explícita (a causa raiz do bug real)', () => {
+    const r = validateLocalReadiness({
+      projectJsonOk: true,
+      hasDaemonIdentity: true,
+      daemonRunning: true,
+      npmScriptsCompatible: false,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.issues.some((i) => i.includes('desatualizada'))).toBe(true)
+  })
+
+  it('sem identidade de daemon (projeto sem device) → não exige daemon/scripts', () => {
+    const r = validateLocalReadiness({
+      projectJsonOk: true,
+      hasDaemonIdentity: false,
+      daemonRunning: false,
+      npmScriptsCompatible: null,
+    })
+    expect(r).toEqual({ ok: true, issues: [] })
   })
 })

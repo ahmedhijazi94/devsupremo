@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  defaultCheckpointDeps,
   parseQueue,
   serializeQueue,
   CHECKPOINT_DIR,
@@ -18,6 +19,12 @@ import {
   type CommitReader,
 } from './changeset'
 import { resolveKeychain } from './keychain'
+import {
+  applyRestore,
+  defaultRestoreDeps,
+  RestoreTargetNotFoundLocallyError,
+  type RestoreDeps,
+} from './restore'
 
 /**
  * SUPREMO CHECKPOINT DAEMON (endurecido) — envia os checkpoints em BACKGROUND.
@@ -86,6 +93,17 @@ export interface PublishInput {
   riskLevel: CheckpointRecord['riskLevel']
   summary: string
   migrations: string[]
+  /** Presente quando este checkpoint é o "E" resultante de um restore. */
+  restoredFromCheckpointId?: string
+  conversationId?: string
+  messageId?: string
+  originAgent?: string
+}
+
+export interface PendingRestore {
+  restoreRequestId: string
+  targetCheckpointId: string
+  targetSummary: string
 }
 
 export interface DaemonHttp {
@@ -94,6 +112,19 @@ export interface DaemonHttp {
    * recebe token. Lança NetworkError/AuthError/ConflictError.
    */
   publish(input: PublishInput): Promise<{ prNumber: number }>
+  /** POST /api/checkpoint/restore-poll. Reivindica pedidos "Restaurar" pendentes. */
+  pollRestores(input: { deviceSecret: string; projectId: string }): Promise<PendingRestore[]>
+  /** POST /api/checkpoint/restore-report — fecha o pedido de restore. */
+  reportRestoreApplied(input: {
+    deviceSecret: string
+    restoreRequestId: string
+    resultCheckpointId: string | null
+  }): Promise<void>
+  reportRestoreFailed(input: {
+    deviceSecret: string
+    restoreRequestId: string
+    error: string
+  }): Promise<void>
 }
 
 export interface DaemonContext {
@@ -145,6 +176,12 @@ export async function processCheckpoint(
       riskLevel: record.riskLevel,
       summary: record.summary,
       migrations: record.migrations,
+      ...(record.restoredFromCheckpointId
+        ? { restoredFromCheckpointId: record.restoredFromCheckpointId }
+        : {}),
+      ...(record.conversationId ? { conversationId: record.conversationId } : {}),
+      ...(record.messageId ? { messageId: record.messageId } : {}),
+      ...(record.originAgent ? { originAgent: record.originAgent } : {}),
     })
     return {
       record: withStatus(record, 'published', { prNumber }),
@@ -173,23 +210,59 @@ export async function processCheckpoint(
 
 export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
   const base = apiBaseUrl.replace(/\/$/, '')
+  // CodeQL js/file-access-to-http sinaliza dado de arquivo (o conteúdo dos
+  // arquivos do changeset, lido por defaultCommitReader em changeset.ts)
+  // chegando a um fetch(). Isso é o PROPÓSITO desta função: enviar o
+  // checkpoint (código do PRÓPRIO usuário) ao backend do Supremo que ele
+  // mesmo configurou (apiBaseUrl vem de .supremo/project.json, escrito pelo
+  // bootstrap — nunca de input não confiável), não uma exfiltração acidental
+  // de um arquivo sensível não relacionado. Suprimido nas 2 linhas exatas
+  // abaixo com esta justificativa — a regra e o job continuam ativos para
+  // qualquer outro fluxo novo.
+  const postJson = async (route: string, body: unknown): Promise<unknown> => {
+    let res: Response
+    try {
+      // codeql[js/file-access-to-http] changeset do usuário → backend que ele configurou (ver nota acima)
+      res = await fetch(`${base}${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // codeql[js/file-access-to-http] mesmo fluxo intencional (ver nota acima)
+        body: JSON.stringify(body),
+      })
+    } catch {
+      throw new NetworkError('offline')
+    }
+    if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`)
+    if (res.status === 409) throw new ConflictError('conflict')
+    if (!res.ok) throw new NetworkError(`${res.status}`)
+    return res.json().catch(() => ({}))
+  }
   return {
     publish: async (input) => {
-      let res: Response
-      try {
-        res = await fetch(`${base}/api/checkpoint/publish`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(input),
-        })
-      } catch {
-        throw new NetworkError('offline')
-      }
-      if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`)
-      if (res.status === 409) throw new ConflictError('conflict')
-      if (!res.ok) throw new NetworkError(`${res.status}`)
-      const data = (await res.json().catch(() => ({}))) as { prNumber?: number }
+      const data = (await postJson('/api/checkpoint/publish', input)) as { prNumber?: number }
       return { prNumber: data.prNumber ?? 0 }
+    },
+    pollRestores: async (input) => {
+      const data = (await postJson('/api/checkpoint/restore-poll', input)) as {
+        requests?: PendingRestore[]
+      }
+      return data.requests ?? []
+    },
+    reportRestoreApplied: async (input) => {
+      await postJson('/api/checkpoint/restore-report', {
+        deviceSecret: input.deviceSecret,
+        restoreRequestId: input.restoreRequestId,
+        status: 'applied',
+        resultCheckpointId: input.resultCheckpointId,
+      })
+    },
+    reportRestoreFailed: async (input) => {
+      await postJson('/api/checkpoint/restore-report', {
+        deviceSecret: input.deviceSecret,
+        restoreRequestId: input.restoreRequestId,
+        status: 'failed',
+        error: input.error,
+      })
     },
   }
 }
@@ -259,9 +332,25 @@ export function ensureDaemon(cwd: string): 'reuse' | 'start' {
   return 'start'
 }
 
-export function daemonStatus(cwd: string): { running: boolean; pid: number | null } {
+export interface DaemonStatus {
+  running: boolean
+  /** Sem healthcheck HTTP próprio (diferente do preview): vivo = saudável. */
+  healthy: boolean
+  pid: number | null
+  pendingCheckpoints: number
+}
+
+export function daemonStatus(cwd: string): DaemonStatus {
   const pid = readPid(cwd)
-  return { running: pid != null && pidAlive(pid), pid }
+  const running = pid != null && pidAlive(pid)
+  let pendingCheckpoints = 0
+  try {
+    const queue = parseQueue(fs.readFileSync(path.join(cwd, QUEUE_FILE), 'utf8'))
+    pendingCheckpoints = queue.filter((r) => RETRIABLE.has(r.pushStatus)).length
+  } catch {
+    // sem fila ainda: 0 pendências
+  }
+  return { running, healthy: running, pid, pendingCheckpoints }
 }
 
 export function stopDaemon(cwd: string): boolean {
@@ -300,8 +389,66 @@ export interface DaemonConfig {
   getSecret: () => string | null
 }
 
+/**
+ * Consulta e aplica pedidos de "Restaurar" (v3.1 finalização). Roda ANTES da
+ * fila de checkpoints normais: se um restore criar o checkpoint "E", ele já
+ * entra na fila a tempo de ser publicado nesta mesma passada. NUNCA falha
+ * silenciosamente — todo pedido reivindicado termina 'applied' ou 'failed' no
+ * backend, mesmo quando o alvo não existe no histórico local desta máquina.
+ *
+ * `http`/`deps` são injetáveis (testáveis sem rede/git real); em produção
+ * `drainOnce` chama sem eles e usa os adapters reais.
+ */
+export async function processRestores(
+  config: DaemonConfig,
+  overrides: { http?: DaemonHttp; deps?: RestoreDeps } = {},
+): Promise<number> {
+  const secret = config.getSecret()
+  if (!secret) return 0
+
+  const http = overrides.http ?? defaultDaemonHttp(config.apiBaseUrl)
+  let pending: Awaited<ReturnType<DaemonHttp['pollRestores']>>
+  try {
+    pending = await http.pollRestores({ deviceSecret: secret, projectId: config.projectId })
+  } catch {
+    return 0 // offline: tenta de novo no próximo tick, sem derrubar o daemon
+  }
+  if (pending.length === 0) return 0
+
+  const deps = overrides.deps ?? defaultRestoreDeps(defaultCheckpointDeps(config.cwd), config.cwd)
+  for (const req of pending) {
+    try {
+      const outcome = applyRestore(
+        req.targetCheckpointId,
+        req.targetSummary,
+        config.projectId,
+        deps,
+      )
+      await http.reportRestoreApplied({
+        deviceSecret: secret,
+        restoreRequestId: req.restoreRequestId,
+        resultCheckpointId: outcome.applied ? (outcome.record?.checkpointId ?? null) : null,
+      })
+    } catch (err) {
+      const message =
+        err instanceof RestoreTargetNotFoundLocallyError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'falha desconhecida ao aplicar restore'
+      await http
+        .reportRestoreFailed({ deviceSecret: secret, restoreRequestId: req.restoreRequestId, error: message })
+        .catch(() => {})
+    }
+  }
+  return pending.length
+}
+
 /** Lê a fila, processa os pendentes (em ordem) uma vez, persiste a fila. */
 export async function drainOnce(config: DaemonConfig): Promise<number> {
+  // Restores primeiro: um checkpoint "E" resultante já entra na fila a tempo.
+  await processRestores(config)
+
   const queuePath = path.join(config.cwd, QUEUE_FILE)
   let queue: CheckpointRecord[]
   try {

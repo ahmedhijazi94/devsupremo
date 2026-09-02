@@ -7,6 +7,7 @@ import os from 'node:os'
 // prepublishOnly reconstrói antes de publicar). Assim `--version` nunca diverge da
 // versão publicada.
 import pkg from '../package.json'
+import { isKnownOrGlobal, unknownCommandMessage } from './command-guard'
 
 const program = new Command()
 
@@ -14,6 +15,18 @@ program
   .name('supremo')
   .description('CLI do Supremo (bootstrap + ponte MCP)')
   .version(pkg.version)
+
+/**
+ * Roda ANTES de `program.parse()`: um comando não-registrado nunca cai
+ * silenciosamente na ponte MCP (ver `command-guard.ts`) — sai com um erro claro
+ * e acionável em vez disso.
+ */
+function guardUnknownCommand(argv: string[]): void {
+  const first = argv[0]
+  if (isKnownOrGlobal(first)) return
+  console.error(unknownCommandMessage(first!))
+  process.exit(1)
+}
 
 const DEFAULT_URL = 'https://supremo.app/api/mcp'
 
@@ -113,7 +126,16 @@ program
 program
   .command('checkpoint <summary...>')
   .description('Cria um checkpoint LOCAL do pedido concluído (sem rede)')
-  .action(async (summaryParts: string[]) => {
+  // Opcionais — preenchidos SÓ se o host do agente fornecer (Histórico
+  // consegue então ligar o checkpoint à conversa/turno de origem). Ausência
+  // não muda nada: o resumo continua sendo a identidade funcional do ponto.
+  .option('--conversation-id <id>', 'ID da conversa, se o host fornecer')
+  .option('--message-id <id>', 'ID da mensagem/turno, se o host fornecer')
+  .option('--origin-agent <name>', 'Nome do agente (ex.: claude, codex)')
+  .action(async (
+    summaryParts: string[],
+    options: { conversationId?: string; messageId?: string; originAgent?: string },
+  ) => {
     const { runCheckpoint, defaultCheckpointDeps, readProjectId, NothingToCheckpointError } =
       await import('./checkpoint')
     const cwd = process.cwd()
@@ -135,7 +157,11 @@ program
       } catch {
         // sem daemon: o checkpoint local ainda é válido; o daemon sobe depois
       }
-      const record = runCheckpoint(summary, projectId, defaultCheckpointDeps(cwd))
+      const record = runCheckpoint(summary, projectId, defaultCheckpointDeps(cwd), {
+        conversationId: options.conversationId,
+        messageId: options.messageId,
+        originAgent: options.originAgent,
+      })
       console.log(
         `✓ checkpoint ${record.checkpointId.slice(0, 8)} (${record.riskLevel}) — ` +
           `push em background. Pode pedir a próxima mudança.`,
@@ -167,8 +193,9 @@ program
       const daemon = await import('./daemon')
       const cwd = process.cwd()
       if (options.status) {
-        const s = daemon.daemonStatus(cwd)
-        console.log(s.running ? `daemon ativo (pid ${s.pid})` : 'daemon parado')
+        // Machine-readable (JSON) — diagnóstico, não é para o usuário comum
+        // rodar; a UI do Supremo (Histórico) é o lugar humano para isto.
+        console.log(JSON.stringify(daemon.daemonStatus(cwd)))
         return
       }
       if (options.stop) {
@@ -210,4 +237,5 @@ program
     await import('./index')
   })
 
+guardUnknownCommand(process.argv.slice(2))
 program.parse()

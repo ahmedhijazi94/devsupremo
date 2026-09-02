@@ -9,6 +9,7 @@ import {
   harnessFiles,
   harnessPackageScripts,
   previewSupervisorScript,
+  supremoStatusScript,
   verifyScript,
   setupLocalScript,
 } from './harness'
@@ -103,13 +104,14 @@ describe('classifyRisk', () => {
 })
 
 describe('harness generator', () => {
-  it('emite os 5 arquivos do harness (inclui o supervisor de preview)', () => {
+  it('emite os 6 arquivos do harness (preview + status agregado)', () => {
     const files = harnessFiles()
     expect(Object.keys(files).sort()).toEqual([
       '.githooks/pre-commit',
       '.githooks/pre-push',
       'scripts/preview.mjs',
       'scripts/setup-local.mjs',
+      'scripts/supremo-status.mjs',
       'scripts/verify.mjs',
     ])
   })
@@ -145,5 +147,20 @@ describe('harness generator', () => {
     const file = join(dir, 'setup-local.mjs')
     writeFileSync(file, setupLocalScript(), 'utf8')
     expect(() => execFileSync(process.execPath, ['--check', file])).not.toThrow()
+  })
+
+  it('o supremo-status.mjs gerado é JavaScript VÁLIDO e agrega preview+daemon (seção 29)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-harness-'))
+    const file = join(dir, 'supremo-status.mjs')
+    const src = supremoStatusScript()
+    writeFileSync(file, src, 'utf8')
+    expect(() => execFileSync(process.execPath, ['--check', file])).not.toThrow()
+    expect(src).toContain('scripts/preview.mjs')
+    expect(src).toContain("'daemon', '--status'")
+    expect(src).toContain('checkpoints')
+  })
+
+  it('package.json expõe supremo:status', () => {
+    expect(harnessPackageScripts()['supremo:status']).toBe('node scripts/supremo-status.mjs')
   })
 })

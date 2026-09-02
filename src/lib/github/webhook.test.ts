@@ -1,6 +1,10 @@
 import crypto from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { parseWebhookForReconcile, verifyWebhookSignature } from './webhook'
+import {
+  isSupremoIntegrationRef,
+  parseWebhookForReconcile,
+  verifyWebhookSignature,
+} from './webhook'
 
 const SECRET = 'super-webhook-secret'
 function sign(body: string, secret = SECRET): string {
@@ -34,12 +38,12 @@ describe('parseWebhookForReconcile — só dispara, não autoriza', () => {
   const repo = { full_name: 'ahmed/app' }
   const installation = { id: 42 }
 
-  it('pull_request synchronize → alvo com a PR', () => {
+  it('pull_request synchronize (branch supremo/) → alvo com a PR', () => {
     const t = parseWebhookForReconcile('pull_request', {
       action: 'synchronize',
       installation,
       repository: repo,
-      pull_request: { number: 7, head: { sha: 'abc123' } },
+      pull_request: { number: 7, head: { sha: 'abc123', ref: 'supremo/cp-aaaa' } },
     })
     expect(t).not.toBeNull()
     expect(t!.prNumbers).toEqual([7])
@@ -54,29 +58,93 @@ describe('parseWebhookForReconcile — só dispara, não autoriza', () => {
       action: 'labeled',
       installation,
       repository: repo,
-      pull_request: { number: 7 },
+      pull_request: { number: 7, head: { ref: 'supremo/cp-aaaa' } },
     })
     expect(t).toBeNull()
   })
 
-  it('check_suite completed → PRs associadas', () => {
+  it('check_suite completed → PRs associadas (todas em branch supremo/)', () => {
     const t = parseWebhookForReconcile('check_suite', {
       action: 'completed',
       installation,
       repository: repo,
-      check_suite: { head_sha: 'deadbeef', pull_requests: [{ number: 3 }, { number: 5 }] },
+      check_suite: {
+        head_sha: 'deadbeef',
+        pull_requests: [
+          { number: 3, head: { ref: 'supremo/cp-aaaa' } },
+          { number: 5, head: { ref: 'supremo/cp-bbbb' } },
+        ],
+      },
     })
     expect(t!.prNumbers).toEqual([3, 5])
   })
 
-  it('check_run completed → PRs via check_suite', () => {
+  it('check_run completed → PRs via check_suite (branch supremo/)', () => {
     const t = parseWebhookForReconcile('check_run', {
       action: 'completed',
       installation,
       repository: repo,
-      check_run: { check_suite: { head_sha: 'x', pull_requests: [{ number: 9 }] } },
+      check_run: {
+        check_suite: {
+          head_sha: 'x',
+          pull_requests: [{ number: 9, head: { ref: 'supremo/cp-cccc' } }],
+        },
+      },
     })
     expect(t!.prNumbers).toEqual([9])
+  })
+
+  describe('isolamento de PR de bot/externo — nunca contamina o Merge Controller', () => {
+    it('isSupremoIntegrationRef: só aceita o namespace supremo/', () => {
+      expect(isSupremoIntegrationRef('supremo/cp-aaaa')).toBe(true)
+      expect(isSupremoIntegrationRef('dependabot/npm_and_yarn/next-15.0.0')).toBe(false)
+      expect(isSupremoIntegrationRef('feature/minha-branch')).toBe(false)
+      expect(isSupremoIntegrationRef('main')).toBe(false)
+      expect(isSupremoIntegrationRef(null)).toBe(false)
+    })
+
+    it('PR do Dependabot (fora de supremo/) → null, NUNCA reconcilia nem contamina integration_state', () => {
+      const t = parseWebhookForReconcile('pull_request', {
+        action: 'opened',
+        installation,
+        repository: repo,
+        pull_request: {
+          number: 42,
+          head: { sha: 'dep123', ref: 'dependabot/npm_and_yarn/next-15.0.0' },
+        },
+      })
+      expect(t).toBeNull()
+    })
+
+    it('check_suite com PR de bot misturada → filtra só a de bot, mantém as do Supremo', () => {
+      const t = parseWebhookForReconcile('check_suite', {
+        action: 'completed',
+        installation,
+        repository: repo,
+        check_suite: {
+          head_sha: 'x',
+          pull_requests: [
+            { number: 3, head: { ref: 'supremo/cp-aaaa' } },
+            { number: 99, head: { ref: 'dependabot/npm_and_yarn/foo' } },
+          ],
+        },
+      })
+      expect(t!.prNumbers).toEqual([3])
+      expect(t!.prNumbers).not.toContain(99)
+    })
+
+    it('check_suite só com PRs de bot → null (nada relevante a reconciliar)', () => {
+      const t = parseWebhookForReconcile('check_suite', {
+        action: 'completed',
+        installation,
+        repository: repo,
+        check_suite: {
+          head_sha: 'x',
+          pull_requests: [{ number: 99, head: { ref: 'dependabot/npm_and_yarn/foo' } }],
+        },
+      })
+      expect(t).toBeNull()
+    })
   })
 
   it('workflow_run é IGNORADO (least privilege: evita exigir Actions:read)', () => {

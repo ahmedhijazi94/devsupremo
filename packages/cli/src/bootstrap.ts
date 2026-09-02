@@ -244,6 +244,84 @@ const tryExecOut = (cmd: string, args: string[]): string | null => {
   }
 }
 
+/** Como `tryExecOut`, mas rodando dentro de `cwd` (para checar o projeto gerado). */
+const tryExecOutIn = (cmd: string, args: string[], cwd: string): string | null => {
+  try {
+    return execFileSync(cmd, args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    })
+  } catch {
+    return null
+  }
+}
+
+// ── Readiness LOCAL (v3.1 finalização) ───────────────────────────────────────
+//
+// Um E2E real revelou o bootstrap dizendo "pronto" enquanto o primeiro
+// checkpoint falhava: os scripts npm gerados chamam `npx --yes supremo-cli ...`,
+// que resolve a versão PUBLICADA no registry — se ela estiver desatualizada
+// (código novo só em git, ainda não publicado), os comandos de checkpoint/daemon
+// simplesmente não existem nela. `daemonCliOutputLooksValid` roda EXATAMENTE o
+// que `npm run daemon:status` rodaria e confere a forma da saída — pega esse
+// gap ANTES de declarar o projeto pronto, em vez de o usuário descobrir no
+// primeiro checkpoint.
+
+/**
+ * PURA: a saída de `daemon --status` tem a forma esperada (CLI compatível)?
+ * O formato é JSON machine-readable ({"running":bool,...}) — uma CLI publicada
+ * desatualizada cai na ponte MCP (texto de erro) ou recusa a opção, e nenhum
+ * dos dois faz JSON.parse virar um objeto com "running" booleano.
+ */
+export function daemonCliOutputLooksValid(output: string | null): boolean {
+  if (output === null) return false
+  try {
+    const parsed: unknown = JSON.parse(output)
+    return (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof (parsed as { running?: unknown }).running === 'boolean'
+    )
+  } catch {
+    return false
+  }
+}
+
+export interface LocalReadiness {
+  ok: boolean
+  issues: string[]
+}
+
+/** PURA: decide se o workflow local prometido está de fato operacional. */
+export function validateLocalReadiness(input: {
+  projectJsonOk: boolean
+  hasDaemonIdentity: boolean
+  daemonRunning: boolean
+  npmScriptsCompatible: boolean | null // null = não aplicável (sem identidade de daemon)
+}): LocalReadiness {
+  const issues: string[] = []
+  if (!input.projectJsonOk) issues.push('.supremo/project.json ausente/incompleto')
+  if (input.hasDaemonIdentity) {
+    if (!input.daemonRunning) issues.push('checkpoint daemon não subiu')
+    if (input.npmScriptsCompatible === false) {
+      issues.push(
+        'os scripts npm gerados (checkpoint/daemon) não batem com a CLI resolvida ' +
+          'por npx — pode estar desatualizada (aguarde a publicação mais recente e ' +
+          'rode "npm run daemon:ensure" de novo)',
+      )
+    }
+  }
+  return { ok: issues.length === 0, issues }
+}
+
+/** Roda o mesmo comando que `npm run daemon:status` rodaria, no projeto gerado. */
+function checkNpmScriptsCompatible(dest: string): boolean {
+  return daemonCliOutputLooksValid(
+    tryExecOutIn('npx', ['--yes', 'supremo-cli', 'daemon', '--status'], dest),
+  )
+}
+
 /**
  * Deixa o checkout pronto para o agente (Claude/Codex) operar o Supabase ONLINE
  * de forma AUTOMÁTICA, sem MCP e sem comando manual:
@@ -476,14 +554,25 @@ export async function runBootstrap(opts: {
 
   // v3.1 item 4: identidade da máquina no keychain (nunca no projeto) + daemon de
   // checkpoint pronto. Assim o push é silencioso — o agente só faz checkpoint local.
+  let daemonRunning = false
+  let npmScriptsCompatible: boolean | null = null
   if (config.daemon) {
     try {
       const { resolveKeychain } = await import('./keychain')
       resolveKeychain().save(config.project.id, config.daemon.deviceSecret)
       ok('Máquina autorizada (checkpoint daemon) — identidade no keychain')
-      const { ensureDaemon } = await import('./daemon')
+      const { ensureDaemon, daemonStatus } = await import('./daemon')
       ensureDaemon(dest)
-      ok('Checkpoint daemon no ar — push/PR em background (npm run daemon:status)')
+      daemonRunning = daemonStatus(dest).running
+      if (daemonRunning) {
+        ok('Checkpoint daemon no ar — push/PR em background (npm run daemon:status)')
+      }
+      // Roda o MESMO comando que "npm run daemon:status" rodaria, agora — pega
+      // uma CLI publicada desatualizada ANTES de declarar o projeto pronto.
+      npmScriptsCompatible = checkNpmScriptsCompatible(dest)
+      if (npmScriptsCompatible) {
+        ok('Scripts de checkpoint/daemon compatíveis com a CLI instalada')
+      }
     } catch {
       console.log(
         '• Não consegui preparar o checkpoint daemon automaticamente.\n' +
@@ -492,7 +581,26 @@ export async function runBootstrap(opts: {
     }
   }
 
-  console.log(`\nProjeto pronto:\n\n  ${dest}\n`)
+  // Só declara "pronto" se o workflow LOCAL prometido está de fato operacional
+  // (não só "os passos rodaram sem lançar exceção").
+  const readiness = validateLocalReadiness({
+    projectJsonOk: fs.existsSync(path.join(dest, '.supremo', 'project.json')),
+    hasDaemonIdentity: Boolean(config.daemon),
+    daemonRunning,
+    npmScriptsCompatible,
+  })
+
+  if (readiness.ok) {
+    console.log(`\nProjeto pronto:\n\n  ${dest}\n`)
+  } else {
+    console.log(`\n⚠ Projeto criado, mas o workflow local não está 100% operacional:\n`)
+    for (const issue of readiness.issues) console.log(`  • ${issue}`)
+    console.log(
+      `\n  O código e o preview funcionam normalmente; resolva o(s) ponto(s) acima\n` +
+        `  antes de contar com checkpoint/publicação automáticos.\n\n  Pasta: ${dest}\n`,
+    )
+  }
+
   if (opts.start) {
     // v3.1: preview PERSISTENTE (detached) — sobrevive aos turnos do agente.
     console.log('Subindo o preview persistente…\n')

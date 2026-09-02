@@ -52,9 +52,33 @@ function num(v: unknown): number | null {
 function str(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null
 }
+
+/**
+ * Namespace EXCLUSIVO das branches de integração que o Supremo publica
+ * (ver `INTEGRATION_BRANCH_PREFIX` em `checkpoint/integration.ts`). Nenhum
+ * checkpoint, humano ou bot cria PR nesse namespace por fora do Supremo.
+ */
+const SUPREMO_INTEGRATION_BRANCH_PREFIX = 'supremo/'
+
+/**
+ * Só uma PR cujo HEAD está no namespace de integração do Supremo pode disparar
+ * reconciliation. SEM isto, o webhook reconcilia QUALQUER PR do repositório —
+ * inclusive uma do Dependabot ou de um colaborador externo — e:
+ *   (a) sobrescreve o `integration_state` do PROJETO com o resultado de uma PR
+ *       que não tem nada a ver com nenhum checkpoint do usuário;
+ *   (b) no modo `supremo_managed`, pode MERGEAR essa PR sozinho assim que os
+ *       checks dela ficarem verdes — uma escrita não pedida pelo usuário.
+ * Filtrar aqui é suficiente e correto: o namespace é a fronteira de autoridade,
+ * não uma lista de exceções.
+ */
+export function isSupremoIntegrationRef(ref: string | null): boolean {
+  return ref !== null && ref.startsWith(SUPREMO_INTEGRATION_BRANCH_PREFIX)
+}
+
 function prNumbersFrom(list: unknown): number[] {
   if (!Array.isArray(list)) return []
   return list
+    .filter((pr) => isSupremoIntegrationRef(str(((pr as Json)?.head as Json)?.ref)))
     .map((pr) => num((pr as Json)?.number))
     .filter((n): n is number => n !== null)
 }
@@ -96,6 +120,10 @@ export function parseWebhookForReconcile(
     const pr = payload.pull_request as Json | undefined
     const prNumber = num(pr?.number)
     if (prNumber === null) return null
+    // Bot/colaborador externo (ex.: Dependabot) abre PR fora do namespace
+    // supremo/ o tempo todo — não é um checkpoint, e não deve tocar
+    // integration_state nem ser candidata a merge pelo Merge Controller.
+    if (!isSupremoIntegrationRef(str((pr?.head as Json)?.ref))) return null
     return {
       ...base,
       prNumbers: [prNumber],

@@ -1,0 +1,15 @@
+# Config do Gitleaks (CLI oficial pinada, ver .github/workflows/ci.yml — job
+# "secrets"). `useDefault = true` HERDA o ruleset padrão do gitleaks inteiro;
+# isto só ADICIONA um allowlist por path, nunca substitui/enfraquece uma regra.
+title = "Supremo — gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Artefatos de BUILD (gerados, não escritos à mão) — bundle minificado do esbuild bate em heurísticos de segredo por padrão sintático (destructuring/imports dinâmicos), não por conteúdo sensível. Excluir por path é o fix correto aqui: um fingerprint por commit+linha (.gitleaksignore) quebraria a CADA rebuild do CLI, que é rotina neste repo. Os próprios arquivos de config do gitleaks também ficam fora: o COMENTÁRIO que descreve um achado (\"bate no heurístico X\") naturalmente contém o padrão que disparou o achado original — histórico de commits antigos desses arquivos re-dispara sem isto, e não é conteúdo sensível, é meta-documentação sobre o scanner."
+paths = [
+  '''packages/cli/dist/.*''',
+  '''^\.gitleaksignore$''',
+  '''^\.gitleaks\.toml$''',
+]

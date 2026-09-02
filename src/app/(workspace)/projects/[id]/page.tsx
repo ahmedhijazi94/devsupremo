@@ -26,6 +26,9 @@ import {
   ActivityFeed,
   type ActivityItem,
 } from '@/components/projects/activity-feed'
+import { CheckpointHistory } from '@/components/projects/checkpoint-history'
+import { humanCheckpointStatus } from '@/lib/checkpoint/restore'
+import type { CheckpointHistoryItem } from '@/actions/checkpoints'
 import {
   connectGithubAccount,
   connectSupabaseAccount,
@@ -79,7 +82,7 @@ export default async function ProjectPage({
   } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [{ data }, { data: activity }] = await Promise.all([
+  const [{ data }, { data: activity }, { data: checkpointRows }] = await Promise.all([
     supabase
       .from('projects')
       .select(
@@ -98,6 +101,16 @@ export default async function ProjectPage({
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(25),
+    // v3.1 finalização — Histórico: cada checkpoint (pedido concluído) do
+    // workflow local (checkpoint/daemon), RLS-scoped (checkpoints_owner_select).
+    supabase
+      .from('checkpoints')
+      .select(
+        'id, parent_checkpoint_id, summary, risk_level, push_status, integration_status, migrations, pr_number, created_at, restored_from_checkpoint_id',
+      )
+      .eq('project_id', id)
+      .order('created_at', { ascending: false })
+      .limit(50),
   ])
 
   if (!data) notFound()
@@ -111,6 +124,23 @@ export default async function ProjectPage({
     provisioned && project.template_version !== TEMPLATE_VERSION
 
   const capabilities = (project.capabilities ?? []) as CapabilityId[]
+
+  // v3.1 finalização — Histórico: status técnico → humano (a UI nunca mostra
+  // jargão de Git; ver "Detalhe da feature" no relatório).
+  const checkpoints: CheckpointHistoryItem[] = (checkpointRows ?? []).map((r) => ({
+    id: r.id as string,
+    parentCheckpointId: (r.parent_checkpoint_id as string | null) ?? null,
+    summary: r.summary as string,
+    riskLevel: r.risk_level as CheckpointHistoryItem['riskLevel'],
+    status: humanCheckpointStatus(
+      r.push_status as Parameters<typeof humanCheckpointStatus>[0],
+      r.integration_status as Parameters<typeof humanCheckpointStatus>[1],
+    ),
+    migrations: Array.isArray(r.migrations) ? (r.migrations as string[]) : [],
+    prNumber: (r.pr_number as number | null) ?? null,
+    createdAt: r.created_at as string,
+    restoredFromCheckpointId: (r.restored_from_checkpoint_id as string | null) ?? null,
+  }))
 
   // Comando de bootstrap (device flow) — só o project-id, nada sensível.
   const configuredUrl = process.env.NEXT_PUBLIC_APP_URL
@@ -237,6 +267,24 @@ export default async function ProjectPage({
         )}
 
         {provisioned && <SecretsCard projectId={project.id} />}
+
+        {/* Histórico (v3.1) — cada pedido concluído no editor local, sem precisar
+            abrir o GitHub. Só aparece quando o projeto já usa checkpoint/daemon. */}
+        {checkpoints.length > 0 && (
+          <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">
+            <div className="mb-3 shrink-0">
+              <h2 className="text-sm font-semibold">Histórico</h2>
+              <p className="text-muted text-xs">
+                Cada alteração pedida no seu editor. Publicação, CI e segurança
+                acontecem em background — o GitHub é infraestrutura, não algo que
+                você precisa abrir.
+              </p>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <CheckpointHistory projectId={project.id} items={checkpoints} />
+            </div>
+          </section>
+        )}
 
         {/* Atividade */}
         <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">

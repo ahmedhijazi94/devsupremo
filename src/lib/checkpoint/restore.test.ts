@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  authorizeRestoreReport,
   authorizeRestoreRequest,
   humanCheckpointStatus,
   humanRestoreStatus,
@@ -25,6 +26,32 @@ describe('authorizeRestoreRequest — fail-closed', () => {
       target: { id: 'cpB', projectId: 'proj-B' },
     })
     expect(d).toEqual({ ok: false, reason: 'project_mismatch' })
+  })
+})
+
+describe('authorizeRestoreReport — fail-closed contra IDOR (device autenticado ≠ autorizado)', () => {
+  it('device é dono do projeto do restoreRequest → autoriza', () => {
+    const d = authorizeRestoreReport({
+      device: { ownerUserId: 'user-1' },
+      restoreRequest: { projectOwnerUserId: 'user-1' },
+    })
+    expect(d).toEqual({ ok: true })
+  })
+
+  it('restoreRequestId inexistente → recusa (nunca revela se existe)', () => {
+    const d = authorizeRestoreReport({
+      device: { ownerUserId: 'user-1' },
+      restoreRequest: null,
+    })
+    expect(d).toEqual({ ok: false, reason: 'restore_request_not_found' })
+  })
+
+  it('restoreRequest de OUTRO dono → recusa (device autenticado NÃO é suficiente — IDOR)', () => {
+    const d = authorizeRestoreReport({
+      device: { ownerUserId: 'user-1' },
+      restoreRequest: { projectOwnerUserId: 'intruso' },
+    })
+    expect(d).toEqual({ ok: false, reason: 'device_owner_mismatch' })
   })
 })
 

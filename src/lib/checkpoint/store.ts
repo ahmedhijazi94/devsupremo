@@ -189,6 +189,31 @@ export async function getCheckpointForRestore(
 }
 
 /**
+ * Dono do projeto de um pedido de restore (join restore_request → project) —
+ * usado por /restore-report para confirmar que o device autenticado só fecha
+ * pedidos do PRÓPRIO dono (ver `authorizeRestoreReport`, fail-closed contra
+ * IDOR). null quando o pedido não existe.
+ */
+export async function getRestoreRequestProjectOwner(
+  client: SupabaseClient,
+  restoreRequestId: string,
+): Promise<{ projectOwnerUserId: string } | null> {
+  const { data: req } = await client
+    .from('checkpoint_restore_requests')
+    .select('project_id')
+    .eq('id', restoreRequestId)
+    .maybeSingle()
+  if (!req) return null
+  const { data: proj } = await client
+    .from('projects')
+    .select('user_id')
+    .eq('id', req.project_id as string)
+    .maybeSingle()
+  if (!proj) return null
+  return { projectOwnerUserId: proj.user_id as string }
+}
+
+/**
  * Reivindica (poll-and-claim atômico) os pedidos PENDENTES de um projeto para
  * este device — evita dois daemons aplicarem o mesmo restore. `pending → claimed`
  * só se ainda pending (condição no UPDATE); devolve só os que este device pegou.

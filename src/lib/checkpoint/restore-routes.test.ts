@@ -24,7 +24,11 @@ describe('restore-poll — reivindica sem tocar no GitHub', () => {
     expect(pollRoute).toContain('claimPendingRestoreRequests')
   })
   it('NÃO fala com a API do GitHub nem menciona token/installation', () => {
-    expect(pollRoute).not.toMatch(/api\.github\.com/)
+    // .toContain (substring literal), não regex: é isso que checamos — "essa
+    // string aparece em algum lugar do arquivo" — e evita o falso positivo do
+    // CodeQL js/regex/missing-regexp-anchor (a checagem não é validação de URL
+    // não-âncorada, é presença literal de texto no código-fonte do arquivo).
+    expect(pollRoute).not.toContain('api.github.com')
     expect(pollRoute).not.toMatch(/mintRepoScopedToken|installationCreds|appTokenForRepo/)
   })
 })
@@ -33,12 +37,16 @@ describe('restore-report — só fecha o pedido, não publica nada', () => {
   it('autentica o device (fail-closed) antes de qualquer coisa', () => {
     expect(reportRoute).toContain('authenticateDeviceSecret')
   })
+  it('autoriza o restoreRequestId contra o DONO do device (IDOR — ver route.test.ts)', () => {
+    expect(reportRoute).toContain('authorizeRestoreReport')
+    expect(reportRoute).toContain('getRestoreRequestProjectOwner')
+  })
   it('só dois desfechos possíveis: applied | failed (discriminated union)', () => {
     expect(reportRoute).toContain("z.literal('applied')")
     expect(reportRoute).toContain("z.literal('failed')")
   })
   it('NÃO fala com a API do GitHub nem menciona token/installation', () => {
-    expect(reportRoute).not.toMatch(/api\.github\.com/)
+    expect(reportRoute).not.toContain('api.github.com')
     expect(reportRoute).not.toMatch(/mintRepoScopedToken|installationCreds|appTokenForRepo/)
   })
 })

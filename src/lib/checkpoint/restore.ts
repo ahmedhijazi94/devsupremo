@@ -31,6 +31,31 @@ export function authorizeRestoreRequest(input: {
   return { ok: true }
 }
 
+export type RestoreReportAuthDecision =
+  | { ok: true }
+  | { ok: false; reason: 'restore_request_not_found' | 'device_owner_mismatch' }
+
+/**
+ * Autoriza `/api/checkpoint/restore-report`: o device autenticado só pode
+ * fechar (applied/failed) um pedido de restore que pertence a um PROJETO DO
+ * PRÓPRIO DONO do device — nunca o de outro usuário. `mcpDataClient()` (a
+ * rota) usa service_role (ignora RLS), então esta checagem é a ÚNICA barreira
+ * de dono aqui; sem ela, qualquer device autenticado (de qualquer projeto)
+ * conseguiria reportar applied/failed num restoreRequestId arbitrário — um
+ * IDOR clássico (objeto acessado por id sem checar dono). Fail-closed: pedido
+ * inexistente OU de outro dono → mesma recusa (404), nunca revela qual caso é.
+ */
+export function authorizeRestoreReport(input: {
+  device: { ownerUserId: string }
+  restoreRequest: { projectOwnerUserId: string } | null
+}): RestoreReportAuthDecision {
+  if (!input.restoreRequest) return { ok: false, reason: 'restore_request_not_found' }
+  if (input.restoreRequest.projectOwnerUserId !== input.device.ownerUserId) {
+    return { ok: false, reason: 'device_owner_mismatch' }
+  }
+  return { ok: true }
+}
+
 // ── Status humano (a UI nunca mostra jargão de Git) ─────────────────────────
 
 export type PushStatusRow = 'publishing' | 'published' | 'integrated' | 'failed'

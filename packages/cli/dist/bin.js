@@ -35,6 +35,60 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/auth.ts
+function openBrowser(url) {
+  const [cmd, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+  return new Promise((resolve) => {
+    try {
+      const child = (0, import_node_child_process2.execFile)(cmd, [...args], (err) => resolve(!err));
+      child.on("error", () => resolve(false));
+    } catch {
+      resolve(false);
+    }
+  });
+}
+async function ensureAuthorized(provider, io = defaultAuthIO) {
+  if (await provider.isAuthorized()) {
+    io.ok(`${provider.name} autorizado`);
+    return true;
+  }
+  const message = provider.prompt ?? `${provider.name} precisa ser autorizado nesta m\xE1quina. Pressione ENTER para continuar\u2026`;
+  await io.waitForEnter(message);
+  await provider.authorize();
+  if (await provider.isAuthorized()) {
+    io.ok(`${provider.name} autorizado`);
+    return true;
+  }
+  return false;
+}
+var import_node_child_process2, import_node_readline, defaultAuthIO;
+var init_auth = __esm({
+  "src/auth.ts"() {
+    "use strict";
+    import_node_child_process2 = require("node:child_process");
+    import_node_readline = __toESM(require("node:readline"));
+    defaultAuthIO = {
+      ok: (m) => console.log(`\u2713 ${m}`),
+      info: (m) => console.log(m),
+      waitForEnter: (message) => new Promise((resolve) => {
+        if (!process.stdin.isTTY) {
+          console.log(message);
+          resolve();
+          return;
+        }
+        const rl = import_node_readline.default.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        rl.question(`${message} `, () => {
+          rl.close();
+          resolve();
+        });
+      })
+    };
+  }
+});
+
 // src/bootstrap.ts
 var bootstrap_exports = {};
 __export(bootstrap_exports, {
@@ -126,7 +180,7 @@ async function pollForConfig(baseUrl, deviceCode, intervalSec, expiresAt) {
   }
   throw new Error("Tempo de autoriza\xE7\xE3o esgotado.");
 }
-function linkSupabaseRemote(dest, supabase) {
+async function linkSupabaseRemote(dest, supabase) {
   const { projectRef, dbPassword, majorVersion } = supabase;
   const { bin: sb, local } = resolveSupabaseBin(dest);
   const manual = `cd ${dest} && npx supabase link --project-ref ${projectRef}`;
@@ -142,47 +196,46 @@ function linkSupabaseRemote(dest, supabase) {
     return false;
   }
   ok(`Supabase CLI dispon\xEDvel (${local ? "local pinada" : "global"} v${version.trim()})`);
-  const login = () => {
-    console.log("\nAutorize o Supabase no navegador (login oficial)\u2026");
-    try {
-      run(sb, ["login"], dest);
-      return true;
-    } catch {
-      return false;
+  const supabaseOk = await ensureAuthorized({
+    name: "Supabase",
+    prompt: "Supabase precisa ser autorizado nesta m\xE1quina. Pressione ENTER para continuar\u2026",
+    isAuthorized: () => tryExecOut(sb, ["projects", "list"]) !== null,
+    authorize: () => {
+      try {
+        run(sb, ["login"], dest);
+      } catch {
+      }
     }
-  };
-  let projects = tryExecOut(sb, ["projects", "list"]);
-  if (projects === null) {
-    if (!login()) {
-      console.log(`\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
+  });
+  if (!supabaseOk) {
+    console.log(`\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
     ${manual}
 `);
-      return false;
-    }
-    projects = tryExecOut(sb, ["projects", "list"]);
-  } else if (!projectListHasRef(projects, projectRef)) {
-    console.log("\n\u2022 A conta Supabase logada n\xE3o \xE9 dona deste projeto \u2014 trocando de conta.");
-    tryExec(sb, ["logout"]);
-    if (!login()) {
-      console.log(`\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
-    ${manual}
-`);
-      return false;
-    }
-    projects = tryExecOut(sb, ["projects", "list"]);
-  }
-  if (projects === null || !projectListHasRef(projects, projectRef)) {
-    console.log(
-      `
-\u2022 A conta logada ainda n\xE3o tem acesso ao projeto ${projectRef}.
-  Entre com a MESMA conta Supabase que voc\xEA conectou ao Supremo (a dona
-  deste projeto): npx supabase login && ( ${manual} )
-`
-    );
     return false;
   }
-  ok("Conta Supabase autorizada");
-  ok("Projeto remoto confirmado");
+  let projects = tryExecOut(sb, ["projects", "list"]) ?? "";
+  if (!projectListHasRef(projects, projectRef)) {
+    await defaultAuthIO.waitForEnter(
+      "A conta Supabase logada n\xE3o \xE9 a dona deste projeto. Pressione ENTER para entrar na conta certa\u2026"
+    );
+    tryExec(sb, ["logout"]);
+    try {
+      run(sb, ["login"], dest);
+    } catch {
+    }
+    projects = tryExecOut(sb, ["projects", "list"]) ?? "";
+    if (!projectListHasRef(projects, projectRef)) {
+      console.log(
+        `
+\u2022 A conta logada ainda n\xE3o \xE9 a dona do projeto ${projectRef}.
+  Entre com a MESMA conta Supabase que voc\xEA conectou ao Supremo:
+    npx supabase login && ( ${manual} )
+`
+      );
+      return false;
+    }
+  }
+  ok("Conta correta");
   if (majorVersion) {
     try {
       const cfgPath = import_node_path2.default.join(dest, "supabase", "config.toml");
@@ -194,7 +247,7 @@ function linkSupabaseRemote(dest, supabase) {
     }
   }
   try {
-    (0, import_node_child_process2.execFileSync)(sb, supabaseLinkArgs(projectRef), {
+    (0, import_node_child_process3.execFileSync)(sb, supabaseLinkArgs(projectRef), {
       cwd: dest,
       env: supabaseLinkEnv(process.env, dbPassword),
       stdio: ["ignore", "ignore", "inherit"]
@@ -214,7 +267,7 @@ function linkSupabaseRemote(dest, supabase) {
     );
     return false;
   }
-  ok(`Supabase linkado: ${projectRef}`);
+  ok(`Projeto linkado: ${projectRef}`);
   const dry = tryExecOut(sb, ["db", "push", "--dry-run"]);
   if (dry !== null && migrationDryRunSynced(dry)) {
     ok("Migration history sincronizado");
@@ -235,20 +288,32 @@ function readLinkedRef(dest) {
 async function runBootstrap(opts) {
   const baseUrl = opts.url.replace(/\/$/, "");
   console.log("\nSupremo Bootstrap\n");
-  const flow = await startDeviceFlow(baseUrl, opts.projectId);
-  console.log("Abra este link no navegador para autorizar esta m\xE1quina:\n");
-  console.log(`  ${flow.verificationUriComplete}`);
-  console.log(`
-  C\xF3digo: ${flow.userCode}
-`);
-  console.log("Aguardando autoriza\xE7\xE3o\u2026");
-  const config = await pollForConfig(
-    baseUrl,
-    flow.deviceCode,
-    flow.intervalSec,
-    flow.expiresAt
-  );
-  ok("Supremo autorizado");
+  const held = { config: null };
+  const supremoOk = await ensureAuthorized({
+    name: "Supremo",
+    prompt: "Supremo precisa autorizar esta m\xE1quina. Pressione ENTER para continuar\u2026",
+    isAuthorized: () => held.config !== null,
+    authorize: async () => {
+      const flow = await startDeviceFlow(baseUrl, opts.projectId);
+      const opened = await openBrowser(flow.verificationUriComplete);
+      if (!opened) {
+        console.log("\n  N\xE3o consegui abrir o navegador. Abra manualmente:");
+        console.log(`  ${flow.verificationUriComplete}`);
+        console.log(`  C\xF3digo: ${flow.userCode}`);
+      }
+      console.log("Aguardando autoriza\xE7\xE3o\u2026");
+      held.config = await pollForConfig(
+        baseUrl,
+        flow.deviceCode,
+        flow.intervalSec,
+        flow.expiresAt
+      );
+    }
+  });
+  const config = held.config;
+  if (!supremoOk || !config) {
+    throw new Error("Supremo n\xE3o autorizado \u2014 rode o bootstrap de novo.");
+  }
   console.log(`  Projeto: ${config.project.name}`);
   const dest = targetDir(config.repo.fullName, opts.dir);
   if (import_node_fs2.default.existsSync(dest)) {
@@ -266,7 +331,7 @@ async function runBootstrap(opts) {
   ok("Environment p\xFAblico configurado");
   run("npm", ["ci"], dest);
   ok("Depend\xEAncias instaladas");
-  const linked = config.supabase?.projectRef ? linkSupabaseRemote(dest, config.supabase) : false;
+  const linked = config.supabase?.projectRef ? await linkSupabaseRemote(dest, config.supabase) : false;
   try {
     run("npm", ["run", "setup:local"], dest);
     ok("Verify passou");
@@ -290,19 +355,20 @@ Projeto pronto:
 `);
   }
 }
-var import_node_child_process2, import_node_fs2, import_node_path2, sleep, run, ok, tryExec, tryExecOut;
+var import_node_child_process3, import_node_fs2, import_node_path2, sleep, run, ok, tryExec, tryExecOut;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
-    import_node_child_process2 = require("node:child_process");
+    import_node_child_process3 = require("node:child_process");
     import_node_fs2 = __toESM(require("node:fs"));
     import_node_path2 = __toESM(require("node:path"));
+    init_auth();
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    run = (cmd, args, cwd, env) => (0, import_node_child_process2.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
+    run = (cmd, args, cwd, env) => (0, import_node_child_process3.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
     ok = (label) => console.log(`\u2713 ${label}`);
     tryExec = (cmd, args) => {
       try {
-        (0, import_node_child_process2.execFileSync)(cmd, args, { stdio: "ignore" });
+        (0, import_node_child_process3.execFileSync)(cmd, args, { stdio: "ignore" });
         return true;
       } catch {
         return false;
@@ -310,7 +376,7 @@ var init_bootstrap = __esm({
     };
     tryExecOut = (cmd, args) => {
       try {
-        return (0, import_node_child_process2.execFileSync)(cmd, args, {
+        return (0, import_node_child_process3.execFileSync)(cmd, args, {
           stdio: ["ignore", "pipe", "ignore"],
           encoding: "utf8"
         });
@@ -390,7 +456,7 @@ async function forward(message) {
   }
 }
 function main() {
-  const rl = (0, import_node_readline.createInterface)({ input: process.stdin, terminal: false });
+  const rl = (0, import_node_readline2.createInterface)({ input: process.stdin, terminal: false });
   let queue = Promise.resolve();
   rl.on("line", (line) => {
     const trimmed = line.trim();
@@ -409,11 +475,11 @@ function main() {
   });
   logStderr(`ponte ativa \u2192 ${endpoint}`);
 }
-var import_node_readline, endpoint, token;
+var import_node_readline2, endpoint, token;
 var init_index = __esm({
   "src/index.ts"() {
     "use strict";
-    import_node_readline = require("node:readline");
+    import_node_readline2 = require("node:readline");
     endpoint = process.env.SUPREMO_URL;
     token = process.env.SUPREMO_TOKEN;
     if (!endpoint) {

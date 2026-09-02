@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { defaultAuthIO, ensureAuthorized, openBrowser } from './auth'
 
 /**
  * `supremo bootstrap <project-id>` — device flow + workspace local pronto.
@@ -254,10 +255,10 @@ const tryExecOut = (cmd: string, args: string[]): string | null => {
  * Retorna true só quando o checkout ficou linkado e validado. Falha aqui não
  * quebra o bootstrap (o app local já está pronto); sempre imprime o passo manual.
  */
-function linkSupabaseRemote(
+async function linkSupabaseRemote(
   dest: string,
   supabase: { projectRef: string; dbPassword?: string; majorVersion?: number },
-): boolean {
+): Promise<boolean> {
   const { projectRef, dbPassword, majorVersion } = supabase
   // CLI LOCAL PINADA do projeto (node_modules/.bin/supabase) — nunca a global.
   // Assim a versão é a mesma em qualquer máquina/agente.
@@ -274,45 +275,50 @@ function linkSupabaseRemote(
   }
   ok(`Supabase CLI disponível (${local ? 'local pinada' : 'global'} v${version.trim()})`)
 
-  const login = (): boolean => {
-    console.log('\nAutorize o Supabase no navegador (login oficial)…')
-    try {
-      run(sb, ['login'], dest)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  // Conta certa: uma chamada a `projects list` detecta login E acesso ao projeto.
-  let projects = tryExecOut(sb, ['projects', 'list'])
-  if (projects === null) {
-    // não autenticado → login guiado
-    if (!login()) {
-      console.log(`• Login do Supabase não concluído — pulei o link.\n    ${manual}\n`)
-      return false
-    }
-    projects = tryExecOut(sb, ['projects', 'list'])
-  } else if (!projectListHasRef(projects, projectRef)) {
-    // autenticado na conta ERRADA → troca de conta automaticamente (login no browser)
-    console.log('\n• A conta Supabase logada não é dona deste projeto — trocando de conta.')
-    tryExec(sb, ['logout'])
-    if (!login()) {
-      console.log(`• Login do Supabase não concluído — pulei o link.\n    ${manual}\n`)
-      return false
-    }
-    projects = tryExecOut(sb, ['projects', 'list'])
-  }
-  if (projects === null || !projectListHasRef(projects, projectRef)) {
-    console.log(
-      `\n• A conta logada ainda não tem acesso ao projeto ${projectRef}.\n` +
-        `  Entre com a MESMA conta Supabase que você conectou ao Supremo (a dona\n` +
-        `  deste projeto): npx supabase login && ( ${manual} )\n`,
-    )
+  // Autorização do Supabase pelo MESMO padrão único (Auth Orchestrator): detecta
+  // se já está logado; se não, ENTER → `supabase login` (abre o browser oficial e
+  // aguarda) → detecta. Nunca inventamos auth própria nem enviamos o token do backend.
+  const supabaseOk = await ensureAuthorized({
+    name: 'Supabase',
+    prompt: 'Supabase precisa ser autorizado nesta máquina. Pressione ENTER para continuar…',
+    isAuthorized: () => tryExecOut(sb, ['projects', 'list']) !== null,
+    authorize: () => {
+      try {
+        run(sb, ['login'], dest)
+      } catch {
+        // o re-check do isAuthorized decide o sucesso
+      }
+    },
+  })
+  if (!supabaseOk) {
+    console.log(`• Login do Supabase não concluído — pulei o link.\n    ${manual}\n`)
     return false
   }
-  ok('Conta Supabase autorizada')
-  ok('Projeto remoto confirmado')
+
+  // Conta correta (dona do projeto). Se for a errada, troca de conta pelo mesmo
+  // padrão (ENTER → login na conta certa), sem pedir comando manual.
+  let projects = tryExecOut(sb, ['projects', 'list']) ?? ''
+  if (!projectListHasRef(projects, projectRef)) {
+    await defaultAuthIO.waitForEnter(
+      'A conta Supabase logada não é a dona deste projeto. Pressione ENTER para entrar na conta certa…',
+    )
+    tryExec(sb, ['logout'])
+    try {
+      run(sb, ['login'], dest)
+    } catch {
+      // re-check abaixo
+    }
+    projects = tryExecOut(sb, ['projects', 'list']) ?? ''
+    if (!projectListHasRef(projects, projectRef)) {
+      console.log(
+        `\n• A conta logada ainda não é a dona do projeto ${projectRef}.\n` +
+          `  Entre com a MESMA conta Supabase que você conectou ao Supremo:\n` +
+          `    npx supabase login && ( ${manual} )\n`,
+      )
+      return false
+    }
+  }
+  ok('Conta correta')
 
   // Alinha a versão do Postgres no config.toml (evita "Local database version differs").
   if (majorVersion) {
@@ -349,7 +355,7 @@ function linkSupabaseRemote(
     )
     return false
   }
-  ok(`Supabase linkado: ${projectRef}`)
+  ok(`Projeto linkado: ${projectRef}`)
 
   // Confirma o histórico sincronizado (dry-run, SEM mutação).
   const dry = tryExecOut(sb, ['db', 'push', '--dry-run'])
@@ -393,19 +399,35 @@ export async function runBootstrap(opts: {
   const baseUrl = opts.url.replace(/\/$/, '')
   console.log('\nSupremo Bootstrap\n')
 
-  const flow = await startDeviceFlow(baseUrl, opts.projectId)
-  console.log('Abra este link no navegador para autorizar esta máquina:\n')
-  console.log(`  ${flow.verificationUriComplete}`)
-  console.log(`\n  Código: ${flow.userCode}\n`)
-  console.log('Aguardando autorização…')
-
-  const config = await pollForConfig(
-    baseUrl,
-    flow.deviceCode,
-    flow.intervalSec,
-    flow.expiresAt,
-  )
-  ok('Supremo autorizado')
+  // Device flow do Supremo pelo padrão único do Auth Orchestrator: ENTER → abre o
+  // browser no fluxo oficial → aguarda → detecta. URL/código só como fallback.
+  // (holder para o config, que o passo authorize preenche.)
+  const held: { config: BootstrapConfig | null } = { config: null }
+  const supremoOk = await ensureAuthorized({
+    name: 'Supremo',
+    prompt: 'Supremo precisa autorizar esta máquina. Pressione ENTER para continuar…',
+    isAuthorized: () => held.config !== null,
+    authorize: async () => {
+      const flow = await startDeviceFlow(baseUrl, opts.projectId)
+      const opened = await openBrowser(flow.verificationUriComplete)
+      if (!opened) {
+        console.log('\n  Não consegui abrir o navegador. Abra manualmente:')
+        console.log(`  ${flow.verificationUriComplete}`)
+        console.log(`  Código: ${flow.userCode}`)
+      }
+      console.log('Aguardando autorização…')
+      held.config = await pollForConfig(
+        baseUrl,
+        flow.deviceCode,
+        flow.intervalSec,
+        flow.expiresAt,
+      )
+    },
+  })
+  const config = held.config
+  if (!supremoOk || !config) {
+    throw new Error('Supremo não autorizado — rode o bootstrap de novo.')
+  }
   console.log(`  Projeto: ${config.project.name}`)
 
   const dest = targetDir(config.repo.fullName, opts.dir)
@@ -434,7 +456,7 @@ export async function runBootstrap(opts: {
   // para o agente operar o banco online. Antes do baseline: a experiência final
   // mostra os passos do Supabase e só então "Verify passou".
   const linked = config.supabase?.projectRef
-    ? linkSupabaseRemote(dest, config.supabase)
+    ? await linkSupabaseRemote(dest, config.supabase)
     : false
 
   try {

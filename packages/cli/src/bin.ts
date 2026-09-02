@@ -3,13 +3,17 @@ import { Command } from 'commander'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+// Fonte ÚNICA da versão: o próprio package.json (o esbuild inlina no bundle, e o
+// prepublishOnly reconstrói antes de publicar). Assim `--version` nunca diverge da
+// versão publicada.
+import pkg from '../package.json'
 
 const program = new Command()
 
 program
   .name('supremo')
-  .description('Ponte MCP do Supremo para agentes de IA')
-  .version('2.0.0')
+  .description('CLI do Supremo (bootstrap + ponte MCP)')
+  .version(pkg.version)
 
 const DEFAULT_URL = 'https://supremo.app/api/mcp'
 

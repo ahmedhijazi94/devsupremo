@@ -3870,8 +3870,51 @@ var program = new Command();
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_path3 = __toESM(require("node:path"));
 var import_node_os = __toESM(require("node:os"));
+
+// package.json
+var package_default = {
+  name: "supremo-cli",
+  version: "1.1.1",
+  description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
+  license: "MIT",
+  author: "Supremo",
+  homepage: "https://supremo-three.vercel.app",
+  repository: {
+    type: "git",
+    url: "git+https://github.com/ahmedhijazi94/devsupremo.git",
+    directory: "packages/cli"
+  },
+  keywords: ["supremo", "bootstrap", "scaffold", "cli", "mcp", "device-flow"],
+  bin: {
+    supremo: "./dist/bin.js"
+  },
+  files: ["dist", "README.md"],
+  engines: {
+    node: ">=18"
+  },
+  publishConfig: {
+    access: "public"
+  },
+  scripts: {
+    build: "esbuild src/bin.ts --bundle --platform=node --target=node18 --outfile=dist/bin.js",
+    prepublishOnly: "npm run build",
+    start: "node dist/bin.js",
+    test: "vitest run"
+  },
+  "//": "Sem dependencies de runtime: o esbuild empacota tudo em dist/bin.js (self-contained), ent\xE3o o npx s\xF3 baixa o bundle. Estas ficam em devDependencies porque o build precisa empacot\xE1-las.",
+  devDependencies: {
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    commander: "^12.1.0",
+    dotenv: "^16.4.5",
+    "@types/node": "^20.12.7",
+    esbuild: "^0.20.2",
+    typescript: "^5.4.5"
+  }
+};
+
+// src/bin.ts
 var program2 = new Command();
-program2.name("supremo").description("Ponte MCP do Supremo para agentes de IA").version("2.0.0");
+program2.name("supremo").description("CLI do Supremo (bootstrap + ponte MCP)").version(package_default.version);
 var DEFAULT_URL = "https://supremo.app/api/mcp";
 function claudeDesktopConfigPath() {
   if (process.platform === "darwin") {

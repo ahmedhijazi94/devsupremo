@@ -56,6 +56,29 @@ describe('resolveSelectableOwners — interseção segura', () => {
       resolveSelectableOwners({ userLogin: '', userOrgLogins: [], appInstallations: [] }),
     ).toEqual([])
   })
+
+  it('token SEM acesso a org (userOrgLogins vazio) → só pessoal, Hijaziia ausente', () => {
+    // Simula token sem read:org: /user/orgs volta vazio, mesmo com a App na Hijaziia.
+    const owners = resolveSelectableOwners({
+      userLogin: 'ahmedhijazi94',
+      userOrgLogins: [],
+      appInstallations: appInstalls, // App está na Hijaziia...
+    })
+    expect(owners).toEqual([{ login: 'ahmedhijazi94', type: 'personal' }])
+    expect(owners.map((o) => o.login)).not.toContain('Hijaziia') // ...mas sem acesso, não entra
+  })
+
+  it('token COM Hijaziia acessível → Hijaziia aparece (interseção completa)', () => {
+    const owners = resolveSelectableOwners({
+      userLogin: 'ahmedhijazi94',
+      userOrgLogins: ['Hijaziia'],
+      appInstallations: appInstalls,
+    })
+    expect(owners).toEqual([
+      { login: 'ahmedhijazi94', type: 'personal' },
+      { login: 'Hijaziia', type: 'organization' },
+    ])
+  })
 })
 
 describe('isOwnerAllowed — autorização anti-forja no servidor', () => {

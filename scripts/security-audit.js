@@ -243,6 +243,11 @@ const AUTH_MARKERS = [
   /getSession\s*\(/,
   /resolveMcpToken\s*\(/,
   /parseAuthorizationHeader\s*\(/,
+  // Checkpoint daemon (v3.1): endpoints máquina-a-máquina sem sessão/cookie
+  // (o daemon roda headless na máquina do dev) — autoriza pelo secret do
+  // device, fail-closed, mesmo status de "prova de identidade" que os
+  // marcadores acima dão aos outros mecanismos não-baseados-em-sessão.
+  /authenticateDeviceSecret\s*\(/,
   /CRON_SECRET/,
   // O callback de OAuth roda antes de existir sessão — é ele que a cria.
   /exchangeCodeForSession\s*\(/,

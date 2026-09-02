@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Globe, User, Building2, Check } from 'lucide-react'
 import { createEmptyProject, getOwnerChoices } from '@/actions/projects'
+import { connectGithubAccount } from '@/actions/accounts'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import {
@@ -62,11 +63,13 @@ export function NewProjectForm() {
   type OwnerChoice = { login: string; type: 'personal' | 'organization' }
   const [owners, setOwners] = useState<OwnerChoice[]>([])
   const [selectedOwner, setSelectedOwner] = useState<string>('')
+  const [needsReconnect, setNeedsReconnect] = useState(false)
   useEffect(() => {
     let alive = true
-    void getOwnerChoices().then(({ owners }) => {
+    void getOwnerChoices().then(({ owners, needsReconnect }) => {
       if (!alive) return
       setOwners(owners)
+      setNeedsReconnect(needsReconnect)
       if (owners.length > 0) setSelectedOwner(owners[0]!.login) // 1 owner → auto
     })
     return () => {
@@ -173,6 +176,24 @@ export function NewProjectForm() {
       {owners.length > 0 && (
         <div className="space-y-2">
           <label className="text-sm font-medium">Onde criar o repositório</label>
+          {needsReconnect && (
+            <div className="bg-sunken rounded-[var(--radius-control)] p-3 text-xs">
+              <p className="text-ink font-medium">
+                Só a conta pessoal aparece.
+              </p>
+              <p className="text-muted mt-1">
+                Para criar numa organização, reconecte o GitHub concedendo acesso a
+                organizações (read:org).
+              </p>
+              <button
+                type="button"
+                onClick={() => void connectGithubAccount()}
+                className="text-accent mt-2 font-medium hover:underline"
+              >
+                Reconectar GitHub →
+              </button>
+            </div>
+          )}
           {owners.length === 1 ? (
             <p className="text-muted text-sm">
               <span className="text-ink font-mono">{owners[0]!.login}</span>

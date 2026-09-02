@@ -11,6 +11,7 @@ import {
 } from '@/lib/templates/project-files'
 import { capabilitiesForKind, inferSecurityProfile } from '@/lib/capabilities'
 import { chooseMergeMode, protectionLevelFor } from '@/lib/github/capabilities'
+import { appInstallationToken, findInstallationForAccount } from '@/lib/github/app'
 import { writeIntegrationMeta } from '@/lib/mcp/repository'
 import {
   runProvisioning,
@@ -107,10 +108,34 @@ export async function provisionProject(params: {
   const kind = ((project.kind as string | null) ?? 'solo') as ProjectKind
   const capabilities = capabilitiesForKind(kind)
   const securityProfile = inferSecurityProfile(capabilities, { kind })
-  const githubToken = decryptToken(
+  // Token do usuário (OAuth) — usado no fluxo PESSOAL, preservado.
+  let githubToken = decryptToken(
     (project.github_accounts as { access_token_encrypted: string })
       .access_token_encrypted,
   )
+
+  // v3: owner do repo. Coluna nova (migration 015) — projeto antigo/sem ela cai em
+  // PESSOAL (fluxo OAuth atual, intacto). Para ORGANIZAÇÃO, toda a automação usa o
+  // installation token da App na org (server-side, curto, não persistido, escopado).
+  const ownerType = ((project.github_owner_type as string | null) ?? 'personal') as
+    | 'personal'
+    | 'organization'
+  const ownerLogin =
+    (project.github_owner_login as string | null) ??
+    (project.github_accounts as { login: string }).login
+  let repoCreatePath = '/user/repos'
+  if (ownerType === 'organization') {
+    const inst = await findInstallationForAccount(ownerLogin)
+    if (!inst) {
+      return {
+        error: `A GitHub App do Supremo não está instalada na organização ${ownerLogin}, ou você não tem acesso. Instale a App na org e tente de novo.`,
+      }
+    }
+    // Installation token da ORG substitui o OAuth em TODA a automação do repo.
+    githubToken = await appInstallationToken(inst.id)
+    repoCreatePath = `/orgs/${ownerLogin}/repos`
+  }
+
   const supabaseAccountId = project.supabase_account_id as string | null
   const files = buildProjectFiles({
     projectName: name,
@@ -236,18 +261,18 @@ export async function provisionProject(params: {
             baseSha,
           }
         }
-        const repoResponse = await githubFetch('/user/repos', githubToken, {
+        const repoResponse = await githubFetch(repoCreatePath, githubToken, {
           method: 'POST',
           body: JSON.stringify({
             name,
             description: description || `${name} — criado com Supremo`,
-            private: true,
+            private: true, // default preservado: repo PRIVATE
             auto_init: true,
           }),
         })
         if (!repoResponse.ok) {
           if (repoResponse.status === 422) {
-            throw new Error(`O repositório "${name}" já existe na sua conta GitHub.`)
+            throw new Error(`O repositório "${name}" já existe em ${ownerLogin}.`)
           }
           const detail = (await repoResponse.json()) as { message?: string }
           throw new Error(

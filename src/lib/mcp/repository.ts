@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { freshGithubToken } from '@/lib/github-token'
 import { freshSupabaseToken } from '@/lib/supabase-token'
+import { decryptToken } from '@/lib/crypto'
 import { mcpDataClient } from './tokens'
 import type { Json } from '@/types/database'
 
@@ -261,6 +262,34 @@ export async function getSupabaseCredentials(
   )
 
   return { token, projectRef: project.supabase_project_ref }
+}
+
+/**
+ * Senha do Postgres do projeto (a que o Supremo gerou ao provisionar), em claro.
+ *
+ * Fica guardada ENCRIPTADA (`db_password_encrypted`) e nunca entra no
+ * PROJECT_COLUMNS — por isso a leitura é dedicada aqui. É devolvida só pelo canal
+ * autenticado do bootstrap, para o `supabase link` gravá-la no keychain do SO.
+ * Nunca vai para `.env.local`, Git, argv, log ou stdout. Retorna null se o
+ * projeto não tem senha guardada (projeto antigo/sem Supabase).
+ */
+export async function getSupabaseDbPassword(
+  userId: string,
+  project: ProjectRecord,
+): Promise<string | null> {
+  if (!project.supabase_project_ref) return null
+  const { data, error } = await db()
+    .from('projects')
+    .select('db_password_encrypted')
+    .eq('id', project.id)
+    .eq('user_id', userId)
+    .maybeSingle<{ db_password_encrypted: string | null }>()
+  if (error || !data?.db_password_encrypted) return null
+  try {
+    return decryptToken(data.db_password_encrypted)
+  } catch {
+    return null
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

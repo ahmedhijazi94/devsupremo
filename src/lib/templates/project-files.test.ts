@@ -388,6 +388,52 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
   it('o .env.example não prefixa a service role com NEXT_PUBLIC_', () => {
     expect(file('.env.example')).not.toMatch(/NEXT_PUBLIC_SUPABASE_SERVICE/)
   })
+
+  it('o .gitignore ignora o estado do link do Supabase (supabase/.temp)', () => {
+    const ignore = file('.gitignore')
+    expect(ignore).toContain('supabase/.temp/')
+  })
+})
+
+describe('banco online — regras do agente para o Supabase via CLI', () => {
+  it('agents.md ensina o fluxo de migration como fonte da verdade', () => {
+    const agents = file('agents.md')
+    expect(agents).toContain('Banco de dados online')
+    expect(agents).toContain('supabase migration new')
+    expect(agents).toContain('supabase db push')
+    expect(agents).toContain('supabase/.temp/project-ref')
+  })
+
+  it('agents.md exige confirmação + ref antes de operação destrutiva remota', () => {
+    const agents = file('agents.md')
+    expect(agents).toMatch(/destrutiv/i)
+    expect(agents).toContain('supabase db reset')
+    expect(agents).toContain('confirmação explícita')
+  })
+
+  it('CLAUDE.md proíbe destrutivo no remoto sem confirmação', () => {
+    const claude = file('CLAUDE.md')
+    expect(claude).toContain('supabase db reset')
+    expect(claude).toMatch(/project-ref/)
+  })
+
+  it('config.toml nasce no Postgres 17 (casa com o default do Supabase)', () => {
+    const cfg = file('supabase/config.toml')
+    expect(cfg).toMatch(/major_version\s*=\s*17/)
+    expect(cfg).not.toMatch(/major_version\s*=\s*15/)
+  })
+
+  it('a Supabase CLI é devDependency PINADA (sem depender de global)', () => {
+    const supabase = packageJson.devDependencies.supabase
+    expect(supabase).toBeTruthy()
+    // pinada exata (sem ^ ou ~) para a mesma versão em toda máquina
+    expect(supabase).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  it('agents.md manda usar a CLI local (npx supabase), não a global', () => {
+    expect(file('agents.md')).toContain('npx supabase')
+    expect(file('CLAUDE.md')).toContain('npx supabase')
+  })
 })
 
 describe('primeira tela — o app abre antes de configurar nada', () => {

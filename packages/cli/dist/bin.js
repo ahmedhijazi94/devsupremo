@@ -35,13 +35,73 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/auth.ts
+function openBrowser(url) {
+  const [cmd, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+  return new Promise((resolve) => {
+    try {
+      const child = (0, import_node_child_process2.execFile)(cmd, [...args], (err) => resolve(!err));
+      child.on("error", () => resolve(false));
+    } catch {
+      resolve(false);
+    }
+  });
+}
+async function ensureAuthorized(provider, io = defaultAuthIO) {
+  if (await provider.isAuthorized()) {
+    io.ok(`${provider.name} autorizado`);
+    return true;
+  }
+  const message = provider.prompt ?? `${provider.name} precisa ser autorizado nesta m\xE1quina. Pressione ENTER para continuar\u2026`;
+  await io.waitForEnter(message);
+  await provider.authorize();
+  if (await provider.isAuthorized()) {
+    io.ok(`${provider.name} autorizado`);
+    return true;
+  }
+  return false;
+}
+var import_node_child_process2, import_node_readline, defaultAuthIO;
+var init_auth = __esm({
+  "src/auth.ts"() {
+    "use strict";
+    import_node_child_process2 = require("node:child_process");
+    import_node_readline = __toESM(require("node:readline"));
+    defaultAuthIO = {
+      ok: (m) => console.log(`\u2713 ${m}`),
+      info: (m) => console.log(m),
+      waitForEnter: (message) => new Promise((resolve) => {
+        if (!process.stdin.isTTY) {
+          console.log(message);
+          resolve();
+          return;
+        }
+        const rl = import_node_readline.default.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        rl.question(`${message} `, () => {
+          rl.close();
+          resolve();
+        });
+      })
+    };
+  }
+});
+
 // src/bootstrap.ts
 var bootstrap_exports = {};
 __export(bootstrap_exports, {
   buildEnvFile: () => buildEnvFile,
   cleanRemoteUrl: () => cleanRemoteUrl,
   gitCloneArgs: () => gitCloneArgs,
+  migrationDryRunSynced: () => migrationDryRunSynced,
+  patchConfigMajorVersion: () => patchConfigMajorVersion,
+  projectListHasRef: () => projectListHasRef,
+  resolveSupabaseBin: () => resolveSupabaseBin,
   runBootstrap: () => runBootstrap,
+  supabaseLinkArgs: () => supabaseLinkArgs,
+  supabaseLinkEnv: () => supabaseLinkEnv,
   targetDir: () => targetDir
 });
 function buildEnvFile(env) {
@@ -67,6 +127,27 @@ function gitCloneArgs(repoFullName, branch, dest) {
     cleanRemoteUrl(repoFullName),
     dest
   ];
+}
+function supabaseLinkArgs(projectRef) {
+  return ["link", "--project-ref", projectRef];
+}
+function supabaseLinkEnv(base, dbPassword) {
+  return dbPassword ? { ...base, SUPABASE_DB_PASSWORD: dbPassword } : { ...base };
+}
+function projectListHasRef(projectsListOutput, projectRef) {
+  return projectsListOutput.includes(projectRef);
+}
+function patchConfigMajorVersion(configToml, major) {
+  return configToml.replace(
+    /^(\s*major_version\s*=\s*)\d+/m,
+    `$1${major}`
+  );
+}
+function migrationDryRunSynced(dryRunOutput) {
+  if (/up to date|no schema changes|nothing to push/i.test(dryRunOutput)) {
+    return true;
+  }
+  return !/\b\d{14}_/.test(dryRunOutput);
 }
 async function startDeviceFlow(baseUrl, projectId) {
   const res = await fetch(`${baseUrl}/api/bootstrap/device/start`, {
@@ -99,24 +180,141 @@ async function pollForConfig(baseUrl, deviceCode, intervalSec, expiresAt) {
   }
   throw new Error("Tempo de autoriza\xE7\xE3o esgotado.");
 }
+async function linkSupabaseRemote(dest, supabase) {
+  const { projectRef, dbPassword, majorVersion } = supabase;
+  const { bin: sb, local } = resolveSupabaseBin(dest);
+  const manual = `cd ${dest} && npx supabase link --project-ref ${projectRef}`;
+  const version = tryExecOut(sb, ["--version"]);
+  if (version === null) {
+    console.log(
+      `
+\u2022 Supabase CLI n\xE3o dispon\xEDvel \u2014 pulei o link do banco online.
+  A CLI \xE9 uma devDependency pinada; garanta o "npm ci" e rode:
+    ${manual}
+`
+    );
+    return false;
+  }
+  ok(`Supabase CLI dispon\xEDvel (${local ? "local pinada" : "global"} v${version.trim()})`);
+  const supabaseOk = await ensureAuthorized({
+    name: "Supabase",
+    prompt: "Supabase precisa ser autorizado nesta m\xE1quina. Pressione ENTER para continuar\u2026",
+    isAuthorized: () => tryExecOut(sb, ["projects", "list"]) !== null,
+    authorize: () => {
+      try {
+        run(sb, ["login"], dest);
+      } catch {
+      }
+    }
+  });
+  if (!supabaseOk) {
+    console.log(`\u2022 Login do Supabase n\xE3o conclu\xEDdo \u2014 pulei o link.
+    ${manual}
+`);
+    return false;
+  }
+  let projects = tryExecOut(sb, ["projects", "list"]) ?? "";
+  if (!projectListHasRef(projects, projectRef)) {
+    await defaultAuthIO.waitForEnter(
+      "A conta Supabase logada n\xE3o \xE9 a dona deste projeto. Pressione ENTER para entrar na conta certa\u2026"
+    );
+    tryExec(sb, ["logout"]);
+    try {
+      run(sb, ["login"], dest);
+    } catch {
+    }
+    projects = tryExecOut(sb, ["projects", "list"]) ?? "";
+    if (!projectListHasRef(projects, projectRef)) {
+      console.log(
+        `
+\u2022 A conta logada ainda n\xE3o \xE9 a dona do projeto ${projectRef}.
+  Entre com a MESMA conta Supabase que voc\xEA conectou ao Supremo:
+    npx supabase login && ( ${manual} )
+`
+      );
+      return false;
+    }
+  }
+  ok("Conta correta");
+  if (majorVersion) {
+    try {
+      const cfgPath = import_node_path2.default.join(dest, "supabase", "config.toml");
+      const cfg = import_node_fs2.default.readFileSync(cfgPath, "utf8");
+      const patched = patchConfigMajorVersion(cfg, majorVersion);
+      if (patched !== cfg) import_node_fs2.default.writeFileSync(cfgPath, patched);
+      ok("PostgreSQL/config alinhados");
+    } catch {
+    }
+  }
+  try {
+    (0, import_node_child_process3.execFileSync)(sb, supabaseLinkArgs(projectRef), {
+      cwd: dest,
+      env: supabaseLinkEnv(process.env, dbPassword),
+      stdio: ["ignore", "ignore", "inherit"]
+    });
+  } catch {
+    console.log(`\u2022 N\xE3o consegui linkar automaticamente. Rode:
+    ${manual}
+`);
+    return false;
+  }
+  const linkedRef = readLinkedRef(dest);
+  if (linkedRef !== projectRef) {
+    console.log(
+      `
+\u2022 Diverg\xEAncia no link: esperado ${projectRef}, mas supabase/.temp/project-ref = ${linkedRef ?? "(vazio)"}. Parei antes de qualquer opera\xE7\xE3o no banco.
+`
+    );
+    return false;
+  }
+  ok(`Projeto linkado: ${projectRef}`);
+  const dry = tryExecOut(sb, ["db", "push", "--dry-run"]);
+  if (dry !== null && migrationDryRunSynced(dry)) {
+    ok("Migration history sincronizado");
+  }
+  return true;
+}
+function resolveSupabaseBin(dest) {
+  const localBin = import_node_path2.default.join(dest, "node_modules", ".bin", "supabase");
+  return import_node_fs2.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
+}
+function readLinkedRef(dest) {
+  try {
+    return import_node_fs2.default.readFileSync(import_node_path2.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
+  } catch {
+    return null;
+  }
+}
 async function runBootstrap(opts) {
   const baseUrl = opts.url.replace(/\/$/, "");
   console.log("\nSupremo Bootstrap\n");
-  const flow = await startDeviceFlow(baseUrl, opts.projectId);
-  console.log("Abra este link no navegador para autorizar esta m\xE1quina:\n");
-  console.log(`  ${flow.verificationUriComplete}`);
-  console.log(`
-  C\xF3digo: ${flow.userCode}
-`);
-  console.log("Aguardando autoriza\xE7\xE3o\u2026");
-  const config = await pollForConfig(
-    baseUrl,
-    flow.deviceCode,
-    flow.intervalSec,
-    flow.expiresAt
-  );
-  ok("Autoriza\xE7\xE3o concedida");
-  ok(`Projeto: ${config.project.name}`);
+  const held = { config: null };
+  const supremoOk = await ensureAuthorized({
+    name: "Supremo",
+    prompt: "Supremo precisa autorizar esta m\xE1quina. Pressione ENTER para continuar\u2026",
+    isAuthorized: () => held.config !== null,
+    authorize: async () => {
+      const flow = await startDeviceFlow(baseUrl, opts.projectId);
+      const opened = await openBrowser(flow.verificationUriComplete);
+      if (!opened) {
+        console.log("\n  N\xE3o consegui abrir o navegador. Abra manualmente:");
+        console.log(`  ${flow.verificationUriComplete}`);
+        console.log(`  C\xF3digo: ${flow.userCode}`);
+      }
+      console.log("Aguardando autoriza\xE7\xE3o\u2026");
+      held.config = await pollForConfig(
+        baseUrl,
+        flow.deviceCode,
+        flow.intervalSec,
+        flow.expiresAt
+      );
+    }
+  });
+  const config = held.config;
+  if (!supremoOk || !config) {
+    throw new Error("Supremo n\xE3o autorizado \u2014 rode o bootstrap de novo.");
+  }
+  console.log(`  Projeto: ${config.project.name}`);
   const dest = targetDir(config.repo.fullName, opts.dir);
   if (import_node_fs2.default.existsSync(dest)) {
     throw new Error(`J\xE1 existe ${dest} \u2014 remova ou use --dir para outro caminho.`);
@@ -126,21 +324,21 @@ async function runBootstrap(opts) {
     ...process.env,
     SUPREMO_GIT_TOKEN: config.gitToken
   });
-  ok(`Repository clonado (token ${config.gitTokenScope}, ef\xEAmero)`);
+  ok("Repository clonado");
   import_node_fs2.default.writeFileSync(import_node_path2.default.join(dest, ".env.local"), buildEnvFile(config.env), {
     mode: 384
   });
-  ok(
-    `Environment configurado (${Object.keys(config.env).length} vari\xE1vel(is) p\xFAblica(s))`
-  );
+  ok("Environment p\xFAblico configurado");
   run("npm", ["ci"], dest);
   ok("Depend\xEAncias instaladas");
+  const linked = config.supabase?.projectRef ? await linkSupabaseRemote(dest, config.supabase) : false;
   try {
     run("npm", ["run", "setup:local"], dest);
-    ok("Setup local + baseline");
+    ok("Verify passou");
   } catch {
     console.log('\u2022 setup:local pulado (rode "npm run setup:local" manualmente)');
   }
+  if (linked) ok("Claude/Codex prontos para trabalhar no Supabase online");
   console.log(`
 Projeto pronto:
 
@@ -157,16 +355,35 @@ Projeto pronto:
 `);
   }
 }
-var import_node_child_process2, import_node_fs2, import_node_path2, sleep, run, ok;
+var import_node_child_process3, import_node_fs2, import_node_path2, sleep, run, ok, tryExec, tryExecOut;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
-    import_node_child_process2 = require("node:child_process");
+    import_node_child_process3 = require("node:child_process");
     import_node_fs2 = __toESM(require("node:fs"));
     import_node_path2 = __toESM(require("node:path"));
+    init_auth();
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    run = (cmd, args, cwd, env) => (0, import_node_child_process2.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
+    run = (cmd, args, cwd, env) => (0, import_node_child_process3.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
     ok = (label) => console.log(`\u2713 ${label}`);
+    tryExec = (cmd, args) => {
+      try {
+        (0, import_node_child_process3.execFileSync)(cmd, args, { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    tryExecOut = (cmd, args) => {
+      try {
+        return (0, import_node_child_process3.execFileSync)(cmd, args, {
+          stdio: ["ignore", "pipe", "ignore"],
+          encoding: "utf8"
+        });
+      } catch {
+        return null;
+      }
+    };
   }
 });
 
@@ -239,7 +456,7 @@ async function forward(message) {
   }
 }
 function main() {
-  const rl = (0, import_node_readline.createInterface)({ input: process.stdin, terminal: false });
+  const rl = (0, import_node_readline2.createInterface)({ input: process.stdin, terminal: false });
   let queue = Promise.resolve();
   rl.on("line", (line) => {
     const trimmed = line.trim();
@@ -258,11 +475,11 @@ function main() {
   });
   logStderr(`ponte ativa \u2192 ${endpoint}`);
 }
-var import_node_readline, endpoint, token;
+var import_node_readline2, endpoint, token;
 var init_index = __esm({
   "src/index.ts"() {
     "use strict";
-    import_node_readline = require("node:readline");
+    import_node_readline2 = require("node:readline");
     endpoint = process.env.SUPREMO_URL;
     token = process.env.SUPREMO_TOKEN;
     if (!endpoint) {
@@ -3695,7 +3912,7 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
   config.mcpServers = config.mcpServers ?? {};
   config.mcpServers.supremo = {
     command: "npx",
-    args: ["-y", "@supremo/cli", "mcp"],
+    args: ["-y", "supremo-cli", "mcp"],
     env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token }
   };
   import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(configPath), { recursive: true });

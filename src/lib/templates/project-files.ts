@@ -28,7 +28,15 @@ import {
 // o CI adaptativo. Projeto atrás mostra o cartão "Atualizar base".
 // 2.2.0: scaffold v2 — local dev harness (verify adaptativo, setup:local, git
 // hooks), identidade do projeto em .supremo/project.json e capabilities.
-export const TEMPLATE_VERSION = '2.2.0'
+// 2.3.0: banco online via Supabase CLI — o bootstrap linka o checkout ao remoto;
+// regras de agente (migration = fonte da verdade, guarda de op destrutiva) e
+// supabase/.temp gitignored.
+// 2.4.0: config.toml nasce em Postgres 17 (default atual do Supabase; o bootstrap
+// ainda ajusta à versão real do remoto); regras de agente refinadas (db reset
+// --linked, confirmar o project-ref antes de qualquer mutação remota).
+// 2.5.0: Supabase CLI pinada como devDependency (npx supabase local, nunca a
+// global) — versão idêntica em qualquer máquina/agente; agents/CLAUDE usam npx.
+export const TEMPLATE_VERSION = '2.5.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -98,6 +106,10 @@ const DEV_DEPENDENCIES = {
   eslint: '^9.39.5',
   'eslint-config-next': '16.3.3',
   jsdom: '^25.0.1',
+  // CLI do Supabase PINADA no projeto: o bootstrap e o agente usam esta versão
+  // local (node_modules/.bin/supabase), nunca uma instalação global arbitrária —
+  // dois computadores/agentes se comportam igual.
+  supabase: '2.116.0',
   tailwindcss: '^4.3.3',
   typescript: '^5.9.3',
   vitest: '^3.2.7',
@@ -681,6 +693,11 @@ test-results/
 
 .env*
 !.env.example
+
+# Supabase CLI: estado do link (project-ref etc.) e branches locais. O ref não é
+# segredo, mas é por-máquina e não deve ir ao Git (cada checkout linka o seu).
+supabase/.temp/
+supabase/.branches/
 
 *.log
 .DS_Store
@@ -1863,7 +1880,10 @@ max_rows = 1000
 
 [db]
 port = 54322
-major_version = 15
+# Casa com o default atual do Supabase (Postgres 17) para o checkout linkado não
+# acusar "Local database version differs". O bootstrap ajusta este valor à versão
+# real do projeto remoto, caso o Supremo tenha provisionado outra.
+major_version = 17
 
 [auth]
 enabled = true
@@ -2584,6 +2604,41 @@ exigida pelo CI — não é sugestão.
 3. Espere os gates. Se algum falhar, leia o log e corrija.
 4. Merge só com tudo verde.
 
+## Banco de dados online (Supabase CLI)
+
+Este checkout está **linkado ao Supabase remoto DESTE projeto** — o \`project-ref\`
+fica em \`supabase/.temp/project-ref\`. Você opera o banco online direto pela CLI,
+sem depender do MCP.
+
+**Use SEMPRE a CLI local pinada do projeto: \`npx supabase …\`** (é uma
+devDependency versionada, instalada pelo \`npm ci\`). Nunca use uma instalação
+global — ela pode ter outra versão e dar comportamento diferente entre máquinas.
+
+- **Sincronizar do remoto:** \`npx supabase db pull\` / \`npx supabase db diff\`
+- **Mudar schema (tabela, coluna, RLS, policy, função SQL, trigger):**
+  1. \`npx supabase migration new <nome>\` — cria a migration versionada
+  2. escreva o SQL (toda tabela nova com RLS ativa + teste de isolamento)
+  3. \`npx supabase db push\` — aplica no remoto
+- **Edge Functions:** \`npx supabase functions new|deploy|list\`
+
+**Migration é a fonte da verdade.** Nunca altere o schema "invisível" só no banco
+(SQL solto no dashboard): mudança de schema/RLS vira migration versionada, validada
+e aplicada por \`npx supabase db push\` no remoto linkado. Repositório e banco nunca
+divergem. **Antes de QUALQUER mutação remota, confirme o alvo:**
+\`cat supabase/.temp/project-ref\`.
+
+### Operações destrutivas no remoto — PARE e confirme
+\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\` de estrutura existente,
+\`DELETE\` em massa e exclusões massivas são irreversíveis no banco online. Antes
+de rodar qualquer uma:
+1. **Mostre o \`project-ref\` alvo:** \`cat supabase/.temp/project-ref\`.
+2. **Peça confirmação explícita** ao humano, nomeando esse ref.
+3. Só então execute. Nunca rode uma operação destrutiva de forma autônoma.
+
+Credenciais (o token do \`supabase login\` e a senha do banco) vivem no **keychain
+do sistema**, gravadas pela própria CLI. Nunca as imprima, escreva em arquivo nem
+faça commit. O \`supabase/.temp/\` é gitignored — não versione o estado do link.
+
 Este projeto é gerenciado pelo Supremo. O MCP remoto expõe estas regras via
 \`get_project_context\` — elas valem de qualquer máquina.
 `
@@ -2599,6 +2654,9 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 - Implementar do servidor para fora
 - Ativar RLS em toda tabela nova **e escrever o teste de isolamento**
 - Validar entrada com Zod no servidor
+- Mudar o schema do banco online só por **migration versionada + \`npx supabase db
+  push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
+  "Banco de dados online" no \`agents.md\`.
 - Rodar \`npm run typecheck && npm run lint && npm test\` antes de propor mudança
 
 ## Nunca
@@ -2609,6 +2667,8 @@ Leia \`agents.md\` primeiro. Este arquivo complementa com comportamento.
 - Segredo em código
 - Validação de acesso no cliente
 - Commit direto na \`main\`
+- Rodar destrutivo no remoto (\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\`,
+  \`DELETE\` em massa) sem confirmação explícita do humano + mostrar o \`project-ref\`
 
 ## Commits
 \`feat:\` \`fix:\` \`refactor:\` \`test:\` \`security:\` \`docs:\` \`chore:\`

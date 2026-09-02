@@ -606,6 +606,10 @@ async function provisionSupabase(
   )
 
   if (migration) {
+    // Aplica a migration E a registra no histórico do Supabase, atomicamente:
+    // sem isso o remoto fica com o schema mas sem a linha em schema_migrations,
+    // e o checkout linkado vê "Local 00000000000000 / Remote vazio" e tenta
+    // reaplicar o initial_schema (exigia `migration repair` manual).
     const migrationResponse = await fetch(
       `${SUPABASE_API}/v1/projects/${ref}/database/query`,
       {
@@ -614,7 +618,9 @@ async function provisionSupabase(
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query: migration.content }),
+        body: JSON.stringify({
+          query: buildInitialMigrationQuery(migration.path, migration.content),
+        }),
       },
     )
 
@@ -628,6 +634,46 @@ async function provisionSupabase(
   }
 
   return { projectRef: ref, dbPasswordEncrypted, warnings }
+}
+
+/**
+ * SQL que aplica a migration inicial E a registra em
+ * `supabase_migrations.schema_migrations`, de forma idempotente e numa única
+ * transação. Resultado: o projeto novo nasce com `Local == Remote` no histórico
+ * de migrations — `supabase db push --dry-run` fica limpo, sem reaplicar o
+ * initial_schema e sem `migration repair` manual.
+ *
+ * A version/name saem do nome do arquivo (`00000000000000_initial_schema.sql` →
+ * version `00000000000000`, name `initial_schema`), então casam exatamente com o
+ * que a CLI espera do checkout.
+ */
+export function buildInitialMigrationQuery(
+  migrationPath: string,
+  migrationContent: string,
+): string {
+  const filename = migrationPath.split('/').pop() ?? ''
+  const base = filename.replace(/\.sql$/i, '')
+  const sep = base.indexOf('_')
+  const version = sep === -1 ? base : base.slice(0, sep)
+  const name = sep === -1 ? '' : base.slice(sep + 1)
+  // Dollar-quoting evita qualquer escape do conteúdo (que tem aspas/‘$’ simples).
+  const tag = '$supremo_migration$'
+  return [
+    'begin;',
+    'create schema if not exists supabase_migrations;',
+    'create table if not exists supabase_migrations.schema_migrations (',
+    '  version text not null primary key, statements text[], name text);',
+    migrationContent.trim(),
+    'insert into supabase_migrations.schema_migrations (version, name, statements)',
+    `values (${quoteSqlLiteral(version)}, ${quoteSqlLiteral(name)}, array[${tag}${migrationContent}${tag}]::text[])`,
+    'on conflict (version) do nothing;',
+    'commit;',
+  ].join('\n')
+}
+
+/** Escapa uma string para um literal SQL entre aspas simples. */
+function quoteSqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 async function waitForSupabaseProject(

@@ -1,9 +1,17 @@
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import {
   buildEnvFile,
   cleanRemoteUrl,
   gitCloneArgs,
+  migrationDryRunSynced,
+  patchConfigMajorVersion,
+  projectListHasRef,
+  resolveSupabaseBin,
+  supabaseLinkArgs,
+  supabaseLinkEnv,
   targetDir,
 } from './bootstrap'
 
@@ -53,5 +61,117 @@ describe('clone seguro', () => {
     // zera helpers do sistema antes do nosso
     expect(args).toContain('credential.helper=')
     expect(args).toContain('--branch')
+  })
+})
+
+describe('supabase link seguro', () => {
+  const SECRET = 'super-secret-db-pass'
+
+  it('os args do link só carregam o ref — NUNCA a senha', () => {
+    const args = supabaseLinkArgs('abcdefghijklmnop')
+    expect(args).toEqual(['link', '--project-ref', 'abcdefghijklmnop'])
+    expect(args.join(' ')).not.toContain(SECRET)
+    expect(args.join(' ')).not.toMatch(/password|SUPABASE_DB_PASSWORD/i)
+  })
+
+  it('a senha vai só pela env do processo (SUPABASE_DB_PASSWORD)', () => {
+    const env = supabaseLinkEnv({ PATH: '/usr/bin' }, SECRET)
+    expect(env.SUPABASE_DB_PASSWORD).toBe(SECRET)
+    expect(env.PATH).toBe('/usr/bin')
+    // a senha nunca aparece nos args
+    expect(supabaseLinkArgs('ref123').join(' ')).not.toContain(SECRET)
+  })
+
+  it('sem senha (projeto antigo/sem senha guardada) → não injeta a env', () => {
+    const env = supabaseLinkEnv({ PATH: '/usr/bin' })
+    expect(env.SUPABASE_DB_PASSWORD).toBeUndefined()
+    expect(env.PATH).toBe('/usr/bin')
+  })
+
+  it('não muta a env base recebida', () => {
+    const base = { PATH: '/usr/bin' }
+    supabaseLinkEnv(base, SECRET)
+    expect('SUPABASE_DB_PASSWORD' in base).toBe(false)
+  })
+})
+
+describe('detecção de divergência de conta (projectListHasRef)', () => {
+  const output = `
+   LINKED | ORG ID               | REFERENCE ID         | NAME
+  --------|----------------------|----------------------|------
+          | orgabc               | yhwevjxjdplsudrfatxn | app-a
+          | orgabc               | kwmgtswgoquazjcffmun | app-b
+`
+
+  it('true quando o ref aparece na lista da conta logada', () => {
+    expect(projectListHasRef(output, 'yhwevjxjdplsudrfatxn')).toBe(true)
+  })
+
+  it('false quando o projeto é de outra conta (ref ausente)', () => {
+    expect(projectListHasRef(output, 'mkdzmimexvnhkcjjlhvr')).toBe(false)
+  })
+})
+
+describe('config.toml — alinhar versão do Postgres', () => {
+  const toml = `project_id = "app"
+
+[db]
+port = 54322
+major_version = 15
+
+[auth]
+enabled = true
+`
+
+  it('troca o major_version para a versão do remoto', () => {
+    const out = patchConfigMajorVersion(toml, 17)
+    expect(out).toContain('major_version = 17')
+    expect(out).not.toContain('major_version = 15')
+  })
+
+  it('mexe só na linha do major_version (resto intacto)', () => {
+    const out = patchConfigMajorVersion(toml, 17)
+    expect(out).toContain('project_id = "app"')
+    expect(out).toContain('port = 54322')
+    expect(out).toContain('[auth]')
+  })
+
+  it('sem a linha, devolve o conteúdo intacto', () => {
+    const semDb = 'project_id = "x"\n'
+    expect(patchConfigMajorVersion(semDb, 17)).toBe(semDb)
+  })
+})
+
+describe('migration history — dry-run sincronizado', () => {
+  it('true quando a CLI diz que está up to date', () => {
+    expect(migrationDryRunSynced('Remote database is up to date.')).toBe(true)
+  })
+
+  it('true quando não lista nenhuma migration pendente', () => {
+    expect(migrationDryRunSynced('Connecting to remote database...\n')).toBe(true)
+  })
+
+  it('false quando há migration pendente (nome com timestamp)', () => {
+    expect(
+      migrationDryRunSynced('Would push:\n  20260901230657_e2e_widgets.sql'),
+    ).toBe(false)
+  })
+})
+
+describe('CLI Supabase local pinada (resolveSupabaseBin)', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bin-'))
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
+
+  it('sem node_modules → cai na global (último recurso)', () => {
+    expect(resolveSupabaseBin(tmp)).toEqual({ bin: 'supabase', local: false })
+  })
+
+  it('com a CLI instalada → usa a LOCAL pinada, não a global', () => {
+    const bin = path.join(tmp, 'node_modules', '.bin')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(bin, 'supabase'), '#!/bin/sh\n')
+    const r = resolveSupabaseBin(tmp)
+    expect(r.local).toBe(true)
+    expect(r.bin).toBe(path.join(tmp, 'node_modules', '.bin', 'supabase'))
   })
 })

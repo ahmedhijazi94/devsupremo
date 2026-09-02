@@ -15,8 +15,13 @@ import {
 
 /**
  * Fallback periódico de reconciliation (Vercel Cron) — a REDE DE SEGURANÇA do
- * merge assíncrono. O webhook é o caminho primário; este recupera webhooks
- * perdidos / erros temporários / estado dessincronizado. Roda SEM sessão de
+ * merge assíncrono. O caminho IMEDIATO/event-driven é o webhook (`/api/github/
+ * webhook`); ESTE só recupera casos raros: webhook perdido / erro temporário /
+ * estado dessincronizado.
+ *
+ * Roda 1x/dia (`0 3 * * *` no vercel.json) — frequência compatível com o Vercel
+ * Hobby (que só permite cron >= diário). Como é apenas rede de segurança e o
+ * webhook resolve em segundos, uma varredura diária basta. Roda SEM sessão de
  * agente. NÃO varre tudo: só projetos em estado relevante (ci_running/
  * merge_pending/validated). Reusa EXATAMENTE o mesmo `reconcileProjectPr`.
  */

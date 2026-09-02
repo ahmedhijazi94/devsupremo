@@ -72,6 +72,83 @@ export async function appTokenForRepo(repoFullName: string): Promise<string> {
   return appInstallationToken(id)
 }
 
+export interface AppInstallation {
+  id: number
+  accountLogin: string
+  accountType: string // 'User' | 'Organization'
+}
+
+/** Lista TODAS as installations da App (App JWT). Base da descoberta on-demand. */
+export async function listAppInstallations(): Promise<AppInstallation[]> {
+  if (!appAuthConfigured()) throw new Error('GitHub App não configurada.')
+  const jwt = buildAppJwt(
+    process.env.GITHUB_APP_ID!,
+    process.env.GITHUB_APP_PRIVATE_KEY!,
+  )
+  const res = await fetch(`${GITHUB_API}/app/installations?per_page=100`, {
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) throw new Error(`Falha ao listar installations (${res.status}).`)
+  const data = (await res.json()) as Array<{
+    id: number
+    account: { login: string; type: string } | null
+  }>
+  return data
+    .filter((i) => i.account)
+    .map((i) => ({
+      id: i.id,
+      accountLogin: i.account!.login,
+      accountType: i.account!.type,
+    }))
+}
+
+/**
+ * Descobre a installation da App para uma conta/org (ex.: "Hijaziia") — SEM
+ * depender de persistência. É o resolvedor que o provisioning usa para pegar o
+ * installation token server-side do owner escolhido. Case-insensitive.
+ */
+export async function findInstallationForAccount(
+  login: string,
+): Promise<AppInstallation | null> {
+  return matchInstallation(await listAppInstallations(), login)
+}
+
+/** Match puro (case-insensitive) de installation por conta — testável sem I/O. */
+export function matchInstallation(
+  installations: readonly AppInstallation[],
+  login: string,
+): AppInstallation | null {
+  const target = login.toLowerCase()
+  return installations.find((i) => i.accountLogin.toLowerCase() === target) ?? null
+}
+
+/**
+ * Interpreta o callback do Setup URL da GitHub App (puro). O GitHub redireciona
+ * para cá após instalar/atualizar a App com `?installation_id=&setup_action=`.
+ * Decide para onde redirecionar — sem 404. `install`/`update` com id → sucesso.
+ */
+export function interpretSetupCallback(input: {
+  installationId: string | null
+  setupAction: string | null
+  hasUser: boolean
+}): { redirect: string } {
+  if (!input.hasUser) return { redirect: '/login' }
+  const id = Number(input.installationId)
+  if (!input.installationId || !Number.isFinite(id) || id <= 0) {
+    return { redirect: '/accounts?error=github_app_no_installation' }
+  }
+  if (input.setupAction === 'request') {
+    // Instalação pediu aprovação de um admin da org — ainda não ativa.
+    return { redirect: '/accounts?info=github_app_pending_approval' }
+  }
+  return { redirect: '/accounts?success=github_app_installed' }
+}
+
 /** Monta GithubCredentials para o worker a partir de um installation token. */
 export function installationCreds(
   token: string,

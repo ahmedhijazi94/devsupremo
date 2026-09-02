@@ -45,6 +45,7 @@ export default defineConfig({
         'src/lib/provisioning/provision.ts', // provisioning: GitHub+Supabase+DB (E2E)
         'src/lib/bootstrap/config.ts', // resolve credenciais/env + App token
         'src/lib/bootstrap/supabase-store.ts', // store do device flow sobre Postgres
+        'src/lib/checkpoint/store.ts', // store Supabase do checkpoint daemon (I/O)
         'src/lib/runtime/companion-identity.ts', // Admin API do Supabase
         'src/lib/runtime/realtime-broadcast.ts', // broadcast HTTP do Realtime
         // Contexto de requisição / factories finas / tipos

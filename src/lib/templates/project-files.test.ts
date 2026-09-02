@@ -3,6 +3,7 @@ import {
   CI_JOB_NAMES,
   buildProjectFiles,
   CI_INVOKED_SCRIPTS,
+  TEMPLATE_VERSION,
 } from './project-files'
 import { inferTablesFromMigration, generateRlsTest } from './rls-tests'
 
@@ -479,6 +480,51 @@ describe('workflow v3.1 — preview persistente + fast dev loop', () => {
   })
 })
 
+describe('workflow v3.1 item 4 — checkpoint/push silencioso (daemon)', () => {
+  const pkg = JSON.parse(file('package.json')) as { scripts: Record<string, string> }
+  const agents = file('AGENTS.md')
+  const claude = file('CLAUDE.md')
+  const projectJson = JSON.parse(file('.supremo/project.json')) as Record<string, unknown>
+
+  it('template 3.2.0 (checkpoint daemon)', () => {
+    expect(TEMPLATE_VERSION).toBe('3.2.0')
+  })
+
+  it('package.json expõe checkpoint + daemon:ensure/status/stop (via CLI)', () => {
+    expect(pkg.scripts.checkpoint).toMatch(/supremo-cli checkpoint/)
+    expect(pkg.scripts['daemon:ensure']).toMatch(/daemon --ensure/)
+    expect(pkg.scripts['daemon:status']).toMatch(/daemon --status/)
+    expect(pkg.scripts['daemon:stop']).toMatch(/daemon --stop/)
+  })
+
+  it('.gitignore ignora o estado por-máquina do daemon (fila/pid/log/worktree)', () => {
+    expect(file('.gitignore')).toContain('.supremo/checkpoints/')
+  })
+
+  it('.supremo/project.json carrega a URL do Supremo para o daemon chamar', () => {
+    expect(typeof projectJson.supremoUrl).toBe('string')
+    expect(String(projectJson.supremoUrl)).toMatch(/^https?:\/\//)
+  })
+
+  // teste 14 — o agente NUNCA executa git push; fecha o pedido com checkpoint LOCAL
+  it('AGENTS.md: fecha o pedido com checkpoint LOCAL e proíbe git push/branch/PR', () => {
+    expect(agents).toMatch(/npm run checkpoint|supremo checkpoint/)
+    expect(agents).toMatch(/NUNCA[\s\S]{0,60}git push/i)
+    expect(agents).toMatch(/git branch|git checkout -b/)
+    expect(agents).toMatch(/abra\/atualize\/feche PR/i)
+  })
+
+  // teste 20 — o contrato vale para Codex e Claude (AGENTS canônico + CLAUDE alinhado)
+  it('o contrato do checkpoint vale para Codex e Claude', () => {
+    // AGENTS.md é o contrato canônico que os DOIS agentes leem
+    expect(agents).toMatch(/checkpoint/i)
+    expect(claude).toMatch(/checkpoint/i)
+    expect(claude).toMatch(/AGENTS\.md/)
+    // ambos proíbem git push manual (o daemon é quem empurra)
+    expect(claude).toMatch(/git push/)
+  })
+})
+
 describe('workflow v3 — contrato assíncrono do agente (AGENTS.md/CLAUDE.md)', () => {
   const paths = files.map((f) => f.path)
   const agents = file('AGENTS.md')
@@ -555,24 +601,17 @@ describe('workflow v3 — contrato assíncrono do agente (AGENTS.md/CLAUDE.md)',
     expect(agents).toMatch(/falha crítica de segurança[\s\S]*corrigida antes/i)
   })
 
-  it('falha não-crítica não força espera pela CI', () => {
-    expect(agents).toMatch(/não espere de novo/i)
+  it('falha de CI de um checkpoint anterior: resumo barato + novo checkpoint, sem polling', () => {
+    expect(agents).toMatch(/Falha de CI de um checkpoint anterior/i)
+    expect(agents).toMatch(/resumo barato/i)
+    expect(agents).toMatch(/novo checkpoint/i)
   })
 
-  it('trata a corrida de auto-merge durante a edição sem perder o local', () => {
-    expect(agents).toMatch(/Corrida de auto-merge/i)
-    expect(agents).toMatch(/re-cheque se a PR de desenvolvimento ativa ainda está/i)
-    // preserva o trabalho local
-    expect(agents).toMatch(/preserve[\s\S]{0,6}as alterações locais/i)
-    // cria nova branch a partir da main
-    expect(agents).toMatch(/NOVA branch de desenvolvimento[\s\S]{0,4}a partir da .{0,2}main/i)
-    // nunca vira push acidental para a main
-    expect(agents).toMatch(/push direto na[\s\S]{0,10}nessa transi/i)
-  })
-
-  it('detecta auto-merge entre prompts e cria nova branch a partir da main', () => {
-    expect(agents).toMatch(/Início de um novo prompt/i)
-    expect(agents).toMatch(/crie\s+uma nova branch de desenvolvimento/i)
+  it('a corrida de auto-merge é do DAEMON, não do agente (rotate + delta, sem tocar o worktree)', () => {
+    expect(agents).toMatch(/corrida de auto-merge/i)
+    expect(agents).toMatch(/daemon.*rotaciona a branch|rotaciona a branch/i)
+    expect(agents).toMatch(/delta/i)
+    expect(agents).toMatch(/sem tocar o seu worktree|sem perder/i)
   })
 
   it('ci.yml cancela runs obsoletos por branch/PR sem liberar HEAD não validado', () => {

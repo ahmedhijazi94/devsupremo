@@ -89,11 +89,736 @@ var init_auth = __esm({
   }
 });
 
+// src/keychain.ts
+var keychain_exports = {};
+__export(keychain_exports, {
+  accountFor: () => accountFor,
+  keychainService: () => keychainService,
+  resolveKeychain: () => resolveKeychain
+});
+function keychainService() {
+  return SERVICE;
+}
+function accountFor(projectId) {
+  return `project:${projectId}`;
+}
+function macSave(account, secret) {
+  (0, import_node_child_process3.execFileSync)(
+    "security",
+    ["add-generic-password", "-a", account, "-s", SERVICE, "-U", "-w"],
+    { input: secret, stdio: ["pipe", "ignore", "ignore"] }
+  );
+}
+function macGet(account) {
+  try {
+    return (0, import_node_child_process3.execFileSync)(
+      "security",
+      ["find-generic-password", "-a", account, "-s", SERVICE, "-w"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+    ).trim();
+  } catch {
+    return null;
+  }
+}
+function macRemove(account) {
+  try {
+    (0, import_node_child_process3.execFileSync)(
+      "security",
+      ["delete-generic-password", "-a", account, "-s", SERVICE],
+      { stdio: "ignore" }
+    );
+  } catch {
+  }
+}
+function hasSecretTool() {
+  try {
+    (0, import_node_child_process3.execFileSync)("secret-tool", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function linuxSave(account, secret) {
+  (0, import_node_child_process3.execFileSync)(
+    "secret-tool",
+    ["store", "--label", SERVICE, "service", SERVICE, "account", account],
+    { input: secret, stdio: ["pipe", "ignore", "ignore"] }
+  );
+}
+function linuxGet(account) {
+  try {
+    return (0, import_node_child_process3.execFileSync)(
+      "secret-tool",
+      ["lookup", "service", SERVICE, "account", account],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+    ).trim();
+  } catch {
+    return null;
+  }
+}
+function linuxRemove(account) {
+  try {
+    (0, import_node_child_process3.execFileSync)(
+      "secret-tool",
+      ["clear", "service", SERVICE, "account", account],
+      { stdio: "ignore" }
+    );
+  } catch {
+  }
+}
+function fileDir() {
+  const base = process.env.XDG_CONFIG_HOME ?? import_node_path2.default.join(import_node_os.default.homedir(), ".config");
+  return import_node_path2.default.join(base, "supremo", "checkpoint");
+}
+function filePath(account) {
+  const safe = account.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return import_node_path2.default.join(fileDir(), `${safe}.secret`);
+}
+function fileSave(account, secret) {
+  import_node_fs2.default.mkdirSync(fileDir(), { recursive: true, mode: 448 });
+  import_node_fs2.default.writeFileSync(filePath(account), secret, { mode: 384 });
+}
+function fileGet(account) {
+  try {
+    return import_node_fs2.default.readFileSync(filePath(account), "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+function fileRemove(account) {
+  try {
+    import_node_fs2.default.rmSync(filePath(account));
+  } catch {
+  }
+}
+function resolveKeychain(platform = process.platform) {
+  if (platform === "darwin") {
+    return {
+      save: (p, s) => macSave(accountFor(p), s),
+      get: (p) => macGet(accountFor(p)),
+      remove: (p) => macRemove(accountFor(p))
+    };
+  }
+  if (platform === "linux" && hasSecretTool()) {
+    return {
+      save: (p, s) => linuxSave(accountFor(p), s),
+      get: (p) => linuxGet(accountFor(p)),
+      remove: (p) => linuxRemove(accountFor(p))
+    };
+  }
+  return {
+    save: (p, s) => fileSave(accountFor(p), s),
+    get: (p) => fileGet(accountFor(p)),
+    remove: (p) => fileRemove(accountFor(p))
+  };
+}
+var import_node_child_process3, import_node_fs2, import_node_os, import_node_path2, SERVICE;
+var init_keychain = __esm({
+  "src/keychain.ts"() {
+    "use strict";
+    import_node_child_process3 = require("node:child_process");
+    import_node_fs2 = __toESM(require("node:fs"));
+    import_node_os = __toESM(require("node:os"));
+    import_node_path2 = __toESM(require("node:path"));
+    SERVICE = "supremo-checkpoint-daemon";
+  }
+});
+
+// src/checkpoint.ts
+var checkpoint_exports = {};
+__export(checkpoint_exports, {
+  CHECKPOINT_DIR: () => CHECKPOINT_DIR,
+  NOTIFY_FILE: () => NOTIFY_FILE,
+  NothingToCheckpointError: () => NothingToCheckpointError,
+  QUEUE_FILE: () => QUEUE_FILE,
+  buildCheckpointRecord: () => buildCheckpointRecord,
+  classifyCheckpointRisk: () => classifyCheckpointRisk,
+  defaultCheckpointDeps: () => defaultCheckpointDeps,
+  detectMigrations: () => detectMigrations,
+  hasChanges: () => hasChanges,
+  nextParentId: () => nextParentId,
+  parseChangedPaths: () => parseChangedPaths,
+  parseQueue: () => parseQueue,
+  readProjectId: () => readProjectId,
+  runCheckpoint: () => runCheckpoint,
+  serializeQueue: () => serializeQueue
+});
+function hasChanges(porcelain) {
+  return porcelain.trim().length > 0;
+}
+function parseChangedPaths(porcelain) {
+  const out = [];
+  for (const raw of porcelain.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (line.trim().length === 0) continue;
+    let rest = line.slice(3);
+    const arrow = rest.indexOf(" -> ");
+    if (arrow !== -1) rest = rest.slice(arrow + 4);
+    rest = rest.trim().replace(/^"(.*)"$/, "$1");
+    if (rest) out.push(rest);
+  }
+  return out;
+}
+function classifyCheckpointRisk(paths) {
+  if (paths.some((p) => HIGH_RE.some((re) => re.test(p)))) return "high";
+  if (paths.length > 8 || paths.some((p) => MEDIUM_RE.some((re) => re.test(p)))) {
+    return "medium";
+  }
+  return "low";
+}
+function detectMigrations(paths) {
+  return paths.filter((p) => /supabase\/migrations\/.*\.sql$/.test(p));
+}
+function nextParentId(queue) {
+  return queue.length > 0 ? queue[queue.length - 1].checkpointId : null;
+}
+function buildCheckpointRecord(input) {
+  return {
+    checkpointId: input.checkpointId,
+    projectId: input.projectId,
+    commitSha: input.commitSha,
+    parentCheckpointId: input.parentCheckpointId,
+    createdAt: input.createdAt,
+    summary: input.summary,
+    riskLevel: classifyCheckpointRisk(input.changedPaths),
+    migrations: detectMigrations(input.changedPaths),
+    changedPaths: [...input.changedPaths],
+    pushStatus: "local",
+    attempts: 0
+  };
+}
+function serializeQueue(queue) {
+  return queue.map((r) => JSON.stringify(r)).join("\n") + (queue.length ? "\n" : "");
+}
+function parseQueue(jsonl) {
+  const out = [];
+  for (const line of jsonl.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      out.push(JSON.parse(t));
+    } catch {
+    }
+  }
+  return out;
+}
+function runCheckpoint(summary, projectId, deps) {
+  const porcelain = deps.git(["status", "--porcelain"]);
+  if (!hasChanges(porcelain)) throw new NothingToCheckpointError();
+  const changedPaths = parseChangedPaths(porcelain);
+  deps.git(["add", "-A"]);
+  deps.git(["commit", "-m", `checkpoint: ${summary}`]);
+  const commitSha = deps.git(["rev-parse", "HEAD"]).trim();
+  const queue = deps.readQueue();
+  const record = buildCheckpointRecord({
+    checkpointId: deps.uuid(),
+    projectId,
+    commitSha,
+    parentCheckpointId: nextParentId(queue),
+    createdAt: deps.now(),
+    summary,
+    changedPaths
+  });
+  deps.appendQueue(record);
+  deps.notifyDaemon();
+  return record;
+}
+function readProjectId(cwd) {
+  try {
+    const raw = JSON.parse(
+      import_node_fs3.default.readFileSync(import_node_path3.default.join(cwd, ".supremo/project.json"), "utf8")
+    );
+    return raw.projectId ?? null;
+  } catch {
+    return null;
+  }
+}
+function defaultCheckpointDeps(cwd) {
+  const queuePath = import_node_path3.default.join(cwd, QUEUE_FILE);
+  return {
+    git: (args) => (0, import_node_child_process4.execFileSync)("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    }),
+    readQueue: () => {
+      try {
+        return parseQueue(import_node_fs3.default.readFileSync(queuePath, "utf8"));
+      } catch {
+        return [];
+      }
+    },
+    appendQueue: (record) => {
+      import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(queuePath), { recursive: true });
+      import_node_fs3.default.appendFileSync(queuePath, JSON.stringify(record) + "\n");
+    },
+    notifyDaemon: () => {
+      try {
+        import_node_fs3.default.mkdirSync(import_node_path3.default.join(cwd, CHECKPOINT_DIR), { recursive: true });
+        import_node_fs3.default.writeFileSync(import_node_path3.default.join(cwd, NOTIFY_FILE), (/* @__PURE__ */ new Date()).toISOString());
+      } catch {
+      }
+    },
+    now: () => (/* @__PURE__ */ new Date()).toISOString(),
+    uuid: () => import_node_crypto.default.randomUUID()
+  };
+}
+var import_node_child_process4, import_node_crypto, import_node_fs3, import_node_path3, HIGH_RE, MEDIUM_RE, NothingToCheckpointError, CHECKPOINT_DIR, QUEUE_FILE, NOTIFY_FILE;
+var init_checkpoint = __esm({
+  "src/checkpoint.ts"() {
+    "use strict";
+    import_node_child_process4 = require("node:child_process");
+    import_node_crypto = __toESM(require("node:crypto"));
+    import_node_fs3 = __toESM(require("node:fs"));
+    import_node_path3 = __toESM(require("node:path"));
+    HIGH_RE = [
+      /supabase\/migrations\/.*\.sql$/,
+      /(^|\/)app\/api\/.*route\.(ts|tsx|js|jsx)$/,
+      /(^|\/)actions\//,
+      /\.github\/workflows\//,
+      /(^|\/)middleware\.(ts|js)$/,
+      /\.(rls|policy)\.(sql|ts)$/,
+      /(^|\/)(next\.config|tsconfig|package)\.(ts|js|json)$/,
+      /(^|\/)vercel\.json$/
+    ];
+    MEDIUM_RE = [/(^|\/)(lib|hooks|stores|server|src\/lib)\//];
+    NothingToCheckpointError = class extends Error {
+      constructor() {
+        super("Nada para checkpoint \u2014 nenhuma mudan\xE7a no worktree.");
+        this.name = "NothingToCheckpointError";
+      }
+    };
+    CHECKPOINT_DIR = ".supremo/checkpoints";
+    QUEUE_FILE = `${CHECKPOINT_DIR}/queue.jsonl`;
+    NOTIFY_FILE = `${CHECKPOINT_DIR}/notify`;
+  }
+});
+
+// src/daemon.ts
+var daemon_exports = {};
+__export(daemon_exports, {
+  AuthError: () => AuthError,
+  DAEMON_LOG_FILE: () => DAEMON_LOG_FILE,
+  DAEMON_PID_FILE: () => DAEMON_PID_FILE,
+  MAIN_BRANCHES: () => MAIN_BRANCHES,
+  NetworkError: () => NetworkError,
+  assertNotMain: () => assertNotMain,
+  backoffDelayMs: () => backoffDelayMs,
+  cleanRemoteUrl: () => cleanRemoteUrl,
+  daemonStatus: () => daemonStatus,
+  defaultDaemonGit: () => defaultDaemonGit,
+  defaultDaemonHttp: () => defaultDaemonHttp,
+  drainOnce: () => drainOnce,
+  ensureDaemon: () => ensureDaemon,
+  gitCredentialArgs: () => gitCredentialArgs,
+  gitCredentialHelper: () => gitCredentialHelper,
+  gitPushArgs: () => gitPushArgs,
+  processCheckpoint: () => processCheckpoint,
+  readProjectConfig: () => readProjectConfig,
+  runDaemonLoop: () => runDaemonLoop,
+  selectNextPending: () => selectNextPending,
+  stopDaemon: () => stopDaemon,
+  upsertQueue: () => upsertQueue,
+  withStatus: () => withStatus
+});
+function selectNextPending(queue) {
+  for (const r of queue) if (RETRIABLE.has(r.pushStatus)) return r;
+  return null;
+}
+function backoffDelayMs(attempts, baseMs = 2e3, maxMs = 6e4) {
+  const n = Math.max(0, attempts);
+  return Math.min(maxMs, baseMs * 2 ** n);
+}
+function assertNotMain(branch) {
+  if (MAIN_BRANCHES.has(branch)) {
+    throw new Error(`Recusado: push na branch protegida "${branch}".`);
+  }
+}
+function cleanRemoteUrl(repoFullName) {
+  return `https://github.com/${repoFullName}.git`;
+}
+function gitCredentialHelper() {
+  return `!f() { test "$1" = get && printf 'username=x-access-token\\npassword=%s\\n' "$SUPREMO_GIT_TOKEN"; }; f`;
+}
+function gitCredentialArgs() {
+  return ["-c", "credential.helper=", "-c", `credential.helper=${gitCredentialHelper()}`];
+}
+function gitPushArgs(repoFullName, srcSha, branch) {
+  assertNotMain(branch);
+  return [
+    ...gitCredentialArgs(),
+    "push",
+    cleanRemoteUrl(repoFullName),
+    `${srcSha}:refs/heads/${branch}`
+  ];
+}
+function withStatus(record, status, patch = {}) {
+  return { ...record, pushStatus: status, ...patch };
+}
+function upsertQueue(queue, record) {
+  return queue.map((r) => r.checkpointId === record.checkpointId ? record : r);
+}
+async function processCheckpoint(record, ctx) {
+  const secret = ctx.getSecret();
+  if (!secret) {
+    return {
+      record: withStatus(record, "push_failed"),
+      result: "failed",
+      reason: "device_not_provisioned"
+    };
+  }
+  let grant;
+  try {
+    grant = await ctx.http.requestGrant({
+      deviceSecret: secret,
+      projectId: ctx.projectId,
+      record
+    });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return {
+        record: withStatus(record, "push_failed"),
+        result: "failed",
+        reason: "unauthorized"
+      };
+    }
+    return {
+      record: withStatus(record, "push_pending", { attempts: record.attempts + 1 }),
+      result: "deferred",
+      reason: "network"
+    };
+  }
+  const { plan, token: token2, repoFullName } = grant;
+  assertNotMain(plan.branch);
+  try {
+    if (plan.action === "reuse") {
+      ctx.git.pushReuse(repoFullName, plan.pushSha ?? record.commitSha, plan.branch, token2);
+    } else {
+      const observedMain = ctx.git.fetchMainSha(repoFullName, token2);
+      if (observedMain !== plan.expectedBaseSha) {
+        await ctx.http.revokeToken(token2);
+        return {
+          record: withStatus(record, "push_pending", {
+            attempts: record.attempts + 1
+          }),
+          result: "deferred",
+          reason: "stale_base"
+        };
+      }
+      ctx.git.pushRotate(
+        repoFullName,
+        {
+          branch: plan.branch,
+          baseSha: plan.expectedBaseSha,
+          fromSha: plan.deltaRange?.fromSha ?? null,
+          toSha: plan.deltaRange?.toSha ?? record.commitSha
+        },
+        token2
+      );
+    }
+  } catch {
+    await ctx.http.revokeToken(token2);
+    return {
+      record: withStatus(record, "push_pending", { attempts: record.attempts + 1 }),
+      result: "deferred",
+      reason: "push_error"
+    };
+  }
+  await ctx.http.revokeToken(token2);
+  const pushed = withStatus(record, "pushing", { integrationBranch: plan.branch });
+  try {
+    const pr = await ctx.http.ensurePr({
+      deviceSecret: secret,
+      projectId: ctx.projectId,
+      checkpointId: record.checkpointId,
+      branch: plan.branch,
+      summary: record.summary
+    });
+    return {
+      record: withStatus(record, "pushed", {
+        integrationBranch: plan.branch,
+        prNumber: pr.prNumber
+      }),
+      result: "done"
+    };
+  } catch {
+    return { record: pushed, result: "deferred", reason: "ensure_pr_network" };
+  }
+}
+function gitWithToken(args, cwd, token2) {
+  return (0, import_node_child_process5.execFileSync)("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, SUPREMO_GIT_TOKEN: token2 }
+  });
+}
+function defaultDaemonGit(cwd) {
+  return {
+    fetchMainSha: (repoFullName, token2) => {
+      gitWithToken(
+        [...gitCredentialArgs(), "fetch", cleanRemoteUrl(repoFullName), "main"],
+        cwd,
+        token2
+      );
+      return gitWithToken(["rev-parse", "FETCH_HEAD"], cwd, token2).trim();
+    },
+    pushReuse: (repoFullName, pushSha, branch, token2) => {
+      gitWithToken(gitPushArgs(repoFullName, pushSha, branch), cwd, token2);
+    },
+    pushRotate: (repoFullName, plan, token2) => {
+      assertNotMain(plan.branch);
+      const wt = import_node_path4.default.join(cwd, ".supremo/checkpoints/wt");
+      try {
+        gitWithToken(["worktree", "remove", "--force", wt], cwd, token2);
+      } catch {
+      }
+      gitWithToken(["worktree", "add", "--detach", wt, plan.baseSha], cwd, token2);
+      try {
+        const from = plan.fromSha ?? plan.baseSha;
+        (0, import_node_child_process5.execFileSync)("git", ["rebase", "--onto", plan.baseSha, from, plan.toSha], {
+          cwd: wt,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, SUPREMO_GIT_TOKEN: token2 }
+        });
+        gitWithToken(
+          [
+            ...gitCredentialArgs(),
+            "push",
+            cleanRemoteUrl(repoFullName),
+            `HEAD:refs/heads/${plan.branch}`
+          ],
+          wt,
+          token2
+        );
+      } finally {
+        try {
+          gitWithToken(["worktree", "remove", "--force", wt], cwd, token2);
+        } catch {
+        }
+      }
+    }
+  };
+}
+function defaultDaemonHttp(apiBaseUrl) {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const postJson = async (route, body) => {
+    let res;
+    try {
+      res = await fetch(`${base}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    } catch {
+      throw new NetworkError("offline");
+    }
+    if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`);
+    if (!res.ok) throw new NetworkError(`${res.status}`);
+    return res.json().catch(() => ({}));
+  };
+  return {
+    requestGrant: async ({ deviceSecret, projectId, record }) => {
+      const data = await postJson("/api/checkpoint/push-grant", {
+        deviceSecret,
+        projectId,
+        checkpointId: record.checkpointId,
+        commitSha: record.commitSha,
+        parentCheckpointId: record.parentCheckpointId,
+        summary: record.summary,
+        riskLevel: record.riskLevel,
+        changedPaths: record.changedPaths,
+        migrations: record.migrations
+      });
+      return data;
+    },
+    ensurePr: async ({ deviceSecret, projectId, checkpointId, branch, summary }) => {
+      const data = await postJson("/api/checkpoint/ensure-pr", {
+        deviceSecret,
+        projectId,
+        checkpointId,
+        branch,
+        summary
+      });
+      return data;
+    },
+    revokeToken: async (token2) => {
+      try {
+        await fetch(`${GITHUB_API}/installation/token`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token2}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28"
+          }
+        });
+      } catch {
+      }
+    }
+  };
+}
+async function drainOnce(config) {
+  const queuePath = import_node_path4.default.join(config.cwd, QUEUE_FILE);
+  let queue;
+  try {
+    queue = parseQueue(import_node_fs4.default.readFileSync(queuePath, "utf8"));
+  } catch {
+    return 0;
+  }
+  const ctx = {
+    projectId: config.projectId,
+    getSecret: config.getSecret,
+    http: defaultDaemonHttp(config.apiBaseUrl),
+    git: defaultDaemonGit(config.cwd)
+  };
+  let processed = 0;
+  for (; ; ) {
+    const next = selectNextPending(queue);
+    if (!next) break;
+    const outcome = await processCheckpoint(next, ctx);
+    queue = upsertQueue(queue, outcome.record);
+    import_node_fs4.default.writeFileSync(queuePath, serializeQueue(queue));
+    processed++;
+    if (outcome.result !== "done") break;
+  }
+  return processed;
+}
+function readProjectConfig(cwd) {
+  try {
+    const raw = JSON.parse(
+      import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, ".supremo/project.json"), "utf8")
+    );
+    if (!raw.projectId || !raw.supremoUrl) return null;
+    return { projectId: raw.projectId, apiBaseUrl: raw.supremoUrl };
+  } catch {
+    return null;
+  }
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function readPid(cwd) {
+  try {
+    const pid = Number(import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE), "utf8").trim());
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+function ensureDaemon(cwd) {
+  const existing = readPid(cwd);
+  if (existing && pidAlive(existing)) return "reuse";
+  import_node_fs4.default.mkdirSync(import_node_path4.default.join(cwd, CHECKPOINT_DIR), { recursive: true });
+  const logPath = import_node_path4.default.join(cwd, DAEMON_LOG_FILE);
+  const out = import_node_fs4.default.openSync(logPath, "a");
+  const binPath = process.argv[1] ?? "";
+  const child = (0, import_node_child_process5.spawn)(process.execPath, [binPath, "daemon"], {
+    cwd,
+    detached: true,
+    stdio: ["ignore", out, out]
+  });
+  child.unref();
+  if (child.pid) {
+    import_node_fs4.default.writeFileSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE), String(child.pid));
+  }
+  return "start";
+}
+function daemonStatus(cwd) {
+  const pid = readPid(cwd);
+  return { running: pid != null && pidAlive(pid), pid };
+}
+function stopDaemon(cwd) {
+  const pid = readPid(cwd);
+  if (pid && pidAlive(pid)) {
+    try {
+      process.kill(pid);
+    } catch {
+    }
+  }
+  try {
+    import_node_fs4.default.rmSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE));
+  } catch {
+  }
+  return true;
+}
+function minPendingAttempts(queue) {
+  let min = null;
+  for (const r of queue) {
+    if (RETRIABLE.has(r.pushStatus)) {
+      min = min === null ? r.attempts : Math.min(min, r.attempts);
+    }
+  }
+  return min;
+}
+async function runDaemonLoop(cwd, opts = {}) {
+  const config = readProjectConfig(cwd);
+  if (!config) {
+    process.stderr.write("[daemon] .supremo/project.json ausente/incompleto.\n");
+    return;
+  }
+  const keychain = resolveKeychain();
+  const daemonConfig = {
+    projectId: config.projectId,
+    apiBaseUrl: config.apiBaseUrl,
+    cwd,
+    getSecret: () => keychain.get(config.projectId)
+  };
+  const idleMs = opts.idleMs ?? 3e3;
+  let stopped = false;
+  process.on("SIGTERM", () => {
+    stopped = true;
+  });
+  while (!stopped) {
+    let queue = [];
+    try {
+      queue = parseQueue(import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, QUEUE_FILE), "utf8"));
+    } catch {
+    }
+    await drainOnce(daemonConfig);
+    try {
+      import_node_fs4.default.rmSync(import_node_path4.default.join(cwd, NOTIFY_FILE));
+    } catch {
+    }
+    const attempts = minPendingAttempts(queue);
+    await sleep(attempts != null ? backoffDelayMs(attempts) : idleMs);
+  }
+}
+var import_node_child_process5, import_node_fs4, import_node_path4, RETRIABLE, MAIN_BRANCHES, NetworkError, AuthError, GITHUB_API, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
+var init_daemon = __esm({
+  "src/daemon.ts"() {
+    "use strict";
+    import_node_child_process5 = require("node:child_process");
+    import_node_fs4 = __toESM(require("node:fs"));
+    import_node_path4 = __toESM(require("node:path"));
+    init_checkpoint();
+    init_keychain();
+    RETRIABLE = /* @__PURE__ */ new Set([
+      "local",
+      "push_pending",
+      "pushing"
+    ]);
+    MAIN_BRANCHES = /* @__PURE__ */ new Set(["main", "master"]);
+    NetworkError = class extends Error {
+    };
+    AuthError = class extends Error {
+    };
+    GITHUB_API = "https://api.github.com";
+    DAEMON_PID_FILE = `${CHECKPOINT_DIR}/daemon.pid`;
+    DAEMON_LOG_FILE = `${CHECKPOINT_DIR}/daemon.log`;
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  }
+});
+
 // src/bootstrap.ts
 var bootstrap_exports = {};
 __export(bootstrap_exports, {
   buildEnvFile: () => buildEnvFile,
-  cleanRemoteUrl: () => cleanRemoteUrl,
+  cleanRemoteUrl: () => cleanRemoteUrl2,
   gitCloneArgs: () => gitCloneArgs,
   migrationDryRunSynced: () => migrationDryRunSynced,
   patchConfigMajorVersion: () => patchConfigMajorVersion,
@@ -109,9 +834,9 @@ function buildEnvFile(env) {
 }
 function targetDir(repoFullName, baseDir) {
   const name = repoFullName.split("/").pop() || "projeto";
-  return import_node_path2.default.join(baseDir ?? process.cwd(), name);
+  return import_node_path5.default.join(baseDir ?? process.cwd(), name);
 }
-function cleanRemoteUrl(repoFullName) {
+function cleanRemoteUrl2(repoFullName) {
   return `https://github.com/${repoFullName}.git`;
 }
 function gitCloneArgs(repoFullName, branch, dest) {
@@ -124,7 +849,7 @@ function gitCloneArgs(repoFullName, branch, dest) {
     "clone",
     "--branch",
     branch,
-    cleanRemoteUrl(repoFullName),
+    cleanRemoteUrl2(repoFullName),
     dest
   ];
 }
@@ -164,7 +889,7 @@ async function startDeviceFlow(baseUrl, projectId) {
 async function pollForConfig(baseUrl, deviceCode, intervalSec, expiresAt) {
   const deadline = Date.parse(expiresAt);
   while (Date.now() < deadline) {
-    await sleep(intervalSec * 1e3);
+    await sleep2(intervalSec * 1e3);
     const res = await fetch(`${baseUrl}/api/bootstrap/device/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -238,16 +963,16 @@ async function linkSupabaseRemote(dest, supabase) {
   ok("Conta correta");
   if (majorVersion) {
     try {
-      const cfgPath = import_node_path2.default.join(dest, "supabase", "config.toml");
-      const cfg = import_node_fs2.default.readFileSync(cfgPath, "utf8");
+      const cfgPath = import_node_path5.default.join(dest, "supabase", "config.toml");
+      const cfg = import_node_fs5.default.readFileSync(cfgPath, "utf8");
       const patched = patchConfigMajorVersion(cfg, majorVersion);
-      if (patched !== cfg) import_node_fs2.default.writeFileSync(cfgPath, patched);
+      if (patched !== cfg) import_node_fs5.default.writeFileSync(cfgPath, patched);
       ok("PostgreSQL/config alinhados");
     } catch {
     }
   }
   try {
-    (0, import_node_child_process3.execFileSync)(sb, supabaseLinkArgs(projectRef), {
+    (0, import_node_child_process6.execFileSync)(sb, supabaseLinkArgs(projectRef), {
       cwd: dest,
       env: supabaseLinkEnv(process.env, dbPassword),
       stdio: ["ignore", "ignore", "inherit"]
@@ -275,12 +1000,12 @@ async function linkSupabaseRemote(dest, supabase) {
   return true;
 }
 function resolveSupabaseBin(dest) {
-  const localBin = import_node_path2.default.join(dest, "node_modules", ".bin", "supabase");
-  return import_node_fs2.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
+  const localBin = import_node_path5.default.join(dest, "node_modules", ".bin", "supabase");
+  return import_node_fs5.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
 }
 function readLinkedRef(dest) {
   try {
-    return import_node_fs2.default.readFileSync(import_node_path2.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
+    return import_node_fs5.default.readFileSync(import_node_path5.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
   } catch {
     return null;
   }
@@ -316,16 +1041,16 @@ async function runBootstrap(opts) {
   }
   console.log(`  Projeto: ${config.project.name}`);
   const dest = targetDir(config.repo.fullName, opts.dir);
-  if (import_node_fs2.default.existsSync(dest)) {
+  if (import_node_fs5.default.existsSync(dest)) {
     throw new Error(`J\xE1 existe ${dest} \u2014 remova ou use --dir para outro caminho.`);
   }
-  import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(dest), { recursive: true });
+  import_node_fs5.default.mkdirSync(import_node_path5.default.dirname(dest), { recursive: true });
   run("git", gitCloneArgs(config.repo.fullName, config.repo.branch, dest), void 0, {
     ...process.env,
     SUPREMO_GIT_TOKEN: config.gitToken
   });
   ok("Repository clonado");
-  import_node_fs2.default.writeFileSync(import_node_path2.default.join(dest, ".env.local"), buildEnvFile(config.env), {
+  import_node_fs5.default.writeFileSync(import_node_path5.default.join(dest, ".env.local"), buildEnvFile(config.env), {
     mode: 384
   });
   ok("Environment p\xFAblico configurado");
@@ -339,6 +1064,20 @@ async function runBootstrap(opts) {
     console.log('\u2022 setup:local pulado (rode "npm run setup:local" manualmente)');
   }
   if (linked) ok("Claude/Codex prontos para trabalhar no Supabase online");
+  if (config.daemon) {
+    try {
+      const { resolveKeychain: resolveKeychain2 } = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
+      resolveKeychain2().save(config.project.id, config.daemon.deviceSecret);
+      ok("M\xE1quina autorizada (checkpoint daemon) \u2014 identidade no keychain");
+      const { ensureDaemon: ensureDaemon2 } = await Promise.resolve().then(() => (init_daemon(), daemon_exports));
+      ensureDaemon2(dest);
+      ok("Checkpoint daemon no ar \u2014 push/PR em background (npm run daemon:status)");
+    } catch {
+      console.log(
+        "\u2022 N\xE3o consegui preparar o checkpoint daemon automaticamente.\n  Rode depois: npm run daemon:ensure\n"
+      );
+    }
+  }
   console.log(`
 Projeto pronto:
 
@@ -356,20 +1095,20 @@ Projeto pronto:
 `);
   }
 }
-var import_node_child_process3, import_node_fs2, import_node_path2, sleep, run, ok, tryExec, tryExecOut;
+var import_node_child_process6, import_node_fs5, import_node_path5, sleep2, run, ok, tryExec, tryExecOut;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
-    import_node_child_process3 = require("node:child_process");
-    import_node_fs2 = __toESM(require("node:fs"));
-    import_node_path2 = __toESM(require("node:path"));
+    import_node_child_process6 = require("node:child_process");
+    import_node_fs5 = __toESM(require("node:fs"));
+    import_node_path5 = __toESM(require("node:path"));
     init_auth();
-    sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    run = (cmd, args, cwd, env) => (0, import_node_child_process3.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
+    sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+    run = (cmd, args, cwd, env) => (0, import_node_child_process6.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
     ok = (label) => console.log(`\u2713 ${label}`);
     tryExec = (cmd, args) => {
       try {
-        (0, import_node_child_process3.execFileSync)(cmd, args, { stdio: "ignore" });
+        (0, import_node_child_process6.execFileSync)(cmd, args, { stdio: "ignore" });
         return true;
       } catch {
         return false;
@@ -377,7 +1116,7 @@ var init_bootstrap = __esm({
     };
     tryExecOut = (cmd, args) => {
       try {
-        return (0, import_node_child_process3.execFileSync)(cmd, args, {
+        return (0, import_node_child_process6.execFileSync)(cmd, args, {
           stdio: ["ignore", "pipe", "ignore"],
           encoding: "utf8"
         });
@@ -3610,9 +4349,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
    * @param {string} [path]
    * @return {(string|null|Command)}
    */
-  executableDir(path4) {
-    if (path4 === void 0) return this._executableDir;
-    this._executableDir = path4;
+  executableDir(path7) {
+    if (path7 === void 0) return this._executableDir;
+    this._executableDir = path7;
     return this;
   }
   /**
@@ -3868,9 +4607,9 @@ function useColor() {
 var program = new Command();
 
 // src/bin.ts
-var import_node_fs3 = __toESM(require("node:fs"));
-var import_node_path3 = __toESM(require("node:path"));
-var import_node_os = __toESM(require("node:os"));
+var import_node_fs6 = __toESM(require("node:fs"));
+var import_node_path6 = __toESM(require("node:path"));
+var import_node_os2 = __toESM(require("node:os"));
 
 // package.json
 var package_default = {
@@ -3919,8 +4658,8 @@ program2.name("supremo").description("CLI do Supremo (bootstrap + ponte MCP)").v
 var DEFAULT_URL = "https://supremo.app/api/mcp";
 function claudeDesktopConfigPath() {
   if (process.platform === "darwin") {
-    return import_node_path3.default.join(
-      import_node_os.default.homedir(),
+    return import_node_path6.default.join(
+      import_node_os2.default.homedir(),
       "Library",
       "Application Support",
       "Claude",
@@ -3928,13 +4667,13 @@ function claudeDesktopConfigPath() {
     );
   }
   if (process.platform === "win32") {
-    return import_node_path3.default.join(
-      process.env.APPDATA ?? import_node_os.default.homedir(),
+    return import_node_path6.default.join(
+      process.env.APPDATA ?? import_node_os2.default.homedir(),
       "Claude",
       "claude_desktop_config.json"
     );
   }
-  return import_node_path3.default.join(import_node_os.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
+  return import_node_path6.default.join(import_node_os2.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
 }
 program2.command("connect").description("Configura o Claude Desktop para usar o Supremo remoto").requiredOption("-t, --token <token>", "Token gerado em /mcps").option("-u, --url <url>", "Endpoint MCP do Supremo", DEFAULT_URL).action((options) => {
   if (!options.token.startsWith("sup_")) {
@@ -3943,9 +4682,9 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
   }
   const configPath = claudeDesktopConfigPath();
   let config = {};
-  if (import_node_fs3.default.existsSync(configPath)) {
+  if (import_node_fs6.default.existsSync(configPath)) {
     try {
-      config = JSON.parse(import_node_fs3.default.readFileSync(configPath, "utf8"));
+      config = JSON.parse(import_node_fs6.default.readFileSync(configPath, "utf8"));
     } catch {
       console.error(
         `${configPath} existe mas n\xE3o \xE9 JSON v\xE1lido. Corrija ou remova o arquivo antes de continuar.`
@@ -3959,8 +4698,8 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
     args: ["-y", "supremo-cli", "mcp"],
     env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token }
   };
-  import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(configPath), { recursive: true });
-  import_node_fs3.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
+  import_node_fs6.default.mkdirSync(import_node_path6.default.dirname(configPath), { recursive: true });
+  import_node_fs6.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
 `);
   console.log(`Configurado em ${configPath}`);
   console.log(`Endpoint: ${options.url}`);
@@ -3984,6 +4723,77 @@ program2.command("bootstrap <project-id>").description("Prepara o workspace loca
       );
       process.exit(1);
     }
+  }
+);
+program2.command("checkpoint <summary...>").description("Cria um checkpoint LOCAL do pedido conclu\xEDdo (sem rede)").action(async (summaryParts) => {
+  const { runCheckpoint: runCheckpoint2, defaultCheckpointDeps: defaultCheckpointDeps2, readProjectId: readProjectId2, NothingToCheckpointError: NothingToCheckpointError2 } = await Promise.resolve().then(() => (init_checkpoint(), checkpoint_exports));
+  const cwd = process.cwd();
+  const projectId = readProjectId2(cwd);
+  if (!projectId) {
+    console.error("\u2717 .supremo/project.json ausente \u2014 rode o bootstrap primeiro.");
+    process.exit(1);
+  }
+  const summary = summaryParts.join(" ").trim();
+  if (!summary) {
+    console.error('\u2717 Informe um resumo: supremo checkpoint "home minimalista"');
+    process.exit(1);
+  }
+  try {
+    const { ensureDaemon: ensureDaemon2 } = await Promise.resolve().then(() => (init_daemon(), daemon_exports));
+    try {
+      ensureDaemon2(cwd);
+    } catch {
+    }
+    const record = runCheckpoint2(summary, projectId, defaultCheckpointDeps2(cwd));
+    console.log(
+      `\u2713 checkpoint ${record.checkpointId.slice(0, 8)} (${record.riskLevel}) \u2014 push em background. Pode pedir a pr\xF3xima mudan\xE7a.`
+    );
+  } catch (error) {
+    if (error instanceof NothingToCheckpointError2) {
+      console.log("\u2022 Nada mudou \u2014 nenhum checkpoint criado.");
+      return;
+    }
+    console.error(`\u2717 ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+});
+program2.command("daemon").description("Checkpoint daemon: envia checkpoints em background (push/PR)").option("--ensure", "Garante o daemon vivo (sobe desacoplado se preciso)").option("--status", "Mostra se o daemon est\xE1 rodando").option("--stop", "Para o daemon").option("--once", "Drena a fila uma vez e sai (debug/CI)").action(
+  async (options) => {
+    const daemon = await Promise.resolve().then(() => (init_daemon(), daemon_exports));
+    const cwd = process.cwd();
+    if (options.status) {
+      const s = daemon.daemonStatus(cwd);
+      console.log(s.running ? `daemon ativo (pid ${s.pid})` : "daemon parado");
+      return;
+    }
+    if (options.stop) {
+      daemon.stopDaemon(cwd);
+      console.log("daemon parado.");
+      return;
+    }
+    if (options.ensure) {
+      const r = daemon.ensureDaemon(cwd);
+      console.log(r === "reuse" ? "\u2713 daemon j\xE1 ativo" : "\u2713 daemon iniciado");
+      return;
+    }
+    if (options.once) {
+      const cfg = daemon.readProjectConfig(cwd);
+      if (!cfg) {
+        console.error("\u2717 .supremo/project.json ausente/incompleto.");
+        process.exit(1);
+      }
+      const { resolveKeychain: resolveKeychain2 } = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
+      const kc = resolveKeychain2();
+      const n = await daemon.drainOnce({
+        projectId: cfg.projectId,
+        apiBaseUrl: cfg.apiBaseUrl,
+        cwd,
+        getSecret: () => kc.get(cfg.projectId)
+      });
+      console.log(`processados: ${n}`);
+      return;
+    }
+    await daemon.runDaemonLoop(cwd);
   }
 );
 program2.command("mcp", { isDefault: true }).description("Roda a ponte MCP (o cliente chama isto automaticamente)").action(async () => {

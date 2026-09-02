@@ -149,6 +149,117 @@ export function interpretSetupCallback(input: {
   return { redirect: '/accounts?success=github_app_installed' }
 }
 
+// ── Token de PUSH escopado (checkpoint daemon, v3.1 item 4) ──────────────────
+
+/** Permissões mínimas do token entregue ao daemon. Nunca inclui merge/PR/admin. */
+export interface RepoScopedPermissions {
+  contents: 'write'
+  workflows?: 'write'
+}
+
+export interface RepoScopedToken {
+  token: string
+  repositoryId: number
+  installationId: number
+  expiresAt: string
+}
+
+async function ghApp<T>(path: string, jwt: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${GITHUB_API}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(init?.headers ?? {}),
+    },
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) throw new Error(`GitHub App API ${path} → ${res.status}`)
+  return (await res.json()) as T
+}
+
+/**
+ * Emite um installation token ESCOPADO AO REPO EXATO do projeto, com as
+ * permissões mínimas (contents:write; +workflows:write só quando o diff mexe em
+ * workflows). Preferimos `repository_ids` (id exato) quando ele é conhecido;
+ * senão, `repositories:[nome]` — ambos restringem ao repo do projeto (o GitHub
+ * recusa cross-repo). NUNCA persistimos nem logamos o token. Curta duração (~1h);
+ * o daemon o descarta/revoga logo após o push (`revokeInstallationToken`).
+ */
+export async function mintRepoScopedToken(input: {
+  repoFullName: string
+  permissions: RepoScopedPermissions
+  repositoryId?: number | null
+}): Promise<RepoScopedToken> {
+  if (!appAuthConfigured()) throw new Error('GitHub App não configurada.')
+  const jwt = buildAppJwt(
+    process.env.GITHUB_APP_ID!,
+    process.env.GITHUB_APP_PRIVATE_KEY!,
+  )
+  const installation = await ghApp<{ id: number }>(
+    `/repos/${input.repoFullName}/installation`,
+    jwt,
+  )
+  const scope =
+    input.repositoryId && input.repositoryId > 0
+      ? { repository_ids: [input.repositoryId] }
+      : { repositories: [input.repoFullName.split('/')[1]] }
+  const result = await ghApp<{ token: string; expires_at: string }>(
+    `/app/installations/${installation.id}/access_tokens`,
+    jwt,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...scope, permissions: input.permissions }),
+    },
+  )
+  // Resolve o repository_id (para auditoria/backfill) com o PRÓPRIO token escopado.
+  let repositoryId = input.repositoryId ?? 0
+  if (!repositoryId) {
+    try {
+      const repo = await fetch(`${GITHUB_API}/repos/${input.repoFullName}`, {
+        headers: {
+          Authorization: `Bearer ${result.token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        signal: AbortSignal.timeout(20_000),
+      })
+      if (repo.ok) repositoryId = ((await repo.json()) as { id: number }).id
+    } catch {
+      // best-effort: o escopo por nome já garante o repo exato
+    }
+  }
+  return {
+    token: result.token,
+    repositoryId,
+    installationId: installation.id,
+    expiresAt: result.expires_at,
+  }
+}
+
+/**
+ * Revoga IMEDIATAMENTE um installation token (o próprio token se auto-revoga via
+ * DELETE /installation/token). Best-effort: mesmo que falhe, o token expira em
+ * ~1h; o objetivo é reduzir a janela ao mínimo assim que o push termina.
+ */
+export async function revokeInstallationToken(token: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${GITHUB_API}/installation/token`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      signal: AbortSignal.timeout(15_000),
+    })
+    return res.status === 204
+  } catch {
+    return false
+  }
+}
+
 /** Monta GithubCredentials para o worker a partir de um installation token. */
 export function installationCreds(
   token: string,

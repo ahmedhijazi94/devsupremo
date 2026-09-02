@@ -537,6 +537,13 @@ describe('workflow v3 — contrato assíncrono do agente (AGENTS.md/CLAUDE.md)',
     expect(ciYml).toMatch(/github\.ref/)
   })
 
+  it('pre-push bloqueia push direto na main (defesa local no Free)', () => {
+    const hook = file('.githooks/pre-push')
+    expect(hook).toMatch(/refs\/heads\/main/)
+    expect(hook).toMatch(/bloqueado/i)
+    expect(hook).toContain('scripts/verify.mjs') // segue validando também
+  })
+
   it('operações destrutivas continuam exigindo humano (auto-merge não autoriza)', () => {
     expect(agents).toMatch(/destrutiv/i)
     expect(agents).toMatch(/confirmação explícita/i)

@@ -210,12 +210,23 @@ export async function processCheckpoint(
 
 export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
   const base = apiBaseUrl.replace(/\/$/, '')
+  // CodeQL js/file-access-to-http sinaliza dado de arquivo (o conteúdo dos
+  // arquivos do changeset, lido por defaultCommitReader em changeset.ts)
+  // chegando a um fetch(). Isso é o PROPÓSITO desta função: enviar o
+  // checkpoint (código do PRÓPRIO usuário) ao backend do Supremo que ele
+  // mesmo configurou (apiBaseUrl vem de .supremo/project.json, escrito pelo
+  // bootstrap — nunca de input não confiável), não uma exfiltração acidental
+  // de um arquivo sensível não relacionado. Suprimido nas 2 linhas exatas
+  // abaixo com esta justificativa — a regra e o job continuam ativos para
+  // qualquer outro fluxo novo.
   const postJson = async (route: string, body: unknown): Promise<unknown> => {
     let res: Response
     try {
+      // codeql[js/file-access-to-http] changeset do usuário → backend que ele configurou (ver nota acima)
       res = await fetch(`${base}${route}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // codeql[js/file-access-to-http] mesmo fluxo intencional (ver nota acima)
         body: JSON.stringify(body),
       })
     } catch {

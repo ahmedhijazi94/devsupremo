@@ -6,6 +6,7 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { createOAuthState } from '@/lib/oauth-state'
+import { GITHUB_OAUTH_SCOPE_STRING } from '@/lib/github/scopes'
 
 /** Se o app OAuth do Supabase existe neste ambiente. */
 export async function isSupabaseOAuthAvailable(): Promise<boolean> {
@@ -28,11 +29,12 @@ export async function connectGithubAccount(projectId?: string) {
 
   const state = await createOAuthState(supabase, user.id, 'github', projectId)
 
-  // Redirecionar para GitHub OAuth com escopos necessários para criar repos
+  // Escopos necessários para criar repos E listar organizações do usuário
+  // (read:org — sem ele /user/orgs volta vazio e nenhuma org aparece como owner).
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID!,
     redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/auth/github-account/callback`,
-    scope: 'repo,read:user,user:email,delete_repo,workflow',
+    scope: GITHUB_OAUTH_SCOPE_STRING,
     state,
   })
 

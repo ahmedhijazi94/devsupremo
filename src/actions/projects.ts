@@ -10,6 +10,7 @@ import {
   isOwnerAllowed,
   ownerTypeOf,
 } from '@/lib/github/owners'
+import { accountNeedsReconnect } from '@/lib/github/scopes'
 import type { ProjectKind } from '@/lib/templates/project-files'
 
 const activateProjectSchema = z.object({
@@ -328,25 +329,35 @@ export async function deleteProject(
  */
 export async function getOwnerChoices(): Promise<{
   owners: { login: string; type: 'personal' | 'organization' }[]
+  /** true = a conta GitHub existe mas falta scope (ex.: read:org) → reautorizar. */
+  needsReconnect: boolean
+  /** true = nenhuma conta GitHub conectada ainda. */
+  notConnected: boolean
 }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { owners: [] }
+  if (!user) return { owners: [], needsReconnect: false, notConnected: true }
 
   const { data: gh } = await supabase
     .from('github_accounts')
-    .select('login, access_token_encrypted')
+    .select('login, access_token_encrypted, scopes')
     .eq('user_id', user.id)
     .maybeSingle()
-  if (!gh) return { owners: [] }
+  if (!gh) return { owners: [], needsReconnect: false, notConnected: true }
+
+  // Nunca esconder a falta de scope: uma conexão sem read:org lista só a conta
+  // pessoal, então sinalizamos reconexão em vez de fingir que está completa.
+  const needsReconnect = accountNeedsReconnect(
+    (gh as { scopes: string[] | null }).scopes,
+  )
 
   const owners = await getSelectableOwners(
     decryptToken((gh as { access_token_encrypted: string }).access_token_encrypted),
     (gh as { login: string }).login,
   )
-  return { owners }
+  return { owners, needsReconnect, notConnected: false }
 }
 
 export async function createEmptyProject(

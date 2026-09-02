@@ -4,7 +4,54 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { classifyRisk } from './verify-classifier'
-import { harnessFiles, harnessPackageScripts, verifyScript, setupLocalScript } from './harness'
+import {
+  decidePreviewAction,
+  harnessFiles,
+  harnessPackageScripts,
+  previewSupervisorScript,
+  verifyScript,
+  setupLocalScript,
+} from './harness'
+
+describe('preview supervisor (v3.1) — decisão pura', () => {
+  it('vivo + saudável → reusa (uma instância só)', () => {
+    expect(decidePreviewAction({ pidAlive: true, healthy: true })).toBe('reuse')
+  })
+  it('vivo mas não responde (zumbi) → reinicia', () => {
+    expect(decidePreviewAction({ pidAlive: true, healthy: false })).toBe('restart')
+  })
+  it('nada rodando (morto/ausente) → inicia', () => {
+    expect(decidePreviewAction({ pidAlive: false, healthy: false })).toBe('start')
+    expect(decidePreviewAction({ pidAlive: false, healthy: true })).toBe('start')
+  })
+})
+
+describe('preview supervisor (v3.1) — script gerado é determinístico', () => {
+  const src = previewSupervisorScript()
+  it('sobe DESACOPLADO (detached + unref) para sobreviver ao turno', () => {
+    expect(src).toMatch(/detached:\s*true/)
+    expect(src).toContain('.unref()')
+  })
+  it('mantém UMA instância via pidfile + health check', () => {
+    expect(src).toContain('preview.pid')
+    expect(src).toMatch(/http\.get/)
+  })
+  it('usa porta estável do projeto', () => {
+    expect(src).toMatch(/process\.env\.PORT \|\| 3000/)
+  })
+  it('expõe ensure/status/stop', () => {
+    for (const c of ['ensure', 'status', 'stop']) expect(src).toContain(c)
+  })
+  it('preview.mjs está no manifesto do harness', () => {
+    expect(Object.keys(harnessFiles())).toContain('scripts/preview.mjs')
+  })
+  it('scripts npm preview:ensure/status/stop existem', () => {
+    const s = harnessPackageScripts()
+    expect(s['preview:ensure']).toBe('node scripts/preview.mjs ensure')
+    expect(s['preview:status']).toBe('node scripts/preview.mjs status')
+    expect(s['preview:stop']).toBe('node scripts/preview.mjs stop')
+  })
+})
 
 describe('classifyRisk', () => {
   it('cosmético → quick', () => {
@@ -56,11 +103,12 @@ describe('classifyRisk', () => {
 })
 
 describe('harness generator', () => {
-  it('emite os 4 arquivos do harness', () => {
+  it('emite os 5 arquivos do harness (inclui o supervisor de preview)', () => {
     const files = harnessFiles()
     expect(Object.keys(files).sort()).toEqual([
       '.githooks/pre-commit',
       '.githooks/pre-push',
+      'scripts/preview.mjs',
       'scripts/setup-local.mjs',
       'scripts/verify.mjs',
     ])

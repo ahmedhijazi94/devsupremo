@@ -46,7 +46,12 @@ import {
 // Trata a corrida de auto-merge durante a edição (preserva local → nova branch da
 // main). main protegida (sem push direto/force/bypass). Destrutivo continua exigindo
 // humano. concurrency+cancel-in-progress já na ci.yml.
-export const TEMPLATE_VERSION = '3.0.0'
+// 3.1.0: experiência Lovable sem perder segurança. Preview PERSISTENTE (supervisor
+// scripts/preview.mjs: detached, pidfile, porta estável, health, reuse/restart —
+// sobrevive ao turno). Fast dev loop por RISCO (LOW/MEDIUM/HIGH; pesado em background).
+// Checkpoint por pedido + push assíncrono do Supremo (agente não pede push/merge).
+// AGENTS/CLAUDE: preview:ensure, hot path, anti-churn de infra em microfeature.
+export const TEMPLATE_VERSION = '3.1.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.0.0'
@@ -708,6 +713,10 @@ test-results/
 # segredo, mas é por-máquina e não deve ir ao Git (cada checkout linka o seu).
 supabase/.temp/
 supabase/.branches/
+
+# Supremo v3.1: estado por-máquina do supervisor de preview (não versionar).
+.supremo/preview.pid
+.supremo/preview.log
 
 *.log
 .DS_Store
@@ -2608,34 +2617,46 @@ ${description}
 Escreva o teste junto com o código, não depois. Cobertura mínima de 70%,
 exigida pelo CI — não é sugestão.
 
-## Ciclo de desenvolvimento (v3 — rápido e assíncrono)
+## Ciclo de desenvolvimento (v3.1 — rápido e assíncrono)
 
 O usuário NÃO acompanha branch/PR/CI/merge — isso é infraestrutura invisível. A
 experiência é: **usuário pede → você implementa → o preview atualiza → o usuário pede
 outra coisa**. A CI roda em BACKGROUND e o auto-merge acontece sozinho quando todos os
 required checks do HEAD atual ficam verdes.
 
-Para cada pedido normal:
+### Preview PERSISTENTE (v3.1)
+No início de todo pedido, garanta o preview com **\`npm run preview:ensure\`**. Ele é
+INFRAESTRUTURA da sessão (processo desacoplado, porta estável, HMR) — reusa se já está
+saudável, reinicia se morreu. **NUNCA** rode \`npm run dev\` à mão: um dev efêmero morre
+quando seu comando/turno termina e o preview cai. Não mate/recrie o preview a cada
+prompt; o HMR reflete as mudanças no mesmo servidor.
 
-1. Sincronize só o estado Git necessário (rápido, não bloqueante).
-2. Cheque UMA vez, sem bloquear, se há uma falha de CI ANTERIOR já concluída e
-   relevante. Se estiver \`RUNNING\`, ignore para fins de bloqueio e siga. Se
-   \`SUCCESS\`, já será/pôde ser auto-mergeada. Se \`FAILED\`, classifique (ver abaixo).
-3. **Implemente** a mudança.
-4. Mantenha o **dev server/preview VIVO** e reutilize — não mate/recrie a cada prompt.
-5. Use **HMR**; não rode build de produção nem re-setup já válido à toa.
-6. **Inspecione o preview** quando fizer sentido (mudança visual aparece em segundos).
-7. Crie/atualize **só os testes relacionados** à mudança (escritos junto, não depois).
-8. Rode **\`npm run verify\`** — comando PADRÃO, adaptativo. O harness escolhe o nível
-   (QUICK / SECURITY / FULL) pelo risco; **não** troque por uma lista fixa como
-   \`npm run typecheck && npm run lint && npm test\`, e **não** rode \`verify:full\` em
-   toda microalteração.
-9. Corrija falhas locais.
-10. Faça um **commit lógico** (\`feat:\`/\`fix:\`/\`refactor:\`/\`test:\`/\`security:\`/
-    \`docs:\`/\`chore:\`).
-11. **Push** — mas antes veja "Corrida de auto-merge" abaixo.
-12. Deixe o GitHub/CI seguir em **BACKGROUND**.
-13. **Devolva o controle ao usuário IMEDIATAMENTE.**
+### Hot path × integração — por RISCO (v3.1)
+Separe o que BLOQUEIA a resposta (hot path, proporcional ao risco) do que roda em
+BACKGROUND (a CI é a barreira definitiva antes da main):
+
+- **LOW** (CSS/layout/copy/componente visual sem regra sensível): só lint/typecheck do
+  que mudou + testes relacionados. Segundos. NÃO rode build/suíte ampla/RLS aqui.
+- **MEDIUM** (lógica/Server Action/API/feature normal): testes relacionados +
+  typecheck/lint necessários.
+- **HIGH/SECURITY** (migration/RLS/auth/multitenancy/secrets/permissions/billing/infra):
+  gates locais mais fortes antes do checkpoint.
+
+\`npm run verify\` é adaptativo e escolhe isso (QUICK/SECURITY/FULL) pelo git diff — use-o
+e **não** rode \`verify:full\` em toda microalteração. LOW não é inseguro: o trabalho
+pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/CI.
+
+### Passos de cada pedido normal
+1. \`npm run preview:ensure\` (garante o preview) e sincronize só o Git necessário.
+2. Cheque UMA vez, sem bloquear, se há falha de CI ANTERIOR relevante (RUNNING → siga;
+   FAILED → classifique; SUCCESS → já pôde auto-mergear).
+3. **Implemente** a mudança; veja no preview (HMR).
+4. Crie/atualize **só os testes relacionados** (escritos junto).
+5. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
+6. Corrija falhas locais do hot path.
+7. **Checkpoint**: um commit lógico por pedido concluído (\`feat:\`/\`fix:\`/…). O
+   push/PR/CI/auto-merge é infraestrutura do Supremo, assíncrona — ver abaixo.
+8. **Devolva o controle ao usuário IMEDIATAMENTE.** Não espere CI, não peça merge.
 
 ### NUNCA (v3)
 - **NUNCA espere a CI depois de um push normal.** Não faça polling, não fique abrindo
@@ -2646,6 +2667,10 @@ Para cada pedido normal:
   para "ficar verde". Se um gate falha, corrija o CÓDIGO (ou o teste, se ele estiver
   errado) — nunca remova a barreira.
 - **NUNCA** faça merge só porque você "acha que terminou": quem libera é o GitHub.
+- **NUNCA** rode \`npm run dev\` à mão (mata o preview persistente) — use \`preview:ensure\`.
+- **NUNCA** "melhore" infraestrutura numa microfeature (LOW): não edite \`AGENTS.md\`,
+  \`CLAUDE.md\`, \`tsconfig*\`, CI, \`package.json\`, migrations ou config estrutural sem
+  necessidade técnica concreta do pedido. Ler as regras é ok; mexer por impulso não.
 
 ### SEMPRE (v3)
 - **Continue desenvolvendo enquanto a CI roda de forma assíncrona.**
@@ -2745,13 +2770,15 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - Mudar o schema do banco online só por **migration versionada + \`npx supabase db
   push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
   "Banco de dados online" no \`AGENTS.md\`.
-- **Rodar \`npm run verify\`** — comando padrão, adaptativo (o harness escolhe
-  QUICK/SECURITY/FULL pelo risco). **Não** use lista fixa como \`npm run typecheck &&
-  npm run lint && npm test\`, e **não** rode \`verify:full\` em toda microalteração.
-- Trabalhar em **branch própria**, com **commit lógico** e **push** — e então
-  **devolver o controle ao usuário imediatamente**
+- Garantir o preview com **\`npm run preview:ensure\`** no início do pedido (persistente,
+  HMR); **nunca** \`npm run dev\` à mão (mata o preview). Ver "Preview PERSISTENTE".
+- **Rodar \`npm run verify\`** — comando padrão, adaptativo, **proporcional ao risco**
+  (LOW só lint/typecheck do que mudou + testes relacionados; HIGH/SECURITY gates fortes).
+  **Não** use lista fixa nem rode \`verify:full\` em toda microalteração — o pesado
+  (build/suíte/RLS/CodeQL) roda em background/CI.
+- Fazer um **checkpoint** (commit lógico) por pedido concluído e **devolver o controle
+  imediatamente** — push/PR/CI/auto-merge são infraestrutura assíncrona do Supremo
 - **Continuar desenvolvendo enquanto a CI roda em background** (ela é assíncrona)
-- Manter o **dev server/preview vivo** e usar **HMR** (não recriar a cada prompt)
 - **Antes de cada commit/push, re-checar se a PR de desenvolvimento foi auto-mergeada
   durante a edição** — se sim: preservar o local, criar nova branch a partir da \`main\`,
   reaplicar e dar push (nunca push direto na \`main\`)
@@ -2763,6 +2790,9 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - Tabela sem RLS
 - Segredo em código
 - Validação de acesso no cliente
+- **Rodar \`npm run dev\` à mão** (mata o preview persistente) — use \`preview:ensure\`
+- **"Melhorar" infra numa microfeature LOW** (AGENTS.md/CLAUDE.md/tsconfig/CI/package.json/
+  migrations/config) sem necessidade técnica concreta — evite churn de infraestrutura
 - **Esperar ou pollar a CI depois de um push normal** — a CI é assíncrona; continue
 - **Commit direto na \`main\`; force push na \`main\`; bypass de required checks**
 - **Desativar/comentar teste, afrouxar threshold, alterar ruleset ou remover gate para

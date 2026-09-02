@@ -345,13 +345,14 @@ Projeto pronto:
   ${dest}
 `);
   if (opts.start) {
-    console.log("Iniciando o dev server (Ctrl+C para sair)\u2026\n");
-    run("npm", ["run", "dev"], dest);
+    console.log("Subindo o preview persistente\u2026\n");
+    run("npm", ["run", "preview:ensure"], dest);
+    ok("Preview no ar \u2014 reutilizado a cada mudan\xE7a (npm run preview:status)");
   } else {
     console.log(`Agora:
 
   cd ${dest}
-  npm run dev
+  npm run preview:ensure
 `);
   }
 }

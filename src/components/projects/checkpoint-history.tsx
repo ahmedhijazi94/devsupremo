@@ -1,6 +1,8 @@
-import { Database, GitPullRequest, History, Sparkles, RotateCcw } from 'lucide-react'
-import { formatRelativeTime } from '@/lib/utils'
+import { Database, GitPullRequest, History, Sparkles, RotateCcw, CircleDot } from 'lucide-react'
+import { formatRelativeTime, cn } from '@/lib/utils'
+import { computeActiveCheckpointId } from '@/lib/checkpoint/restore'
 import { RestoreCheckpointButton } from './restore-checkpoint-button'
+import { Pill, type PillTone } from '@/components/ui/pill'
 import type { CheckpointHistoryItem } from '@/actions/checkpoints'
 
 /**
@@ -9,17 +11,19 @@ import type { CheckpointHistoryItem } from '@/actions/checkpoints'
  * voltar a um ponto anterior: status humano, resumo, arquivos/migrations no
  * detalhe, e "Restaurar" cria um pedido (aplicado pelo daemon da máquina
  * original) — nunca um reset. Ver `humanCheckpointStatus`.
+ *
+ * Badge "Ativo" (v3.1 finalização): marca o item que representa o estado
+ * ATUALMENTE aplicado no projeto — nunca a operação mais recente por si só. Um
+ * `Restaurar "X"` devolve o Ativo pro checkpoint-ALVO (X), não fica no
+ * registro técnico do restore. Ver `computeActiveCheckpointId`.
  */
 
-const STATUS_STYLE: Record<
-  CheckpointHistoryItem['status'],
-  { dot: string; label: string }
-> = {
-  Salvando: { dot: 'bg-line-strong', label: 'Salvando' },
-  Publicando: { dot: 'bg-info-ink', label: 'Publicando' },
-  Testando: { dot: 'bg-wait-ink', label: 'Testando' },
-  Integrado: { dot: 'bg-up-ink', label: 'Integrado' },
-  Falhou: { dot: 'bg-down-ink', label: 'Falhou' },
+const STATUS_TONE: Record<CheckpointHistoryItem['status'], PillTone> = {
+  Salvando: 'neutral',
+  Publicando: 'info',
+  Testando: 'wait',
+  Integrado: 'up',
+  Falhou: 'down',
 }
 
 const RISK_LABEL: Record<CheckpointHistoryItem['riskLevel'], string> = {
@@ -36,8 +40,8 @@ interface CheckpointHistoryProps {
 export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) {
   if (items.length === 0) {
     return (
-      <div className="border-line bg-surface rounded-[var(--radius-inner)] border border-dashed p-6 text-center">
-        <History className="text-muted mx-auto mb-2 size-5" />
+      <div className="border-line bg-surface rounded-[var(--radius-inner)] border border-dashed p-8 text-center">
+        <History className="text-muted mx-auto mb-2.5 size-5" />
         <p className="text-muted text-sm">
           Nenhum checkpoint ainda. Cada pedido concluído no seu editor aparece aqui.
         </p>
@@ -45,62 +49,82 @@ export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) 
     )
   }
 
+  const activeId = computeActiveCheckpointId(items)
+
   return (
-    <ul className="flex flex-col gap-2">
+    <ul className="flex flex-col gap-2.5">
       {items.map((item) => {
-        const style = STATUS_STYLE[item.status]
+        const isActive = item.id === activeId
+        const inProgress =
+          item.status === 'Salvando' || item.status === 'Publicando' || item.status === 'Testando'
         return (
           <li
             key={item.id}
-            className="border-line bg-surface rounded-[var(--radius-inner)] border p-3"
+            className={cn(
+              'rounded-[var(--radius-inner)] border p-3.5 transition-colors',
+              isActive
+                ? 'border-ink/15 bg-sunken shadow-[0_1px_0_0_rgba(0,0,0,0.02)]'
+                : 'border-line bg-surface hover:border-line-strong',
+            )}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className={`size-2 shrink-0 rounded-full ${style.dot}`} />
-                  <p className="text-ink truncate text-sm font-medium">{item.summary}</p>
+                <div className="mb-1.5 flex items-center gap-1.5">
+                  {isActive && (
+                    <Pill tone="ink" icon={CircleDot} className="shrink-0">
+                      Ativo
+                    </Pill>
+                  )}
+                  <p className="text-ink min-w-0 truncate text-sm font-semibold">{item.summary}</p>
                   {item.restoredFromCheckpointId && (
                     <span
                       title="Resultado de uma restauração"
-                      className="text-info-ink inline-flex shrink-0 items-center gap-0.5 text-[11px]"
+                      className="text-info-ink bg-info/60 inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
                     >
-                      <RotateCcw className="size-3" />
+                      <RotateCcw className="size-2.5" />
                       restore
                     </span>
                   )}
                 </div>
-                <div className="text-muted mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                  <span>{style.label}</span>
-                  <span>·</span>
-                  <span>{formatRelativeTime(item.createdAt)}</span>
-                  <span>·</span>
-                  <span className="font-mono">{RISK_LABEL[item.riskLevel]}</span>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Pill tone={STATUS_TONE[item.status]} dot pulse={inProgress}>
+                    {item.status}
+                  </Pill>
+                  <span className="text-muted text-xs">{formatRelativeTime(item.createdAt)}</span>
+                  <span className="text-line-strong">·</span>
+                  <span className="text-muted font-mono text-[11px]">
+                    {RISK_LABEL[item.riskLevel]}
+                  </span>
                   {item.migrations.length > 0 && (
-                    <span className="inline-flex items-center gap-1">
+                    <span className="text-muted inline-flex items-center gap-1 text-xs">
                       <Database className="size-3" />
                       {item.migrations.length}{' '}
                       {item.migrations.length === 1 ? 'migration' : 'migrations'}
                     </span>
                   )}
                   {item.prNumber && (
-                    <span className="inline-flex items-center gap-1">
+                    <span className="text-muted inline-flex items-center gap-1 text-xs">
                       <GitPullRequest className="size-3" />#{item.prNumber}
                     </span>
                   )}
                 </div>
+
                 {item.migrations.length > 0 && item.status !== 'Integrado' && (
-                  <p className="text-wait-ink mt-1.5 flex items-center gap-1 text-[11px]">
-                    <Sparkles className="size-3" />
+                  <p className="text-wait-ink mt-2 flex items-center gap-1 text-[11px]">
+                    <Sparkles className="size-3 shrink-0" />
                     Este ponto inclui alterações de banco. Restaurar o código não altera
                     o schema; mudanças destrutivas exigem confirmação separada.
                   </p>
                 )}
               </div>
-              <RestoreCheckpointButton
-                projectId={projectId}
-                checkpointId={item.id}
-                summary={item.summary}
-              />
+              <div className="pt-0.5">
+                <RestoreCheckpointButton
+                  projectId={projectId}
+                  checkpointId={item.id}
+                  summary={item.summary}
+                />
+              </div>
             </div>
           </li>
         )

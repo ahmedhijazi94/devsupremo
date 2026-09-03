@@ -4,6 +4,7 @@ import {
   applyRestore,
   findLocalCommitForCheckpoint,
   isEmptyPatch,
+  isKnownNextTsconfigNoise,
   restoreCommitMessage,
   RestoreTargetNotFoundLocallyError,
   type RestoreDeps,
@@ -51,6 +52,10 @@ function fakeDeps(opts: {
   porcelain?: string
   diff?: string
   shas?: string[] // sequência de rev-parse HEAD
+  /** `git show HEAD:tsconfig.json` — só usado quando a salvaguarda checa ruído do Next. */
+  headTsconfig?: string
+  /** conteúdo ATUAL de tsconfig.json no worktree — null = arquivo ausente. */
+  worktreeTsconfig?: string | null
 }): { deps: RestoreDeps; calls: string[][]; queue: CheckpointRecord[]; applied: string[] } {
   const calls: string[][] = []
   const queue = [...opts.queue]
@@ -65,6 +70,7 @@ function fakeDeps(opts: {
       if (args[0] === 'status') return opts.porcelain ?? ''
       if (args[0] === 'rev-parse') return `${shas[shaIdx++] ?? 'sha-x'}\n`
       if (args[0] === 'diff') return opts.diff ?? ''
+      if (args[0] === 'show') return opts.headTsconfig ?? ''
       return ''
     },
     readQueue: () => [...queue],
@@ -78,6 +84,7 @@ function fakeDeps(opts: {
     applyPatch: (patch) => {
       applied.push(patch)
     },
+    readWorktreeFile: () => opts.worktreeTsconfig ?? null,
   }
   return { deps, calls, queue, applied }
 }
@@ -173,5 +180,138 @@ describe('applyRestore', () => {
         expect(call).toContain('--no-verify')
       }
     })
+  })
+})
+
+// ── Ruído conhecido do Next em tsconfig.json (v3-10) ────────────────────────
+
+const BASE_TSCONFIG = JSON.stringify(
+  {
+    compilerOptions: { strict: true, jsx: 'react-jsx' },
+    include: ['next-env.d.ts', '**/*.ts', '**/*.tsx', '.next/types/**/*.ts'],
+    exclude: ['node_modules'],
+  },
+  null,
+  2,
+)
+
+/** Next (dev server / typed routes) adicionou sozinho `.next/dev/types/**\/*.ts`. */
+const NEXT_NOISE_TSCONFIG = JSON.stringify(
+  {
+    compilerOptions: { strict: true, jsx: 'react-jsx' },
+    include: [
+      'next-env.d.ts',
+      '**/*.ts',
+      '**/*.tsx',
+      '.next/types/**/*.ts',
+      '.next/dev/types/**/*.ts',
+    ],
+    exclude: ['node_modules'],
+  },
+  null,
+  2,
+)
+
+/** Mudança REAL do usuário (não é o padrão do Next) — desativou `strict`. */
+const REAL_TSCONFIG_CHANGE = JSON.stringify(
+  {
+    compilerOptions: { strict: false, jsx: 'react-jsx' },
+    include: ['next-env.d.ts', '**/*.ts', '**/*.tsx', '.next/types/**/*.ts'],
+    exclude: ['node_modules'],
+  },
+  null,
+  2,
+)
+
+describe('isKnownNextTsconfigNoise — pura', () => {
+  it('só o include mudou, e só com a assinatura do Next (.next/.../types/**/*.ts) → ruído', () => {
+    expect(isKnownNextTsconfigNoise(BASE_TSCONFIG, NEXT_NOISE_TSCONFIG)).toBe(true)
+  })
+
+  it('mudança real (fora de include) → NUNCA ruído, mesmo com include intacto', () => {
+    expect(isKnownNextTsconfigNoise(BASE_TSCONFIG, REAL_TSCONFIG_CHANGE)).toBe(false)
+  })
+
+  it('entrada de include que NÃO bate com a assinatura do Next → NUNCA ruído (fail-closed)', () => {
+    const after = JSON.stringify(
+      {
+        compilerOptions: { strict: true, jsx: 'react-jsx' },
+        include: ['next-env.d.ts', '**/*.ts', '**/*.tsx', '.next/types/**/*.ts', 'scripts/**/*.ts'],
+        exclude: ['node_modules'],
+      },
+      null,
+      2,
+    )
+    expect(isKnownNextTsconfigNoise(BASE_TSCONFIG, after)).toBe(false)
+  })
+
+  it('nada mudou → não é "ruído" (não houve diferença nenhuma)', () => {
+    expect(isKnownNextTsconfigNoise(BASE_TSCONFIG, BASE_TSCONFIG)).toBe(false)
+  })
+
+  it('JSON inválido → fail-closed (nunca trata como ruído)', () => {
+    expect(isKnownNextTsconfigNoise(BASE_TSCONFIG, '{ not valid json')).toBe(false)
+  })
+})
+
+/**
+ * E2E real (v3-10): depois de um restore apareceu um checkpoint de
+ * "salvaguarda automática antes do restore" só por causa da mutação
+ * transitória/automática do Next em tsconfig.json — poluindo o Histórico com
+ * um checkpoint compensatório inútil.
+ */
+describe('applyRestore — ruído do Next em tsconfig.json não gera salvaguarda desnecessária (v3-10)', () => {
+  it('tsconfig.json é a ÚNICA mudança, e é o ruído conhecido do Next → NENHUMA salvaguarda é criada', () => {
+    const { deps, queue, calls } = fakeDeps({
+      queue: [record()],
+      porcelain: ' M tsconfig.json\n',
+      diff: 'diff --git a/app/page.tsx b/app/page.tsx\n@@ ...',
+      shas: ['head-atual', 'novo-sha-E'],
+      headTsconfig: BASE_TSCONFIG,
+      worktreeTsconfig: NEXT_NOISE_TSCONFIG,
+    })
+    const before = queue.length
+    const out = applyRestore('cpB', 'deixar home minimalista', 'proj-1', deps)
+
+    expect(out.applied).toBe(true)
+    // só o checkpoint E do restore entrou na fila — nenhuma salvaguarda
+    expect(queue.length).toBe(before + 1)
+    expect(queue.some((r) => r.summary === 'Salvaguarda automática antes do restore')).toBe(false)
+    // nunca deu `git add -A` (só a salvaguarda faz isso) nem um segundo commit
+    expect(calls.some((c) => c[0] === 'add')).toBe(false)
+    const commitCalls = calls.filter((c) => c[0] === 'commit')
+    expect(commitCalls).toHaveLength(1)
+    expect(commitCalls[0]).toContain(restoreCommitMessage('deixar home minimalista'))
+  })
+
+  it('tsconfig.json mudou por um motivo REAL (não é o padrão do Next) → salvaguarda roda normalmente', () => {
+    const { deps, queue } = fakeDeps({
+      queue: [record()],
+      porcelain: ' M tsconfig.json\n',
+      diff: 'diff --git a/app/page.tsx b/app/page.tsx\n@@ ...',
+      shas: ['sha-salvaguarda', 'head-atual', 'novo-sha-E'],
+      headTsconfig: BASE_TSCONFIG,
+      worktreeTsconfig: REAL_TSCONFIG_CHANGE,
+    })
+    const out = applyRestore('cpB', 'x', 'proj-1', deps)
+
+    expect(out.applied).toBe(true)
+    const summaries = queue.map((r) => r.summary)
+    expect(summaries.some((s) => s.includes('Salvaguarda automática'))).toBe(true)
+  })
+
+  it('ruído do Next JUNTO de outro arquivo real → salvaguarda roda normalmente (só o caso "só tsconfig.json" é dispensado)', () => {
+    const { deps, queue } = fakeDeps({
+      queue: [record()],
+      porcelain: ' M tsconfig.json\n M app/dirty.ts\n',
+      diff: 'diff --git a/app/page.tsx b/app/page.tsx\n@@ ...',
+      shas: ['sha-salvaguarda', 'head-atual', 'novo-sha-E'],
+      headTsconfig: BASE_TSCONFIG,
+      worktreeTsconfig: NEXT_NOISE_TSCONFIG,
+    })
+    const out = applyRestore('cpB', 'x', 'proj-1', deps)
+
+    expect(out.applied).toBe(true)
+    expect(queue.some((r) => r.summary === 'Salvaguarda automática antes do restore')).toBe(true)
   })
 })

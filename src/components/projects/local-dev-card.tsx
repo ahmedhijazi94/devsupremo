@@ -23,16 +23,20 @@ export function LocalDevCard({ command }: { command: string }) {
   }
 
   return (
-    <section className="bg-surface rounded-[var(--radius-inner)] p-4">
-      <div className="mb-1 flex items-center gap-2">
-        <TerminalSquare className="text-ink h-4 w-4" />
-        <h2 className="text-sm font-semibold">Desenvolvimento Local</h2>
+    <section className="bg-surface rounded-[var(--radius-inner)] p-4 sm:p-5">
+      <div className="mb-3.5 flex items-start gap-2.5">
+        <div className="bg-sunken flex size-7 shrink-0 items-center justify-center rounded-full">
+          <TerminalSquare className="text-ink-soft size-3.5" />
+        </div>
+        <div className="min-w-0 pt-0.5">
+          <h2 className="text-ink text-sm font-semibold">Desenvolvimento Local</h2>
+          <p className="text-muted mt-0.5 text-xs leading-relaxed">
+            Cole no terminal e autorize no navegador. O workspace clona, configura o{' '}
+            <code>.env.local</code>, instala e roda o baseline sozinho. Depois:{' '}
+            <span className="text-ink font-mono">npm run dev</span>.
+          </p>
+        </div>
       </div>
-      <p className="text-muted mb-3 text-xs">
-        Cole no terminal e autorize no navegador. O workspace clona, configura o{' '}
-        <code>.env.local</code>, instala e roda o baseline sozinho. Depois:{' '}
-        <span className="text-ink font-mono">npm run dev</span>.
-      </p>
 
       <div className="bg-sunken flex items-start gap-2 rounded-[var(--radius-control)] p-2.5">
         <code className="text-ink min-w-0 flex-1 break-all font-mono text-xs">
@@ -51,7 +55,7 @@ export function LocalDevCard({ command }: { command: string }) {
         </button>
       </div>
 
-      <p className="text-muted mt-2 text-xs">
+      <p className="text-muted mt-2.5 text-xs">
         Sem segredo no comando — a autorização é no navegador, por dispositivo, e
         revogável.
       </p>

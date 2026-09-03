@@ -1,6 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import Link from 'next/link'
+import type { LucideIcon } from 'lucide-react'
 import {
   ArrowLeft,
   ExternalLink,
@@ -11,6 +12,8 @@ import {
   Database,
   ShieldCheck,
   Boxes,
+  History,
+  Activity,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { DeleteProjectDialog } from '@/components/projects/delete-project-dialog'
@@ -19,6 +22,7 @@ import { LiveGateBadge } from '@/components/projects/live-gate-badge'
 import { TemplateUpdateCard } from '@/components/projects/template-update-card'
 import { SecretsCard } from '@/components/projects/secrets-card'
 import { LocalDevCard } from '@/components/projects/local-dev-card'
+import { Pill, type PillTone } from '@/components/ui/pill'
 import { bootstrapCommand } from '@/lib/bootstrap/command'
 import { TEMPLATE_VERSION } from '@/lib/templates/project-files'
 import { CAPABILITIES, type CapabilityId } from '@/lib/capabilities'
@@ -33,7 +37,6 @@ import {
   connectGithubAccount,
   connectSupabaseAccount,
 } from '@/actions/accounts'
-import { cn } from '@/lib/utils'
 import type { Project } from '@/types/database'
 
 /**
@@ -59,15 +62,20 @@ const PROFILE_LABEL: Record<string, string> = {
   sensitive: 'Sensível',
 }
 
-/** Selo do estado de provisioning (independente do status funcional). */
+/**
+ * Selo do estado de provisioning (independente do status funcional).
+ * `satisfies` (não `Record<string, …>`) preserva as chaves LITERAIS —
+ * `keyof typeof PSTATE` continua o union fechado de sempre, então
+ * `PSTATE[pstate]` não vira `T | undefined` sob `noUncheckedIndexedAccess`.
+ */
 const PSTATE = {
-  ready: { label: 'READY', tone: 'text-up-ink', icon: CheckCircle2, spin: false },
-  provisioning: { label: 'Provisionando', tone: 'text-wait-ink', icon: Loader2, spin: true },
-  scaffolding: { label: 'Gerando scaffold', tone: 'text-wait-ink', icon: Loader2, spin: true },
-  validating: { label: 'Validando', tone: 'text-wait-ink', icon: Loader2, spin: true },
-  failed: { label: 'Falhou', tone: 'text-down-ink', icon: AlertCircle, spin: false },
-  draft: { label: 'Rascunho', tone: 'text-muted', icon: AlertCircle, spin: false },
-} as const
+  ready: { label: 'READY', tone: 'up', icon: CheckCircle2, spin: false },
+  provisioning: { label: 'Provisionando', tone: 'wait', icon: Loader2, spin: true },
+  scaffolding: { label: 'Gerando scaffold', tone: 'wait', icon: Loader2, spin: true },
+  validating: { label: 'Validando', tone: 'wait', icon: Loader2, spin: true },
+  failed: { label: 'Falhou', tone: 'down', icon: AlertCircle, spin: false },
+  draft: { label: 'Rascunho', tone: 'neutral', icon: AlertCircle, spin: false },
+} satisfies Record<string, { label: string; tone: PillTone; icon: LucideIcon; spin: boolean }>
 
 export default async function ProjectPage({
   params,
@@ -159,41 +167,40 @@ export default async function ProjectPage({
 
   return (
     <div className="min-h-dvh p-3 sm:p-4">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 sm:gap-4">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 sm:gap-5">
+        <Link
+          href="/dashboard"
+          className="text-muted hover:text-ink inline-flex w-fit shrink-0 items-center gap-1.5 px-1 text-xs font-medium transition-colors"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Dashboard
+        </Link>
+
         {/* Cabeçalho */}
-        <header className="flex items-center gap-4 px-1">
-          <Link
-            href="/dashboard"
-            className="bg-surface inline-flex shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors hover:opacity-80"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Dashboard
-          </Link>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="truncate text-base font-semibold">{project.name}</h1>
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1 text-xs font-semibold',
-                  state.tone,
-                )}
-              >
-                <state.icon
-                  className={cn('h-3.5 w-3.5', state.spin && 'animate-spin')}
-                />
-                {state.label}
-              </span>
-              {provisioned && <LiveGateBadge projectId={project.id} />}
+        <header className="bg-surface rounded-[var(--radius-inner)] p-4 sm:p-5">
+          <div className="flex items-start gap-4">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-ink truncate text-lg font-semibold tracking-tight sm:text-xl">
+                {project.name}
+              </h1>
+              {project.description && (
+                <p className="text-muted mt-0.5 truncate text-sm">
+                  {project.description}
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                <Pill tone={state.tone} icon={state.icon} pulse={state.spin}>
+                  {state.label}
+                </Pill>
+                {provisioned && <LiveGateBadge projectId={project.id} />}
+              </div>
             </div>
-            {project.description && (
-              <p className="text-muted truncate text-xs">{project.description}</p>
-            )}
-          </div>
-          <div className="ml-auto">
-            <DeleteProjectDialog
-              projectId={project.id}
-              projectName={project.name}
-            />
+            <div className="shrink-0">
+              <DeleteProjectDialog
+                projectId={project.id}
+                projectName={project.name}
+              />
+            </div>
           </div>
         </header>
 
@@ -271,36 +278,56 @@ export default async function ProjectPage({
         {/* Histórico (v3.1) — cada pedido concluído no editor local, sem precisar
             abrir o GitHub. Só aparece quando o projeto já usa checkpoint/daemon. */}
         {checkpoints.length > 0 && (
-          <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">
-            <div className="mb-3 shrink-0">
-              <h2 className="text-sm font-semibold">Histórico</h2>
-              <p className="text-muted text-xs">
-                Cada alteração pedida no seu editor. Publicação, CI e segurança
-                acontecem em background — o GitHub é infraestrutura, não algo que
-                você precisa abrir.
-              </p>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
+          <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4 sm:p-5">
+            <SectionHeader
+              icon={History}
+              title="Histórico"
+              subtitle="Cada alteração pedida no seu editor. Publicação, CI e segurança acontecem em background — o GitHub é infraestrutura, não algo que você precisa abrir."
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
               <CheckpointHistory projectId={project.id} items={checkpoints} />
             </div>
           </section>
         )}
 
         {/* Atividade */}
-        <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4">
-          <div className="mb-3 shrink-0">
-            <h2 className="text-sm font-semibold">Atividade</h2>
-            <p className="text-muted text-xs">
-              Cada proposta do agente, com o pull request e os gates.
-            </p>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+        <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4 sm:p-5">
+          <SectionHeader
+            icon={Activity}
+            title="Atividade"
+            subtitle="Cada proposta do agente, com o pull request e os gates."
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
             <ActivityFeed
               items={(activity ?? []) as unknown as ActivityItem[]}
               repoFullName={project.github_repo_full_name}
             />
           </div>
         </section>
+      </div>
+    </div>
+  )
+}
+
+/** Cabeçalho de seção consistente — ícone + título + subtítulo, mesma hierarquia
+ *  em Histórico, Atividade e nas demais seções da tela do projeto. */
+function SectionHeader({
+  icon: Icon,
+  title,
+  subtitle,
+}: {
+  icon: LucideIcon
+  title: string
+  subtitle: string
+}) {
+  return (
+    <div className="mb-3.5 flex shrink-0 items-start gap-2.5">
+      <div className="bg-sunken flex size-7 shrink-0 items-center justify-center rounded-full">
+        <Icon className="text-ink-soft size-3.5" />
+      </div>
+      <div className="min-w-0 pt-0.5">
+        <h2 className="text-ink text-sm font-semibold">{title}</h2>
+        <p className="text-muted mt-0.5 text-xs leading-relaxed">{subtitle}</p>
       </div>
     </div>
   )
@@ -318,21 +345,21 @@ function ProjectInfoCard({
   securityBaseline: string | null
 }) {
   return (
-    <section className="bg-surface rounded-[var(--radius-inner)] p-4">
-      <h2 className="mb-3 text-sm font-semibold">Projeto</h2>
-      <dl className="grid gap-3 sm:grid-cols-2">
+    <section className="bg-surface rounded-[var(--radius-inner)] p-4 sm:p-5">
+      <SectionHeader icon={Boxes} title="Projeto" subtitle="Capabilities e perfil de segurança do scaffold." />
+      <dl className="grid gap-4 sm:grid-cols-2">
         <div>
-          <dt className="text-muted mb-1 flex items-center gap-1.5 text-xs">
+          <dt className="text-muted mb-1.5 flex items-center gap-1.5 text-xs font-medium">
             <Boxes className="h-3.5 w-3.5" /> Capabilities
           </dt>
           <dd className="flex flex-wrap gap-1.5">
             {capabilities.length === 0 ? (
-              <span className="text-ink text-sm">só o CORE</span>
+              <span className="text-ink-soft text-sm">só o CORE</span>
             ) : (
               capabilities.map((id) => (
                 <span
                   key={id}
-                  className="bg-sunken text-ink rounded-full px-2 py-0.5 text-xs font-medium"
+                  className="bg-sunken text-ink rounded-full px-2.5 py-1 text-xs font-medium"
                 >
                   {CAPABILITIES[id]?.title ?? id}
                 </span>
@@ -341,7 +368,7 @@ function ProjectInfoCard({
           </dd>
         </div>
         <div>
-          <dt className="text-muted mb-1 flex items-center gap-1.5 text-xs">
+          <dt className="text-muted mb-1.5 flex items-center gap-1.5 text-xs font-medium">
             <ShieldCheck className="h-3.5 w-3.5" /> Perfil de segurança
           </dt>
           <dd className="text-ink text-sm font-medium">
@@ -349,11 +376,11 @@ function ProjectInfoCard({
           </dd>
         </div>
         <div>
-          <dt className="text-muted mb-1 text-xs">Scaffold</dt>
+          <dt className="text-muted mb-1.5 text-xs font-medium">Scaffold</dt>
           <dd className="text-ink font-mono text-sm">{scaffoldVersion ?? '—'}</dd>
         </div>
         <div>
-          <dt className="text-muted mb-1 text-xs">Security baseline</dt>
+          <dt className="text-muted mb-1.5 text-xs font-medium">Security baseline</dt>
           <dd className="text-ink font-mono text-sm">{securityBaseline ?? '—'}</dd>
         </div>
       </dl>
@@ -371,8 +398,8 @@ function ProvisionCard({
   failed: boolean
 }) {
   return (
-    <section className="bg-surface rounded-[var(--radius-inner)] p-4">
-      <h2 className="text-sm font-semibold">
+    <section className="bg-surface rounded-[var(--radius-inner)] p-4 sm:p-5">
+      <h2 className="text-ink text-sm font-semibold">
         {failed ? 'Retomar provisionamento' : 'Provisionar'}
       </h2>
       <p className="text-muted mt-1 mb-3 text-xs">
@@ -413,17 +440,16 @@ function IntegrationCard({
   actionLabel: string
 }) {
   return (
-    <section className="bg-surface rounded-[var(--radius-inner)] p-4">
+    <section className="bg-surface rounded-[var(--radius-inner)] p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-medium">{title}</h3>
+          <h3 className="text-ink text-sm font-medium">{title}</h3>
           <p className="text-muted text-xs">{subtitle}</p>
         </div>
         {connected ? (
-          <span className="text-up-ink inline-flex shrink-0 items-center gap-1 text-xs font-medium">
-            <CheckCircle2 className="h-3.5 w-3.5" />
+          <Pill tone="up" icon={CheckCircle2} className="shrink-0">
             Conectado
-          </span>
+          </Pill>
         ) : (
           <Database className="text-muted h-4 w-4 shrink-0" />
         )}

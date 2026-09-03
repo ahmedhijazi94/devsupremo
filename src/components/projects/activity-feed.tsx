@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { formatRelativeTime, truncate } from '@/lib/utils'
+import { Pill, type PillTone } from '@/components/ui/pill'
 import type { Json } from '@/types/database'
 
 export interface ActivityItem {
@@ -31,32 +32,15 @@ interface ActivityFeedProps {
   repoFullName: string | null
 }
 
-const PIPELINE_STATES = {
-  passed: {
-    icon: CheckCircle2,
-    label: 'Gates verdes',
-    className: 'text-up-ink',
-    dot: 'bg-up-ink',
-  },
-  failed: {
-    icon: XCircle,
-    label: 'Gate vermelho',
-    className: 'text-down-ink',
-    dot: 'bg-down-ink',
-  },
-  running: {
-    icon: Loader2,
-    label: 'Rodando',
-    className: 'text-wait-ink',
-    dot: 'bg-wait-ink',
-  },
-  pending: {
-    icon: Clock,
-    label: 'Na fila',
-    className: 'text-muted',
-    dot: 'bg-line-strong',
-  },
-} as const
+const PIPELINE_STATES: Record<
+  NonNullable<ActivityItem['pipeline_status']>,
+  { icon: typeof CheckCircle2; label: string; tone: PillTone; dot: string }
+> = {
+  passed: { icon: CheckCircle2, label: 'Gates verdes', tone: 'up', dot: 'bg-up-ink' },
+  failed: { icon: XCircle, label: 'Gate vermelho', tone: 'down', dot: 'bg-down-ink' },
+  running: { icon: Loader2, label: 'Rodando', tone: 'wait', dot: 'bg-wait-ink' },
+  pending: { icon: Clock, label: 'Na fila', tone: 'neutral', dot: 'bg-line-strong' },
+}
 
 function countFiles(filesChanged: Json | null): number {
   return Array.isArray(filesChanged) ? filesChanged.length : 0
@@ -90,12 +74,12 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
         const isLast = index === items.length - 1
 
         return (
-          <li key={item.id} className="relative flex gap-4 pb-5">
+          <li key={item.id} className="relative flex gap-3.5 pb-6 last:pb-0">
             {/* Trilho da timeline */}
             {!isLast && (
               <span
                 aria-hidden
-                className="bg-line-strong absolute top-5 left-[7px] h-full w-px"
+                className="bg-line absolute top-5 left-[7px] h-full w-px"
               />
             )}
 
@@ -106,9 +90,9 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
               }`}
             />
 
-            <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                <p className="text-sm leading-snug font-medium">
+                <p className="text-ink text-sm leading-snug font-medium">
                   {truncate(item.content, 120)}
                 </p>
                 <time
@@ -119,18 +103,11 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
                 </time>
               </div>
 
-              <div className="text-muted flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+              <div className="text-muted flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-xs">
                 {state && (
-                  <span
-                    className={`inline-flex items-center gap-1 font-medium ${state.className}`}
-                  >
-                    <state.icon
-                      className={`h-3.5 w-3.5 ${
-                        item.pipeline_status === 'running' ? 'animate-spin' : ''
-                      }`}
-                    />
+                  <Pill tone={state.tone} icon={state.icon} pulse={item.pipeline_status === 'running'}>
                     {state.label}
-                  </span>
+                  </Pill>
                 )}
 
                 {item.pr_url && item.pr_number !== null && (

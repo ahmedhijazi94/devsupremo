@@ -973,8 +973,8 @@ var require_command = __commonJS({
   "node_modules/commander/lib/command.js"(exports2) {
     var EventEmitter = require("node:events").EventEmitter;
     var childProcess = require("node:child_process");
-    var path6 = require("node:path");
-    var fs6 = require("node:fs");
+    var path7 = require("node:path");
+    var fs7 = require("node:fs");
     var process2 = require("node:process");
     var { Argument: Argument2, humanReadableArgName } = require_argument();
     var { CommanderError: CommanderError2 } = require_error();
@@ -1916,13 +1916,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
         let launchWithNode = false;
         const sourceExt = [".js", ".ts", ".tsx", ".mjs", ".cjs"];
         function findFile(baseDir, baseName) {
-          const localBin = path6.resolve(baseDir, baseName);
-          if (fs6.existsSync(localBin))
+          const localBin = path7.resolve(baseDir, baseName);
+          if (fs7.existsSync(localBin))
             return localBin;
-          if (sourceExt.includes(path6.extname(baseName)))
+          if (sourceExt.includes(path7.extname(baseName)))
             return void 0;
           const foundExt = sourceExt.find(
-            (ext) => fs6.existsSync(`${localBin}${ext}`)
+            (ext) => fs7.existsSync(`${localBin}${ext}`)
           );
           if (foundExt)
             return `${localBin}${foundExt}`;
@@ -1935,21 +1935,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
         if (this._scriptPath) {
           let resolvedScriptPath;
           try {
-            resolvedScriptPath = fs6.realpathSync(this._scriptPath);
+            resolvedScriptPath = fs7.realpathSync(this._scriptPath);
           } catch (err) {
             resolvedScriptPath = this._scriptPath;
           }
-          executableDir = path6.resolve(
-            path6.dirname(resolvedScriptPath),
+          executableDir = path7.resolve(
+            path7.dirname(resolvedScriptPath),
             executableDir
           );
         }
         if (executableDir) {
           let localFile = findFile(executableDir, executableFile);
           if (!localFile && !subcommand._executableFile && this._scriptPath) {
-            const legacyName = path6.basename(
+            const legacyName = path7.basename(
               this._scriptPath,
-              path6.extname(this._scriptPath)
+              path7.extname(this._scriptPath)
             );
             if (legacyName !== this._name) {
               localFile = findFile(
@@ -1960,7 +1960,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
           }
           executableFile = localFile || executableFile;
         }
-        launchWithNode = sourceExt.includes(path6.extname(executableFile));
+        launchWithNode = sourceExt.includes(path7.extname(executableFile));
         let proc;
         if (process2.platform !== "win32") {
           if (launchWithNode) {
@@ -2817,7 +2817,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @return {Command}
        */
       nameFromFilename(filename) {
-        this._name = path6.basename(filename, path6.extname(filename));
+        this._name = path7.basename(filename, path7.extname(filename));
         return this;
       }
       /**
@@ -2831,10 +2831,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @param {string} [path]
        * @return {(string|null|Command)}
        */
-      executableDir(path7) {
-        if (path7 === void 0)
+      executableDir(path8) {
+        if (path8 === void 0)
           return this._executableDir;
-        this._executableDir = path7;
+        this._executableDir = path8;
         return this;
       }
       /**
@@ -3621,18 +3621,18 @@ function defaultCommitReader(cwd) {
         const status = parts[i++] ?? "";
         if (status.startsWith("R") || status.startsWith("C")) {
           const oldPath = parts[i++] ?? "";
-          const path6 = parts[i++] ?? "";
-          changes.push({ status, path: path6, oldPath });
+          const path7 = parts[i++] ?? "";
+          changes.push({ status, path: path7, oldPath });
         } else {
-          const path6 = parts[i++] ?? "";
-          changes.push({ status, path: path6 });
+          const path7 = parts[i++] ?? "";
+          changes.push({ status, path: path7 });
         }
       }
       return changes;
     },
-    content: (sha, path6) => {
+    content: (sha, path7) => {
       try {
-        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path6}`], {
+        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path7}`], {
           cwd,
           stdio: ["ignore", "pipe", "ignore"],
           maxBuffer: 64 * 1024 * 1024
@@ -3647,9 +3647,9 @@ function defaultCommitReader(cwd) {
       const authorEmail = text(["show", "-s", "--format=%ae", sha]).trim();
       return { message: message || "checkpoint", authorName, authorEmail };
     },
-    executable: (sha, path6) => {
+    executable: (sha, path7) => {
       try {
-        const line = text(["ls-tree", sha, path6]);
+        const line = text(["ls-tree", sha, path7]);
         return line.slice(0, 6) === "100755";
       } catch {
         return false;
@@ -3677,13 +3677,77 @@ function isEmptyPatch(patch) {
 function restoreCommitMessage(targetSummary) {
   return `checkpoint: Restaurar "${targetSummary}"`;
 }
+function deepEqual(a, b) {
+  if (a === b)
+    return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length)
+      return false;
+    return a.every((v, i) => deepEqual(v, b[i]));
+  }
+  if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+    if (keysA.length !== keysB.length)
+      return false;
+    return keysA.every(
+      (k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k])
+    );
+  }
+  return false;
+}
+function isKnownNextTsconfigNoise(before, after) {
+  let a;
+  let b;
+  try {
+    a = JSON.parse(before);
+    b = JSON.parse(after);
+  } catch {
+    return false;
+  }
+  if (typeof a !== "object" || a === null || typeof b !== "object" || b === null)
+    return false;
+  if (Array.isArray(a) || Array.isArray(b))
+    return false;
+  const { include: includeA, ...restA } = a;
+  const { include: includeB, ...restB } = b;
+  if (!Array.isArray(includeA) || !Array.isArray(includeB))
+    return false;
+  if (!includeA.every((x) => typeof x === "string") || !includeB.every((x) => typeof x === "string")) {
+    return false;
+  }
+  if (!deepEqual(restA, restB))
+    return false;
+  const setA = new Set(includeA);
+  const setB = new Set(includeB);
+  const added = includeB.filter((x) => !setA.has(x));
+  const removed = includeA.filter((x) => !setB.has(x));
+  if (added.length === 0 && removed.length === 0)
+    return false;
+  return [...added, ...removed].every((entry) => NEXT_TYPES_GLOB_RE.test(entry));
+}
+function isRestoreSafeguardNoise(porcelain, deps) {
+  const changedPaths = parseChangedPaths(porcelain);
+  if (changedPaths.length !== 1 || changedPaths[0] !== "tsconfig.json")
+    return false;
+  let before;
+  try {
+    before = deps.git(["show", "HEAD:tsconfig.json"]);
+  } catch {
+    return false;
+  }
+  const after = deps.readWorktreeFile("tsconfig.json");
+  if (after === null)
+    return false;
+  return isKnownNextTsconfigNoise(before, after);
+}
 function applyRestore(targetCheckpointId, targetSummary, projectId, deps) {
   let queue = deps.readQueue();
   const targetSha = findLocalCommitForCheckpoint(queue, targetCheckpointId);
   if (!targetSha)
     throw new RestoreTargetNotFoundLocallyError();
   const porcelain = deps.git(["status", "--porcelain"]);
-  if (hasChanges(porcelain)) {
+  if (hasChanges(porcelain) && !isRestoreSafeguardNoise(porcelain, deps)) {
     const changedPaths = parseChangedPaths(porcelain);
     deps.git(["add", "-A"]);
     deps.git(["commit", "--no-verify", "-m", "checkpoint: salvaguarda autom\xE1tica antes do restore"]);
@@ -3741,14 +3805,23 @@ function defaultRestoreDeps(base, cwd) {
         input: patch,
         stdio: ["pipe", "ignore", "pipe"]
       });
+    },
+    readWorktreeFile: (relPath) => {
+      try {
+        return import_node_fs3.default.readFileSync(import_node_path3.default.join(cwd, relPath), "utf8");
+      } catch {
+        return null;
+      }
     }
   };
 }
-var import_node_child_process5, RestoreTargetNotFoundLocallyError;
+var import_node_child_process5, import_node_fs3, import_node_path3, RestoreTargetNotFoundLocallyError, NEXT_TYPES_GLOB_RE;
 var init_restore = __esm({
   "src/restore.ts"() {
     "use strict";
     import_node_child_process5 = require("node:child_process");
+    import_node_fs3 = __toESM(require("node:fs"));
+    import_node_path3 = __toESM(require("node:path"));
     init_checkpoint();
     RestoreTargetNotFoundLocallyError = class extends Error {
       constructor() {
@@ -3758,6 +3831,7 @@ var init_restore = __esm({
         this.name = "RestoreTargetNotFoundLocallyError";
       }
     };
+    NEXT_TYPES_GLOB_RE = /^\.?\/?\.next\/(dev\/)?types\/\*\*\/\*\.ts$/;
   }
 });
 
@@ -3903,7 +3977,7 @@ function defaultDaemonHttp(apiBaseUrl) {
 function readProjectConfig(cwd) {
   try {
     const raw = JSON.parse(
-      import_node_fs3.default.readFileSync(import_node_path3.default.join(cwd, ".supremo/project.json"), "utf8")
+      import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, ".supremo/project.json"), "utf8")
     );
     if (!raw.projectId || !raw.supremoUrl)
       return null;
@@ -3922,7 +3996,7 @@ function pidAlive(pid) {
 }
 function readPid(cwd) {
   try {
-    const pid = Number(import_node_fs3.default.readFileSync(import_node_path3.default.join(cwd, DAEMON_PID_FILE), "utf8").trim());
+    const pid = Number(import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE), "utf8").trim());
     return Number.isFinite(pid) && pid > 0 ? pid : null;
   } catch {
     return null;
@@ -3932,9 +4006,9 @@ function ensureDaemon(cwd) {
   const existing = readPid(cwd);
   if (existing && pidAlive(existing))
     return "reuse";
-  import_node_fs3.default.mkdirSync(import_node_path3.default.join(cwd, CHECKPOINT_DIR), { recursive: true });
-  const logPath = import_node_path3.default.join(cwd, DAEMON_LOG_FILE);
-  const out = import_node_fs3.default.openSync(logPath, "a");
+  import_node_fs4.default.mkdirSync(import_node_path4.default.join(cwd, CHECKPOINT_DIR), { recursive: true });
+  const logPath = import_node_path4.default.join(cwd, DAEMON_LOG_FILE);
+  const out = import_node_fs4.default.openSync(logPath, "a");
   const binPath = process.argv[1] ?? "";
   const child = (0, import_node_child_process6.spawn)(process.execPath, [binPath, "daemon"], {
     cwd,
@@ -3943,7 +4017,7 @@ function ensureDaemon(cwd) {
   });
   child.unref();
   if (child.pid) {
-    import_node_fs3.default.writeFileSync(import_node_path3.default.join(cwd, DAEMON_PID_FILE), String(child.pid));
+    import_node_fs4.default.writeFileSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE), String(child.pid));
   }
   return "start";
 }
@@ -3952,7 +4026,7 @@ function daemonStatus(cwd) {
   const running = pid != null && pidAlive(pid);
   let pendingCheckpoints = 0;
   try {
-    const queue = parseQueue(import_node_fs3.default.readFileSync(import_node_path3.default.join(cwd, QUEUE_FILE), "utf8"));
+    const queue = parseQueue(import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, QUEUE_FILE), "utf8"));
     pendingCheckpoints = queue.filter((r) => RETRIABLE.has(r.pushStatus)).length;
   } catch {
   }
@@ -3967,7 +4041,7 @@ function stopDaemon(cwd) {
     }
   }
   try {
-    import_node_fs3.default.rmSync(import_node_path3.default.join(cwd, DAEMON_PID_FILE));
+    import_node_fs4.default.rmSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE));
   } catch {
   }
   return true;
@@ -4018,10 +4092,10 @@ async function processRestores(config, overrides = {}) {
 }
 async function drainOnce(config) {
   await processRestores(config);
-  const queuePath = import_node_path3.default.join(config.cwd, QUEUE_FILE);
+  const queuePath = import_node_path4.default.join(config.cwd, QUEUE_FILE);
   let queue;
   try {
-    queue = parseQueue(import_node_fs3.default.readFileSync(queuePath, "utf8"));
+    queue = parseQueue(import_node_fs4.default.readFileSync(queuePath, "utf8"));
   } catch {
     return 0;
   }
@@ -4038,7 +4112,7 @@ async function drainOnce(config) {
       break;
     const outcome = await processCheckpoint(next, ctx);
     queue = upsertQueue(queue, outcome.record);
-    import_node_fs3.default.writeFileSync(queuePath, serializeQueue(queue));
+    import_node_fs4.default.writeFileSync(queuePath, serializeQueue(queue));
     processed++;
     if (outcome.result !== "done")
       break;
@@ -4066,25 +4140,25 @@ async function runDaemonLoop(cwd, opts = {}) {
   while (!stopped) {
     let queue = [];
     try {
-      queue = parseQueue(import_node_fs3.default.readFileSync(import_node_path3.default.join(cwd, QUEUE_FILE), "utf8"));
+      queue = parseQueue(import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, QUEUE_FILE), "utf8"));
     } catch {
     }
     await drainOnce(daemonConfig);
     try {
-      import_node_fs3.default.rmSync(import_node_path3.default.join(cwd, NOTIFY_FILE));
+      import_node_fs4.default.rmSync(import_node_path4.default.join(cwd, NOTIFY_FILE));
     } catch {
     }
     const attempts = minPendingAttempts(queue);
     await sleep(attempts != null ? backoffDelayMs(attempts) : idleMs);
   }
 }
-var import_node_child_process6, import_node_fs3, import_node_path3, RETRIABLE, NetworkError, AuthError, ConflictError, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
+var import_node_child_process6, import_node_fs4, import_node_path4, RETRIABLE, NetworkError, AuthError, ConflictError, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
     import_node_child_process6 = require("node:child_process");
-    import_node_fs3 = __toESM(require("node:fs"));
-    import_node_path3 = __toESM(require("node:path"));
+    import_node_fs4 = __toESM(require("node:fs"));
+    import_node_path4 = __toESM(require("node:path"));
     init_checkpoint();
     init_changeset();
     init_keychain();
@@ -4131,7 +4205,7 @@ function buildEnvFile(env) {
 }
 function targetDir(repoFullName, baseDir) {
   const name = repoFullName.split("/").pop() || "projeto";
-  return import_node_path4.default.join(baseDir ?? process.cwd(), name);
+  return import_node_path5.default.join(baseDir ?? process.cwd(), name);
 }
 function cleanRemoteUrl(repoFullName) {
   return `https://github.com/${repoFullName}.git`;
@@ -4321,11 +4395,11 @@ async function linkSupabaseRemote(dest, supabase) {
   ok("Conta correta");
   if (majorVersion) {
     try {
-      const cfgPath = import_node_path4.default.join(dest, "supabase", "config.toml");
-      const cfg = import_node_fs4.default.readFileSync(cfgPath, "utf8");
+      const cfgPath = import_node_path5.default.join(dest, "supabase", "config.toml");
+      const cfg = import_node_fs5.default.readFileSync(cfgPath, "utf8");
       const patched = patchConfigMajorVersion(cfg, majorVersion);
       if (patched !== cfg)
-        import_node_fs4.default.writeFileSync(cfgPath, patched);
+        import_node_fs5.default.writeFileSync(cfgPath, patched);
       ok("PostgreSQL/config alinhados");
     } catch {
     }
@@ -4359,12 +4433,12 @@ async function linkSupabaseRemote(dest, supabase) {
   return true;
 }
 function resolveSupabaseBin(dest) {
-  const localBin = import_node_path4.default.join(dest, "node_modules", ".bin", "supabase");
-  return import_node_fs4.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
+  const localBin = import_node_path5.default.join(dest, "node_modules", ".bin", "supabase");
+  return import_node_fs5.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
 }
 function readLinkedRef(dest) {
   try {
-    return import_node_fs4.default.readFileSync(import_node_path4.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
+    return import_node_fs5.default.readFileSync(import_node_path5.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
   } catch {
     return null;
   }
@@ -4405,16 +4479,16 @@ async function runBootstrap(opts) {
   }
   console.log(`  Projeto: ${config.project.name}`);
   const dest = targetDir(config.repo.fullName, opts.dir);
-  if (import_node_fs4.default.existsSync(dest)) {
+  if (import_node_fs5.default.existsSync(dest)) {
     throw new Error(`J\xE1 existe ${dest} \u2014 remova ou use --dir para outro caminho.`);
   }
-  import_node_fs4.default.mkdirSync(import_node_path4.default.dirname(dest), { recursive: true });
+  import_node_fs5.default.mkdirSync(import_node_path5.default.dirname(dest), { recursive: true });
   run("git", gitCloneArgs(config.repo.fullName, config.repo.branch, dest), void 0, {
     ...process.env,
     SUPREMO_GIT_TOKEN: config.gitToken
   });
   ok("Repository clonado");
-  import_node_fs4.default.writeFileSync(import_node_path4.default.join(dest, ".env.local"), buildEnvFile(config.env), {
+  import_node_fs5.default.writeFileSync(import_node_path5.default.join(dest, ".env.local"), buildEnvFile(config.env), {
     mode: 384
   });
   ok("Environment p\xFAblico configurado");
@@ -4468,7 +4542,7 @@ async function runBootstrap(opts) {
     );
   }
   const readiness = validateLocalReadiness({
-    projectJsonOk: import_node_fs4.default.existsSync(import_node_path4.default.join(dest, ".supremo", "project.json")),
+    projectJsonOk: import_node_fs5.default.existsSync(import_node_path5.default.join(dest, ".supremo", "project.json")),
     hasDaemonIdentity: Boolean(config.daemon),
     daemonRunning,
     npmScriptsCompatible,
@@ -4500,13 +4574,13 @@ Projeto pronto para Codex/Claude:
     );
   }
 }
-var import_node_child_process7, import_node_fs4, import_node_path4, sleep2, run, ok, tryExec, tryExecOut, tryExecOutIn, RECOMMENDED_NODE_MAJORS;
+var import_node_child_process7, import_node_fs5, import_node_path5, sleep2, run, ok, tryExec, tryExecOut, tryExecOutIn, RECOMMENDED_NODE_MAJORS;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
     import_node_child_process7 = require("node:child_process");
-    import_node_fs4 = __toESM(require("node:fs"));
-    import_node_path4 = __toESM(require("node:path"));
+    import_node_fs5 = __toESM(require("node:fs"));
+    import_node_path5 = __toESM(require("node:path"));
     init_auth();
     sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
     run = (cmd, args, cwd, env) => (0, import_node_child_process7.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
@@ -4678,8 +4752,8 @@ var {
 } = import_index.default;
 
 // src/bin.ts
-var import_node_fs5 = __toESM(require("node:fs"));
-var import_node_path5 = __toESM(require("node:path"));
+var import_node_fs6 = __toESM(require("node:fs"));
+var import_node_path6 = __toESM(require("node:path"));
 var import_node_os2 = __toESM(require("node:os"));
 
 // package.json
@@ -4754,7 +4828,7 @@ function guardUnknownCommand(argv) {
 var DEFAULT_URL = "https://supremo.app/api/mcp";
 function claudeDesktopConfigPath() {
   if (process.platform === "darwin") {
-    return import_node_path5.default.join(
+    return import_node_path6.default.join(
       import_node_os2.default.homedir(),
       "Library",
       "Application Support",
@@ -4763,13 +4837,13 @@ function claudeDesktopConfigPath() {
     );
   }
   if (process.platform === "win32") {
-    return import_node_path5.default.join(
+    return import_node_path6.default.join(
       process.env.APPDATA ?? import_node_os2.default.homedir(),
       "Claude",
       "claude_desktop_config.json"
     );
   }
-  return import_node_path5.default.join(import_node_os2.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
+  return import_node_path6.default.join(import_node_os2.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
 }
 program2.command("connect").description("Configura o Claude Desktop para usar o Supremo remoto").requiredOption("-t, --token <token>", "Token gerado em /mcps").option("-u, --url <url>", "Endpoint MCP do Supremo", DEFAULT_URL).action((options) => {
   if (!options.token.startsWith("sup_")) {
@@ -4778,9 +4852,9 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
   }
   const configPath = claudeDesktopConfigPath();
   let config = {};
-  if (import_node_fs5.default.existsSync(configPath)) {
+  if (import_node_fs6.default.existsSync(configPath)) {
     try {
-      config = JSON.parse(import_node_fs5.default.readFileSync(configPath, "utf8"));
+      config = JSON.parse(import_node_fs6.default.readFileSync(configPath, "utf8"));
     } catch {
       console.error(
         `${configPath} existe mas n\xE3o \xE9 JSON v\xE1lido. Corrija ou remova o arquivo antes de continuar.`
@@ -4794,8 +4868,8 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
     args: ["-y", "supremo-cli", "mcp"],
     env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token }
   };
-  import_node_fs5.default.mkdirSync(import_node_path5.default.dirname(configPath), { recursive: true });
-  import_node_fs5.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
+  import_node_fs6.default.mkdirSync(import_node_path6.default.dirname(configPath), { recursive: true });
+  import_node_fs6.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
 `);
   console.log(`Configurado em ${configPath}`);
   console.log(`Endpoint: ${options.url}`);

@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
 import {
   buildCheckpointRecord,
   hasChanges,
@@ -67,6 +69,72 @@ export function restoreCommitMessage(targetSummary: string): string {
   return `checkpoint: Restaurar "${targetSummary}"`
 }
 
+/**
+ * O Next.js (dev server / typed routes) reescreve `tsconfig.json` sozinho pra
+ * manter `include` sincronizado com os tipos que ele gera em `.next/` —
+ * comportamento documentado, automático, sem relação nenhuma com o código do
+ * usuário (ex.: adiciona/remove uma entrada como `.next/dev/types/**\/*.ts`
+ * ou `.next/types/**\/*.ts`). E2E real (v3-10): isso sozinho disparava a
+ * salvaguarda automática do restore — um checkpoint compensatório inútil.
+ */
+const NEXT_TYPES_GLOB_RE = /^\.?\/?\.next\/(dev\/)?types\/\*\*\/\*\.ts$/
+
+/** Deep-equal estrutural (ordem de chave de objeto não importa; de array importa). */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((v, i) => deepEqual(v, b[i]))
+  }
+  if (typeof a === 'object' && a !== null && typeof b === 'object' && b !== null) {
+    const keysA = Object.keys(a)
+    const keysB = Object.keys(b)
+    if (keysA.length !== keysB.length) return false
+    return keysA.every(
+      (k) =>
+        Object.prototype.hasOwnProperty.call(b, k) &&
+        deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+    )
+  }
+  return false
+}
+
+/**
+ * true SÓ quando a diferença inteira entre os dois `tsconfig.json` (parseados
+ * como JSON — nunca texto/diff bruto, imune a reformatação/vírgula/indentação)
+ * está em `include`, e cada entrada que entrou/saiu bate com a assinatura
+ * ESTRITA do Next (`NEXT_TYPES_GLOB_RE`). Qualquer outra diferença — em
+ * `include` ou fora dele, ou JSON inválido — não é reconhecida: fail-closed
+ * (nunca ignora uma mudança real do usuário em tsconfig.json).
+ */
+export function isKnownNextTsconfigNoise(before: string, after: string): boolean {
+  let a: unknown
+  let b: unknown
+  try {
+    a = JSON.parse(before)
+    b = JSON.parse(after)
+  } catch {
+    return false
+  }
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) return false
+
+  const { include: includeA, ...restA } = a as Record<string, unknown>
+  const { include: includeB, ...restB } = b as Record<string, unknown>
+  if (!Array.isArray(includeA) || !Array.isArray(includeB)) return false
+  if (!includeA.every((x) => typeof x === 'string') || !includeB.every((x) => typeof x === 'string')) {
+    return false
+  }
+  if (!deepEqual(restA, restB)) return false
+
+  const setA = new Set(includeA as string[])
+  const setB = new Set(includeB as string[])
+  const added = (includeB as string[]).filter((x) => !setA.has(x))
+  const removed = (includeA as string[]).filter((x) => !setB.has(x))
+  if (added.length === 0 && removed.length === 0) return false // nada mudou de fato
+  return [...added, ...removed].every((entry) => NEXT_TYPES_GLOB_RE.test(entry))
+}
+
 export interface RestoreOutcome {
   /** false quando o worktree já estava igual ao alvo — nada a restaurar. */
   applied: boolean
@@ -78,6 +146,30 @@ export interface RestoreOutcome {
 export interface RestoreDeps extends CheckpointDeps {
   /** Aplica um patch unificado (binário-safe) no índice + worktree. Lança se falhar. */
   applyPatch: (patch: string) => void
+  /** Conteúdo ATUAL do arquivo no worktree (não o do índice/HEAD); null se ausente. */
+  readWorktreeFile: (relPath: string) => string | null
+}
+
+/**
+ * true SÓ quando a única mudança pendente no worktree é o ruído CONHECIDO e
+ * transitório do Next em `tsconfig.json` (ver `isKnownNextTsconfigNoise`) — a
+ * salvaguarda automática do restore não é necessária nesse caso (não é
+ * trabalho do usuário). Qualquer outra combinação — outro arquivo mudou,
+ * `tsconfig.json` mudou por outro motivo, ou não dá pra ler HEAD/worktree —
+ * cai no comportamento normal: fail-closed, a salvaguarda roda.
+ */
+function isRestoreSafeguardNoise(porcelain: string, deps: RestoreDeps): boolean {
+  const changedPaths = parseChangedPaths(porcelain)
+  if (changedPaths.length !== 1 || changedPaths[0] !== 'tsconfig.json') return false
+  let before: string
+  try {
+    before = deps.git(['show', 'HEAD:tsconfig.json'])
+  } catch {
+    return false
+  }
+  const after = deps.readWorktreeFile('tsconfig.json')
+  if (after === null) return false
+  return isKnownNextTsconfigNoise(before, after)
 }
 
 /**
@@ -113,8 +205,15 @@ export function applyRestore(
   // humano iterando); a barreira de verdade é sempre a CI no servidor, que
   // esta mudança não toca — a publicação/PR/gates da CI continuam OBRIGATÓRIOS
   // antes de qualquer merge, exatamente como antes.
+  //
+  // E2E real (v3-10): "mudança pendente" não é só trabalho do usuário — o
+  // Next.js reescreve tsconfig.json sozinho (ver isRestoreSafeguardNoise) e
+  // isso sozinho disparava esta salvaguarda, poluindo o Histórico com um
+  // checkpoint compensatório inútil. Só esse ruído CONHECIDO é dispensado;
+  // qualquer outra mudança (inclusive tsconfig.json por outro motivo) ainda
+  // cai na salvaguarda normal — fail-closed.
   const porcelain = deps.git(['status', '--porcelain'])
-  if (hasChanges(porcelain)) {
+  if (hasChanges(porcelain) && !isRestoreSafeguardNoise(porcelain, deps)) {
     const changedPaths = parseChangedPaths(porcelain)
     deps.git(['add', '-A'])
     deps.git(['commit', '--no-verify', '-m', 'checkpoint: salvaguarda automática antes do restore'])
@@ -181,6 +280,13 @@ export function defaultRestoreDeps(base: CheckpointDeps, cwd: string): RestoreDe
         input: patch,
         stdio: ['pipe', 'ignore', 'pipe'],
       })
+    },
+    readWorktreeFile: (relPath: string) => {
+      try {
+        return fs.readFileSync(path.join(cwd, relPath), 'utf8')
+      } catch {
+        return null
+      }
     },
   }
 }

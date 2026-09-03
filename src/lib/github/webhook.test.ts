@@ -63,6 +63,70 @@ describe('parseWebhookForReconcile — só dispara, não autoriza', () => {
     expect(t).toBeNull()
   })
 
+  /**
+   * E2E real: Histórico preso em "Testando" mesmo com o projeto chegando a
+   * READY. Causa: 'closed' nunca disparava reconciliation — o projeto só
+   * chegava a 'merged' por COINCIDÊNCIA de algum check_suite/check_run
+   * completar enquanto a PR ainda estava aberta. Sem um gatilho dedicado pra
+   * "esta PR mergeou de verdade", reconciliar checkpoints (que só roda dentro
+   * do MESMO ciclo que reconcilia o projeto) ficava refém dessa coincidência.
+   */
+  describe('pull_request closed — só quando CONFIRMADAMENTE mergeada (merged: true)', () => {
+    it('closed COM merged:true → agora dispara reconciliation (o gatilho que faltava)', () => {
+      const t = parseWebhookForReconcile('pull_request', {
+        action: 'closed',
+        installation,
+        repository: repo,
+        pull_request: {
+          number: 7,
+          merged: true,
+          head: { sha: 'final-sha', ref: 'supremo/cp-aaaa' },
+        },
+      })
+      expect(t).not.toBeNull()
+      expect(t!.prNumbers).toEqual([7])
+      expect(t!.action).toBe('closed')
+    })
+
+    it('closed SEM merge (PR abandonada/rejeitada) → continua null — nada a reconciliar, mesclar geraria erro à toa', () => {
+      const t = parseWebhookForReconcile('pull_request', {
+        action: 'closed',
+        installation,
+        repository: repo,
+        pull_request: {
+          number: 7,
+          merged: false,
+          head: { sha: 'abandoned-sha', ref: 'supremo/cp-aaaa' },
+        },
+      })
+      expect(t).toBeNull()
+    })
+
+    it('closed sem o campo merged (payload malformado) → trata como não confirmado, null', () => {
+      const t = parseWebhookForReconcile('pull_request', {
+        action: 'closed',
+        installation,
+        repository: repo,
+        pull_request: { number: 7, head: { ref: 'supremo/cp-aaaa' } },
+      })
+      expect(t).toBeNull()
+    })
+
+    it('closed+merged:true de PR fora do namespace supremo/ → continua null (isolamento preservado)', () => {
+      const t = parseWebhookForReconcile('pull_request', {
+        action: 'closed',
+        installation,
+        repository: repo,
+        pull_request: {
+          number: 42,
+          merged: true,
+          head: { ref: 'dependabot/npm_and_yarn/next-15.0.0' },
+        },
+      })
+      expect(t).toBeNull()
+    })
+  })
+
   it('check_suite completed → PRs associadas (todas em branch supremo/)', () => {
     const t = parseWebhookForReconcile('check_suite', {
       action: 'completed',

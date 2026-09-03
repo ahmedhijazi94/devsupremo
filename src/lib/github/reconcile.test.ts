@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   checkpointStatusFromReconcile,
   isReconcilable,
@@ -6,6 +7,9 @@ import {
   resolveRequiredChecks,
   selectReconcilable,
 } from './reconcile'
+import { parseWebhookForReconcile } from './webhook'
+import { reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
+import { humanCheckpointStatus } from '@/lib/checkpoint/restore'
 import type { MergeGateway } from './merge-controller'
 import type { CheckRun } from './merge-policy'
 
@@ -152,5 +156,240 @@ describe('reconcileProjectPr — caminho único, re-lê pelo gateway', () => {
     })
     expect(gateway.enableNativeAutoMerge).toHaveBeenCalled()
     expect(gateway.merge).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Cliente Supabase FALSO com uma tabela `checkpoints` de VERDADE em memória —
+ * ao contrário do fake de store.test.ts (que só captura a QUERY), este
+ * aplica o filtro + update de fato contra linhas reais, pra provar que um
+ * UPDATE em lote (2+ checkpoints casando o mesmo filtro) afeta AMBOS, cada
+ * um preservando seus próprios campos não tocados (commit_sha, published_sha,
+ * created_at).
+ */
+interface FakeCheckpointRow {
+  id: string
+  project_id: string
+  pr_number: number | null
+  push_status: string
+  integration_status: string | null
+  commit_sha: string
+  published_sha: string | null
+  created_at: string
+}
+
+function fakeCheckpointsClient(rows: FakeCheckpointRow[]): SupabaseClient {
+  function query() {
+    let updatePayload: Record<string, unknown> | null = null
+    const filters: Array<[string, unknown]> = []
+    const builder = {
+      update(payload: Record<string, unknown>) {
+        updatePayload = payload
+        return builder
+      },
+      eq(col: string, val: unknown) {
+        filters.push([col, val])
+        return builder
+      },
+      then(resolve: (v: { error: null }) => void) {
+        const matches = rows.filter((r) =>
+          filters.every(([col, val]) => (r as unknown as Record<string, unknown>)[col] === val),
+        )
+        if (updatePayload) {
+          for (const row of matches) Object.assign(row, updatePayload)
+        }
+        resolve({ error: null })
+      },
+    }
+    return builder
+  }
+  return { from: () => query() } as unknown as SupabaseClient
+}
+
+/**
+ * E2E real (teste-v3-8): 2 checkpoints publicados na PR #1; o segundo
+ * atualizou a MESMA PR via synchronize. O último HEAD passou nos gates, a PR
+ * foi mergeada, o workflow em main passou, o projeto mostrou READY/tudo
+ * verde — mas os DOIS checkpoints continuaram "Testando".
+ *
+ * Causa raiz identificada (ver webhook.ts): 'closed' nunca disparava
+ * reconciliation. O projeto só chegava a 'merged' por COINCIDÊNCIA de algum
+ * check_suite/check_run "completed" pegar o HEAD já verde enquanto a PR
+ * ainda estava aberta — sem um gatilho DEDICADO para "a PR realmente
+ * mergeou", reconciliar os checkpoints (que roda no MESMO ciclo que
+ * reconcilia o projeto) fica refém dessa coincidência de timing.
+ *
+ * Este teste reproduz o cenário exato E prova o invariante pedido: quando
+ * uma PR mergeia após os gates do HEAD final, TODOS os checkpoints
+ * `published` daquela mesma project_id+pr_number reconciliam para
+ * 'integrated' — preservando a ordem e os SHAs individuais de cada um (NUNCA
+ * dependendo de published_sha == HEAD final, que checkpoints anteriores da
+ * mesma PR naturalmente não têm).
+ */
+describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AMBOS Integrado (teste-v3-8)', () => {
+  const PROJECT_ID = 'proj-teste-v3-8'
+  const PR_NUMBER = 1
+  const FINAL_HEAD_SHA = 'published-sha-do-checkpoint-2'
+
+  function seedRows(): FakeCheckpointRow[] {
+    return [
+      {
+        id: 'checkpoint-1',
+        project_id: PROJECT_ID,
+        pr_number: PR_NUMBER,
+        push_status: 'published',
+        integration_status: 'ci_running',
+        commit_sha: 'local-sha-checkpoint-1',
+        published_sha: 'published-sha-do-checkpoint-1',
+        created_at: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'checkpoint-2',
+        project_id: PROJECT_ID,
+        pr_number: PR_NUMBER,
+        push_status: 'published',
+        integration_status: 'ci_running',
+        commit_sha: 'local-sha-checkpoint-2',
+        published_sha: FINAL_HEAD_SHA,
+        created_at: '2026-01-01T00:05:00.000Z',
+      },
+    ]
+  }
+
+  it('fail-closed: enquanto a PR não mergeou de verdade, NENHUM checkpoint vira integrated — mesmo com synchronize disparando reconciliação', async () => {
+    const rows = seedRows()
+    const client = fakeCheckpointsClient(rows)
+
+    // Checkpoint 2 atualiza a PR (synchronize) — o webhook agora tem que
+    // reconhecer o evento (era isto que o E2E real exercitou).
+    const syncTarget = parseWebhookForReconcile('pull_request', {
+      action: 'synchronize',
+      installation: { id: 1 },
+      repository: { full_name: 'ahmed/app' },
+      pull_request: { number: PR_NUMBER, head: { sha: FINAL_HEAD_SHA, ref: 'supremo/cp-x' } },
+    })
+    expect(syncTarget).not.toBeNull()
+    expect(syncTarget!.prNumbers).toEqual([PR_NUMBER])
+
+    // CI do HEAD novo ainda rodando — nada deve avançar pra integrated.
+    const green: CheckRun[] = [{ name: 'G', status: 'in_progress', conclusion: null }]
+    const stillRunningGateway: MergeGateway = {
+      getPullRequest: async () => ({
+        headSha: FINAL_HEAD_SHA,
+        nodeId: 'n',
+        merged: false,
+        state: 'open',
+      }),
+      getChecks: async () => ({ checks: green, headSha: FINAL_HEAD_SHA }),
+      allowAutoMerge: vi.fn(async () => true),
+      enableNativeAutoMerge: vi.fn(async () => true),
+      merge: vi.fn(async () => ({ sha: 'não deveria ser chamado' })),
+    }
+    const pendingResult = await reconcileProjectPr({
+      gateway: stillRunningGateway,
+      prNumber: PR_NUMBER,
+      requiredChecks: ['G'],
+      mode: 'supremo_managed',
+    })
+    expect(pendingResult.merged).toBe(false)
+    await reconcileCheckpointsForPr(
+      client,
+      { projectId: PROJECT_ID, prNumber: PR_NUMBER },
+      checkpointStatusFromReconcile(pendingResult),
+    )
+    expect(stillRunningGateway.merge).not.toHaveBeenCalled()
+    for (const row of rows) {
+      expect(row.push_status).toBe('published') // fail-closed: ninguém virou integrated ainda
+    }
+  })
+
+  it('gates do HEAD final passam + PR mergeada de verdade → AMBOS os checkpoints reconciliam para Integrado, preservando SHAs/ordem individuais', async () => {
+    const rows = seedRows()
+    const client = fakeCheckpointsClient(rows)
+
+    let merged = false
+    const green: CheckRun[] = [{ name: 'G', status: 'completed', conclusion: 'success' }]
+    const gateway: MergeGateway = {
+      getPullRequest: async () => ({
+        headSha: FINAL_HEAD_SHA,
+        nodeId: 'n',
+        merged,
+        state: merged ? 'closed' : 'open',
+      }),
+      getChecks: async () => ({ checks: green, headSha: FINAL_HEAD_SHA }),
+      allowAutoMerge: async () => true,
+      enableNativeAutoMerge: async () => true,
+      merge: async () => {
+        merged = true
+        return { sha: 'squash-commit-sha-na-main' }
+      },
+    }
+
+    // Gates do HEAD final (checkpoint 2) verdes → reconcileProjectPr MESCLA de verdade.
+    const mergeResult = await reconcileProjectPr({
+      gateway,
+      prNumber: PR_NUMBER,
+      requiredChecks: ['G'],
+      mode: 'supremo_managed',
+    })
+    expect(mergeResult.merged).toBe(true)
+    expect(mergeResult.state).toBe('merged')
+
+    // O gatilho corrigido: 'closed' com merged:true (o evento que faltava).
+    const closedTarget = parseWebhookForReconcile('pull_request', {
+      action: 'closed',
+      installation: { id: 1 },
+      repository: { full_name: 'ahmed/app' },
+      pull_request: { number: PR_NUMBER, merged: true, head: { sha: FINAL_HEAD_SHA, ref: 'supremo/cp-x' } },
+    })
+    expect(closedTarget).not.toBeNull()
+    expect(closedTarget!.prNumbers).toEqual([PR_NUMBER])
+
+    // O MESMO ciclo que reconcilia o projeto reconcilia os checkpoints — a
+    // fiação real do webhook route (writeIntegrationMeta + reconcileCheckpointsForPr).
+    await reconcileCheckpointsForPr(
+      client,
+      { projectId: PROJECT_ID, prNumber: PR_NUMBER },
+      checkpointStatusFromReconcile(mergeResult),
+    )
+
+    // AMBOS os checkpoints — nunca só o que tem published_sha == HEAD final.
+    for (const row of rows) {
+      expect(row.push_status).toBe('integrated')
+      expect(row.integration_status).toBe('merged')
+      expect(
+        humanCheckpointStatus(row.push_status as 'integrated', row.integration_status as 'merged'),
+      ).toBe('Integrado')
+    }
+
+    // SHAs e ordem individuais preservados — a reconciliação nunca reescreve
+    // commit_sha/published_sha/created_at, e o checkpoint 1 (mais antigo, SHA
+    // diferente do HEAD final) reconcilia igual ao checkpoint 2.
+    expect(rows[0]!.commit_sha).toBe('local-sha-checkpoint-1')
+    expect(rows[0]!.published_sha).toBe('published-sha-do-checkpoint-1')
+    expect(rows[1]!.commit_sha).toBe('local-sha-checkpoint-2')
+    expect(rows[1]!.published_sha).toBe(FINAL_HEAD_SHA)
+    expect(rows[0]!.published_sha).not.toBe(rows[1]!.published_sha)
+    expect(new Date(rows[0]!.created_at).getTime()).toBeLessThan(
+      new Date(rows[1]!.created_at).getTime(),
+    )
+  })
+
+  it('checkpoint já integrated/failed (de um ciclo anterior) NUNCA é reaberto pela reconciliação de uma PR nova', async () => {
+    const rows = seedRows()
+    rows[0]!.push_status = 'integrated'
+    rows[0]!.integration_status = 'merged'
+    const client = fakeCheckpointsClient(rows)
+
+    await reconcileCheckpointsForPr(
+      client,
+      { projectId: PROJECT_ID, prNumber: PR_NUMBER },
+      { pushStatus: 'integrated', integrationStatus: 'merged' },
+    )
+
+    // O já-integrado permanece como estava (não é alvo do filtro push_status='published').
+    expect(rows[0]!.push_status).toBe('integrated')
+    // O outro, ainda 'published', reconcilia normalmente.
+    expect(rows[1]!.push_status).toBe('integrated')
   })
 })

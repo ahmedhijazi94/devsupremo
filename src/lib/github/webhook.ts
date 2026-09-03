@@ -87,14 +87,36 @@ function prNumbersFrom(list: unknown): number[] {
  * Decide se um evento dispara reconciliation e extrai o alvo. Devolve null para
  * eventos/ações irrelevantes (nada a fazer). Eventos considerados:
  *   • pull_request: opened/reopened/synchronize/ready_for_review → reconciliar a PR;
+ *   • pull_request: closed COM merged:true → reconciliar a PR (ver abaixo);
  *   • check_suite / check_run (completed) → reconciliar as PRs associadas.
+ *
+ * BUG REAL (E2E — Histórico preso em "Testando" com múltiplos checkpoints na
+ * mesma PR): 'closed' nunca esteve na lista de ações relevantes. O projeto só
+ * chegava a `integration_state: 'merged'` (READY) por COINCIDÊNCIA de timing
+ * — algum check_suite/check_run "completed" disparando reconciliation ENQUANTO
+ * a PR ainda estava aberta, no exato momento em que os gates do HEAD ficaram
+ * verdes. Sem um gatilho DEDICADO para "a PR realmente mergeou" (o evento
+ * 'closed' com `merged: true`, a confirmação MAIS FORTE que o GitHub emite),
+ * a reconciliação do checkpoint (que só roda dentro do MESMO ciclo que
+ * reconcilia o projeto) fica refém dessa coincidência — e reconciliar o
+ * projeto sem reconciliar os checkpoints é sintoma direto de um ciclo de
+ * reconciliação que nunca rodou de verdade com `merged: true` confirmado.
+ * Fix: 'closed' com `merged: true` agora SEMPRE dispara reconciliation — é o
+ * sinal mais confiável e direto de "esta PR mergeou", e `reconcileMerge` já
+ * trata `pr.merged` como retorno IMEDIATO (`{ state: 'merged', merged: true }`),
+ * então este gatilho por si só já é suficiente pra reconciliar projeto E
+ * checkpoints, mesmo que nenhum evento anterior tenha pego o estado a tempo.
+ * 'closed' SEM merge (PR fechada/abandonada) continua fora — não há nada pra
+ * reconciliar, e tentar mesclar uma PR fechada só geraria um erro inútil.
  *
  * NÃO usamos `workflow_run`: os jobs da CI aparecem como check-runs, então o fim da
  * CI já chega por check_suite/check_run — e `workflow_run` exigiria `Actions: read`
  * sem trazer gatilho novo. Least privilege: só `Checks: read` + `Pull requests`.
  * Não confia em nada além dos IDENTIFICADORES (repo/installation/prNumber); o
- * SHA/conclusão do payload é só dica de auditoria. Evento perdido → o Vercel Cron
- * (fallback) recupera.
+ * SHA/conclusão do payload é só dica de auditoria — `merged` decide só se este
+ * evento CONTA como gatilho, nunca se o merge é AUTORIZADO (isso é sempre
+ * `evaluateMergeEligibility`, relendo os checks reais no HEAD exato). Evento
+ * perdido → o Vercel Cron (fallback) recupera enquanto a PR ainda está aberta.
  */
 export function parseWebhookForReconcile(
   event: string,
@@ -116,8 +138,9 @@ export function parseWebhookForReconcile(
 
   if (event === 'pull_request') {
     const relevant = ['opened', 'reopened', 'synchronize', 'ready_for_review']
-    if (!action || !relevant.includes(action)) return null
     const pr = payload.pull_request as Json | undefined
+    const isConfirmedMergeClose = action === 'closed' && pr?.merged === true
+    if (!action || (!relevant.includes(action) && !isConfirmedMergeClose)) return null
     const prNumber = num(pr?.number)
     if (prNumber === null) return null
     // Bot/colaborador externo (ex.: Dependabot) abre PR fora do namespace

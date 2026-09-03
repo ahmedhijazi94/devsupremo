@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { classifyRisk, isKnownEnvironmentalBuildFailure } from './verify-classifier'
+import { classifyRisk, isKnownEnvironmentalBuildFailure, isKnownNextTsconfigNoise } from './verify-classifier'
 import {
   classifyBindProbe,
   classifyPidSignalError,
@@ -260,6 +260,112 @@ describe('classifyRisk', () => {
     const r = classifyRisk(['supabase/migrations/1.sql'], ['auth', 'multitenant'])
     expect(r.checks).toEqual(expect.arrayContaining(['rls', 'tenant-isolation', 'idor']))
   })
+
+  /**
+   * E2E real (teste-v3-11): após o bootstrap, o Next já tinha reescrito
+   * `tsconfig.json` sozinho (`include` ganhou `.next/types/**\/*.ts`) ANTES do
+   * prompt — puro ruído transitório, sem relação com o pedido. Um prompt
+   * simples que só mexeu na hero ainda assim elevou o gate pra FULL só por
+   * `tsconfig.json` estar no diff, e o build travou minutos num sandbox sem
+   * `next build` de verdade disponível. `knownNoisePaths` (confirmado pelo
+   * chamador via `isKnownNextTsconfigNoise`) resolve isso — sem enfraquecer
+   * o caso em que `tsconfig.json` muda por qualquer OUTRO motivo.
+   */
+  it('tsconfig.json em knownNoisePaths (ruído confirmado do Next) → NÃO eleva pra full sozinho', () => {
+    const r = classifyRisk(['tsconfig.json', 'app/page.tsx'], [], ['tsconfig.json'])
+    expect(r.level).toBe('quick')
+    expect(r.reason).toMatch(/ruído conhecido do Next/)
+    expect(r.changed).toBe(2) // arquivo continua CONTADO — nunca descartado do changeset
+  })
+
+  it('tsconfig.json SOZINHO em knownNoisePaths (nenhuma outra mudança) → quick, "nada de risco real"', () => {
+    const r = classifyRisk(['tsconfig.json'], [], ['tsconfig.json'])
+    expect(r.level).toBe('quick')
+  })
+
+  it('tsconfig.json SEM confirmação de ruído (knownNoisePaths omitido) → continua full — comportamento anterior preservado, fail-closed por padrão', () => {
+    expect(classifyRisk(['tsconfig.json', 'app/page.tsx']).level).toBe('full')
+  })
+
+  it('tsconfig.json muda por OUTRO motivo (não está em knownNoisePaths, mesmo que o chamador tenha checado outro arquivo) → continua full', () => {
+    const r = classifyRisk(['tsconfig.json', 'app/page.tsx'], [], ['algum-outro-arquivo.json'])
+    expect(r.level).toBe('full')
+  })
+
+  it('mistura: tsconfig.json é ruído, MAS também mudou algo sensível (server action) → sobe pra security mesmo assim (conservador, ruído só evita FULL indevido)', () => {
+    const r = classifyRisk(['tsconfig.json', 'actions/orders.ts'], [], ['tsconfig.json'])
+    expect(r.level).toBe('security')
+  })
+
+  it('mudança ampla (>25 arquivos) SEM contar o ruído de tsconfig.json → não força full só pelo ruído inflar a contagem', () => {
+    const many = Array.from({ length: 24 }, (_, i) => `components/c${i}.tsx`)
+    const r = classifyRisk(['tsconfig.json', ...many], [], ['tsconfig.json'])
+    expect(r.level).toBe('quick') // 24 reais + 1 ruído — nunca cruza o limiar de 25 por causa do ruído
+  })
+})
+
+/**
+ * `isKnownNextTsconfigNoise` — MESMA detecção estrutural (JSON-diff) já usada
+ * por `packages/cli/src/restore.ts` (E2E v3-10), reproduzida aqui pro
+ * classificador do `verify.mjs` (v3-11). Fail-closed: só reconhece a
+ * assinatura EXATA do Next, nunca um heurístico textual amplo.
+ */
+describe('isKnownNextTsconfigNoise (v3-11) — mesma detecção estrutural do restore, sem heurística nova', () => {
+  const base = JSON.stringify({
+    compilerOptions: { target: 'ES2017', strict: true },
+    include: ['**/*.ts', '**/*.tsx'],
+  })
+
+  it('Next ADICIONOU .next/types/**/*.ts em include (nada mais mudou) → ruído conhecido', () => {
+    const after = JSON.stringify({
+      compilerOptions: { target: 'ES2017', strict: true },
+      include: ['**/*.ts', '**/*.tsx', '.next/types/**/*.ts'],
+    })
+    expect(isKnownNextTsconfigNoise(base, after)).toBe(true)
+  })
+
+  it('variante .next/dev/types/**/*.ts (dev server) também é reconhecida', () => {
+    const after = JSON.stringify({
+      compilerOptions: { target: 'ES2017', strict: true },
+      include: ['**/*.ts', '**/*.tsx', './.next/dev/types/**/*.ts'],
+    })
+    expect(isKnownNextTsconfigNoise(base, after)).toBe(true)
+  })
+
+  it('reformatação pura (indentação/ordem de chave, nenhum conteúdo muda) → nunca "ruído" (nada mudou de fato) nem falso positivo', () => {
+    const after = JSON.stringify({
+      include: ['**/*.tsx', '**/*.ts'], // mesmo conteúdo de array, ordem diferente
+      compilerOptions: { strict: true, target: 'ES2017' }, // ordem de chave diferente
+    })
+    // ordem de include importa (array) — isto É uma mudança real de include,
+    // mas nenhuma entrada bate na assinatura do Next → não reconhecida.
+    expect(isKnownNextTsconfigNoise(base, after)).toBe(false)
+  })
+
+  it('usuário mudou compilerOptions ALÉM do include do Next → NUNCA ruído, mesmo com o padrão do Next presente (fail-closed)', () => {
+    const after = JSON.stringify({
+      compilerOptions: { target: 'ES2017', strict: false }, // mudança REAL do usuário
+      include: ['**/*.ts', '**/*.tsx', '.next/types/**/*.ts'],
+    })
+    expect(isKnownNextTsconfigNoise(base, after)).toBe(false)
+  })
+
+  it('entrada estranha em include que NÃO bate na assinatura do Next → NUNCA ruído', () => {
+    const after = JSON.stringify({
+      compilerOptions: { target: 'ES2017', strict: true },
+      include: ['**/*.ts', '**/*.tsx', 'src/**/*.ts'],
+    })
+    expect(isKnownNextTsconfigNoise(base, after)).toBe(false)
+  })
+
+  it('nada mudou de fato (before === after) → false (não é "ruído", é idêntico)', () => {
+    expect(isKnownNextTsconfigNoise(base, base)).toBe(false)
+  })
+
+  it('JSON inválido em qualquer lado → false, fail-closed', () => {
+    expect(isKnownNextTsconfigNoise('{ not json', base)).toBe(false)
+    expect(isKnownNextTsconfigNoise(base, '{ not json')).toBe(false)
+  })
 })
 
 /**
@@ -471,5 +577,123 @@ describe('verify.mjs — execução real: build ambiental defere, erro real bloq
     expect(status).not.toBe(0)
     expect(output).not.toContain('DEFERIDO')
     expect(output).toContain('verify full falhou em: typecheck')
+  })
+})
+
+/**
+ * E2E real (teste-v3-11): após o bootstrap, o Next já tinha reescrito
+ * `tsconfig.json` sozinho (ruído CONHECIDO, ver `isKnownNextTsconfigNoise`) —
+ * mutação pré-existente, sem relação com o pedido. Um prompt simples que só
+ * mexeu na hero ainda assim considerava `tsconfig.json` no changeset, elevava
+ * o gate pra FULL, e o `build` ficava minutos travado num sandbox sem `next
+ * build` de verdade disponível — só saía isolando a mutação manualmente.
+ * `node verify.mjs` (modo AUTO, sem nível forçado) é o modo real usado no
+ * fim de cada pedido — por isso este bloco testa ele, não `verify.mjs full`.
+ */
+describe('verify.mjs — execução real: ruído CONHECIDO do Next em tsconfig.json não eleva o gate (v3-11)', () => {
+  function writeShim(binDir: string, name: string, exitCode: number, stderr = ''): void {
+    const file = join(binDir, name)
+    writeFileSync(file, `#!/bin/sh\n${stderr ? `echo ${JSON.stringify(stderr)} >&2\n` : ''}exit ${exitCode}\n`, 'utf8')
+    chmodSync(file, 0o755)
+  }
+
+  function runVerifyAuto(dir: string, env: NodeJS.ProcessEnv): { status: number; output: string } {
+    try {
+      const output = execFileSync(process.execPath, [join(dir, 'verify.mjs')], { cwd: dir, env, encoding: 'utf8' })
+      return { status: 0, output }
+    } catch (err) {
+      const e = err as { status: number | null; stdout: string; stderr: string }
+      return { status: e.status ?? 1, output: `${e.stdout}${e.stderr}` }
+    }
+  }
+
+  /** Worktree real com um checkpoint (commit) inicial — `next` FALHA se
+   * chamado, pra provar diretamente que build nunca roda quando não deveria. */
+  function setupCommittedProject(nextExitCode: number): { dir: string; env: NodeJS.ProcessEnv } {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-verify-tsconfig-e2e-'))
+    execFileSync('git', ['init', '-q'], { cwd: dir })
+    execFileSync('git', ['config', 'user.email', 'e2e@supremo.test'], { cwd: dir })
+    execFileSync('git', ['config', 'user.name', 'Supremo Harness E2E'], { cwd: dir })
+    const binDir = join(dir, 'bin')
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+    mkdirSync(join(dir, 'app'), { recursive: true })
+    writeFileSync(join(dir, 'scripts', 'security-audit.js'), 'process.exit(0)\n', 'utf8')
+    writeShim(binDir, 'tsc', 0)
+    writeShim(binDir, 'eslint', 0)
+    writeShim(binDir, 'vitest', 0)
+    writeShim(binDir, 'next', nextExitCode, 'build não deveria ter rodado neste cenário')
+    writeFileSync(
+      join(dir, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { strict: true }, include: ['**/*.ts', '**/*.tsx'] }, null, 2),
+      'utf8',
+    )
+    writeFileSync(join(dir, 'app', 'hero.tsx'), 'export default function Hero() { return null }\n', 'utf8')
+    writeFileSync(join(dir, 'verify.mjs'), verifyScript(), 'utf8')
+    execFileSync('git', ['add', '-A'], { cwd: dir })
+    execFileSync('git', ['commit', '-q', '-m', 'checkpoint inicial'], { cwd: dir })
+    return { dir, env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` } }
+  }
+
+  it('REGRESSÃO EXATA v3-11: tsconfig.json com ruído PRÉ-EXISTENTE do Next + alteração simples da hero → QUICK, NUNCA eleva pra build completo', () => {
+    // next FALHA se chamado — prova direta de que build nunca roda aqui.
+    const { dir, env } = setupCommittedProject(1)
+
+    // Bootstrap/Next já reescreveu tsconfig.json sozinho ANTES deste prompt —
+    // só `include` ganhou a entrada conhecida; nada mais mudou.
+    writeFileSync(
+      join(dir, 'tsconfig.json'),
+      JSON.stringify(
+        { compilerOptions: { strict: true }, include: ['**/*.ts', '**/*.tsx', '.next/types/**/*.ts'] },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    // O prompt em si só mexeu na hero — alteração simples/cosmética.
+    writeFileSync(join(dir, 'app', 'hero.tsx'), 'export default function Hero() { return "v2" }\n', 'utf8')
+
+    const { status, output } = runVerifyAuto(dir, env)
+
+    expect(status).toBe(0)
+    expect(output).toContain('[QUICK]')
+    expect(output).not.toContain('[FULL]')
+    expect(output).toMatch(/ruído conhecido do Next/)
+    expect(output).not.toContain('• build')
+  })
+
+  it('tsconfig.json SOZINHO com o ruído do Next (nenhuma outra mudança) → QUICK, nunca full só por essa mutação transitória', () => {
+    const { dir, env } = setupCommittedProject(1)
+    writeFileSync(
+      join(dir, 'tsconfig.json'),
+      JSON.stringify(
+        { compilerOptions: { strict: true }, include: ['**/*.ts', '**/*.tsx', '.next/types/**/*.ts'] },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    const { status, output } = runVerifyAuto(dir, env)
+    expect(status).toBe(0)
+    expect(output).toContain('[QUICK]')
+  })
+
+  it('tsconfig.json muda por motivo REAL (não é a assinatura do Next) → CONTINUA full, build roda normalmente — nunca enfraquece o gate real', () => {
+    const { dir, env } = setupCommittedProject(0) // next passa normalmente aqui — build DEVE rodar
+
+    // Mudança REAL do usuário em compilerOptions — não é o padrão do Next.
+    writeFileSync(
+      join(dir, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { strict: true, target: 'ES2022' }, include: ['**/*.ts', '**/*.tsx'] }, null, 2),
+      'utf8',
+    )
+    writeFileSync(join(dir, 'app', 'hero.tsx'), 'export default function Hero() { return "v2" }\n', 'utf8')
+
+    const { status, output } = runVerifyAuto(dir, env)
+
+    expect(status).toBe(0)
+    expect(output).toContain('[FULL]')
+    expect(output).toContain('• build')
+    expect(output).not.toMatch(/ruído conhecido do Next/)
   })
 })

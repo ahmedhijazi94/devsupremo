@@ -97,6 +97,76 @@ export function isKnownEnvironmentalBuildFailure(output: string): boolean {
   return ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
 }
 
+/**
+ * Ruído CONHECIDO e transitório do Next.js em `tsconfig.json` (dev server /
+ * typed routes reescreve `include` sozinho pra acompanhar os tipos que gera
+ * em `.next/` — sem relação nenhuma com o código do usuário). MESMA detecção
+ * ESTRUTURAL (JSON-diff, nunca texto/regex sobre o arquivo inteiro) já usada
+ * por `isKnownNextTsconfigNoise`/`NEXT_TYPES_GLOB_RE` em
+ * `packages/cli/src/restore.ts` (E2E v3-10, salvaguarda do restore) —
+ * reproduzida aqui verbatim (os dois pacotes são independentes, sem import
+ * cruzado) porque `verify.mjs` v3-11 precisa da MESMA decisão fora do
+ * processo do restore. Não é uma heurística nova/paralela: mesmo regex,
+ * mesmo algoritmo.
+ */
+export const NEXT_TSCONFIG_TYPES_GLOB_RE = /^\.?\/?\.next\/(dev\/)?types\/\*\*\/\*\.ts$/
+
+/** Deep-equal estrutural (ordem de chave de objeto não importa; de array importa). */
+function deepEqualJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((v, i) => deepEqualJson(v, b[i]))
+  }
+  if (typeof a === 'object' && a !== null && typeof b === 'object' && b !== null) {
+    const keysA = Object.keys(a)
+    const keysB = Object.keys(b)
+    if (keysA.length !== keysB.length) return false
+    return keysA.every(
+      (k) =>
+        Object.prototype.hasOwnProperty.call(b, k) &&
+        deepEqualJson((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+    )
+  }
+  return false
+}
+
+/**
+ * true SÓ quando a diferença inteira entre os dois `tsconfig.json` (parseados
+ * como JSON — nunca texto/diff bruto, imune a reformatação/vírgula/
+ * indentação) está em `include`, e cada entrada que entrou/saiu bate com a
+ * assinatura ESTRITA do Next. Qualquer outra diferença — em `include` ou fora
+ * dele, ou JSON inválido — não é reconhecida: fail-closed (nunca ignora uma
+ * mudança real do usuário em `tsconfig.json`, nunca descarta o arquivo).
+ */
+export function isKnownNextTsconfigNoise(before: string, after: string): boolean {
+  let a: unknown
+  let b: unknown
+  try {
+    a = JSON.parse(before)
+    b = JSON.parse(after)
+  } catch {
+    return false
+  }
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) return false
+
+  const { include: includeA, ...restA } = a as Record<string, unknown>
+  const { include: includeB, ...restB } = b as Record<string, unknown>
+  if (!Array.isArray(includeA) || !Array.isArray(includeB)) return false
+  if (!includeA.every((x) => typeof x === 'string') || !includeB.every((x) => typeof x === 'string')) {
+    return false
+  }
+  if (!deepEqualJson(restA, restB)) return false
+
+  const setA = new Set(includeA as string[])
+  const setB = new Set(includeB as string[])
+  const added = (includeB as string[]).filter((x) => !setA.has(x))
+  const removed = (includeA as string[]).filter((x) => !setB.has(x))
+  if (added.length === 0 && removed.length === 0) return false // nada mudou de fato
+  return [...added, ...removed].every((entry) => NEXT_TSCONFIG_TYPES_GLOB_RE.test(entry))
+}
+
 const matchesAny = (path: string, patterns: RegExp[]): boolean =>
   patterns.some((re) => re.test(path))
 
@@ -110,10 +180,21 @@ export interface RiskResult {
 /**
  * Classifica o risco de um conjunto de arquivos alterados, considerando as
  * capabilities do projeto (que definem QUAIS checks de segurança existem).
+ *
+ * `knownNoisePaths` (v3-11): subconjunto de `changedPaths` que o CHAMADOR já
+ * confirmou (via `isKnownNextTsconfigNoise`, comparando conteúdo HEAD×
+ * worktree) ser SÓ ruído automático/transitório do Next — hoje só
+ * `tsconfig.json` é elegível. Esses paths continuam contados em `changed` e
+ * o arquivo NUNCA é descartado do changeset (quem chama decide isso, esta
+ * função só classifica risco) — só ficam de fora da decisão de NÍVEL/gate:
+ * uma alteração simples não vira FULL só por causa desse ruído. Omitido
+ * (padrão `[]`) preserva o comportamento anterior exatamente — `tsconfig.json`
+ * sozinho continua FULL sem essa confirmação explícita (fail-closed).
  */
 export function classifyRisk(
   changedPaths: readonly string[],
   capabilities: readonly CapabilityId[] = [],
+  knownNoisePaths: readonly string[] = [],
 ): RiskResult {
   const applicable = securityChecksFor(capabilities)
   const changed = changedPaths.length
@@ -122,17 +203,22 @@ export function classifyRisk(
     return { level: 'quick', checks: [], reason: 'Nada alterado.', changed: 0 }
   }
 
-  const hasFull = changedPaths.some((p) => matchesAny(p, FULL_PATTERNS))
-  const hasSecurity = changedPaths.some((p) => matchesAny(p, SECURITY_PATTERNS))
-  const allCosmetic = changedPaths.every((p) => matchesAny(p, QUICK_PATTERNS))
+  const noiseSet = new Set(knownNoisePaths.filter((p) => changedPaths.includes(p)))
+  const riskPaths = changedPaths.filter((p) => !noiseSet.has(p))
+  const noiseSuffix = noiseSet.size > 0 ? ' (tsconfig.json: ruído conhecido do Next, ignorado na classificação)' : ''
 
-  if (hasFull || changed > BROAD_FILE_COUNT) {
+  const hasFull = riskPaths.some((p) => matchesAny(p, FULL_PATTERNS))
+  const hasSecurity = riskPaths.some((p) => matchesAny(p, SECURITY_PATTERNS))
+  const allCosmetic = changedPaths.every((p) => noiseSet.has(p) || matchesAny(p, QUICK_PATTERNS))
+
+  if (hasFull || riskPaths.length > BROAD_FILE_COUNT) {
     return {
       level: 'full',
       checks: applicable,
-      reason: hasFull
-        ? 'Arquivo de arquitetura/build/config alterado.'
-        : `Mudança ampla (${changed} arquivos).`,
+      reason:
+        (hasFull
+          ? 'Arquivo de arquitetura/build/config alterado.'
+          : `Mudança ampla (${riskPaths.length} arquivos).`) + noiseSuffix,
       changed,
     }
   }
@@ -141,7 +227,7 @@ export function classifyRisk(
     return {
       level: 'security',
       checks: applicable,
-      reason: 'Área sensível à segurança alterada.',
+      reason: 'Área sensível à segurança alterada.' + noiseSuffix,
       changed,
     }
   }
@@ -150,7 +236,7 @@ export function classifyRisk(
     return {
       level: 'quick',
       checks: [],
-      reason: 'Só alterações cosméticas (UI/CSS/assets).',
+      reason: 'Só alterações cosméticas (UI/CSS/assets).' + noiseSuffix,
       changed,
     }
   }
@@ -160,7 +246,7 @@ export function classifyRisk(
   return {
     level: 'quick',
     checks: [],
-    reason: 'Alteração de código de baixo risco.',
+    reason: 'Alteração de código de baixo risco.' + noiseSuffix,
     changed,
   }
 }

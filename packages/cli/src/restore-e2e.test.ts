@@ -176,6 +176,7 @@ describe('restore — E2E real: patch aplicado → checkpoint E criado → publi
         pollRestores: async () => [],
         reportRestoreApplied: async () => {},
         reportRestoreFailed: async () => {},
+        syncStatus: async () => ({ latest: null }),
       }
       const ctx: DaemonContext = {
         projectId: 'proj-1',

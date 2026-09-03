@@ -14,7 +14,7 @@
  * usuário pediu. `guardUnknownCommand` (em bin.ts) intercepta ANTES do parse:
  * comando desconhecido → erro claro (não a ponte MCP por engano).
  */
-export const KNOWN_COMMANDS = ['connect', 'bootstrap', 'checkpoint', 'daemon', 'mcp'] as const
+export const KNOWN_COMMANDS = ['connect', 'bootstrap', 'checkpoint', 'daemon', 'sync', 'mcp'] as const
 
 /** O primeiro token de argv é um comando conhecido, uma opção global, ou vazio? */
 export function isKnownOrGlobal(firstArg: string | undefined): boolean {

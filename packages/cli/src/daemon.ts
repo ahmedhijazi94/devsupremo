@@ -125,6 +125,32 @@ export interface DaemonHttp {
     restoreRequestId: string
     error: string
   }): Promise<void>
+  /**
+   * POST /api/checkpoint/sync-status (v3.3 — sincronização entre máquinas).
+   * Checagem LEVE (um SELECT, nunca GitHub) do checkpoint mais recente
+   * CONHECIDO do projeto — usada pelo comando `sync`, uma vez por sessão.
+   * TIMEOUT CURTO embutido no adapter: nunca deixa a sessão esperando.
+   */
+  syncStatus(input: { deviceSecret: string; projectId: string }): Promise<SyncStatusResult>
+}
+
+export interface SyncStatusResult {
+  latest: {
+    id: string
+    createdAt: string
+    summary: string
+    pushStatus: string
+    integrationStatus: string | null
+    /** Branch de integração REAL já gerenciada pelo Supremo — existe assim
+     * que pushStatus chega a 'published' (continuidade entre máquinas nunca
+     * espera o CI/merge; ver sync.ts). */
+    integrationBranch: string | null
+    /** SHA exato deste checkpoint em `integrationBranch` (Git Data API) — o
+     * `sync` pina o fast-forward nele, nunca no tip móvel da branch (que
+     * pode ganhar um checkpoint novo de outra máquina em pleno voo do
+     * fetch; ver sync.ts). `null` enquanto ainda 'publishing'. */
+    publishedSha: string | null
+  } | null
 }
 
 export interface DaemonContext {
@@ -208,6 +234,13 @@ export async function processCheckpoint(
 
 // ── Adapter HTTP real (I/O; coberto por E2E) ─────────────────────────────────
 
+/** v3.3 — sync-status é uma checagem de sessão, não um retry em background:
+ * nunca deixa a PRIMEIRA mensagem esperando. Latência é prioridade forte aqui
+ * — 2s no máximo, mesmo com backend lento/indisponível. As demais chamadas
+ * (publish/restore) não levam timeout de propósito — são do daemon, que já
+ * retenta com backoff. */
+export const SYNC_STATUS_TIMEOUT_MS = 2000
+
 export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
   const base = apiBaseUrl.replace(/\/$/, '')
   // CodeQL js/file-access-to-http sinaliza dado de arquivo (o conteúdo dos
@@ -219,8 +252,10 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
   // de um arquivo sensível não relacionado. Suprimido nas 2 linhas exatas
   // abaixo com esta justificativa — a regra e o job continuam ativos para
   // qualquer outro fluxo novo.
-  const postJson = async (route: string, body: unknown): Promise<unknown> => {
+  const postJson = async (route: string, body: unknown, timeoutMs?: number): Promise<unknown> => {
     let res: Response
+    const controller = timeoutMs != null ? new AbortController() : undefined
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined
     try {
       // codeql[js/file-access-to-http] changeset do usuário → backend que ele configurou (ver nota acima)
       res = await fetch(`${base}${route}`, {
@@ -228,9 +263,14 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
         headers: { 'Content-Type': 'application/json' },
         // codeql[js/file-access-to-http] mesmo fluxo intencional (ver nota acima)
         body: JSON.stringify(body),
+        ...(controller ? { signal: controller.signal } : {}),
       })
     } catch {
+      // Aborto por timeout cai aqui também (AbortError) — mesmo tratamento:
+      // "não deu pra falar com o backend agora", nunca trava o chamador.
       throw new NetworkError('offline')
+    } finally {
+      if (timer) clearTimeout(timer)
     }
     if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`)
     if (res.status === 409) throw new ConflictError('conflict')
@@ -263,6 +303,14 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
         status: 'failed',
         error: input.error,
       })
+    },
+    syncStatus: async (input) => {
+      const data = (await postJson(
+        '/api/checkpoint/sync-status',
+        input,
+        SYNC_STATUS_TIMEOUT_MS,
+      )) as SyncStatusResult
+      return { latest: data.latest ?? null }
     },
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertNotMain,
+  baseCheckpointIsFresh,
   baseIsFresh,
   planIntegration,
   rotatedBranchName,
@@ -97,5 +98,44 @@ describe('baseIsFresh — HEAD antigo não integra (teste 17)', () => {
   })
   it('main avançou depois do plano → stale (não integra)', () => {
     expect(baseIsFresh('main-2', 'main-1')).toBe(false)
+  })
+})
+
+/**
+ * Proteção CROSS-MACHINE (v3.3) — item 5 do pedido: "duas máquinas criando
+ * checkpoints a partir da mesma base antiga → divergência detectada no
+ * publish". Máquina A publica D com base C; máquina B tenta publicar E
+ * TAMBÉM com base C — no instante do publish de E, o mais recente já é D
+ * (não C) → recusa.
+ */
+describe('baseCheckpointIsFresh — proteção CROSS-MACHINE (v3.3, item 5)', () => {
+  it('base declarada == mais recente conhecido → fresco (fluxo normal, sequencial)', () => {
+    expect(
+      baseCheckpointIsFresh({ declaredBaseCheckpointId: 'cp-c', latestKnownCheckpointId: 'cp-c' }),
+    ).toBe(true)
+  })
+
+  it('primeiro checkpoint do projeto (nunca publicou nada ainda) → null == null → fresco', () => {
+    expect(
+      baseCheckpointIsFresh({ declaredBaseCheckpointId: null, latestKnownCheckpointId: null }),
+    ).toBe(true)
+  })
+
+  it('máquina A publicou D com base C; máquina B tenta publicar E também com base C → recusa (D já é o mais recente)', () => {
+    expect(
+      baseCheckpointIsFresh({ declaredBaseCheckpointId: 'cp-c', latestKnownCheckpointId: 'cp-d' }),
+    ).toBe(false)
+  })
+
+  it('declara base nula mas já existe checkpoint publicado (outra máquina chegou primeiro) → recusa', () => {
+    expect(
+      baseCheckpointIsFresh({ declaredBaseCheckpointId: null, latestKnownCheckpointId: 'cp-a' }),
+    ).toBe(false)
+  })
+
+  it('declara uma base mas o projeto na verdade não tem nenhum checkpoint conhecido → recusa (fail-closed, nunca assume)', () => {
+    expect(
+      baseCheckpointIsFresh({ declaredBaseCheckpointId: 'cp-c', latestKnownCheckpointId: null }),
+    ).toBe(false)
   })
 })

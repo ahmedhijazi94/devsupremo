@@ -75,6 +75,11 @@ export type IntegrationStatusRow =
   | 'merge_pending'
   | 'merged'
   | 'unmanaged_main_change'
+  /** v3.3 — proteção cross-machine: base desatualizada (outra máquina publicou
+   * algo mais recente). Sempre acompanha push_status='failed', que a função
+   * abaixo já cobre como 'Falhou' antes mesmo de olhar este campo — listado
+   * aqui só por completude do domínio real da coluna. */
+  | 'stale_base'
   | null
   | undefined
 

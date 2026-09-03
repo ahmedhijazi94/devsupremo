@@ -157,10 +157,21 @@ program
       } catch {
         // sem daemon: o checkpoint local ainda é válido; o daemon sobe depois
       }
-      const record = runCheckpoint(summary, projectId, defaultCheckpointDeps(cwd), {
+      // v3.3: a base declarada (parentCheckpointId) considera também o último
+      // estado remoto CONFIRMADAMENTE sincronizado (ver sync.ts) — numa
+      // máquina recém-sincronizada a fila local sozinha ainda não sabe que a
+      // base avançou. Só leitura de arquivo — nenhuma rede aqui.
+      const { resolveParentCheckpointId, readSyncedRemoteState } = await import('./sync')
+      const deps = defaultCheckpointDeps(cwd)
+      const parentCheckpointIdOverride = resolveParentCheckpointId(
+        deps.readQueue(),
+        readSyncedRemoteState(cwd),
+      )
+      const record = runCheckpoint(summary, projectId, deps, {
         conversationId: options.conversationId,
         messageId: options.messageId,
         originAgent: options.originAgent,
+        parentCheckpointIdOverride,
       })
       console.log(
         `✓ checkpoint ${record.checkpointId.slice(0, 8)} (${record.riskLevel}) — ` +
@@ -229,6 +240,53 @@ program
       await daemon.runDaemonLoop(cwd)
     },
   )
+
+program
+  .command('sync')
+  .description(
+    'Sincronização entre máquinas: religa a este worktree ao checkpoint mais ' +
+      'recente conhecido do projeto (fast-forward seguro se possível). Rode UMA ' +
+      'vez no primeiro pedido da sessão, depois de `daemon --ensure`/preview.',
+  )
+  .action(async () => {
+    const cwd = process.cwd()
+    const [{ readProjectId, defaultCheckpointDeps }, daemon, sync] = await Promise.all([
+      import('./checkpoint'),
+      import('./daemon'),
+      import('./sync'),
+    ])
+    const projectId = readProjectId(cwd)
+    const cfg = daemon.readProjectConfig(cwd)
+    if (!projectId || !cfg) {
+      // Sem bootstrap ainda: não há o que sincronizar. Nunca um erro — é só
+      // um no-op silencioso (o próprio bootstrap deixa tudo em dia).
+      console.log(
+        JSON.stringify({
+          action: 'up_to_date',
+          message: 'projeto ainda não inicializado — nada a sincronizar.',
+        }),
+      )
+      return
+    }
+    const { resolveKeychain } = await import('./keychain')
+    const kc = resolveKeychain()
+    const deviceSecret = kc.get(cfg.projectId)
+    const http = daemon.defaultDaemonHttp(cfg.apiBaseUrl)
+
+    const outcome = await sync.runSync(
+      sync.defaultSyncDeps(defaultCheckpointDeps(cwd), cwd, async () => {
+        if (!deviceSecret) return { ok: false } // sem device: segue local, nunca trava
+        try {
+          const result = await http.syncStatus({ deviceSecret, projectId: cfg.projectId })
+          return { ok: true, latest: result.latest }
+        } catch {
+          // Timeout/rede/auth — tudo vira "não deu pra saber" (ver DaemonHttp.syncStatus).
+          return { ok: false }
+        }
+      }),
+    )
+    console.log(JSON.stringify({ action: outcome.action.kind, message: outcome.message }))
+  })
 
 program
   .command('mcp', { isDefault: true })

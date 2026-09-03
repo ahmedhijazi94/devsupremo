@@ -2687,6 +2687,56 @@ reinicia nada — só confirma e retorna na hora.
 vivos entre pedidos por conta própria (ver "Preview PERSISTENTE" abaixo). Repetir isso a
 cada prompt é overhead sem propósito nenhum.
 
+### Sincronização entre máquinas (v3.3)
+O mesmo projeto Supremo pode ser trabalhado em máquinas diferentes (PC de dia, notebook
+à noite). Você pode ter fechado esta máquina com um checkpoint pendente de sincronizar,
+e outra máquina pode ter publicado checkpoints novos nesse meio-tempo — **sem** você
+precisar pensar em \`git pull\`.
+
+**Logo depois de \`supremo:resume\`, ainda no primeiro pedido da sessão** (nunca nos
+seguintes — mesma regra de "só uma vez" acima), rode:
+\`\`\`
+npm run sync
+\`\`\`
+Ele consulta **uma única vez** o checkpoint mais recente CONHECIDO do projeto — o
+estado real não é só \`origin/main\`: um checkpoint que outra máquina já publicou mas
+que ainda está em PR/CI também conta como "mais novo", e \`sync\` reconhece isso. É uma
+checagem LEVE (uma consulta ao backend, nunca ao GitHub) com **timeout curto** — se
+estiver lenta ou indisponível, \`sync\` desiste sozinho e segue com o estado local; a
+sessão **nunca** fica esperando.
+
+- **Local igual ao remoto** → nada acontece; \`sync\` não faz fetch/pull nenhum.
+- **Local atrás E o worktree limpo** → sincroniza sozinho por fast-forward seguro
+  (\`git fetch\` + \`merge --ff-only\` — **nunca** reset, **nunca** force) para a branch
+  REAL já gerenciada pelo Supremo que corresponde a esse checkpoint — a \`main\` quando
+  ele já integrou, ou a própria branch de integração (\`integration_branch\`) quando ele já
+  foi publicado com sucesso mas ainda está em PR/CI. **A continuidade de edição entre
+  suas máquinas nunca espera o CI terminar** — só a base precisa já ter sido publicada de
+  verdade pelo Supremo (nunca um estado arbitrário/não publicado). CI continua
+  **obrigatório** pra qualquer merge em \`main\`; isto só traz o SEU worktree local até o
+  que o Supremo já publicou. O preview persistente/HMR continuam no ar; as mudanças
+  aparecem nele normalmente.
+- **Você tem alterações locais não checkpointadas** → \`sync\` **nunca** sobrescreve,
+  nunca faz pull por cima: só informa, em uma linha curta, que existe um estado mais
+  novo publicado, e segue. Feche o pedido com um checkpoint normal — a consistência de
+  verdade é garantida no PUBLISH (proteção entre máquinas, servidor), não aqui.
+- **O checkpoint mais novo ainda está "publicando" (nenhuma branch confirmada ainda)**
+  → \`sync\` reconhece que ele existe, mas **não** tenta puxar um estado que o Supremo
+  ainda não confirmou; sincroniza sozinho assim que a publicação terminar.
+
+**Exemplo:** você está no Mac, seus checkpoints A→B→C; C já foi publicado com sucesso
+pelo Supremo (branch real criada), mas o CI de C ainda está rodando. Você abre o
+notebook, parado em A: \`sync\` sincroniza direto pra C (a branch de integração dele,
+não \`main\` — C ainda não integrou) e você já continua C→D normalmente, sem esperar o
+CI de C terminar.
+
+**Duas máquinas publicando ao mesmo tempo a partir da mesma base:** se a máquina A
+publica um checkpoint e a máquina B tentar publicar outro baseado no MESMO ponto
+anterior (sem saber do de A), o **backend recusa** o de B em vez de aplicar por cima do
+de A silenciosamente — nada se perde (o commit local de B continua intacto); rode
+\`sync\` e publique de novo. Você não precisa fazer nada manual para isso — é uma
+garantia do publish, não algo que você gerencia.
+
 ### Preview PERSISTENTE (v3.1)
 O preview é INFRAESTRUTURA da sessão (processo desacoplado, porta estável, HMR) — o
 bootstrap normalmente já deixa um no ar antes do seu primeiro pedido, e a "Retomada
@@ -2831,6 +2881,13 @@ espera nada disso; nem o daemon toca no GitHub diretamente.**
   religa preview/daemon sozinho, sem nova autorização. E **NUNCA** rode
   \`supremo:resume\` fora do primeiro pedido da sessão — repetir a cada prompt é
   overhead sem propósito, o preview/daemon já confirmados continuam de pé sozinhos.
+- **NUNCA** rode \`npm run sync\` fora do primeiro pedido da sessão (mesma regra do
+  \`supremo:resume\`) — nenhuma consulta remota a cada prompt. E **NUNCA** tente
+  sincronizar você mesmo com \`git pull\`/\`git fetch\`/\`git merge\` à mão: \`sync\` já faz
+  isso da forma segura (fast-forward só quando o worktree está limpo e o checkpoint
+  remoto já integrou) — ver "Sincronização entre máquinas". Havendo alterações locais
+  não checkpointadas, **NUNCA** force um pull por cima delas — feche o pedido com
+  checkpoint primeiro.
 
 ### SEMPRE (v3.1)
 - **Continue desenvolvendo enquanto a CI roda** e o daemon integra em background.
@@ -2917,6 +2974,15 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   **reutilize** a URL de \`.supremo/preview.port\` direto — **nunca** confie só na
   existência do arquivo (pode ter sobrevivido a um reboot que matou o processo). **Nunca**
   \`npm run dev\` à mão, **nunca** suba outro servidor no sandbox. Ver "Preview PERSISTENTE".
+- **Logo em seguida, ainda no primeiro pedido**, rodar \`npm run sync\` — checagem LEVE
+  (uma consulta, timeout curto, nunca GitHub) do checkpoint mais recente conhecido do
+  projeto; sincroniza por fast-forward SÓ se o worktree estiver limpo e o checkpoint
+  remoto já foi **publicado com sucesso** pelo Supremo (uma branch real — \`main\` se já
+  integrou, ou a própria branch de integração se ainda estiver em PR/CI: a continuidade
+  entre máquinas **nunca** espera o CI). Com alterações locais não checkpointadas,
+  **nunca** sobrescreve — só informa a divergência. **Nunca** rode \`sync\` fora do
+  primeiro pedido, e **nunca** \`git pull\`/\`fetch\`/\`merge\` manualmente — é isso que
+  \`sync\` existe pra evitar. Ver "Sincronização entre máquinas".
 - **No início da sessão/primeiro pedido, abrir ou disponibilizar automaticamente o
   preview** ao usuário (browser integrado do host, se houver), sem que ele precise
   pedir — na URL real que \`supremo:resume\` devolveu. Sem pane integrado, apenas informe
@@ -2962,6 +3028,10 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   computador) — é pra isso que existe \`npm run supremo:resume\` (ver "Retomada
   automática de sessão" no AGENTS.md); e **rodar \`supremo:resume\` fora do primeiro
   pedido da sessão** — preview/daemon já confirmados seguem de pé sozinhos
+- **Rodar \`sync\` fora do primeiro pedido da sessão**, ou tentar sincronizar você mesmo
+  com \`git pull\`/\`fetch\`/\`merge\` à mão — \`npm run sync\` já faz isso com segurança
+  (fast-forward só se limpo e já publicado com sucesso pelo Supremo); ver "Sincronização
+  entre máquinas" no AGENTS.md
 - **Push direto na \`main\`; force push na \`main\`; bypass de required checks**
 - **Desativar/comentar teste, afrouxar threshold, alterar ruleset ou remover gate para
   "ficar verde"** — corrija o código (ou o teste, se errado), nunca a barreira

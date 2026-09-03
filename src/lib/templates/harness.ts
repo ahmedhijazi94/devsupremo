@@ -46,6 +46,11 @@ export function harnessPackageScripts(): Record<string, string> {
     // Retomada automática de sessão (v3.2, seção 30) — mesmo script, religa o
     // que morreu (preview:ensure/daemon:ensure) e imprime o status final.
     'supremo:resume': 'node scripts/supremo-status.mjs --ensure',
+    // Sincronização entre máquinas (v3.3, seção 31) — SÓ no primeiro pedido da
+    // sessão, DEPOIS de supremo:resume. Checagem leve (um SELECT, nunca
+    // GitHub), timeout curto embutido; fast-forward automático só quando
+    // seguro. A CLI vem por npx, como checkpoint/daemon acima.
+    sync: 'npx --yes supremo-cli sync',
     'security:audit': 'node scripts/security-audit.js --deep',
     'security:report': 'node scripts/security-audit.js --report',
   }

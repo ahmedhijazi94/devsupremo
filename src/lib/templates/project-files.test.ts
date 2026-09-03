@@ -796,6 +796,97 @@ describe('retomada automática de sessão (v3.2) — nunca precisa de bootstrap 
   })
 })
 
+/**
+ * Sincronização entre máquinas (v3.3) — E2E real: "máquina A: A→B→C; máquina
+ * B está parada em A; abre B, manda um prompt; Supremo faz uma checagem
+ * rápida, percebe remoto C, atualiza A→C automaticamente se o worktree
+ * estiver limpo". Estes testes cobrem a POLÍTICA que o agente lê (item 6:
+ * nenhuma consulta remota a cada prompt — só o agente sabe se é o primeiro
+ * pedido, então só dá pra garantir por regra textual). O comportamento de
+ * verdade (fast-forward seguro, nunca sobrescreve, timeout curto, proteção
+ * cross-machine no publish) é provado com git/HTTP reais em
+ * packages/cli/src/sync*.test.ts e src/lib/checkpoint/integration.test.ts.
+ */
+describe('sincronização entre máquinas (v3.3) — sem git pull manual, sem polling a cada prompt', () => {
+  const agents = norm(file('AGENTS.md'))
+  const claude = norm(file('CLAUDE.md'))
+  const pkg = JSON.parse(file('package.json')) as { scripts: Record<string, string> }
+
+  it('package.json expõe sync (mesma rota de npx do checkpoint/daemon)', () => {
+    expect(pkg.scripts.sync).toBe('npx --yes supremo-cli sync')
+  })
+
+  it('AGENTS.md: sync roda logo depois de supremo:resume, ainda no primeiro pedido', () => {
+    expect(agents).toMatch(/[Ll]ogo depois de `?supremo:resume`?.{0,40}primeiro pedido/)
+    expect(agents).toContain('npm run sync')
+  })
+
+  it('AGENTS.md: item 6 — NUNCA roda sync fora do primeiro pedido (nenhuma consulta remota a cada prompt)', () => {
+    expect(agents).toMatch(/NUNCA\*{0,2} rode `?npm run sync`? fora do primeiro pedido da sessão/)
+    expect(agents).toContain('nenhuma consulta remota a cada prompt')
+  })
+
+  it('AGENTS.md: checagem LEVE — timeout curto, nunca GitHub', () => {
+    expect(agents).toMatch(/checagem LEVE/)
+    expect(agents).toMatch(/timeout curto/)
+    expect(agents).toContain('nunca ao GitHub')
+  })
+
+  it('AGENTS.md: reconhece checkpoint publicado ainda em PR/CI (não só origin/main) — o gap real do pedido', () => {
+    expect(agents).toContain('um checkpoint que outra máquina já publicou mas')
+    expect(agents).toMatch(/ainda está em PR\/CI também conta como "mais novo"/)
+  })
+
+  /**
+   * Ajuste explícito: a continuidade de edição entre as PRÓPRIAS máquinas do
+   * usuário nunca espera o checkpoint integrar em main — só precisa já ter
+   * sido publicado com sucesso pelo Supremo (uma branch real). CI continua
+   * obrigatório só pra MERGE em main.
+   */
+  it('AGENTS.md: continuidade entre máquinas NUNCA espera o CI — só precisa estar publicado (branch real), nunca "integrado"', () => {
+    expect(agents).toMatch(/continuidade de edição entre suas máquinas nunca espera o CI terminar/)
+    expect(agents).toContain('já foi publicado com sucesso pelo Supremo')
+    expect(agents).toMatch(/CI continua\s*\*{0,2}obrigatório\*{0,2} pra qualquer merge em `?main`?/)
+    // nunca mais restrito à main/integrado — published+integration_branch já basta
+    expect(agents).not.toMatch(/sincroniza sozinho por fast-forward seguro[\s\S]{0,10}remoto já integrado/)
+  })
+
+  it('AGENTS.md: exemplo explícito do pedido — A local, C publicado com CI rodando → sincroniza pra C, continua C→D', () => {
+    expect(agents).toMatch(/checkpoints A→B→C; C já foi publicado com sucesso/)
+    expect(agents).toContain('o CI de C ainda está rodando')
+    expect(agents).toMatch(/sincroniza direto pra C \(a branch de integração dele, não `?main`? — C ainda não integrou\)/)
+    expect(agents).toContain('sem esperar o CI de C terminar')
+  })
+
+  it('AGENTS.md: fast-forward só quando limpo e seguro — NUNCA reset/force', () => {
+    expect(agents).toMatch(/worktree limpo/)
+    expect(agents).toContain('fast-forward seguro')
+    expect(agents).toContain('**nunca** reset, **nunca** force')
+  })
+
+  it('AGENTS.md: alterações locais não checkpointadas NUNCA são sobrescritas', () => {
+    expect(agents).toMatch(/\*\*nunca\*\* sobrescreve, ?\n?\s*nunca faz pull por cima/)
+  })
+
+  it('AGENTS.md: proteção cross-machine no publish é mencionada (preserva os dois trabalhos, nunca força)', () => {
+    expect(agents).toMatch(/backend recusa/)
+    expect(agents).toContain('nada se perde')
+  })
+
+  it('AGENTS.md: NUNCA git pull/fetch/merge manual — só o comando sync', () => {
+    expect(agents).toMatch(/NUNCA\*{0,2} tente sincronizar você mesmo com/)
+    expect(agents).toMatch(/git pull.{0,20}fetch.{0,20}merge/)
+  })
+
+  it('CLAUDE.md segue o mesmo contrato: sync no primeiro pedido, nunca manual, nunca sobrescreve', () => {
+    expect(claude).toContain('npm run sync')
+    expect(claude).toMatch(/checagem LEVE/)
+    expect(claude).toMatch(/nunca\*{0,2} sobrescreve/i)
+    expect(claude).toMatch(/Rodar `?sync`? fora do primeiro pedido da sessão/)
+    expect(claude).toMatch(/git pull.{0,20}fetch.{0,20}merge.{0,10}à mão/)
+  })
+})
+
 describe('workflow v3 — contrato assíncrono do agente (AGENTS.md/CLAUDE.md)', () => {
   const paths = files.map((f) => f.path)
   const agents = file('AGENTS.md')

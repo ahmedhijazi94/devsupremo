@@ -4643,7 +4643,7 @@ var import_node_os2 = __toESM(require("node:os"));
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.2.0",
+  version: "1.2.1",
   description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
   license: "MIT",
   author: "Supremo",

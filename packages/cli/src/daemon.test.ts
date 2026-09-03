@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -13,11 +14,13 @@ import {
   backoffDelayMs,
   classifyPidSignalError,
   daemonStatus,
+  defaultDaemonHttp,
   DAEMON_PID_FILE,
   ensureDaemon,
   processCheckpoint,
   processRestores,
   selectNextPending,
+  SYNC_STATUS_TIMEOUT_MS,
   type DaemonContext,
   type DaemonHttp,
   type PublishInput,
@@ -198,6 +201,7 @@ describe('processRestores — restore no próprio Supremo (v3.1 finalização)',
       reportRestoreFailed: async (input) => {
         failed.push(input)
       },
+      syncStatus: async () => ({ latest: null }),
     }
     return { http, applied, failed }
   }
@@ -377,5 +381,55 @@ describe('ensureDaemon/daemonStatus — EPERM nunca duplica um daemon vivo (macO
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+/**
+ * v3.3 (sincronização entre máquinas) — item 7 do pedido: "se a consulta
+ * remota estiver lenta ou indisponível, não deixar o usuário esperando
+ * indefinidamente: use timeout curto". Servidor HTTP REAL que NUNCA responde
+ * (nunca chama res.end/res.write) — prova que `syncStatus` corta a espera
+ * sozinho em vez de depender do SO/rede para isso.
+ */
+describe('defaultDaemonHttp.syncStatus — timeout curto real (item 7: nunca trava a sessão)', () => {
+  it(
+    'servidor que nunca responde → syncStatus rejeita por conta própria, bem dentro do timeout configurado',
+    async () => {
+      const server = http.createServer(() => {
+        // de propósito: nunca chama res.end() nem res.write() — a conexão
+        // fica pendurada até o cliente desistir sozinho.
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const address = server.address()
+      if (address === null || typeof address === 'string') throw new Error('sem porta')
+      const apiBaseUrl = `http://127.0.0.1:${address.port}`
+
+      try {
+        const httpClient = defaultDaemonHttp(apiBaseUrl)
+        const start = Date.now()
+        await expect(
+          httpClient.syncStatus({ deviceSecret: 'sup_dev_ckpt_x', projectId: 'proj-1' }),
+        ).rejects.toThrow(NetworkError)
+        const elapsedMs = Date.now() - start
+        // Cortou sozinho perto do timeout configurado — nunca ficou pendurado
+        // esperando o SO ou o servidor "hanging" desistirem primeiro.
+        expect(elapsedMs).toBeGreaterThanOrEqual(SYNC_STATUS_TIMEOUT_MS - 500)
+        expect(elapsedMs).toBeLessThan(SYNC_STATUS_TIMEOUT_MS + 3000)
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    },
+    SYNC_STATUS_TIMEOUT_MS + 5000,
+  )
+
+  it('publish/pollRestores continuam SEM timeout embutido (retry do daemon é quem decide, não a chamada)', () => {
+    // Checagem estrutural: só syncStatus recebe SYNC_STATUS_TIMEOUT_MS — as
+    // demais chamadas do daemon (background, já com backoff próprio) não
+    // devem herdar um timeout curto por acidente numa refatoração futura.
+    const fnSource = defaultDaemonHttp.toString()
+    const syncStatusBlock = fnSource.slice(fnSource.indexOf('syncStatus:'))
+    expect(syncStatusBlock).toContain('SYNC_STATUS_TIMEOUT_MS')
+    const beforeSyncStatus = fnSource.slice(0, fnSource.indexOf('syncStatus:'))
+    expect(beforeSyncStatus).not.toContain('SYNC_STATUS_TIMEOUT_MS')
   })
 })

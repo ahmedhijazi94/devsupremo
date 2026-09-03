@@ -7,10 +7,15 @@ import {
   upsertCheckpoint,
   setCheckpointPushStatus,
   getCheckpointState,
+  getLatestKnownCheckpoint,
   backfillRepositoryId,
 } from '@/lib/checkpoint/store'
 import { authorizePushGrant, type GrantProject } from '@/lib/checkpoint/grant'
-import { planIntegration, type RemoteState } from '@/lib/checkpoint/integration'
+import {
+  planIntegration,
+  baseCheckpointIsFresh,
+  type RemoteState,
+} from '@/lib/checkpoint/integration'
 import { validateChangeset, type Changeset } from '@/lib/checkpoint/changeset'
 import { applyChangeset } from '@/lib/checkpoint/publish'
 import {
@@ -141,6 +146,52 @@ export async function POST(request: NextRequest): Promise<Response> {
     return Response.json({ prNumber: existing.prNumber, published: true, idempotent: true })
   }
 
+  // 5b. Proteção CROSS-MACHINE (v3.3, antes de qualquer chamada ao GitHub/token —
+  // falha rápido e barato). `parent_checkpoint_id` é a base sobre a qual ESTE
+  // changeset foi calculado; se outra máquina já publicou algo mais recente que
+  // esta não conhecia, aplicar por cima arriscaria descartar em silêncio o que
+  // ela mudou (ver baseCheckpointIsFresh). Nunca sobrescreve: só recusa —
+  // o commit LOCAL do checkpoint recusado continua intacto na máquina de
+  // origem; sincronizar (supremo:resume/sync) e tentar de novo resolve.
+  //
+  // Marca (upsert) ANTES de checar: a linha precisa existir pro
+  // setCheckpointPushStatus abaixo (update por id) surtir efeito na primeira
+  // tentativa — e isto não depende de nada que os passos 6/7 calculam.
+  await upsertCheckpoint(client, {
+    id: changeset.checkpointId,
+    projectId: body.projectId,
+    deviceId: auth.device.id,
+    commitSha: changeset.commitSha,
+    parentCheckpointId: changeset.parentCheckpointId,
+    summary: body.summary,
+    riskLevel: body.riskLevel,
+    migrations: body.migrations,
+    conversationId: body.conversationId,
+    messageId: body.messageId,
+    originAgent: body.originAgent,
+    restoredFromCheckpointId: body.restoredFromCheckpointId,
+  })
+
+  const latestKnown = await getLatestKnownCheckpoint(client, body.projectId, changeset.checkpointId)
+  if (
+    !baseCheckpointIsFresh({
+      declaredBaseCheckpointId: changeset.parentCheckpointId,
+      latestKnownCheckpointId: latestKnown?.id ?? null,
+    })
+  ) {
+    await setCheckpointPushStatus(client, changeset.checkpointId, 'failed', {
+      integrationStatus: 'stale_base',
+    })
+    return Response.json(
+      {
+        error:
+          'checkpoint baseado em estado desatualizado — outra máquina já publicou algo mais recente. Sincronize e tente de novo.',
+        reason: 'stale_base',
+      },
+      { status: 409 },
+    )
+  }
+
   // 6. Estado REAL do repo (Control Plane, installation token server-side).
   const controlToken = await appTokenForRepo(repoFullName)
   const readCreds = installationCreds(controlToken, repoFullName, defaultBranch)
@@ -186,22 +237,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     const baseSha =
       plan.action === 'reuse' && openPr ? openPr.headSha : plan.expectedBaseSha
 
-    // 8. Marca em publicação e emite o token de WRITE mínimo (server-side).
-    await upsertCheckpoint(client, {
-      id: changeset.checkpointId,
-      projectId: body.projectId,
-      deviceId: auth.device.id,
-      commitSha: changeset.commitSha,
-      parentCheckpointId: changeset.parentCheckpointId,
-      summary: body.summary,
-      riskLevel: body.riskLevel,
-      migrations: body.migrations,
-      conversationId: body.conversationId,
-      messageId: body.messageId,
-      originAgent: body.originAgent,
-      restoredFromCheckpointId: body.restoredFromCheckpointId,
-    })
-
+    // 8. Emite o token de WRITE mínimo (server-side) — o upsert em 'publishing'
+    // já aconteceu em 5b, antes da checagem cross-machine.
     const scoped = await mintRepoScopedToken({
       repoFullName,
       permissions: decision.permissions, // contents:write (+workflows:write se aplicável)

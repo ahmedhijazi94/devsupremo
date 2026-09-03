@@ -138,3 +138,32 @@ export function baseIsFresh(
 ): boolean {
   return observedMainSha === expectedBaseSha
 }
+
+/**
+ * Proteção CROSS-MACHINE (v3.3 — sincronização entre máquinas), fora do
+ * alcance de `baseIsFresh` acima: aquela guarda cobre a MESMA máquina
+ * reavaliando seu próprio plano no instante do push. Esta cobre DUAS
+ * máquinas publicando a partir do MESMO checkpoint conhecido, sem saber uma
+ * da outra — `applyChangeset` recria a árvore só com os arquivos que o
+ * changeset tocou, por cima do tip atual; se outro checkpoint (que este
+ * changeset nunca viu) já avançou o projeto, aplicar cegamente por cima
+ * pode descartar em silêncio o que ele mudou nos mesmos arquivos.
+ *
+ * `parent_checkpoint_id` (já existente — a base sobre a qual o checkpoint foi
+ * criado, "base_sha ou equivalente" reaproveitado, não uma coluna nova) é
+ * comparado contra o checkpoint mais recente REALMENTE conhecido do projeto
+ * (excluindo este próprio — reenvio idempotente não é divergência). Só
+ * `true` quando batem: nenhuma outra máquina publicou algo nesse meio-tempo.
+ *
+ * Ex.: máquina A publica D com base C; máquina B tenta publicar E também com
+ * base C. No instante do publish de E, o mais recente conhecido já é D — a
+ * base declarada (C) não bate mais → recusa. D fica intacto, E não é
+ * publicado por cima dele (nunca se perde — o commit LOCAL de E continua
+ * intacto na máquina B; só o publish é recusado até sincronizar).
+ */
+export function baseCheckpointIsFresh(input: {
+  declaredBaseCheckpointId: string | null
+  latestKnownCheckpointId: string | null
+}): boolean {
+  return input.declaredBaseCheckpointId === input.latestKnownCheckpointId
+}

@@ -109,6 +109,73 @@ export async function getCheckpointState(
   }
 }
 
+/** O checkpoint mais recente REALMENTE conhecido de um projeto (v3.3 —
+ * sincronização entre máquinas): a "verdade" que tanto o publish (proteção
+ * cross-machine, ver `baseCheckpointIsFresh`) quanto a checagem leve de sync
+ * de sessão (`/api/checkpoint/sync-status`) consultam. */
+export interface LatestCheckpointRow {
+  id: string
+  createdAt: string
+  commitSha: string
+  summary: string
+  pushStatus: string
+  integrationStatus: string | null
+  prNumber: number | null
+  /** Branch de integração REAL já gerenciada pelo Supremo (Git Data API) —
+   * existe assim que `pushStatus` chega a 'published'. Continuidade de
+   * edição entre máquinas usa ISSO como base válida mesmo com PR/CI ainda
+   * rodando (CI segue obrigatório só pra MERGE em `main`; ver sync.ts). */
+  integrationBranch: string | null
+  /** SHA EXATO que este checkpoint produziu em `integrationBranch` (Git Data
+   * API, gravado no publish — `applied.commitSha` em publish/route.ts;
+   * coluna JÁ EXISTENTE, não uma nova). `commitSha` acima é o commit LOCAL
+   * da máquina de origem; este é o resultado real no remoto — só ele é
+   * seguro pra pinar o fast-forward: `integrationBranch` pode ganhar um
+   * checkpoint NOVO de outra máquina entre a consulta e o fetch (a branch
+   * ainda está aberta/PR em andamento), então seguir o TIP da branch corre
+   * o risco de pousar num commit mais novo que o cliente nunca confirmou.
+   * Pinar neste SHA garante que o merge `--ff-only` só pode pousar EXATAMENTE
+   * no checkpoint que o cliente pediu — nunca em "o que quer que esteja lá
+   * agora" (ver `sync.ts`). `null` enquanto ainda 'publishing'. */
+  publishedSha: string | null
+}
+
+/**
+ * Mais recente entre `publishing`/`published`/`integrated` (mesmo filtro já
+ * usado pelo publish pra achar a branch de integração corrente — reaproveitado
+ * aqui, não uma query nova do zero). `'failed'` nunca conta como "o estado
+ * atual" — não chegou a mudar nada de verdade. `excludeCheckpointId` evita que
+ * um reenvio idempotente do PRÓPRIO checkpoint se veja como "outra máquina
+ * publicou antes de mim".
+ */
+export async function getLatestKnownCheckpoint(
+  client: SupabaseClient,
+  projectId: string,
+  excludeCheckpointId?: string,
+): Promise<LatestCheckpointRow | null> {
+  let query = client
+    .from('checkpoints')
+    .select(
+      'id, created_at, commit_sha, summary, push_status, integration_status, pr_number, integration_branch, published_sha',
+    )
+    .eq('project_id', projectId)
+    .in('push_status', ['publishing', 'published', 'integrated'])
+  if (excludeCheckpointId) query = query.neq('id', excludeCheckpointId)
+  const { data } = await query.order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (!data) return null
+  return {
+    id: data.id as string,
+    createdAt: data.created_at as string,
+    commitSha: data.commit_sha as string,
+    summary: data.summary as string,
+    pushStatus: data.push_status as string,
+    integrationStatus: (data.integration_status as string | null) ?? null,
+    prNumber: (data.pr_number as number | null) ?? null,
+    integrationBranch: (data.integration_branch as string | null) ?? null,
+    publishedSha: (data.published_sha as string | null) ?? null,
+  }
+}
+
 /** Cria/atualiza a metadata do checkpoint em estado 'publishing' (idempotente). */
 export async function upsertCheckpoint(
   client: SupabaseClient,

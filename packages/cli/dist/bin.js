@@ -973,8 +973,8 @@ var require_command = __commonJS({
   "node_modules/commander/lib/command.js"(exports2) {
     var EventEmitter = require("node:events").EventEmitter;
     var childProcess = require("node:child_process");
-    var path7 = require("node:path");
-    var fs7 = require("node:fs");
+    var path8 = require("node:path");
+    var fs8 = require("node:fs");
     var process2 = require("node:process");
     var { Argument: Argument2, humanReadableArgName } = require_argument();
     var { CommanderError: CommanderError2 } = require_error();
@@ -1916,13 +1916,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
         let launchWithNode = false;
         const sourceExt = [".js", ".ts", ".tsx", ".mjs", ".cjs"];
         function findFile(baseDir, baseName) {
-          const localBin = path7.resolve(baseDir, baseName);
-          if (fs7.existsSync(localBin))
+          const localBin = path8.resolve(baseDir, baseName);
+          if (fs8.existsSync(localBin))
             return localBin;
-          if (sourceExt.includes(path7.extname(baseName)))
+          if (sourceExt.includes(path8.extname(baseName)))
             return void 0;
           const foundExt = sourceExt.find(
-            (ext) => fs7.existsSync(`${localBin}${ext}`)
+            (ext) => fs8.existsSync(`${localBin}${ext}`)
           );
           if (foundExt)
             return `${localBin}${foundExt}`;
@@ -1935,21 +1935,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
         if (this._scriptPath) {
           let resolvedScriptPath;
           try {
-            resolvedScriptPath = fs7.realpathSync(this._scriptPath);
+            resolvedScriptPath = fs8.realpathSync(this._scriptPath);
           } catch (err) {
             resolvedScriptPath = this._scriptPath;
           }
-          executableDir = path7.resolve(
-            path7.dirname(resolvedScriptPath),
+          executableDir = path8.resolve(
+            path8.dirname(resolvedScriptPath),
             executableDir
           );
         }
         if (executableDir) {
           let localFile = findFile(executableDir, executableFile);
           if (!localFile && !subcommand._executableFile && this._scriptPath) {
-            const legacyName = path7.basename(
+            const legacyName = path8.basename(
               this._scriptPath,
-              path7.extname(this._scriptPath)
+              path8.extname(this._scriptPath)
             );
             if (legacyName !== this._name) {
               localFile = findFile(
@@ -1960,7 +1960,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
           }
           executableFile = localFile || executableFile;
         }
-        launchWithNode = sourceExt.includes(path7.extname(executableFile));
+        launchWithNode = sourceExt.includes(path8.extname(executableFile));
         let proc;
         if (process2.platform !== "win32") {
           if (launchWithNode) {
@@ -2817,7 +2817,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @return {Command}
        */
       nameFromFilename(filename) {
-        this._name = path7.basename(filename, path7.extname(filename));
+        this._name = path8.basename(filename, path8.extname(filename));
         return this;
       }
       /**
@@ -2831,10 +2831,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @param {string} [path]
        * @return {(string|null|Command)}
        */
-      executableDir(path8) {
-        if (path8 === void 0)
+      executableDir(path9) {
+        if (path9 === void 0)
           return this._executableDir;
-        this._executableDir = path8;
+        this._executableDir = path9;
         return this;
       }
       /**
@@ -3457,15 +3457,16 @@ function runCheckpoint(summary, projectId, deps, origin = {}) {
   deps.git(["commit", "-m", `checkpoint: ${summary}`]);
   const commitSha = deps.git(["rev-parse", "HEAD"]).trim();
   const queue = deps.readQueue();
+  const { parentCheckpointIdOverride, ...restOrigin } = origin;
   const record = buildCheckpointRecord({
     checkpointId: deps.uuid(),
     projectId,
     commitSha,
-    parentCheckpointId: nextParentId(queue),
+    parentCheckpointId: parentCheckpointIdOverride !== void 0 ? parentCheckpointIdOverride : nextParentId(queue),
     createdAt: deps.now(),
     summary,
     changedPaths,
-    ...origin
+    ...restOrigin
   });
   deps.appendQueue(record);
   deps.notifyDaemon();
@@ -3621,18 +3622,18 @@ function defaultCommitReader(cwd) {
         const status = parts[i++] ?? "";
         if (status.startsWith("R") || status.startsWith("C")) {
           const oldPath = parts[i++] ?? "";
-          const path7 = parts[i++] ?? "";
-          changes.push({ status, path: path7, oldPath });
+          const path8 = parts[i++] ?? "";
+          changes.push({ status, path: path8, oldPath });
         } else {
-          const path7 = parts[i++] ?? "";
-          changes.push({ status, path: path7 });
+          const path8 = parts[i++] ?? "";
+          changes.push({ status, path: path8 });
         }
       }
       return changes;
     },
-    content: (sha, path7) => {
+    content: (sha, path8) => {
       try {
-        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path7}`], {
+        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path8}`], {
           cwd,
           stdio: ["ignore", "pipe", "ignore"],
           maxBuffer: 64 * 1024 * 1024
@@ -3647,9 +3648,9 @@ function defaultCommitReader(cwd) {
       const authorEmail = text(["show", "-s", "--format=%ae", sha]).trim();
       return { message: message || "checkpoint", authorName, authorEmail };
     },
-    executable: (sha, path7) => {
+    executable: (sha, path8) => {
       try {
-        const line = text(["ls-tree", sha, path7]);
+        const line = text(["ls-tree", sha, path8]);
         return line.slice(0, 6) === "100755";
       } catch {
         return false;
@@ -3843,6 +3844,7 @@ __export(daemon_exports, {
   DAEMON_LOG_FILE: () => DAEMON_LOG_FILE,
   DAEMON_PID_FILE: () => DAEMON_PID_FILE,
   NetworkError: () => NetworkError,
+  SYNC_STATUS_TIMEOUT_MS: () => SYNC_STATUS_TIMEOUT_MS,
   backoffDelayMs: () => backoffDelayMs,
   classifyPidSignalError: () => classifyPidSignalError,
   daemonStatus: () => daemonStatus,
@@ -3928,17 +3930,23 @@ async function processCheckpoint(record, ctx) {
 }
 function defaultDaemonHttp(apiBaseUrl) {
   const base = apiBaseUrl.replace(/\/$/, "");
-  const postJson = async (route, body) => {
+  const postJson = async (route, body, timeoutMs) => {
     let res;
+    const controller = timeoutMs != null ? new AbortController() : void 0;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : void 0;
     try {
       res = await fetch(`${base}${route}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // codeql[js/file-access-to-http] mesmo fluxo intencional (ver nota acima)
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        ...controller ? { signal: controller.signal } : {}
       });
     } catch {
       throw new NetworkError("offline");
+    } finally {
+      if (timer)
+        clearTimeout(timer);
     }
     if (res.status === 401 || res.status === 403)
       throw new AuthError(`${res.status}`);
@@ -3972,6 +3980,14 @@ function defaultDaemonHttp(apiBaseUrl) {
         status: "failed",
         error: input.error
       });
+    },
+    syncStatus: async (input) => {
+      const data = await postJson(
+        "/api/checkpoint/sync-status",
+        input,
+        SYNC_STATUS_TIMEOUT_MS
+      );
+      return { latest: data.latest ?? null };
     }
   };
 }
@@ -4159,7 +4175,7 @@ async function runDaemonLoop(cwd, opts = {}) {
     await sleep(attempts != null ? backoffDelayMs(attempts) : idleMs);
   }
 }
-var import_node_child_process6, import_node_fs4, import_node_path4, RETRIABLE, NetworkError, AuthError, ConflictError, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
+var import_node_child_process6, import_node_fs4, import_node_path4, RETRIABLE, NetworkError, AuthError, ConflictError, SYNC_STATUS_TIMEOUT_MS, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -4181,6 +4197,7 @@ var init_daemon = __esm({
     };
     ConflictError = class extends Error {
     };
+    SYNC_STATUS_TIMEOUT_MS = 2e3;
     DAEMON_PID_FILE = `${CHECKPOINT_DIR}/daemon.pid`;
     DAEMON_LOG_FILE = `${CHECKPOINT_DIR}/daemon.log`;
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -4625,6 +4642,131 @@ var init_bootstrap = __esm({
   }
 });
 
+// src/sync.ts
+var sync_exports = {};
+__export(sync_exports, {
+  SYNC_STATE_FILE: () => SYNC_STATE_FILE,
+  defaultSyncDeps: () => defaultSyncDeps,
+  planSync: () => planSync,
+  readSyncedRemoteState: () => readSyncedRemoteState,
+  resolveParentCheckpointId: () => resolveParentCheckpointId,
+  runSync: () => runSync
+});
+function resolveParentCheckpointId(queue, syncedRemote) {
+  const localLast = queue.length > 0 ? queue[queue.length - 1] : null;
+  if (!syncedRemote)
+    return localLast?.checkpointId ?? null;
+  if (!localLast)
+    return syncedRemote.checkpointId;
+  return new Date(syncedRemote.createdAt).getTime() > new Date(localLast.createdAt).getTime() ? syncedRemote.checkpointId : localLast.checkpointId;
+}
+function syncTarget(remote) {
+  if (remote.pushStatus === "integrated" || remote.integrationStatus === "merged") {
+    return { branch: "main", pinnedSha: null };
+  }
+  if (remote.pushStatus === "published" && remote.integrationBranch && remote.publishedSha) {
+    return { branch: remote.integrationBranch, pinnedSha: remote.publishedSha };
+  }
+  return null;
+}
+function planSync(input) {
+  if (!input.remoteReachable)
+    return { kind: "unreachable" };
+  if (input.remote === null || input.remote.id === input.localCheckpointId) {
+    return { kind: "up_to_date" };
+  }
+  if (!input.worktreeClean)
+    return { kind: "diverged_dirty", target: input.remote };
+  const target = syncTarget(input.remote);
+  if (!target)
+    return { kind: "ahead_publishing", target: input.remote };
+  return { kind: "fast_forward", target: input.remote, branch: target.branch, pinnedSha: target.pinnedSha };
+}
+async function runSync(deps) {
+  const queue = deps.readQueue();
+  const syncedRemote = deps.readSyncedRemote();
+  const localCheckpointId = resolveParentCheckpointId(queue, syncedRemote);
+  const result = await deps.fetchRemote();
+  const porcelain = deps.git(["status", "--porcelain"]);
+  const worktreeClean = !hasChanges(porcelain);
+  const action = planSync({
+    localCheckpointId,
+    remote: result.ok ? result.latest : null,
+    worktreeClean,
+    remoteReachable: result.ok
+  });
+  const nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
+  switch (action.kind) {
+    case "unreachable":
+      return { action, message: "sync remoto indispon\xEDvel (timeout/rede) \u2014 seguindo com o estado local." };
+    case "up_to_date":
+      if (result.ok && result.latest) {
+        deps.writeSyncedRemote({
+          checkpointId: result.latest.id,
+          createdAt: result.latest.createdAt,
+          checkedAt: nowIso()
+        });
+      }
+      return { action, message: "j\xE1 sincronizado com o estado mais recente conhecido." };
+    case "diverged_dirty":
+      return {
+        action,
+        message: `existe um checkpoint mais novo publicado ("${action.target.summary}") e este worktree tem altera\xE7\xF5es n\xE3o salvas \u2014 nada foi sobrescrito. Feche o pedido com um checkpoint normal e a sincroniza\xE7\xE3o segue no pr\xF3ximo.`
+      };
+    case "ahead_publishing":
+      return {
+        action,
+        message: `existe um checkpoint mais novo ("${action.target.summary}") ainda sendo publicado pelo Supremo \u2014 sincroniza sozinho assim que a branch ficar dispon\xEDvel.`
+      };
+    case "fast_forward": {
+      try {
+        deps.git(["fetch", "origin", action.branch]);
+        deps.git(["merge", "--ff-only", action.pinnedSha ?? `origin/${action.branch}`]);
+      } catch {
+        return {
+          action,
+          message: "n\xE3o foi poss\xEDvel sincronizar automaticamente (fast-forward indispon\xEDvel) \u2014 nada foi alterado; sincronize manualmente quando puder."
+        };
+      }
+      deps.writeSyncedRemote({
+        checkpointId: action.target.id,
+        createdAt: action.target.createdAt,
+        checkedAt: nowIso()
+      });
+      return { action, message: `sincronizado automaticamente com "${action.target.summary}".` };
+    }
+  }
+}
+function readSyncedRemoteState(cwd) {
+  try {
+    return JSON.parse(import_node_fs6.default.readFileSync(import_node_path6.default.join(cwd, SYNC_STATE_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+}
+function defaultSyncDeps(base, cwd, fetchRemote) {
+  const statePath = import_node_path6.default.join(cwd, SYNC_STATE_FILE);
+  return {
+    ...base,
+    fetchRemote,
+    readSyncedRemote: () => readSyncedRemoteState(cwd),
+    writeSyncedRemote: (state) => {
+      import_node_fs6.default.mkdirSync(import_node_path6.default.dirname(statePath), { recursive: true });
+      import_node_fs6.default.writeFileSync(statePath, JSON.stringify(state));
+    }
+  };
+}
+var import_node_fs6, import_node_path6, SYNC_STATE_FILE;
+var init_sync = __esm({
+  "src/sync.ts"() {
+    "use strict";
+    import_node_fs6 = __toESM(require("node:fs"));
+    import_node_path6 = __toESM(require("node:path"));
+    init_checkpoint();
+    SYNC_STATE_FILE = `${CHECKPOINT_DIR}/synced-remote.json`;
+  }
+});
+
 // src/index.ts
 var src_exports = {};
 function logStderr(message) {
@@ -4759,14 +4901,14 @@ var {
 } = import_index.default;
 
 // src/bin.ts
-var import_node_fs6 = __toESM(require("node:fs"));
-var import_node_path6 = __toESM(require("node:path"));
+var import_node_fs7 = __toESM(require("node:fs"));
+var import_node_path7 = __toESM(require("node:path"));
 var import_node_os2 = __toESM(require("node:os"));
 
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.2.4",
+  version: "1.2.5",
   description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
   license: "MIT",
   author: "Supremo",
@@ -4805,7 +4947,7 @@ var package_default = {
 };
 
 // src/command-guard.ts
-var KNOWN_COMMANDS = ["connect", "bootstrap", "checkpoint", "daemon", "mcp"];
+var KNOWN_COMMANDS = ["connect", "bootstrap", "checkpoint", "daemon", "sync", "mcp"];
 function isKnownOrGlobal(firstArg) {
   if (!firstArg)
     return true;
@@ -4835,7 +4977,7 @@ function guardUnknownCommand(argv) {
 var DEFAULT_URL = "https://supremo.app/api/mcp";
 function claudeDesktopConfigPath() {
   if (process.platform === "darwin") {
-    return import_node_path6.default.join(
+    return import_node_path7.default.join(
       import_node_os2.default.homedir(),
       "Library",
       "Application Support",
@@ -4844,13 +4986,13 @@ function claudeDesktopConfigPath() {
     );
   }
   if (process.platform === "win32") {
-    return import_node_path6.default.join(
+    return import_node_path7.default.join(
       process.env.APPDATA ?? import_node_os2.default.homedir(),
       "Claude",
       "claude_desktop_config.json"
     );
   }
-  return import_node_path6.default.join(import_node_os2.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
+  return import_node_path7.default.join(import_node_os2.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
 }
 program2.command("connect").description("Configura o Claude Desktop para usar o Supremo remoto").requiredOption("-t, --token <token>", "Token gerado em /mcps").option("-u, --url <url>", "Endpoint MCP do Supremo", DEFAULT_URL).action((options) => {
   if (!options.token.startsWith("sup_")) {
@@ -4859,9 +5001,9 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
   }
   const configPath = claudeDesktopConfigPath();
   let config = {};
-  if (import_node_fs6.default.existsSync(configPath)) {
+  if (import_node_fs7.default.existsSync(configPath)) {
     try {
-      config = JSON.parse(import_node_fs6.default.readFileSync(configPath, "utf8"));
+      config = JSON.parse(import_node_fs7.default.readFileSync(configPath, "utf8"));
     } catch {
       console.error(
         `${configPath} existe mas n\xE3o \xE9 JSON v\xE1lido. Corrija ou remova o arquivo antes de continuar.`
@@ -4875,8 +5017,8 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
     args: ["-y", "supremo-cli", "mcp"],
     env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token }
   };
-  import_node_fs6.default.mkdirSync(import_node_path6.default.dirname(configPath), { recursive: true });
-  import_node_fs6.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
+  import_node_fs7.default.mkdirSync(import_node_path7.default.dirname(configPath), { recursive: true });
+  import_node_fs7.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
 `);
   console.log(`Configurado em ${configPath}`);
   console.log(`Endpoint: ${options.url}`);
@@ -4921,10 +5063,17 @@ program2.command("checkpoint <summary...>").description("Cria um checkpoint LOCA
       ensureDaemon2(cwd);
     } catch {
     }
-    const record = runCheckpoint2(summary, projectId, defaultCheckpointDeps2(cwd), {
+    const { resolveParentCheckpointId: resolveParentCheckpointId2, readSyncedRemoteState: readSyncedRemoteState2 } = await Promise.resolve().then(() => (init_sync(), sync_exports));
+    const deps = defaultCheckpointDeps2(cwd);
+    const parentCheckpointIdOverride = resolveParentCheckpointId2(
+      deps.readQueue(),
+      readSyncedRemoteState2(cwd)
+    );
+    const record = runCheckpoint2(summary, projectId, deps, {
       conversationId: options.conversationId,
       messageId: options.messageId,
-      originAgent: options.originAgent
+      originAgent: options.originAgent,
+      parentCheckpointIdOverride
     });
     console.log(
       `\u2713 checkpoint ${record.checkpointId.slice(0, 8)} (${record.riskLevel}) \u2014 push em background. Pode pedir a pr\xF3xima mudan\xE7a.`
@@ -4976,6 +5125,44 @@ program2.command("daemon").description("Checkpoint daemon: envia checkpoints em 
     await daemon.runDaemonLoop(cwd);
   }
 );
+program2.command("sync").description(
+  "Sincroniza\xE7\xE3o entre m\xE1quinas: religa a este worktree ao checkpoint mais recente conhecido do projeto (fast-forward seguro se poss\xEDvel). Rode UMA vez no primeiro pedido da sess\xE3o, depois de `daemon --ensure`/preview."
+).action(async () => {
+  const cwd = process.cwd();
+  const [{ readProjectId: readProjectId2, defaultCheckpointDeps: defaultCheckpointDeps2 }, daemon, sync] = await Promise.all([
+    Promise.resolve().then(() => (init_checkpoint(), checkpoint_exports)),
+    Promise.resolve().then(() => (init_daemon(), daemon_exports)),
+    Promise.resolve().then(() => (init_sync(), sync_exports))
+  ]);
+  const projectId = readProjectId2(cwd);
+  const cfg = daemon.readProjectConfig(cwd);
+  if (!projectId || !cfg) {
+    console.log(
+      JSON.stringify({
+        action: "up_to_date",
+        message: "projeto ainda n\xE3o inicializado \u2014 nada a sincronizar."
+      })
+    );
+    return;
+  }
+  const { resolveKeychain: resolveKeychain2 } = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
+  const kc = resolveKeychain2();
+  const deviceSecret = kc.get(cfg.projectId);
+  const http = daemon.defaultDaemonHttp(cfg.apiBaseUrl);
+  const outcome = await sync.runSync(
+    sync.defaultSyncDeps(defaultCheckpointDeps2(cwd), cwd, async () => {
+      if (!deviceSecret)
+        return { ok: false };
+      try {
+        const result = await http.syncStatus({ deviceSecret, projectId: cfg.projectId });
+        return { ok: true, latest: result.latest };
+      } catch {
+        return { ok: false };
+      }
+    })
+  );
+  console.log(JSON.stringify({ action: outcome.action.kind, message: outcome.message }));
+});
 program2.command("mcp", { isDefault: true }).description("Roda a ponte MCP (o cliente chama isto automaticamente)").action(async () => {
   await Promise.resolve().then(() => (init_src(), src_exports));
 });

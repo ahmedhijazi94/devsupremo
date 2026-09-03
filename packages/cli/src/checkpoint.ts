@@ -186,7 +186,21 @@ export function runCheckpoint(
   summary: string,
   projectId: string,
   deps: CheckpointDeps,
-  origin: { conversationId?: string; messageId?: string; originAgent?: string } = {},
+  origin: {
+    conversationId?: string
+    messageId?: string
+    originAgent?: string
+    /**
+     * v3.3 (sincronização entre máquinas) — quando fornecido, substitui
+     * `nextParentId(queue)` como base declarada do checkpoint. Quem chama
+     * (bin.ts) calcula isto via `resolveParentCheckpointId` (fila local +
+     * último estado remoto CONFIRMADAMENTE sincronizado — ver sync.ts):
+     * numa máquina recém-sincronizada, a fila local sozinha não sabe que a
+     * base real avançou. `undefined` (padrão) preserva o comportamento de
+     * sempre — só a fila local decide.
+     */
+    parentCheckpointIdOverride?: string | null
+  } = {},
 ): CheckpointRecord {
   const porcelain = deps.git(['status', '--porcelain'])
   if (!hasChanges(porcelain)) throw new NothingToCheckpointError()
@@ -198,15 +212,17 @@ export function runCheckpoint(
   const commitSha = deps.git(['rev-parse', 'HEAD']).trim()
 
   const queue = deps.readQueue()
+  const { parentCheckpointIdOverride, ...restOrigin } = origin
   const record = buildCheckpointRecord({
     checkpointId: deps.uuid(),
     projectId,
     commitSha,
-    parentCheckpointId: nextParentId(queue),
+    parentCheckpointId:
+      parentCheckpointIdOverride !== undefined ? parentCheckpointIdOverride : nextParentId(queue),
     createdAt: deps.now(),
     summary,
     changedPaths,
-    ...origin,
+    ...restOrigin,
   })
 
   deps.appendQueue(record)

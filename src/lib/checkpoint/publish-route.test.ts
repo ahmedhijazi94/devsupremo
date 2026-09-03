@@ -59,3 +59,49 @@ describe('endpoint de publish — nenhum token sai do backend (testes 1, 2, 15, 
     expect(publishRoute).not.toContain('enableNativeAutoMerge')
   })
 })
+
+/**
+ * Proteção CROSS-MACHINE (v3.3, item 5) — duas máquinas publicando a partir
+ * do MESMO checkpoint conhecido: a checagem tem que rodar cedo (nunca emite
+ * token nem chama o GitHub pra um checkpoint que vai ser recusado por base
+ * desatualizada) e nunca sobrescrever silenciosamente o que já foi publicado
+ * (recusa — nunca aplica por cima).
+ */
+describe('endpoint de publish — base desatualizada (cross-machine) é recusada ANTES do GitHub (v3.3)', () => {
+  it('usa a mesma decisão pura já testada isoladamente (baseCheckpointIsFresh)', () => {
+    expect(publishRoute).toContain('baseCheckpointIsFresh')
+    expect(publishRoute).toContain('getLatestKnownCheckpoint')
+  })
+
+  it('a checagem roda ANTES de qualquer chamada ao GitHub/token (appTokenForRepo/mintRepoScopedToken)', () => {
+    const baseCheckIdx = publishRoute.indexOf('baseCheckpointIsFresh(')
+    const controlTokenIdx = publishRoute.indexOf('appTokenForRepo(')
+    const writeTokenIdx = publishRoute.indexOf('mintRepoScopedToken(')
+    expect(baseCheckIdx).toBeGreaterThan(-1)
+    expect(controlTokenIdx).toBeGreaterThan(-1)
+    expect(writeTokenIdx).toBeGreaterThan(-1)
+    expect(baseCheckIdx).toBeLessThan(controlTokenIdx)
+    expect(baseCheckIdx).toBeLessThan(writeTokenIdx)
+  })
+
+  it('recusa marca push_status "failed" (nunca aplica o changeset por cima — ver applyChangeset abaixo da checagem)', () => {
+    const baseCheckIdx = publishRoute.indexOf('baseCheckpointIsFresh(')
+    const applyIdx = publishRoute.indexOf('applyChangeset(')
+    expect(publishRoute).toContain("'stale_base'")
+    expect(publishRoute).toMatch(/setCheckpointPushStatus\(client, changeset\.checkpointId, 'failed'/)
+    expect(baseCheckIdx).toBeLessThan(applyIdx)
+  })
+
+  it('a base declarada vem do PRÓPRIO changeset (parent_checkpoint_id já existente) — nunca um campo novo do cliente', () => {
+    expect(publishRoute).toContain('changeset.parentCheckpointId')
+    expect(publishRoute).not.toMatch(/body\.(baseSha|baseCheckpointId)\b/)
+  })
+
+  it('resposta de recusa nunca inclui token/segredo (mesmo invariante do resto do endpoint)', () => {
+    const idx = publishRoute.indexOf("reason: 'stale_base'")
+    expect(idx).toBeGreaterThan(-1)
+    const around = publishRoute.slice(Math.max(0, idx - 300), idx + 100)
+    expect(around).not.toMatch(/token/i)
+    expect(around).not.toMatch(/secret/i)
+  })
+})

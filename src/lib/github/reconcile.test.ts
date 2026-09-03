@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  checkpointStatusFromReconcile,
   isReconcilable,
   reconcileProjectPr,
   resolveRequiredChecks,
@@ -48,6 +49,64 @@ describe('resolveRequiredChecks — fonte real do template', () => {
     const fast = resolveRequiredChecks({ fastMode: true, rlsMode: 'warn' })
     expect(fast).toContain('Build de produção')
     expect(fast).toContain('Varredura de segredos')
+  })
+})
+
+/**
+ * E2E real: depois que a execução em main ficou verde, o projeto mostrou
+ * READY/tudo verde, mas o Histórico continuou em "Testando". Causa raiz: a
+ * reconciliação sempre gravou `integration_state` no PROJETO
+ * (`writeIntegrationMeta`), mas nada gravava de volta no CHECKPOINT —
+ * `integration_status` era escrito UMA vez no publish ('ci_running') e nunca
+ * mais tocado. `checkpointStatusFromReconcile` é a decisão PURA que resolve
+ * isso: o que gravar no checkpoint a partir do resultado da reconciliação.
+ */
+describe('checkpointStatusFromReconcile — Histórico reconcilia pra Integrado só após merge válido', () => {
+  it('merged: true → push_status vira "integrated" (só quando o merge de fato aconteceu)', () => {
+    expect(checkpointStatusFromReconcile({ state: 'merged', merged: true })).toEqual({
+      pushStatus: 'integrated',
+      integrationStatus: 'merged',
+    })
+  })
+
+  it('ainda não mesclado (ci_running) → integration_status avança, push_status NUNCA antecipa "integrated"', () => {
+    expect(checkpointStatusFromReconcile({ state: 'ci_running', merged: false })).toEqual({
+      pushStatus: null,
+      integrationStatus: 'ci_running',
+    })
+  })
+
+  it('validated (tudo verde, ainda não mesclado) → integration_status avança, mas push_status continua null — nunca declara Integrado antes da hora', () => {
+    expect(checkpointStatusFromReconcile({ state: 'validated', merged: false })).toEqual({
+      pushStatus: null,
+      integrationStatus: 'validated',
+    })
+  })
+
+  it('ci_failed/security_blocked → integration_status reflete a falha real (nunca fica preso em ci_running)', () => {
+    expect(checkpointStatusFromReconcile({ state: 'ci_failed', merged: false })).toEqual({
+      pushStatus: null,
+      integrationStatus: 'ci_failed',
+    })
+    expect(checkpointStatusFromReconcile({ state: 'security_blocked', merged: false })).toEqual({
+      pushStatus: null,
+      integrationStatus: 'security_blocked',
+    })
+  })
+
+  it('merged: false NUNCA produz pushStatus "integrated", seja qual for o state — fail-closed', () => {
+    const states = [
+      'development',
+      'ci_running',
+      'ci_failed',
+      'security_blocked',
+      'validated',
+      'merge_pending',
+      'unmanaged_main_change',
+    ] as const
+    for (const state of states) {
+      expect(checkpointStatusFromReconcile({ state, merged: false }).pushStatus).toBeNull()
+    }
   })
 })
 

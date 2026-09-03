@@ -26,6 +26,8 @@ import {
   readSharedPreview,
   sharedPreviewConfig,
 } from '@/lib/preview'
+import { evaluateMergeEligibility } from '@/lib/github/merge-policy'
+import { resolveRequiredChecks } from '@/lib/github/reconcile'
 
 /**
  * Servidor MCP do Supremo, ligado a um usuário.
@@ -703,11 +705,40 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
       const pr = await gh.getPullRequest(creds, prNumber)
       const checks = await gh.getChecks(creds, pr.headSha)
 
-      if (checks.state !== 'passed') {
+      // MESMO gate fail-closed do Merge Controller assíncrono
+      // (evaluateMergeEligibility) — nunca um check próprio mais fraco.
+      // requiredChecks vem da mesma fonte que o webhook/fallback usam
+      // (resolveRequiredChecks: fail-safe estrito, conjunto COMPLETO sem
+      // sinal claro de fast mode/RLS).
+      //
+      // BUG REAL corrigido aqui: o check anterior (`checks.state !== 'passed'`)
+      // usava um agregado que só conta 'failure'/'timed_out'/'cancelled' como
+      // reprovação — 'skipped'/'neutral'/'action_required' contavam como OK —
+      // e nunca comparava contra a lista de required checks, então um gate
+      // obrigatório que sequer rodou (ausente) não bloqueava nada. Um
+      // checkpoint podia ser mesclado com um required check pulado, cancelado
+      // ou faltando — exatamente o que este merge NUNCA pode permitir.
+      const requiredChecks = resolveRequiredChecks({})
+      const evaluation = evaluateMergeEligibility({
+        requiredChecks,
+        checkRuns: checks.checks,
+        prHeadSha: pr.headSha,
+        validatedSha: checks.headSha,
+      })
+
+      if (evaluation.decision !== 'merge') {
         return fail(
-          `Merge recusado: ${checks.failed} gate(s) vermelho(s), ` +
-            `${checks.pending} ainda rodando. ` +
-            `Corrija antes de tentar de novo.`,
+          `Merge recusado: ${evaluation.reasons.join(' ')}` +
+            (evaluation.failing.length
+              ? ` Falhando: ${evaluation.failing.join(', ')}.`
+              : '') +
+            (evaluation.missing.length
+              ? ` Ausentes: ${evaluation.missing.join(', ')}.`
+              : '') +
+            (evaluation.pending.length
+              ? ` Ainda rodando: ${evaluation.pending.join(', ')}.`
+              : '') +
+            ' Corrija antes de tentar de novo.',
         )
       }
 
@@ -733,7 +764,7 @@ export function createSupremoMcpServer(ctx: ToolContext): McpServer {
 
       return ok(
         `PR #${prNumber} mergeado em ${project.default_branch} (${merged.sha.slice(0, 7)}). ` +
-          `Todos os ${checks.total} gates passaram.` +
+          `Todos os ${requiredChecks.length} gates obrigatórios passaram.` +
           (preview.url
             ? `\nPreview atualizado: ${preview.url}`
             : preview.note

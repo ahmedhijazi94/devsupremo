@@ -54,6 +54,35 @@ export interface ReconcileLogger {
 }
 
 /**
+ * (PURA) Deriva o novo status do CHECKPOINT a partir do resultado de
+ * reconciliação da PR a que ele pertence.
+ *
+ * BUG REAL (E2E): a reconciliação sempre gravou `integration_state` no
+ * PROJETO (`writeIntegrationMeta`, nos dois call sites — webhook e
+ * fallback), mas nada gravava de volta no CHECKPOINT: `integration_status`
+ * era escrito UMA vez no publish ('ci_running') e nunca mais tocado. O
+ * projeto reconciliava corretamente para 'merged' (mostrando "tudo verde"),
+ * mas o card do checkpoint no Histórico ficava preso em "Testando" para
+ * sempre — mesmo depois de um merge válido.
+ *
+ * `pushStatus` só avança para 'integrated' quando o merge de fato aconteceu
+ * (`result.merged`) — nunca antecipa (fail-closed: sem merge confirmado,
+ * `null` e o adapter de persistência não toca push_status). `integrationStatus`
+ * sempre reflete o estado técnico mais recente — o MESMO valor que o
+ * projeto grava em `integration_state` — para o Histórico nunca divergir do
+ * que o projeto já sabe.
+ */
+export function checkpointStatusFromReconcile(result: {
+  state: IntegrationState
+  merged: boolean
+}): { pushStatus: 'integrated' | null; integrationStatus: IntegrationState } {
+  return {
+    pushStatus: result.merged ? 'integrated' : null,
+    integrationStatus: result.state,
+  }
+}
+
+/**
  * Reconcilia UMA PR. É o que o webhook e o fallback chamam depois de RELER o estado
  * (o gateway já fala com o GitHub via installation token server-side). O
  * `headShaHint` do webhook NÃO entra aqui — a autorização vem só do gateway.

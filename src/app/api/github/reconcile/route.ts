@@ -2,6 +2,7 @@ import { appTokenForRepo, installationCreds } from '@/lib/github/app'
 import { githubMergeGateway } from '@/lib/github/gateway'
 import {
   RECONCILABLE_STATES,
+  checkpointStatusFromReconcile,
   reconcileProjectPr,
   resolveRequiredChecks,
   type ReconcileLogger,
@@ -12,6 +13,8 @@ import {
   readIntegrationMeta,
   writeIntegrationMeta,
 } from '@/lib/mcp/repository'
+import { mcpDataClient } from '@/lib/mcp/tokens'
+import { reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
 
 /**
  * Fallback periódico de reconciliation (Vercel Cron) — a REDE DE SEGURANÇA do
@@ -65,6 +68,14 @@ export async function GET(req: Request): Promise<Response> {
         log: logger,
       })
       await writeIntegrationMeta(project.id, { integration_state: result.state })
+      // Reconcilia TAMBÉM o checkpoint (Histórico) — não só o projeto. Bug
+      // real: só o projeto era atualizado (integration_state), o card do
+      // checkpoint ficava preso em "Testando" mesmo após um merge válido.
+      await reconcileCheckpointsForPr(
+        mcpDataClient(),
+        { projectId: project.id, prNumber },
+        checkpointStatusFromReconcile(result),
+      )
       reconciled += 1
     } catch (error) {
       logger.event('reconciliation_error', {

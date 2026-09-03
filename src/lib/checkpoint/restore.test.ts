@@ -74,6 +74,21 @@ describe('humanCheckpointStatus — a UI nunca mostra jargão de Git', () => {
     expect(humanCheckpointStatus('failed', null)).toBe('Falhou')
     expect(humanCheckpointStatus('published', 'security_blocked')).toBe('Falhou')
   })
+
+  // Estes 3 ramos só passaram a ser exercitáveis de verdade depois do fix da
+  // reconciliação (checkpointStatusFromReconcile grava result.state completo,
+  // não mais só 'ci_running' hardcoded) — sem cobertura aqui, um CI vermelho
+  // reconciliado cairia no default 'Publicando' (sugerindo que nada rodou
+  // ainda) em vez de 'Falhou'.
+  it('ci_failed → Falhou (mesmo tratamento de security_blocked — CI vermelho é falha, não "ainda publicando")', () => {
+    expect(humanCheckpointStatus('published', 'ci_failed')).toBe('Falhou')
+  })
+  it('validated (tudo verde, ainda não mesclado) → Testando, NUNCA Integrado antes do merge de verdade', () => {
+    expect(humanCheckpointStatus('published', 'validated')).toBe('Testando')
+  })
+  it('unmanaged_main_change (anomalia — main mudou fora do Merge Controller) → Testando, nunca Integrado sem confirmação', () => {
+    expect(humanCheckpointStatus('published', 'unmanaged_main_change')).toBe('Testando')
+  })
 })
 
 describe('humanRestoreStatus', () => {

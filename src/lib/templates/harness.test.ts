@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { classifyRisk } from './verify-classifier'
 import {
+  classifyBindProbe,
+  classifyPidSignalError,
   decidePreviewAction,
   harnessFiles,
   harnessPackageScripts,
@@ -57,6 +59,49 @@ describe('preview supervisor (v3.1) — pickFreePreviewPort (colisão de porta)'
   })
 })
 
+/**
+ * E2E real: `preview:ensure` rodando dentro do sandbox do Codex. Um preview
+ * saudável sobreviveu entre "prompts" (pid antigo, :3001), mas o prompt
+ * seguinte rodou em outro contexto de sandbox onde `process.kill(pid, 0)`
+ * no pid antigo deu EPERM (não ESRCH) — o processo seguia vivo e saudável,
+ * só não sinalizável DAQUELE contexto. O supervisor tratava EPERM como
+ * "morto" e sobrescrevia .supremo/preview.pid/.port pro pid/porta de uma
+ * candidata nova (que morreu com `listen EPERM`) ANTES de confirmar que ela
+ * respondia — perdendo o rastro da instância antiga, que seguia rodando.
+ */
+describe('preview supervisor (v3.1) — classifyPidSignalError (ESRCH vs EPERM/desconhecido)', () => {
+  it('ESRCH → dead (processo comprovadamente não existe mais)', () => {
+    expect(classifyPidSignalError('ESRCH')).toBe('dead')
+  })
+  it('EPERM → unknown (existe, só não dá pra sinalizar — NUNCA "dead")', () => {
+    expect(classifyPidSignalError('EPERM')).toBe('unknown')
+  })
+  it('qualquer outro código, ou nenhum → unknown (nunca assume morto sem ESRCH)', () => {
+    expect(classifyPidSignalError('EACCES')).toBe('unknown')
+    expect(classifyPidSignalError(undefined)).toBe('unknown')
+    expect(classifyPidSignalError(null)).toBe('unknown')
+  })
+})
+
+describe('preview supervisor (v3.1) — classifyBindProbe (erro indeterminado nunca prova porta livre)', () => {
+  it('sem erro (bind teve sucesso) → free', () => {
+    expect(classifyBindProbe(null)).toBe('free')
+    expect(classifyBindProbe(undefined)).toBe('free')
+  })
+  it('EADDRINUSE → busy (única prova real de ocupação)', () => {
+    expect(classifyBindProbe('EADDRINUSE')).toBe('busy')
+  })
+  it('família de endereço indisponível NESTA máquina (ex.: IPv6 desligado) → skip, não conta como ocupado', () => {
+    expect(classifyBindProbe('EADDRNOTAVAIL')).toBe('skip')
+    expect(classifyBindProbe('EAFNOSUPPORT')).toBe('skip')
+  })
+  it('erro INDETERMINADO (ex.: EPERM de bind restrito por sandbox) → busy, NUNCA free — bug real do E2E era o oposto', () => {
+    expect(classifyBindProbe('EPERM')).toBe('busy')
+    expect(classifyBindProbe('EACCES')).toBe('busy')
+    expect(classifyBindProbe('ALGUM_CODIGO_NUNCA_VISTO')).toBe('busy')
+  })
+})
+
 describe('preview supervisor (v3.1) — script gerado é determinístico', () => {
   const src = previewSupervisorScript()
   it('sobe DESACOPLADO (detached + unref) para sobreviver ao turno', () => {
@@ -99,7 +144,7 @@ describe('preview supervisor (v3.1) — script gerado é determinístico', () =>
   it('persiste a porta REAL em uso (pode diferir da preferida) — status/ensure seguintes checam essa, não a configurada às cegas', () => {
     expect(src).toContain('preview.port')
     expect(src).toContain('function readPort()')
-    expect(src).toMatch(/writeFileSync\(PORTFILE, String\(port\)\)/)
+    expect(src).toMatch(/writeFileSync\(PORTFILE, String\(chosen\)\)/)
   })
   it('sem porta livre no intervalo → falha CLARO (stderr + exit code != 0), nunca finge sucesso', () => {
     expect(src).toMatch(/if \(chosen === null\)/)
@@ -108,9 +153,57 @@ describe('preview supervisor (v3.1) — script gerado é determinístico', () =>
   })
   it('o bind-probe checa IPv4 E IPv6 (loopback + wildcard das duas) — não só IPv4 (bug real: foreign server só no wildcard IPv6 "::" passava batido)', () => {
     expect(src).toMatch(/PROBE_HOSTS\s*=\s*\[HOST,\s*'0\.0\.0\.0',\s*'::',\s*'::1'\]/)
-    // só EADDRINUSE prova ocupação — qualquer outro erro (ex.: IPv6
-    // indisponível na máquina) não pode derrubar a varredura inteira.
-    expect(src).toContain("err.code === 'EADDRINUSE'")
+    // só EADDRINUSE prova ocupação real.
+    expect(src).toContain("code === 'EADDRINUSE'")
+  })
+  it('erro de bind INDETERMINADO (ex.: EPERM de um sandbox) NUNCA vira prova de porta livre — tratado como ocupado, nunca "skip" nem "free"', () => {
+    // Bug real do E2E: um sandbox restringindo o bind fazia a porta PARECER
+    // livre (qualquer erro != EADDRINUSE virava "não ocupado"). Fix: só
+    // códigos que provam "família de endereço indisponível NESTA máquina"
+    // (IPv6 desligado, por exemplo) são ignorados sem contar como ocupado —
+    // qualquer OUTRO erro (EPERM incluso) conta como ocupado (conservador).
+    expect(src).toContain('function classifyBindError(code)')
+    expect(src).toMatch(/ADDRESS_FAMILY_UNAVAILABLE = \[.*EADDRNOTAVAIL.*EAFNOSUPPORT.*\]/)
+    expect(src).toMatch(/return 'skip'/)
+    // o fallback final (nem EADDRINUSE nem família indisponível) é 'busy'.
+    expect(src.match(/function classifyBindError\(code\) \{[\s\S]*?\n\}/)?.[0]).toMatch(
+      /return 'busy'\s*\n\}$/,
+    )
+  })
+  it('alive()/status()/ensure() usam pidState (ESRCH vs EPERM/desconhecido) — nunca kill(pid,0) cru tratando qualquer erro como morto', () => {
+    expect(src).toContain('function pidState(pid)')
+    expect(src).toMatch(/return \(err && err\.code\) === 'ESRCH' \? 'dead' : 'unknown'/)
+    expect(src).toMatch(/function alive\(pid\) \{\s*\n\s*return pidState\(pid\) !== 'dead'/)
+  })
+  it('ensure() checa a saúde da porta rastreada SEMPRE (não só quando alive(pid) é true) — nunca perde uma instância saudável por EPERM', () => {
+    // O bug real: a checagem de saúde ficava DENTRO de `if (alive(pid))`, e
+    // alive() tratava EPERM como falso — então uma instância saudável mas
+    // não-sinalizável (sandbox) nunca era detectada. Fix: health(trackedPort)
+    // é chamado incondicionalmente, direto no decide().
+    expect(src).toMatch(/const action = decide\(alive\(pid\), await health\(trackedPort\)\)/)
+  })
+  it('candidata nova que NÃO fica saudável NUNCA sobrescreve .supremo/preview.pid|.port — estado anterior é preservado', () => {
+    // startDetached não grava mais os arquivos de estado — só ensure() grava,
+    // e só DEPOIS de waitReady confirmar sucesso.
+    const startDetachedBody = src.slice(
+      src.indexOf('function startDetached(port)'),
+      src.indexOf('async function ensure()'),
+    )
+    expect(startDetachedBody).not.toContain('writeFileSync(PIDFILE')
+    expect(startDetachedBody).not.toContain('writeFileSync(PORTFILE')
+    expect(src).toMatch(/if \(!ok\) \{/)
+    expect(src).toMatch(/mantendo estado anterior/)
+    // as ÚNICAS gravações de PIDFILE/PORTFILE em ensure() ficam depois do
+    // `if (!ok) { ... return }` — nunca antes de confirmar a candidata.
+    const ensureBody = src.slice(src.indexOf('async function ensure()'), src.indexOf('async function status()'))
+    const okCheckIdx = ensureBody.indexOf('if (!ok)')
+    const writePidIdx = ensureBody.indexOf('writeFileSync(PIDFILE')
+    expect(okCheckIdx).toBeGreaterThan(-1)
+    expect(writePidIdx).toBeGreaterThan(okCheckIdx)
+  })
+  it('orçamento de espera por readiness é configurável só por env (default inalterado: 90 tentativas de 1s)', () => {
+    expect(src).toMatch(/const WAIT_TRIES = Number\(process\.env\.SUPREMO_PREVIEW_WAIT_TRIES\) \|\| 90/)
+    expect(src).toMatch(/const WAIT_INTERVAL_MS = Number\(process\.env\.SUPREMO_PREVIEW_WAIT_INTERVAL_MS\) \|\| 1000/)
   })
   it('o script gerado é JavaScript VÁLIDO (node --check)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'supremo-harness-preview-'))

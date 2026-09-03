@@ -85,6 +85,35 @@ function readPersistedPort(dir: string): number | null {
   }
 }
 
+/**
+ * Reproduz o EXATO sintoma do sandbox do Codex sem depender de root/UID/
+ * container: um `--require` shim que intercepta `process.kill(pid, 0)` SÓ
+ * para o pid-alvo e lança um erro `EPERM` real (com `.code === 'EPERM'`) —
+ * o mesmo formato de erro que o Node lança quando o SO nega o sinal. Uma
+ * dependência de PID 1 (init/launchd) seria mais frágil: como root, `kill(1,
+ * 0)` costuma FUNCIONAR (sem EPERM), o que quebraria o teste em containers
+ * de CI rodando como root. O shim reproduz o pid REAL e vivo do preview,
+ * artificialmente não-sinalizável — exatamente o que o sandbox faz.
+ */
+function writeEpermShim(dir: string): string {
+  const shimPath = join(dir, 'eperm-shim.cjs')
+  writeFileSync(
+    shimPath,
+    "'use strict'\n" +
+      'const target = Number(process.env.SUPREMO_TEST_EPERM_PID)\n' +
+      'const realKill = process.kill.bind(process)\n' +
+      'process.kill = function (pid, signal) {\n' +
+      '  if (Number(pid) === target && signal === 0) {\n' +
+      "    const err = new Error('kill EPERM (test shim)')\n" +
+      "    err.code = 'EPERM'\n" +
+      '    throw err\n' +
+      '  }\n' +
+      '  return realKill(pid, signal)\n' +
+      '}\n',
+  )
+  return shimPath
+}
+
 const tempDirs: string[] = []
 const foreignServers: http.Server[] = []
 
@@ -242,6 +271,138 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       // Ownership real: quem responde na porta escolhida é o NOSSO dev
       // server — o app alheio em IPv6 continua intacto, sem ter sido tocado.
       await expect(fetchBody(persistedPort!)).resolves.toBe('OWN-DEV-SERVER')
+    },
+    30_000,
+  )
+
+  // E2E real: preview:ensure dentro do sandbox do Codex. Um preview saudável
+  // sobreviveu entre "prompts" (pid antigo, porta antiga), mas o prompt
+  // seguinte rodou em outro contexto de sandbox onde process.kill(pid, 0) no
+  // pid antigo deu EPERM (não ESRCH) — o processo seguia vivo e saudável, só
+  // não sinalizável DAQUELE contexto. O supervisor tratava EPERM como
+  // "morto" e sobrescrevia .supremo/preview.pid/.port pro pid/porta de uma
+  // candidata nova (que morreu com `listen EPERM`) — perdendo o rastro da
+  // instância antiga, que seguia rodando (órfã, sem ninguém apontando pra
+  // ela). Reproduz isso com o pid REAL do preview (via shim — ver
+  // writeEpermShim) e confirma: reusa, nunca mata, nunca sobrescreve.
+  it(
+    'kill(pid,0) retorna EPERM (pid existe, só não é sinalizável — ex.: sandbox) + trackedPort saudável → REUSA, nunca mata nem sobrescreve nada',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-eperm-'))
+      tempDirs.push(dir)
+      writeFixtureProject(dir)
+      const shimPath = writeEpermShim(dir)
+
+      const port = randomBasePort()
+      const first = runPreview(dir, ['ensure'], { PORT: String(port) })
+      expect(first.status).toBe(0)
+      const realPid = readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()
+      expect(readPersistedPort(dir)).toBe(port)
+
+      // Segundo "prompt": mesmo pid real, mas agora kill(realPid, 0) dá
+      // EPERM (simulando o novo contexto de sandbox) — nunca ESRCH.
+      const second = spawnSync(
+        process.execPath,
+        ['--require', shimPath, join(dir, 'scripts/preview.mjs'), 'ensure'],
+        {
+          cwd: dir,
+          encoding: 'utf8',
+          timeout: 20_000,
+          env: { ...process.env, PORT: String(port), SUPREMO_TEST_EPERM_PID: realPid },
+        },
+      )
+      expect(second.status).toBe(0)
+      expect(second.stdout).toMatch(/já no ar/)
+      // Nunca declara sucesso apontando pra uma porta nova/diferente —
+      // nenhuma tentativa de relocar ou subir por cima aconteceu.
+      expect(second.stdout).not.toMatch(/ocupada por outro processo/)
+
+      // O processo REAL (nosso, do primeiro ensure()) segue vivo — nunca foi
+      // morto nem substituído por uma segunda instância. Sinalizável de
+      // verdade pelo processo de teste (que não tem o shim — kill(realPid,0)
+      // aqui reflete o SO de verdade, não a simulação).
+      expect(() => process.kill(Number(realPid), 0)).not.toThrow()
+      await expect(fetchBody(port)).resolves.toBe('OWN-DEV-SERVER')
+
+      // O estado gravado continua sendo o da instância REAL — nunca foi
+      // sobrescrito por nada relacionado à tentativa "EPERM".
+      expect(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()).toBe(realPid)
+      expect(readPersistedPort(dir)).toBe(port)
+
+      // status também reconhece a instância como saudável — running/healthy
+      // vêm da porta rastreada respondendo, não de conseguir sinalizar o pid.
+      const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
+        running: boolean
+        healthy: boolean
+        port: number
+      }
+      expect(status.running).toBe(true)
+      expect(status.healthy).toBe(true)
+      expect(status.port).toBe(port)
+    },
+    30_000,
+  )
+
+  // Segunda metade do mesmo E2E: mesmo SEM o angle do EPERM, uma candidata
+  // nova que não fica saudável (ex.: `listen EPERM` real no sandbox) NUNCA
+  // pode sobrescrever um estado anterior válido. Reproduz com uma instância
+  // real morta (pid genuinamente ESRCH — não precisa do shim aqui) + um dev
+  // script que nunca binda em lugar nenhum, e confirma que o pid/porta
+  // antigos (agora só um REGISTRO stale, mas ainda assim o único que temos)
+  // continuam intactos — nunca substituídos pelo pid/porta da tentativa que
+  // falhou.
+  it(
+    'candidata nova NÃO fica saudável (nunca binda) → NUNCA sobrescreve .supremo/preview.pid|.port com a tentativa falha',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-preserve-'))
+      tempDirs.push(dir)
+      writeFixtureProject(dir)
+
+      const port = randomBasePort()
+      const first = runPreview(dir, ['ensure'], { PORT: String(port) })
+      expect(first.status).toBe(0)
+      const realPid = readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()
+      expect(readPersistedPort(dir)).toBe(port)
+
+      // Mata a instância de verdade (ESRCH genuíno na próxima checagem) —
+      // simula a instância antiga tendo morrido de fato entre "prompts". O
+      // pidfile/portfile continuam com os valores antigos (nada os reescreve
+      // sozinho).
+      process.kill(Number(realPid))
+      for (let i = 0; i < 50; i++) {
+        try {
+          process.kill(Number(realPid), 0)
+          await new Promise((r) => setTimeout(r, 50))
+        } catch {
+          break
+        }
+      }
+
+      // Troca o dev script por um que NUNCA binda em porta nenhuma (simula
+      // `listen EPERM` real do sandbox — o efeito observável é o mesmo:
+      // a candidata nunca fica saudável).
+      writeFileSync(
+        join(dir, 'dev-server.mjs'),
+        "process.stdout.write('nunca vou bindar em nada\\n')\n",
+      )
+
+      // WAIT_TRIES/INTERVAL rápidos só pra este teste não esperar o
+      // orçamento de produção (até 90s) — default de produção inalterado
+      // (ver harness.test.ts: 90 tentativas de 1s sem a env).
+      const second = runPreview(dir, ['ensure'], {
+        PORT: String(port),
+        SUPREMO_PREVIEW_WAIT_TRIES: '3',
+        SUPREMO_PREVIEW_WAIT_INTERVAL_MS: '100',
+      })
+      expect(second.status).toBe(0)
+      expect(second.stdout).toMatch(/mantendo estado anterior/)
+      expect(second.stdout).not.toMatch(/✓ preview no ar/)
+
+      // O estado NÃO foi sobrescrito pela tentativa que falhou — continua
+      // sendo exatamente o da instância antiga (agora morta, mas preservada
+      // — nunca trocada por um pid/porta que sabemos que morreram).
+      expect(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()).toBe(realPid)
+      expect(readPersistedPort(dir)).toBe(port)
     },
     30_000,
   )

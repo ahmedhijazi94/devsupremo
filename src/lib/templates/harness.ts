@@ -95,6 +95,50 @@ export function pickFreePreviewPort(
 }
 
 /**
+ * (PURA) Classifica o resultado de checar se um pid rastreado está vivo via
+ * `process.kill(pid, 0)`. Só `ESRCH` prova que o processo NÃO existe mais.
+ * `EPERM` (comum em sandboxes — ex.: Codex — que podem barrar sinalizar um
+ * processo mesmo que ele exista e esteja saudável, por rodar em contexto
+ * isolado) ou QUALQUER outro erro NÃO prova que morreu — fica `'unknown'`.
+ *
+ * BUG REAL (E2E): EPERM era tratado como "morto". `ensure()` perdia o rastro
+ * de uma instância saudável (pid vivo em :3001) e subia outra por cima (pid
+ * novo em :3000), que morreu com `listen EPERM` — sobrescrevendo o estado da
+ * antiga, que continuava rodando e saudável, agora órfã e sem rastro.
+ */
+export function classifyPidSignalError(code: string | null | undefined): 'dead' | 'unknown' {
+  return code === 'ESRCH' ? 'dead' : 'unknown'
+}
+
+/**
+ * (PURA) Classifica o erro (`err.code`, ou `null`/`undefined` se o bind teve
+ * sucesso) de uma tentativa de bind numa porta/host — decide o que isso
+ * prova sobre a porta. Só `EADDRINUSE` prova ocupação real. Códigos que só
+ * dizem "essa família de endereço não existe nesta máquina" (IPv6 desligado,
+ * por exemplo) não provam NADA sobre a porta — `'skip'` (a varredura ignora
+ * esse host, sem contar nem como ocupado nem como livre). QUALQUER outro
+ * erro (ex.: `EPERM` — bind restrito por um sandbox, como o do Codex) é
+ * INDETERMINADO e NUNCA pode virar prova de porta livre — bug real do E2E:
+ * um erro assim era tratado como "bind ok, porta livre". Tratado como
+ * `'busy'` (conservador): melhor procurar outra porta do que arriscar subir
+ * por cima de algo que não conseguimos verificar.
+ */
+export function classifyBindProbe(errorCode: string | null | undefined): 'free' | 'busy' | 'skip' {
+  if (!errorCode) return 'free'
+  if (errorCode === 'EADDRINUSE') return 'busy'
+  const ADDRESS_FAMILY_UNAVAILABLE = [
+    'EADDRNOTAVAIL',
+    'EAFNOSUPPORT',
+    'EPROTONOSUPPORT',
+    'ENOTSUP',
+    'EOPNOTSUPP',
+    'EINVAL',
+  ]
+  if (ADDRESS_FAMILY_UNAVAILABLE.includes(errorCode)) return 'skip'
+  return 'busy'
+}
+
+/**
  * `scripts/preview.mjs` — supervisor determinístico do dev server (v3.1).
  *
  * O preview é INFRAESTRUTURA da sessão/projeto, não um processo do turno do agente.
@@ -114,11 +158,28 @@ export function pickFreePreviewPort(
  * porta REAL usada em \`.supremo/preview.port\` — \`status\`/\`ensure\` seguintes
  * sempre checam essa porta persistida, nunca cegamente a configurada. Se
  * nenhuma porta livre existir no intervalo, falha alto e claro (nunca declara
- * sucesso). Uma instância JÁ rastreada (pid vivo) só é reusada depois de
- * responder saudável NA PORTA PERSISTIDA — e como essa porta só foi ocupada
- * por nós (confirmada livre antes do bind), TCP garante que ninguém mais
- * pode estar respondendo ali: não há como um processo alheio ser confundido
- * com o nosso nesse caminho.
+ * sucesso). Uma instância JÁ rastreada (pid vivo OU não-sinalizável — ver
+ * abaixo) só é reusada depois de responder saudável NA PORTA PERSISTIDA — e
+ * como essa porta só foi ocupada por nós (confirmada livre antes do bind),
+ * TCP garante que ninguém mais pode estar respondendo ali: não há como um
+ * processo alheio ser confundido com o nosso nesse caminho.
+ *
+ * SANDBOX (fix do E2E real: `preview:ensure` dentro do sandbox do Codex).
+ * Um preview saudável sobrevivia entre "prompts" (pid antigo, porta antiga),
+ * mas o prompt seguinte rodava em outro contexto de sandbox onde
+ * `process.kill(pid, 0)` no pid antigo dava **EPERM** (não `ESRCH`) — o
+ * processo seguia vivo e saudável, só não era mais SINALIZÁVEL daquele
+ * contexto. O supervisor tratava EPERM como "morto", subia uma instância
+ * NOVA (que morreu com `listen EPERM` — outra restrição do sandbox), e já
+ * tinha sobrescrito `.supremo/preview.pid`/`.port` pro pid/porta mortos ANTES
+ * de confirmar que a nova instância respondia — perdendo o rastro da antiga,
+ * que seguia rodando (órfã, sem ninguém apontando pra ela). Fix, em duas
+ * partes: (1) `pidState`/`alive` (ver `classifyPidSignalError`) só tratam um
+ * pid como morto com `ESRCH` — `EPERM`/qualquer outro erro vira `'unknown'`,
+ * que `ensure()` trata como "pode estar vivo, confirma pela porta"; (2)
+ * `.supremo/preview.pid`/`.port` só são escritos DEPOIS que uma candidata
+ * nova passa no healthcheck — uma tentativa que falha NUNCA sobrescreve o
+ * estado anterior, saudável ou não.
  */
 export function previewSupervisorScript(): string {
   return `#!/usr/bin/env node
@@ -150,9 +211,23 @@ function readPort() {
     return Number.isFinite(n) && n > 0 ? n : null
   } catch { return null }
 }
+// Mesma classificação pura de harness.classifyPidSignalError (mantidas em
+// sincronia). Só ESRCH prova que o processo não existe mais — EPERM (comum
+// em sandboxes, ex.: Codex) ou qualquer outro erro NÃO prova que morreu.
+function pidState(pid) {
+  if (!pid) return 'dead'
+  try {
+    process.kill(pid, 0)
+    return 'alive'
+  } catch (err) {
+    return (err && err.code) === 'ESRCH' ? 'dead' : 'unknown'
+  }
+}
+// 'unknown' (não dá pra confirmar, mas também não dá pra provar que morreu)
+// conta como vivo pra decide() — a prova de verdade vem do healthcheck na
+// porta rastreada (ver ensure()), não de conseguir sinalizar o pid.
 function alive(pid) {
-  if (!pid) return false
-  try { process.kill(pid, 0); return true } catch { return false }
+  return pidState(pid) !== 'dead'
 }
 // Bind-probe real (node:net) — NUNCA HTTP: uma porta ocupada por um serviço
 // não-HTTP (ou por um app que não responde em '/') ainda conta como ocupada.
@@ -167,26 +242,33 @@ function alive(pid) {
 // verdade. Fix: testa TODOS os endereços relevantes pra "esta porta está
 // livre pra servir o preview" — loopback e wildcard, IPv4 E IPv6 — e só
 // declara livre se NENHUM deles estiver ocupado.
+//
+// Mesma classificação pura de harness.classifyBindProbe (mantidas em
+// sincronia). QUALQUER erro fora de EADDRINUSE/família-indisponível (ex.:
+// EPERM — bind restrito por sandbox) é indeterminado e NUNCA vira prova de
+// porta livre — outro bug real do E2E era exatamente esse.
+function classifyBindError(code) {
+  if (!code) return 'free'
+  if (code === 'EADDRINUSE') return 'busy'
+  const ADDRESS_FAMILY_UNAVAILABLE = ['EADDRNOTAVAIL', 'EAFNOSUPPORT', 'EPROTONOSUPPORT', 'ENOTSUP', 'EOPNOTSUPP', 'EINVAL']
+  if (ADDRESS_FAMILY_UNAVAILABLE.includes(code)) return 'skip'
+  return 'busy'
+}
 function tryBind(port, host) {
   return new Promise((resolve) => {
     const tester = net.createServer()
     let done = false
-    const finish = (busy) => {
+    const finish = (result) => {
       if (done) return
       done = true
-      resolve(busy)
+      resolve(result)
     }
-    // Só EADDRINUSE prova que a porta está ocupada NESTE endereço. Qualquer
-    // outro erro (ex.: família de endereço indisponível nesta máquina — IPv6
-    // desligado, por exemplo) não prova nada sobre a porta: tratado como "não
-    // avaliável aqui", nunca como ocupado — senão a varredura quebraria em
-    // máquinas sem suporte a um dos dois protocolos.
-    tester.once('error', (err) => finish(Boolean(err && err.code === 'EADDRINUSE')))
-    tester.once('listening', () => tester.close(() => finish(false)))
+    tester.once('error', (err) => finish(classifyBindError(err && err.code)))
+    tester.once('listening', () => tester.close(() => finish('free')))
     try {
       tester.listen(port, host)
-    } catch {
-      finish(false)
+    } catch (err) {
+      finish(classifyBindError(err && err.code))
     }
   })
 }
@@ -196,7 +278,7 @@ function tryBind(port, host) {
 const PROBE_HOSTS = [HOST, '0.0.0.0', '::', '::1']
 async function isPortFree(port) {
   for (const host of PROBE_HOSTS) {
-    if (await tryBind(port, host)) return false
+    if ((await tryBind(port, host)) === 'busy') return false
   }
   return true
 }
@@ -216,8 +298,14 @@ function health(port, timeoutMs = 1500) {
     req.on('timeout', () => { req.destroy(); resolve(false) })
   })
 }
-async function waitReady(port, tries = 90) {
-  for (let i = 0; i < tries; i++) { if (await health(port)) return true; await new Promise((r) => setTimeout(r, 1000)) }
+// Orçamento de espera por readiness — configurável só por env (default
+// inalterado: 90 tentativas de 1s = até 90s); existe pra testes de
+// regressão simularem uma candidata que nunca fica saudável sem esperar
+// minutos, sem mudar o comportamento padrão em produção.
+const WAIT_TRIES = Number(process.env.SUPREMO_PREVIEW_WAIT_TRIES) || 90
+const WAIT_INTERVAL_MS = Number(process.env.SUPREMO_PREVIEW_WAIT_INTERVAL_MS) || 1000
+async function waitReady(port, tries = WAIT_TRIES) {
+  for (let i = 0; i < tries; i++) { if (await health(port)) return true; await new Promise((r) => setTimeout(r, WAIT_INTERVAL_MS)) }
   return false
 }
 // Mesma decisão pura de harness.decidePreviewAction (mantidas em sincronia).
@@ -237,30 +325,37 @@ function startDetached(port) {
     env: { ...process.env, PORT: String(port) },
   })
   child.unref()
-  writeFileSync(PIDFILE, String(child.pid))
-  writeFileSync(PORTFILE, String(port))
+  // NÃO grava PIDFILE/PORTFILE aqui — só depois que ensure() confirmar via
+  // waitReady que a candidata ficou saudável (ver ensure()). Escrever cedo
+  // demais foi exatamente o bug real do E2E: uma candidata que morre (ex.:
+  // listen EPERM num sandbox) sobrescrevia o rastro de uma instância
+  // anterior que seguia viva e saudável em outra porta.
   return child.pid
 }
 async function ensure() {
   const pid = readPid()
   const trackedPort = readPort() ?? PORT
-  if (alive(pid)) {
-    // A porta rastreada só foi ocupada por nós (confirmada livre antes do
-    // bind) — quem responde nela agora só pode ser o nosso processo.
-    const action = decide(true, await health(trackedPort))
-    if (action === 'reuse') {
-      console.log(\`✓ preview já no ar (pid \${pid}, http://localhost:\${trackedPort})\`)
-      return
-    }
-    // zumbi (vivo mas não responde): mata e recomeça do zero (inclui achar porta de novo).
-    try { process.kill(pid) } catch {}
-    rmSync(PIDFILE, { force: true })
-    rmSync(PORTFILE, { force: true })
+  // Nunca descarta uma instância rastreada só por não sinalizar o pid via
+  // kill(pid,0) — EPERM (comum em sandboxes como o do Codex, onde o mesmo
+  // pid pode existir e estar saudável num contexto isolado, sem ser
+  // sinalizável a partir deste) NÃO prova que morreu (ver pidState/alive).
+  // A prova de verdade é responder saudável na PRÓPRIA porta persistida —
+  // checada aqui, SEMPRE, antes de cogitar subir qualquer coisa nova.
+  const action = decide(alive(pid), await health(trackedPort))
+  if (action === 'reuse') {
+    console.log(\`✓ preview já no ar (pid \${pid}, http://localhost:\${trackedPort})\`)
+    return
   }
-  // Nenhuma instância nossa viva: NUNCA assume que a porta preferida está
-  // livre só porque ninguém nosso está rastreado — confirma via bind-probe.
-  // Se estiver ocupada por outro processo/projeto, procura a próxima livre;
-  // se nenhuma existir no intervalo, falha claro em vez de dar falso positivo.
+  if (action === 'restart') {
+    // Zumbi: mata o que tínhamos rastreado (inofensivo mesmo se não der pra
+    // sinalizar — EPERM/ESRCH aqui são só engolidos). NÃO apaga
+    // .supremo/preview.pid|.port ainda — só depois que a candidata nova
+    // passar no healthcheck: nunca sobrescreve estado válido antes disso.
+    try { process.kill(pid) } catch {}
+  }
+  // Nenhuma instância rastreada respondeu saudável: escolhe porta (NUNCA
+  // assume que a preferida está livre sem confirmar — bind-probe IPv4+IPv6,
+  // ver isPortFree) e sobe uma candidata nova.
   const chosen = await pickPort(PORT)
   if (chosen === null) {
     console.error(\`✗ portas \${PORT}-\${PORT + PORT_SEARCH_SPAN - 1} todas ocupadas — não consigo subir o preview. Libere uma porta ou rode com PORT=<outra>.\`)
@@ -272,9 +367,19 @@ async function ensure() {
   }
   const newPid = startDetached(chosen)
   const ok = await waitReady(chosen)
-  console.log(ok
-    ? \`✓ preview no ar (pid \${newPid}, http://localhost:\${chosen})\`
-    : \`• preview iniciando (pid \${newPid}) — aquecendo; veja .supremo/preview.log\`)
+  if (!ok) {
+    // Candidata NÃO ficou saudável (ex.: listen EPERM num sandbox, como no
+    // E2E real) — NUNCA sobrescreve .supremo/preview.pid|.port: um estado
+    // anterior válido (mesmo que não confirmado saudável agora) continua
+    // intacto em vez de virar um pid/porta mortos. Mata a tentativa que não
+    // decolou, pra não deixar processo órfão.
+    try { process.kill(newPid) } catch {}
+    console.log(\`• preview não respondeu em http://localhost:\${chosen} (pid \${newPid}) — mantendo estado anterior; veja .supremo/preview.log\`)
+    return
+  }
+  writeFileSync(PIDFILE, String(newPid))
+  writeFileSync(PORTFILE, String(chosen))
+  console.log(\`✓ preview no ar (pid \${newPid}, http://localhost:\${chosen})\`)
 }
 async function status() {
   const pid = readPid()

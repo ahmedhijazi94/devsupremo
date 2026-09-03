@@ -106,8 +106,10 @@ export function pickFreePreviewPort(
  * fazia `preview:ensure` reportar "saudável" usando a resposta do processo
  * ALHEIO, e salvar o pid de um processo nosso que podia morrer/migrar de
  * porta sem ninguém notar). Antes de subir um processo NOVO, o supervisor
- * SEMPRE confirma via bind-probe (`node:net`, não HTTP) que a porta está
- * livre; se a configurada estiver ocupada por outra coisa, procura a próxima
+ * SEMPRE confirma via bind-probe (`node:net`, não HTTP; em IPv4 E IPv6 —
+ * loopback e wildcard das duas famílias, ver `isPortFree` — um foreign server
+ * só no wildcard IPv6 `::` já escapou de um probe IPv4-only num E2E real)
+ * que a porta está livre; se a configurada estiver ocupada por outra coisa, procura a próxima
  * livre (`pickPort`, mesmo algoritmo de `pickFreePreviewPort`) e persiste a
  * porta REAL usada em \`.supremo/preview.port\` — \`status\`/\`ensure\` seguintes
  * sempre checam essa porta persistida, nunca cegamente a configurada. Se
@@ -156,13 +158,47 @@ function alive(pid) {
 // não-HTTP (ou por um app que não responde em '/') ainda conta como ocupada.
 // É isto (checar ANTES de subir, nunca confiar em quem já responde lá) que
 // impede o falso positivo do bug real: nunca subimos por cima de outro app.
-function isPortFree(port) {
+//
+// BUG REAL (E2E, achado que a v1 deste fix não cobria): o probe testava SÓ
+// IPv4 (127.0.0.1). Um \`python3 -m http.server\` que ocupa o wildcard IPv6
+// (\`::\`) passa batido nesse probe — a porta parece livre, o preview persiste
+// ela, e o dev server real (que, sem host explícito, também tenta bindar em
+// IPv6 quando disponível — é o padrão do próprio Node) morre ao colidir de
+// verdade. Fix: testa TODOS os endereços relevantes pra "esta porta está
+// livre pra servir o preview" — loopback e wildcard, IPv4 E IPv6 — e só
+// declara livre se NENHUM deles estiver ocupado.
+function tryBind(port, host) {
   return new Promise((resolve) => {
     const tester = net.createServer()
-    tester.once('error', () => resolve(false))
-    tester.once('listening', () => tester.close(() => resolve(true)))
-    tester.listen(port, HOST)
+    let done = false
+    const finish = (busy) => {
+      if (done) return
+      done = true
+      resolve(busy)
+    }
+    // Só EADDRINUSE prova que a porta está ocupada NESTE endereço. Qualquer
+    // outro erro (ex.: família de endereço indisponível nesta máquina — IPv6
+    // desligado, por exemplo) não prova nada sobre a porta: tratado como "não
+    // avaliável aqui", nunca como ocupado — senão a varredura quebraria em
+    // máquinas sem suporte a um dos dois protocolos.
+    tester.once('error', (err) => finish(Boolean(err && err.code === 'EADDRINUSE')))
+    tester.once('listening', () => tester.close(() => finish(false)))
+    try {
+      tester.listen(port, host)
+    } catch {
+      finish(false)
+    }
   })
+}
+// HOST (IPv4) + wildcards de IPv4/IPv6 + loopback IPv6 — compatível com
+// qualquer host em que o \`npm run dev\` real (subido sem --host explícito)
+// venha a bindar, seja qual for o framework.
+const PROBE_HOSTS = [HOST, '0.0.0.0', '::', '::1']
+async function isPortFree(port) {
+  for (const host of PROBE_HOSTS) {
+    if (await tryBind(port, host)) return false
+  }
+  return true
 }
 // Mesmo algoritmo puro de harness.pickFreePreviewPort (mantidos em sincronia).
 async function pickPort(configuredPort, span = PORT_SEARCH_SPAN) {

@@ -167,17 +167,30 @@ export async function setCheckpointPushStatus(
  * Join por `pr_number` — estável, nunca reciclado pelo GitHub dentro de um
  * repositório — junto de `project_id` (o mesmo número de PR nunca se repete
  * entre projetos/repos diferentes de qualquer forma, mas o filtro deixa a
- * query explícita). Só avança checkpoints ainda `push_status = 'published'`
- * — nunca reabre um `'integrated'`/`'failed'` já resolvido, e nunca toca um
- * `'publishing'` (ainda não tem PR de verdade) ou um checkpoint de OUTRA PR
- * que coincidentemente reusa a mesma integration_branch mais tarde. Idempotente.
+ * query explícita). Um UPDATE só, sem `.single()`/`.limit()`: afeta TODOS os
+ * checkpoints que casam o filtro numa chamada — 2+ checkpoints publicados na
+ * MESMA PR (reuse + synchronize) reconciliam juntos, cada um com seu próprio
+ * commit_sha/published_sha/created_at preservados intactos (só integration_
+ * status/push_status mudam). Só avança checkpoints ainda `push_status =
+ * 'published'` — nunca reabre um `'integrated'`/`'failed'` já resolvido, e
+ * nunca toca um `'publishing'` (ainda não tem PR de verdade) ou um checkpoint
+ * de OUTRA PR que coincidentemente reusa a mesma integration_branch mais
+ * tarde. Idempotente.
+ *
+ * BUG REAL corrigido aqui: a versão anterior não checava `error` — uma falha
+ * da query (rede, permissão, o que for) resolvia como sucesso silencioso,
+ * sem lançar nada. Se isto rodasse DEPOIS de `writeIntegrationMeta` já ter
+ * gravado o projeto como 'merged' (a ordem real no webhook), o projeto virava
+ * READY enquanto os checkpoints ficavam presos sem QUALQUER sinal de erro nos
+ * logs. Agora lança — o catch do webhook route pelo menos REGISTRA a falha
+ * em vez de escondê-la.
  */
 export async function reconcileCheckpointsForPr(
   client: SupabaseClient,
   input: { projectId: string; prNumber: number },
   status: { pushStatus: 'integrated' | null; integrationStatus: string },
 ): Promise<void> {
-  await client
+  const { error } = await client
     .from('checkpoints')
     .update({
       integration_status: status.integrationStatus,
@@ -186,6 +199,9 @@ export async function reconcileCheckpointsForPr(
     .eq('project_id', input.projectId)
     .eq('pr_number', input.prNumber)
     .eq('push_status', 'published')
+  if (error) {
+    throw new Error(`Falha ao reconciliar checkpoints da PR #${input.prNumber}: ${error.message}`)
+  }
 }
 
 // ── Restore (v3.1 finalização) ───────────────────────────────────────────────

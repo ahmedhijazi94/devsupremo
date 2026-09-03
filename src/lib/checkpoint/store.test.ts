@@ -12,7 +12,7 @@ import { reconcileCheckpointsForPr } from './store'
  * (nunca reabre um 'integrated'/'failed' já resolvido, nunca vaza pra outro
  * projeto/PR).
  */
-function fakeClient() {
+function fakeClient(queryError: { message: string } | null = null) {
   const calls: { eq: Array<[string, unknown]>; update: unknown } = { eq: [], update: undefined }
   const chain = {
     from: vi.fn(() => chain),
@@ -24,7 +24,8 @@ function fakeClient() {
       calls.eq.push([col, val])
       return chain
     }),
-    then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+    then: (resolve: (v: { error: { message: string } | null }) => void) =>
+      resolve({ error: queryError }),
   }
   return { client: chain as unknown as SupabaseClient, calls }
 }
@@ -63,5 +64,22 @@ describe('reconcileCheckpointsForPr — escopo exato (projeto + PR + só publish
       ['pr_number', 42],
       ['push_status', 'published'],
     ])
+  })
+
+  it('lança quando o Supabase reporta erro — nunca engole silenciosamente uma falha da query', async () => {
+    // Bug real: a versão anterior não checava `error` — uma falha da query
+    // (rede, permissão, o que for) virava sucesso silencioso. Se isto rodar
+    // DEPOIS de o projeto já ter sido gravado como 'merged' (a ordem real no
+    // webhook), o projeto vira READY e os checkpoints ficam presos sem
+    // NENHUM sinal de erro. Agora precisa lançar, pro catch do webhook route
+    // ao menos REGISTRAR a falha.
+    const { client } = fakeClient({ message: 'connection reset' })
+    await expect(
+      reconcileCheckpointsForPr(
+        client,
+        { projectId: 'proj-1', prNumber: 42 },
+        { pushStatus: 'integrated', integrationStatus: 'merged' },
+      ),
+    ).rejects.toThrow(/connection reset/)
   })
 })

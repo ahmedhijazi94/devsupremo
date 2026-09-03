@@ -2253,6 +2253,17 @@ jobs:
   changes:
     name: Áreas afetadas
     runs-on: ubuntu-latest
+    # dorny/paths-filter@v3 num evento pull_request: o checkout do PR não traz
+    # histórico da base (fetch-depth padrão), então a action cai pro fallback
+    # via API do GitHub pra listar os arquivos mudados — que exige LEITURA da
+    # PR. Sem isto, falha com "Resource not accessible by integration" (bug
+    # real do E2E). Escopo aqui, só neste job (não no workflow inteiro): os
+    # outros jobs (quality/test/build/e2e/secrets/...) não leem PR nenhuma —
+    # menor privilégio é dar exatamente o que CADA job precisa, não o que o
+    # workflow como um todo poderia vir a precisar.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       db: \${{ steps.filter.outputs.db }}
       app: \${{ steps.filter.outputs.app }}

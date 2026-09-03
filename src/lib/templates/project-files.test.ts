@@ -255,10 +255,16 @@ describe('CI — actions em versão suportada', () => {
     expect(ci).toMatch(/contents:\s*read/)
   })
 
-  it('NÃO pede pull-requests:read (a CLI do gitleaks lê o checkout local, não a API)', () => {
+  it('o workflow (nível raiz) NÃO concede pull-requests:read — só o job "changes" precisa (ver describe dedicado abaixo)', () => {
     // v3.3.0: trocamos gitleaks/gitleaks-action (que lia /pulls/N/commits) pela
-    // CLI oficial rodando sobre `fetch-depth: 0` — sem chamada à API de PR.
-    expect(ci).not.toMatch(/pull-requests:\s*read/)
+    // CLI oficial rodando sobre `fetch-depth: 0` — gitleaks nunca chama a API
+    // de PR, então esse gate continua certo em não precisar da permissão.
+    // dorny/paths-filter (job "changes") passou a precisar dela (E2E real:
+    // "Resource not accessible by integration") — mas concedida SÓ nesse job,
+    // nunca no bloco `permissions:` do topo do arquivo (que os outros 7 jobs
+    // herdam) — menor privilégio.
+    const topLevelPermissions = ci.slice(0, ci.indexOf('\njobs:'))
+    expect(topLevelPermissions).not.toMatch(/pull-requests:\s*read/)
   })
 
   it('não usa actions em depreciação de Node 20', () => {
@@ -273,6 +279,51 @@ describe('CI — actions em versão suportada', () => {
     expect(ci).toMatch(/node-version:\s*'22'/)
     expect(ci).not.toMatch(/node-version:\s*'20'/)
     expect(file('.nvmrc').trim()).toBe('22')
+  })
+})
+
+/**
+ * E2E real: dorny/paths-filter@v3 falhou em PR com "Resource not accessible
+ * by integration" ao buscar os arquivos mudados. Num evento pull_request, o
+ * checkout não traz histórico da base (fetch-depth padrão) — a action então
+ * cai pro fallback via API do GitHub (lista os arquivos da PR), que exige
+ * `pull-requests: read` no GITHUB_TOKEN. Sem essa permissão, a chamada falha
+ * com exatamente esse erro. Fix: concede a permissão MÍNIMA necessária — só
+ * no job "changes" (onde paths-filter roda), nunca no workflow inteiro.
+ */
+describe('CI — permissões mínimas do job "changes" (dorny/paths-filter precisa ler a PR)', () => {
+  const ci = file('.github/workflows/ci.yml')
+  const changesJob = ci.slice(ci.indexOf('\n  changes:'), ci.indexOf('\n  quality:'))
+
+  it('o job "changes" concede pull-requests:read — a permissão que faltava no E2E real', () => {
+    expect(changesJob).toMatch(/permissions:\s*\n\s*contents:\s*read\s*\n\s*pull-requests:\s*read/)
+  })
+
+  it('a permissão é escopada SÓ ao job "changes" — os outros 7 jobs não ganham acesso de leitura à PR', () => {
+    const otherJobs = ci.slice(ci.indexOf('\n  quality:'))
+    expect(otherJobs).not.toMatch(/pull-requests:\s*read/)
+  })
+
+  it('o job "changes" não herda permissões que não usa (security-events/actions) — um job com `permissions:` próprio substitui, não soma, o bloco do workflow', () => {
+    // Documenta a semântica do GitHub Actions que este fix depende: definir
+    // `permissions:` num job REESCREVE (não estende) o que ele herdaria do
+    // topo do arquivo — por isso listar só contents+pull-requests aqui é
+    // estritamente MENOS, não mais, do que o job tinha antes (que herdava
+    // também security-events:write e actions:read, que paths-filter/checkout
+    // nunca usam).
+    expect(changesJob).not.toMatch(/security-events/)
+    expect(changesJob).not.toMatch(/actions:\s*read/)
+  })
+
+  it('dorny/paths-filter continua no job "changes", depois do checkout', () => {
+    expect(changesJob).toMatch(/uses:\s*actions\/checkout@v5/)
+    expect(changesJob).toMatch(/uses:\s*dorny\/paths-filter@v3/)
+    // Busca o PASSO (`uses: ...`), não uma menção em comentário explicativo
+    // (o comentário acima de `permissions:` cita dorny/paths-filter@v3 na
+    // prosa, antes do passo de verdade).
+    expect(changesJob.indexOf('uses: actions/checkout@v5')).toBeLessThan(
+      changesJob.indexOf('uses: dorny/paths-filter@v3'),
+    )
   })
 })
 

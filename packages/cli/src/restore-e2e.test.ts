@@ -195,3 +195,209 @@ describe('restore — E2E real: patch aplicado → checkpoint E criado → publi
     20_000,
   )
 })
+
+/**
+ * Regressão E2E real (git de verdade, teste-v3-12): checkpoint A sem
+ * migration; depois foram criadas E APLICADAS duas migrations reais no
+ * Supabase remoto (checkpoints B e C). Ao restaurar A, o preview voltava
+ * corretamente e A virava "Ativo" — mas os dois arquivos de
+ * `supabase/migrations/` eram REMOVIDOS do worktree, e a remoção entrava no
+ * commit compensatório do restore. O Supabase remoto continuava com as duas
+ * migrations aplicadas → o repo ficava PRA TRÁS do banco real, violando a
+ * regra forward-only (migrations nunca desfazem schema; restore de código
+ * nunca executa down migration). Migrations posteriores ao alvo devem
+ * permanecer FISICAMENTE em `supabase/migrations/`, byte-idênticas, e fora
+ * do commit compensatório — mesmo restaurando pra um checkpoint que não as
+ * tinha.
+ */
+describe('restore — E2E real: migrations FORWARD-ONLY nunca são apagadas/revertidas pelo restore de código (v3-12)', () => {
+  let dir: string
+
+  afterEach(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  function git(args: string[], cwd: string): string {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  }
+
+  function queueRow(over: Partial<CheckpointRecord>): CheckpointRecord {
+    return buildCheckpointRecord({
+      checkpointId: 'placeholder',
+      projectId: 'proj-1',
+      commitSha: 'placeholder',
+      parentCheckpointId: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      summary: 'placeholder',
+      changedPaths: [],
+      ...over,
+    }) as CheckpointRecord
+  }
+
+  it(
+    'checkpoint A sem migration → B adiciona M1 → C adiciona M2 → restaurar A: código volta, M1/M2 continuam presentes e byte-idênticas, commit compensatório não as toca, nenhum rollback é executado',
+    async () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-restore-migrations-e2e-'))
+      git(['init', '-q'], dir)
+      git(['config', 'user.email', 'e2e@supremo.test'], dir)
+      git(['config', 'user.name', 'Supremo E2E'], dir)
+      fs.writeFileSync(path.join(dir, '.gitignore'), '.supremo/checkpoints/\n')
+      fs.mkdirSync(path.join(dir, 'supabase', 'migrations'), { recursive: true })
+      git(['add', '-A'], dir)
+      git(['commit', '-q', '-m', 'chore: gitignore'], dir)
+
+      // checkpoint A — FAQ, SEM nenhuma migration ainda (o ALVO do restore).
+      fs.writeFileSync(path.join(dir, 'faq.txt'), 'FAQ v1\n')
+      git(['add', '-A'], dir)
+      git(['commit', '-q', '-m', 'checkpoint: A (FAQ)'], dir)
+      const shaA = git(['rev-parse', 'HEAD'], dir).trim()
+
+      // checkpoint B — cria E "aplica" (no Supabase remoto, fora do escopo
+      // deste teste) a migration M1.
+      const m1Content = '-- M1: cria tabela orders\ncreate table orders (id uuid primary key);\n'
+      fs.writeFileSync(path.join(dir, 'supabase', 'migrations', '002_orders.sql'), m1Content)
+      git(['add', '-A'], dir)
+      git(['commit', '-q', '-m', 'checkpoint: B (migration M1)'], dir)
+      const shaB = git(['rev-parse', 'HEAD'], dir).trim()
+
+      // checkpoint C — cria E "aplica" a migration M2, e TAMBÉM muda o
+      // código (senão restaurar pra A não teria nada de código a fazer,
+      // dado que a única diferença seria migrations — que nunca contam).
+      // HEAD atual.
+      const m2Content = '-- M2: cria tabela products\ncreate table products (id uuid primary key);\n'
+      fs.writeFileSync(path.join(dir, 'supabase', 'migrations', '003_products.sql'), m2Content)
+      fs.writeFileSync(path.join(dir, 'faq.txt'), 'FAQ v2 (quebrado)\n')
+      git(['add', '-A'], dir)
+      git(['commit', '-q', '-m', 'checkpoint: C (migration M2 + FAQ quebrado)'], dir)
+      const shaC = git(['rev-parse', 'HEAD'], dir).trim()
+
+      const queue: CheckpointRecord[] = [
+        queueRow({ checkpointId: 'cpA', commitSha: shaA, summary: 'A (FAQ)' }),
+        queueRow({ checkpointId: 'cpB', commitSha: shaB, parentCheckpointId: 'cpA', summary: 'B (M1)' }),
+        queueRow({ checkpointId: 'cpC', commitSha: shaC, parentCheckpointId: 'cpB', summary: 'C (M2)' }),
+      ]
+      const queuePath = path.join(dir, QUEUE_FILE)
+      fs.mkdirSync(path.dirname(queuePath), { recursive: true })
+      fs.writeFileSync(queuePath, serializeQueue(queue))
+
+      const restoreDeps = defaultRestoreDeps(defaultCheckpointDeps(dir), dir)
+      const outcome = applyRestore('cpA', 'A (FAQ)', 'proj-1', restoreDeps)
+
+      // 5. código volta pra A.
+      expect(outcome.applied).toBe(true)
+      expect(fs.readFileSync(path.join(dir, 'faq.txt'), 'utf8')).toBe('FAQ v1\n')
+      expect(git(['status', '--porcelain'], dir).trim()).toBe('')
+
+      // 6. M1 e M2 continuam presentes e BYTE-IDÊNTICAS no worktree.
+      const m1Path = path.join(dir, 'supabase', 'migrations', '002_orders.sql')
+      const m2Path = path.join(dir, 'supabase', 'migrations', '003_products.sql')
+      expect(fs.existsSync(m1Path)).toBe(true)
+      expect(fs.existsSync(m2Path)).toBe(true)
+      expect(fs.readFileSync(m1Path, 'utf8')).toBe(m1Content)
+      expect(fs.readFileSync(m2Path, 'utf8')).toBe(m2Content)
+
+      // preservedMigrations reporta as duas — nunca um conflito de conteúdo
+      // (é o caso normal: elas só existem no estado atual, não em A).
+      expect(outcome.preservedMigrations.sort()).toEqual(
+        ['supabase/migrations/002_orders.sql', 'supabase/migrations/003_products.sql'].sort(),
+      )
+      expect(outcome.migrationConflicts).toEqual([])
+
+      // 7. o commit compensatório (checkpoint E) NÃO contém deleção/
+      // modificação de M1/M2 — o diff dele nunca menciona supabase/migrations.
+      const headAfter = git(['rev-parse', 'HEAD'], dir).trim()
+      expect(headAfter).not.toBe(shaA)
+      expect(headAfter).not.toBe(shaC)
+      const restoreCommitDiff = git(['diff', '--name-status', shaC, headAfter], dir)
+      expect(restoreCommitDiff).not.toContain('supabase/migrations')
+      const restoreCommitFiles = git(['diff', '--name-only', shaC, headAfter], dir)
+      expect(restoreCommitFiles.split('\n').filter(Boolean)).toEqual(['faq.txt'])
+
+      // As migrations continuam rastreadas pelo git (nunca removidas do
+      // índice) e com o MESMO blob de conteúdo de quando foram commitadas em
+      // B/C — prova, via git, de que nada foi reescrito.
+      expect(git(['ls-files', 'supabase/migrations'], dir).trim().split('\n').sort()).toEqual(
+        ['supabase/migrations/002_orders.sql', 'supabase/migrations/003_products.sql'].sort(),
+      )
+      const blobAtC = git(['rev-parse', `${shaC}:supabase/migrations/002_orders.sql`], dir).trim()
+      const blobAtHead = git(['rev-parse', `${headAfter}:supabase/migrations/002_orders.sql`], dir).trim()
+      expect(blobAtHead).toBe(blobAtC)
+
+      // 8. nenhum comando de rollback/down migration é executado — o restore
+      // não sabe nada sobre Supabase; só git. A migration original de A
+      // (inexistente) nunca foi "recriada"/tocada por nenhum caminho.
+      const gitLogAllFiles = git(['log', '--name-only', '--format='], dir)
+      expect(gitLogAllFiles).not.toMatch(/down|rollback/i)
+
+      // checkpoints antigos preservados intactos — nunca reescritos.
+      expect(() => git(['cat-file', '-e', shaA], dir)).not.toThrow()
+      expect(() => git(['cat-file', '-e', shaB], dir)).not.toThrow()
+      expect(() => git(['cat-file', '-e', shaC], dir)).not.toThrow()
+    },
+    20_000,
+  )
+
+  it(
+    'fail-closed: migration EXISTENTE com conteúdo divergente entre atual e alvo (editada in-place, nunca deveria acontecer) → conteúdo ATUAL preservado, nunca reescrito pro conteúdo antigo, e sinalizado como conflito',
+    async () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-restore-migrations-e2e-'))
+      git(['init', '-q'], dir)
+      git(['config', 'user.email', 'e2e@supremo.test'], dir)
+      git(['config', 'user.name', 'Supremo E2E'], dir)
+      fs.writeFileSync(path.join(dir, '.gitignore'), '.supremo/checkpoints/\n')
+      fs.mkdirSync(path.join(dir, 'supabase', 'migrations'), { recursive: true })
+      git(['add', '-A'], dir)
+      git(['commit', '-q', '-m', 'chore: gitignore'], dir)
+
+      // checkpoint A — já tem a migration M1, versão ORIGINAL.
+      const originalM1 = '-- M1 original\ncreate table orders (id uuid primary key);\n'
+      fs.writeFileSync(path.join(dir, 'supabase', 'migrations', '001_orders.sql'), originalM1)
+      fs.writeFileSync(path.join(dir, 'faq.txt'), 'FAQ v1\n')
+      git(['add', '-A'], dir)
+      git(['commit', '-q', '-m', 'checkpoint: A (M1 original)'], dir)
+      const shaA = git(['rev-parse', 'HEAD'], dir).trim()
+
+      // checkpoint B — edita a migration JÁ EXISTENTE in-place (anti-padrão;
+      // nunca deveria acontecer num fluxo forward-only real, mas prova que o
+      // restore nunca reescreve silenciosamente mesmo nesse caso). HEAD atual.
+      const editedM1 = '-- M1 EDITADA depois de já commitada (nao deveria acontecer)\ncreate table orders (id uuid primary key, total numeric);\n'
+      fs.writeFileSync(path.join(dir, 'supabase', 'migrations', '001_orders.sql'), editedM1)
+      fs.writeFileSync(path.join(dir, 'faq.txt'), 'FAQ v2\n')
+      git(['add', '-A'], dir)
+      git(['commit', '-q', '-m', 'checkpoint: B (edita M1 in-place + FAQ)'], dir)
+      const shaB = git(['rev-parse', 'HEAD'], dir).trim()
+
+      const queue: CheckpointRecord[] = [
+        queueRow({ checkpointId: 'cpA', commitSha: shaA, summary: 'A (M1 original)' }),
+        queueRow({ checkpointId: 'cpB', commitSha: shaB, parentCheckpointId: 'cpA', summary: 'B' }),
+      ]
+      const queuePath = path.join(dir, QUEUE_FILE)
+      fs.mkdirSync(path.dirname(queuePath), { recursive: true })
+      fs.writeFileSync(queuePath, serializeQueue(queue))
+
+      const restoreDeps = defaultRestoreDeps(defaultCheckpointDeps(dir), dir)
+      const outcome = applyRestore('cpA', 'A (M1 original)', 'proj-1', restoreDeps)
+
+      expect(outcome.applied).toBe(true)
+      // FAQ volta pro estado de A normalmente — só o código de fato muda.
+      expect(fs.readFileSync(path.join(dir, 'faq.txt'), 'utf8')).toBe('FAQ v1\n')
+
+      // A migration NUNCA é reescrita pro conteúdo antigo de A — o conteúdo
+      // ATUAL (de B, editado) é o que fica, intacto.
+      const m1Path = path.join(dir, 'supabase', 'migrations', '001_orders.sql')
+      expect(fs.readFileSync(m1Path, 'utf8')).toBe(editedM1)
+      expect(fs.readFileSync(m1Path, 'utf8')).not.toBe(originalM1)
+
+      // sinalizado como CONFLITO (conteúdo divergente, não só ausência) —
+      // preservada do mesmo jeito, mas o chamador sabe que é um caso raro.
+      expect(outcome.preservedMigrations).toEqual(['supabase/migrations/001_orders.sql'])
+      expect(outcome.migrationConflicts).toEqual(['supabase/migrations/001_orders.sql'])
+
+      // o commit compensatório não toca a migration.
+      const headAfter = git(['rev-parse', 'HEAD'], dir).trim()
+      const restoreCommitDiff = git(['diff', '--name-status', shaB, headAfter], dir)
+      expect(restoreCommitDiff).not.toContain('supabase/migrations')
+    },
+    20_000,
+  )
+})

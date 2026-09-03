@@ -508,6 +508,15 @@ export async function processRestores(
         config.projectId,
         deps,
       )
+      // Sinaliza (v3-12) — nunca falha o restore por causa disto: a migration
+      // já foi preservada como está (nunca reescrita), isto é só visibilidade
+      // pra um caso que nunca deveria acontecer (migration histórica editada
+      // in-place em algum checkpoint).
+      if (outcome.migrationConflicts.length > 0) {
+        console.error(
+          `⚠ restore: ${outcome.migrationConflicts.length} migration(s) com conteúdo divergente entre o estado atual e o alvo do restore — preservada(s) como está(ão) (nunca reescrita(s)): ${outcome.migrationConflicts.join(', ')}`,
+        )
+      }
       await http.reportRestoreApplied({
         deviceSecret: secret,
         restoreRequestId: req.restoreRequestId,

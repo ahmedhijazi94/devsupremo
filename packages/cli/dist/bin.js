@@ -3727,6 +3727,25 @@ function isKnownNextTsconfigNoise(before, after) {
     return false;
   return [...added, ...removed].every((entry) => NEXT_TYPES_GLOB_RE.test(entry));
 }
+function parseNameStatus(output) {
+  const entries = [];
+  for (const line of output.split("\n")) {
+    const parts = line.split("	").filter((p) => p.length > 0);
+    if (parts.length < 2)
+      continue;
+    const status = parts[0];
+    if (!/^[AMDRCT]\d*$/.test(status))
+      continue;
+    const path8 = parts[parts.length - 1];
+    entries.push({ status, path: path8 });
+  }
+  return entries;
+}
+function classifyMigrationDiff(entries) {
+  const preservedPaths = entries.map((e) => e.path);
+  const conflicts = entries.filter((e) => e.status !== "A" && e.status !== "D").map((e) => e.path);
+  return { preservedPaths, conflicts };
+}
 function isRestoreSafeguardNoise(porcelain, deps) {
   const changedPaths = parseChangedPaths(porcelain);
   if (changedPaths.length !== 1 || changedPaths[0] !== "tsconfig.json")
@@ -3766,9 +3785,33 @@ function applyRestore(targetCheckpointId, targetSummary, projectId, deps) {
     queue = [...queue, autoRecord];
   }
   const currentHead = deps.git(["rev-parse", "HEAD"]).trim();
-  const patch = deps.git(["diff", "--binary", currentHead, targetSha]);
+  let migrationStatusOutput = "";
+  try {
+    migrationStatusOutput = deps.git([
+      "diff",
+      "--name-status",
+      currentHead,
+      targetSha,
+      "--",
+      MIGRATIONS_PATHSPEC
+    ]);
+  } catch {
+    migrationStatusOutput = "";
+  }
+  const { preservedPaths: preservedMigrations, conflicts: migrationConflicts } = classifyMigrationDiff(
+    parseNameStatus(migrationStatusOutput)
+  );
+  const patch = deps.git([
+    "diff",
+    "--binary",
+    currentHead,
+    targetSha,
+    "--",
+    ".",
+    `:(exclude)${MIGRATIONS_PATHSPEC}`
+  ]);
   if (isEmptyPatch(patch)) {
-    return { applied: false, record: null };
+    return { applied: false, record: null, preservedMigrations, migrationConflicts };
   }
   deps.applyPatch(patch);
   deps.git(["commit", "--no-verify", "-m", restoreCommitMessage(targetSummary)]);
@@ -3785,7 +3828,7 @@ function applyRestore(targetCheckpointId, targetSummary, projectId, deps) {
   });
   deps.appendQueue(record);
   deps.notifyDaemon();
-  return { applied: true, record };
+  return { applied: true, record, preservedMigrations, migrationConflicts };
 }
 function parseChangedPathsFromDiff(patch) {
   const out = /* @__PURE__ */ new Set();
@@ -3816,7 +3859,7 @@ function defaultRestoreDeps(base, cwd) {
     }
   };
 }
-var import_node_child_process5, import_node_fs3, import_node_path3, RestoreTargetNotFoundLocallyError, NEXT_TYPES_GLOB_RE;
+var import_node_child_process5, import_node_fs3, import_node_path3, RestoreTargetNotFoundLocallyError, NEXT_TYPES_GLOB_RE, MIGRATIONS_PATHSPEC;
 var init_restore = __esm({
   "src/restore.ts"() {
     "use strict";
@@ -3833,6 +3876,7 @@ var init_restore = __esm({
       }
     };
     NEXT_TYPES_GLOB_RE = /^\.?\/?\.next\/(dev\/)?types\/\*\*\/\*\.ts$/;
+    MIGRATIONS_PATHSPEC = "supabase/migrations";
   }
 });
 
@@ -4100,6 +4144,11 @@ async function processRestores(config, overrides = {}) {
         config.projectId,
         deps
       );
+      if (outcome.migrationConflicts.length > 0) {
+        console.error(
+          `\u26A0 restore: ${outcome.migrationConflicts.length} migration(s) com conte\xFAdo divergente entre o estado atual e o alvo do restore \u2014 preservada(s) como est\xE1(\xE3o) (nunca reescrita(s)): ${outcome.migrationConflicts.join(", ")}`
+        );
+      }
       await http.reportRestoreApplied({
         deviceSecret: secret,
         restoreRequestId: req.restoreRequestId,
@@ -4908,7 +4957,7 @@ var import_node_os2 = __toESM(require("node:os"));
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.2.5",
+  version: "1.2.6",
   description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
   license: "MIT",
   author: "Supremo",

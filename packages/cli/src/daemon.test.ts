@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CheckpointRecord } from './checkpoint'
 import type { CommitReader } from './changeset'
 import type { RestoreDeps } from './restore'
@@ -259,6 +259,99 @@ describe('processRestores — restore no próprio Supremo (v3.1 finalização)',
     expect(n).toBe(1)
     expect(applied).toHaveLength(1)
     expect(applied[0]).toMatchObject({ restoreRequestId: 'req-1', resultCheckpointId: 'cpE' })
+  })
+
+  /**
+   * v3-12 — proteção forward-only de migrations: quando `applyRestore`
+   * reporta `migrationConflicts` (migration existente com conteúdo
+   * divergente, editada in-place em algum checkpoint — nunca deveria
+   * acontecer), o daemon SINALIZA (console.error) sem falhar o restore nem
+   * mudar o payload reportado ao backend — a migration já foi preservada
+   * como está pelo próprio `applyRestore`, isto é só visibilidade local.
+   */
+  it('migrationConflicts no outcome → sinaliza via console.error, mas reporta "applied" normalmente (nunca falha o restore por causa disso)', async () => {
+    const { http, applied } = fakeHttp({
+      pending: [{ restoreRequestId: 'req-1', targetCheckpointId: 'cpB', targetSummary: 'home minimalista' }],
+    })
+    const deps: RestoreDeps = {
+      git: (args) =>
+        args[0] === 'diff' && args.includes('--name-status')
+          ? 'M\tsupabase/migrations/001_orders.sql\n'
+          : args[0] === 'diff'
+            ? 'diff --git a/x b/x\n@@'
+            : args[0] === 'rev-parse'
+              ? 'sha-E\n'
+              : '',
+      readQueue: () => [
+        {
+          checkpointId: 'cpB',
+          projectId: 'proj-1',
+          commitSha: 'sha-B',
+          parentCheckpointId: null,
+          createdAt: 't',
+          summary: 'home minimalista',
+          riskLevel: 'low',
+          migrations: [],
+          changedPaths: [],
+          pushStatus: 'published',
+          attempts: 0,
+        },
+      ],
+      appendQueue: () => {},
+      notifyDaemon: () => {},
+      now: () => 't',
+      uuid: () => 'cpE',
+      applyPatch: () => {},
+      readWorktreeFile: () => null,
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const n = await processRestores({ ...cfg, getSecret: () => 'sup_dev_ckpt_x' }, { http, deps })
+      expect(n).toBe(1)
+      expect(applied).toHaveLength(1) // reporta applied normalmente — nunca failed
+      expect(applied[0]).toMatchObject({ restoreRequestId: 'req-1', resultCheckpointId: 'cpE' })
+      expect(errorSpy).toHaveBeenCalledTimes(1)
+      expect(errorSpy.mock.calls[0]?.[0]).toContain('supabase/migrations/001_orders.sql')
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('sem migrationConflicts (caso normal) → nenhum console.error é chamado', async () => {
+    const { http } = fakeHttp({
+      pending: [{ restoreRequestId: 'req-1', targetCheckpointId: 'cpB', targetSummary: 'home minimalista' }],
+    })
+    const deps: RestoreDeps = {
+      git: (args) => (args[0] === 'diff' ? 'diff --git a/x b/x\n@@' : args[0] === 'rev-parse' ? 'sha-E\n' : ''),
+      readQueue: () => [
+        {
+          checkpointId: 'cpB',
+          projectId: 'proj-1',
+          commitSha: 'sha-B',
+          parentCheckpointId: null,
+          createdAt: 't',
+          summary: 'home minimalista',
+          riskLevel: 'low',
+          migrations: [],
+          changedPaths: [],
+          pushStatus: 'published',
+          attempts: 0,
+        },
+      ],
+      appendQueue: () => {},
+      notifyDaemon: () => {},
+      now: () => 't',
+      uuid: () => 'cpE',
+      applyPatch: () => {},
+      readWorktreeFile: () => null,
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await processRestores({ ...cfg, getSecret: () => 'sup_dev_ckpt_x' }, { http, deps })
+      expect(errorSpy).not.toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 
   it('alvo não encontrado localmente → reporta "failed", nunca trava o daemon', async () => {

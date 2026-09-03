@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { CheckpointDeps, CheckpointRecord } from './checkpoint'
 import {
   applyRestore,
+  classifyMigrationDiff,
   findLocalCommitForCheckpoint,
   isEmptyPatch,
   isKnownNextTsconfigNoise,
+  MIGRATIONS_PATHSPEC,
+  parseNameStatus,
   restoreCommitMessage,
   RestoreTargetNotFoundLocallyError,
   type RestoreDeps,
@@ -56,6 +59,11 @@ function fakeDeps(opts: {
   headTsconfig?: string
   /** conteúdo ATUAL de tsconfig.json no worktree — null = arquivo ausente. */
   worktreeTsconfig?: string | null
+  /** saída de `git diff --name-status <head> <alvo> -- supabase/migrations`
+   * (v3-12) — default '' (nenhuma migration tocada), o comportamento seguro
+   * que TODOS os testes pré-existentes (que não mencionam migrations) já
+   * esperam implicitamente. */
+  migrationsNameStatus?: string
 }): { deps: RestoreDeps; calls: string[][]; queue: CheckpointRecord[]; applied: string[] } {
   const calls: string[][] = []
   const queue = [...opts.queue]
@@ -69,6 +77,7 @@ function fakeDeps(opts: {
       calls.push(args)
       if (args[0] === 'status') return opts.porcelain ?? ''
       if (args[0] === 'rev-parse') return `${shas[shaIdx++] ?? 'sha-x'}\n`
+      if (args[0] === 'diff' && args.includes('--name-status')) return opts.migrationsNameStatus ?? ''
       if (args[0] === 'diff') return opts.diff ?? ''
       if (args[0] === 'show') return opts.headTsconfig ?? ''
       return ''
@@ -104,7 +113,7 @@ describe('applyRestore', () => {
     })
     const before = queue.length
     const out = applyRestore('cpB', 'deixar home minimalista', 'proj-1', deps)
-    expect(out).toEqual({ applied: false, record: null })
+    expect(out).toEqual({ applied: false, record: null, preservedMigrations: [], migrationConflicts: [] })
     expect(applied).toHaveLength(0)
     expect(queue.length).toBe(before) // nada novo enfileirado
   })
@@ -313,5 +322,161 @@ describe('applyRestore — ruído do Next em tsconfig.json não gera salvaguarda
 
     expect(out.applied).toBe(true)
     expect(queue.some((r) => r.summary === 'Salvaguarda automática antes do restore')).toBe(true)
+  })
+})
+
+// ── Migrations FORWARD-ONLY (v3-12) ─────────────────────────────────────────
+
+describe('parseNameStatus — pura', () => {
+  it('parseia D/M/A simples', () => {
+    expect(parseNameStatus('D\tsupabase/migrations/002.sql\nM\tsupabase/migrations/001.sql\n')).toEqual([
+      { status: 'D', path: 'supabase/migrations/002.sql' },
+      { status: 'M', path: 'supabase/migrations/001.sql' },
+    ])
+  })
+
+  it('rename/copy (STATUS\\tOLD\\tNEW) → usa o path NOVO', () => {
+    expect(parseNameStatus('R100\tsupabase/migrations/old.sql\tsupabase/migrations/new.sql\n')).toEqual([
+      { status: 'R100', path: 'supabase/migrations/new.sql' },
+    ])
+  })
+
+  it('linhas que não batem no formato STATUS\\tPATH (ex.: um diff --git bruto) são ignoradas — nunca interpreta lixo como migration', () => {
+    expect(parseNameStatus('diff --git a/app/page.tsx b/app/page.tsx\n@@ -1 +1 @@\n-old\n+new\n')).toEqual([])
+  })
+
+  it('saída vazia → array vazio', () => {
+    expect(parseNameStatus('')).toEqual([])
+  })
+})
+
+describe('classifyMigrationDiff — pura', () => {
+  it('D (só existe no atual, o caso real do bug v3-12) → preservada, NUNCA conflito', () => {
+    const r = classifyMigrationDiff([{ status: 'D', path: 'supabase/migrations/002.sql' }])
+    expect(r.preservedPaths).toEqual(['supabase/migrations/002.sql'])
+    expect(r.conflicts).toEqual([])
+  })
+
+  it('A (só existe no alvo) → preservada, NUNCA conflito', () => {
+    const r = classifyMigrationDiff([{ status: 'A', path: 'supabase/migrations/003.sql' }])
+    expect(r.preservedPaths).toEqual(['supabase/migrations/003.sql'])
+    expect(r.conflicts).toEqual([])
+  })
+
+  it('M (mesmo path, conteúdo diferente — migration histórica editada in-place) → preservada E conflito', () => {
+    const r = classifyMigrationDiff([{ status: 'M', path: 'supabase/migrations/001.sql' }])
+    expect(r.preservedPaths).toEqual(['supabase/migrations/001.sql'])
+    expect(r.conflicts).toEqual(['supabase/migrations/001.sql'])
+  })
+
+  it('mistura: D + M → preserva os dois, mas só o M entra em conflicts', () => {
+    const r = classifyMigrationDiff([
+      { status: 'D', path: 'supabase/migrations/002.sql' },
+      { status: 'M', path: 'supabase/migrations/001.sql' },
+    ])
+    expect(r.preservedPaths).toEqual(['supabase/migrations/002.sql', 'supabase/migrations/001.sql'])
+    expect(r.conflicts).toEqual(['supabase/migrations/001.sql'])
+  })
+
+  it('nenhuma entrada → nada preservado, nenhum conflito', () => {
+    expect(classifyMigrationDiff([])).toEqual({ preservedPaths: [], conflicts: [] })
+  })
+})
+
+/**
+ * E2E real (teste-v3-12): checkpoint A sem migration; depois foram criadas E
+ * APLICADAS duas migrations reais no Supabase remoto (B: M1, C: M2). Ao
+ * restaurar A, o preview voltou corretamente e A virou Ativo — mas os dois
+ * arquivos de supabase/migrations/ foram REMOVIDOS do worktree e a remoção
+ * entrou no commit compensatório do restore. O Supabase remoto continua com
+ * as duas migrations aplicadas → o repo ficou pra trás do banco real,
+ * violando a regra forward-only. Migrations NUNCA podem ser tocadas pelo
+ * restore de código — mesmo indo pra um checkpoint que não as tinha.
+ */
+describe('applyRestore — migrations FORWARD-ONLY nunca são apagadas/revertidas/modificadas (v3-12)', () => {
+  it('REGRESSÃO EXATA v3-12: restaurar pra A (sem migrations) com M1/M2 aplicadas depois → patch exclui supabase/migrations inteiramente, migrations reportadas como preservadas', () => {
+    const { deps, calls } = fakeDeps({
+      queue: [record()],
+      diff: 'diff --git a/app/faq.tsx b/app/faq.tsx\n@@ ...',
+      migrationsNameStatus: 'D\tsupabase/migrations/002_orders.sql\nD\tsupabase/migrations/003_products.sql\n',
+      shas: ['head-atual', 'novo-sha-E'],
+    })
+    const out = applyRestore('cpB', 'FAQ', 'proj-1', deps)
+
+    expect(out.applied).toBe(true)
+    // as duas migrations aparecem como PRESERVADAS — nunca como conflito
+    // (é exatamente o caso esperado: só existem no estado atual, não em A).
+    expect(out.preservedMigrations).toEqual([
+      'supabase/migrations/002_orders.sql',
+      'supabase/migrations/003_products.sql',
+    ])
+    expect(out.migrationConflicts).toEqual([])
+
+    // o patch REAL (o que de fato vira `git apply`/o commit) exclui
+    // supabase/migrations inteiramente via pathspec — nunca um filtro de
+    // texto sobre o diff já pronto.
+    const patchCall = calls.find(
+      (c) => c[0] === 'diff' && c.includes('--binary') && !c.includes('--name-status'),
+    )
+    expect(patchCall).toContain(`:(exclude)${MIGRATIONS_PATHSPEC}`)
+
+    // a consulta de status das migrations é ESCOPADA (nunca lê o diff geral
+    // pra decidir isso) e roda ANTES do patch real.
+    const statusCall = calls.find((c) => c[0] === 'diff' && c.includes('--name-status'))
+    expect(statusCall).toEqual(
+      expect.arrayContaining(['diff', '--name-status', 'head-atual', 'sha-B', '--', MIGRATIONS_PATHSPEC]),
+    )
+    const statusIdx = calls.indexOf(statusCall!)
+    const patchIdx = calls.indexOf(patchCall!)
+    expect(statusIdx).toBeLessThan(patchIdx)
+
+    // nenhum comando de rollback/down migration é executado — só os git
+    // calls normais do restore (status/rev-parse/diff/commit).
+    const knownRestoreVerbs = new Set(['status', 'rev-parse', 'diff', 'commit'])
+    for (const call of calls) {
+      expect(knownRestoreVerbs.has(call[0]!)).toBe(true)
+    }
+    expect(calls.flat()).not.toContain('supabase')
+    expect(calls.flat().join(' ')).not.toMatch(/migration down|db reset|revert/i)
+  })
+
+  it('migration com CONTEÚDO divergente entre atual e alvo (editada in-place, nunca deveria acontecer) → preservada E sinalizada como conflito, nunca reescrita silenciosamente', () => {
+    const { deps } = fakeDeps({
+      queue: [record()],
+      diff: 'diff --git a/app/faq.tsx b/app/faq.tsx\n@@ ...',
+      migrationsNameStatus: 'M\tsupabase/migrations/001_init.sql\n',
+      shas: ['head-atual', 'novo-sha-E'],
+    })
+    const out = applyRestore('cpB', 'FAQ', 'proj-1', deps)
+
+    expect(out.applied).toBe(true)
+    // preservada do MESMO jeito que o caso D — nunca reescrita — mas também
+    // sinalizada como conflito, pro chamador (daemon) alertar.
+    expect(out.preservedMigrations).toEqual(['supabase/migrations/001_init.sql'])
+    expect(out.migrationConflicts).toEqual(['supabase/migrations/001_init.sql'])
+  })
+
+  it('nenhuma migration tocada pelo restore → preservedMigrations/migrationConflicts vazios (comportamento normal intacto)', () => {
+    const { deps } = fakeDeps({
+      queue: [record()],
+      diff: 'diff --git a/app/faq.tsx b/app/faq.tsx\n@@ ...',
+      shas: ['head-atual', 'novo-sha-E'],
+    })
+    const out = applyRestore('cpB', 'FAQ', 'proj-1', deps)
+    expect(out.preservedMigrations).toEqual([])
+    expect(out.migrationConflicts).toEqual([])
+  })
+
+  it('worktree já igual ao alvo FORA de migrations, mas migrations divergem → applied false, migrations ainda reportadas (nada de código a restaurar, mas o sinal não se perde)', () => {
+    const { deps } = fakeDeps({
+      queue: [record()],
+      diff: '', // patch (já excluindo migrations) vazio — só migrations diferem
+      migrationsNameStatus: 'D\tsupabase/migrations/002_orders.sql\n',
+      shas: ['head-atual', 'novo-sha-E'],
+    })
+    const out = applyRestore('cpB', 'FAQ', 'proj-1', deps)
+    expect(out.applied).toBe(false)
+    expect(out.record).toBeNull()
+    expect(out.preservedMigrations).toEqual(['supabase/migrations/002_orders.sql'])
   })
 })

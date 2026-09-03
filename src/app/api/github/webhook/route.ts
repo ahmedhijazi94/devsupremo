@@ -1,6 +1,7 @@
 import { appInstallationToken, installationCreds } from '@/lib/github/app'
 import { githubMergeGateway } from '@/lib/github/gateway'
 import {
+  checkpointStatusFromReconcile,
   reconcileProjectPr,
   resolveRequiredChecks,
   type ReconcileLogger,
@@ -11,6 +12,8 @@ import {
   readIntegrationMeta,
   writeIntegrationMeta,
 } from '@/lib/mcp/repository'
+import { mcpDataClient } from '@/lib/mcp/tokens'
+import { reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
 
 /**
  * Webhook da GitHub App — o GATILHO event-driven do Merge Controller v3.
@@ -74,6 +77,7 @@ export async function POST(req: Request): Promise<Response> {
     )
     const requiredChecks = resolveRequiredChecks({}) // fail-safe estrito (conjunto completo)
 
+    const client = mcpDataClient()
     for (const prNumber of target.prNumbers) {
       const result = await reconcileProjectPr({
         gateway,
@@ -83,6 +87,14 @@ export async function POST(req: Request): Promise<Response> {
         log: logger,
       })
       await writeIntegrationMeta(project.id, { integration_state: result.state })
+      // Reconcilia TAMBÉM o checkpoint (Histórico) — não só o projeto. Bug
+      // real: só o projeto era atualizado (integration_state), o card do
+      // checkpoint ficava preso em "Testando" mesmo após um merge válido.
+      await reconcileCheckpointsForPr(
+        client,
+        { projectId: project.id, prNumber },
+        checkpointStatusFromReconcile(result),
+      )
     }
   } catch (error) {
     // 200 mesmo assim: evitar retry-storm do GitHub; o fallback periódico recupera.

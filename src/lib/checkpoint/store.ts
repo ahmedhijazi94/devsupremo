@@ -160,6 +160,34 @@ export async function setCheckpointPushStatus(
     .eq('id', id)
 }
 
+/**
+ * Reconcilia o status de TODOS os checkpoints publicados sob esta PR com o
+ * resultado mais recente da reconciliação (ver `checkpointStatusFromReconcile`
+ * em `@/lib/github/reconcile` — decide O QUE gravar; esta função só grava).
+ * Join por `pr_number` — estável, nunca reciclado pelo GitHub dentro de um
+ * repositório — junto de `project_id` (o mesmo número de PR nunca se repete
+ * entre projetos/repos diferentes de qualquer forma, mas o filtro deixa a
+ * query explícita). Só avança checkpoints ainda `push_status = 'published'`
+ * — nunca reabre um `'integrated'`/`'failed'` já resolvido, e nunca toca um
+ * `'publishing'` (ainda não tem PR de verdade) ou um checkpoint de OUTRA PR
+ * que coincidentemente reusa a mesma integration_branch mais tarde. Idempotente.
+ */
+export async function reconcileCheckpointsForPr(
+  client: SupabaseClient,
+  input: { projectId: string; prNumber: number },
+  status: { pushStatus: 'integrated' | null; integrationStatus: string },
+): Promise<void> {
+  await client
+    .from('checkpoints')
+    .update({
+      integration_status: status.integrationStatus,
+      ...(status.pushStatus ? { push_status: status.pushStatus } : {}),
+    })
+    .eq('project_id', input.projectId)
+    .eq('pr_number', input.prNumber)
+    .eq('push_status', 'published')
+}
+
 // ── Restore (v3.1 finalização) ───────────────────────────────────────────────
 
 export interface RestoreRequestRow {

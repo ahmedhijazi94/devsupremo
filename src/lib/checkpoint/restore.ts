@@ -59,12 +59,22 @@ export function authorizeRestoreReport(input: {
 // ── Status humano (a UI nunca mostra jargão de Git) ─────────────────────────
 
 export type PushStatusRow = 'publishing' | 'published' | 'integrated' | 'failed'
+/**
+ * Mesmo domínio de `IntegrationState` (`@/lib/github/merge-policy`) — desde
+ * que a reconciliação passou a gravar `result.state` (o valor REAL da
+ * reconciliação, não mais só 'ci_running' hardcoded — ver
+ * `checkpointStatusFromReconcile`), este tipo precisa cobrir TODOS os
+ * valores que a coluna pode de fato receber, não só os 3 originais.
+ */
 export type IntegrationStatusRow =
+  | 'development'
   | 'ci_running'
-  | 'merge_pending'
-  | 'validated'
-  | 'merged'
+  | 'ci_failed'
   | 'security_blocked'
+  | 'validated'
+  | 'merge_pending'
+  | 'merged'
+  | 'unmanaged_main_change'
   | null
   | undefined
 
@@ -74,6 +84,15 @@ export type HumanCheckpointStatus = 'Salvando' | 'Publicando' | 'Testando' | 'In
  * Mapeia o estado técnico (push_status + integration_status) para o rótulo
  * humano do Histórico. Detalhes técnicos (SHA, PR, branch) ficam só na tela de
  * detalhe — o card principal nunca expõe jargão de Git.
+ *
+ * 'validated' e 'unmanaged_main_change' viram 'Testando' (existe/matched-PR
+ * ainda não confirmado como mesclado — nunca declarar 'Integrado' sem
+ * `merged`/`push_status='integrated'` de verdade). 'ci_failed' junta-se a
+ * 'security_blocked' em 'Falhou' — bug real corrigido junto da reconciliação
+ * do checkpoint: antes só 'ci_running' era gravado (nunca 'ci_failed'), então
+ * esse ramo nunca era exercitado; agora que a reconciliação grava o estado
+ * real, um CI vermelho tem que aparecer como falha, não cair no default
+ * 'Publicando' (que sugeriria que nada rodou ainda).
  */
 export function humanCheckpointStatus(
   pushStatus: PushStatusRow,
@@ -81,12 +100,20 @@ export function humanCheckpointStatus(
 ): HumanCheckpointStatus {
   if (pushStatus === 'failed') return 'Falhou'
   if (pushStatus === 'publishing') return 'Salvando'
-  if (integrationStatus === 'security_blocked') return 'Falhou'
+  if (integrationStatus === 'security_blocked' || integrationStatus === 'ci_failed') {
+    return 'Falhou'
+  }
   if (integrationStatus === 'merged' || pushStatus === 'integrated') return 'Integrado'
-  if (integrationStatus === 'ci_running' || integrationStatus === 'merge_pending') {
+  if (
+    integrationStatus === 'ci_running' ||
+    integrationStatus === 'merge_pending' ||
+    integrationStatus === 'validated' ||
+    integrationStatus === 'unmanaged_main_change'
+  ) {
     return 'Testando'
   }
-  // 'published' sem integration_status ainda conhecido: PR acabou de ser criada.
+  // 'published' sem integration_status ainda conhecido (ou 'development'): PR
+  // acabou de ser criada.
   return 'Publicando'
 }
 

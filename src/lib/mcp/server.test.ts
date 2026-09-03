@@ -21,6 +21,7 @@ vi.mock('./repository', () => ({
     token: 't',
   })),
   logAudit: vi.fn(async () => undefined),
+  updateProject: vi.fn(async () => undefined),
 }))
 
 vi.mock('./github', () => ({
@@ -57,10 +58,36 @@ vi.mock('./github', () => ({
     checks: [],
     headSha: 'sha7',
   })),
+  getPullRequest: vi.fn(async () => ({
+    number: 7,
+    url: 'https://github.com/dono/app/pull/7',
+    headSha: 'sha7',
+    headRef: 'supremo/carrinho',
+    state: 'open',
+    merged: false,
+    mergeable: true,
+    nodeId: 'PR_node7',
+  })),
+  mergePullRequest: vi.fn(async () => ({ sha: 'merged-sha' })),
 }))
+
+// mcpDataClient() (usado por markPipelineStatus dentro de merge_when_green)
+// exige SUPABASE_URL/SERVICE_ROLE_KEY reais fora deste mock — aqui é só um
+// stub encadeável (.from().update().eq()...) que resolve sem erro.
+vi.mock('./tokens', () => {
+  const chain: Record<string, unknown> = {}
+  chain.from = () => chain
+  chain.update = () => chain
+  chain.eq = () => chain
+  chain.then = (resolve: (v: { error: null }) => void) => resolve({ error: null })
+  return { mcpDataClient: vi.fn(() => chain) }
+})
 
 import { createSupremoMcpServer } from './server'
 import { slugToBranch, SERVER_INSTRUCTIONS, resumeAction } from './server'
+import * as gh from './github'
+import type { CheckSummary } from './github'
+import { CI_JOB_NAMES } from '@/lib/templates/project-files'
 
 /** Invoca uma tool registrada pelo caminho que a instância usa internamente. */
 async function callTool(tool: string, args: Record<string, unknown> = {}) {
@@ -79,6 +106,32 @@ async function callTool(tool: string, args: Record<string, unknown> = {}) {
     content: Array<{ text: string }>
   }
   return JSON.parse(result.content[0]!.text)
+}
+
+/**
+ * Como `callTool`, mas devolve o TextResult cru (isError + texto) em vez de
+ * assumir JSON. `fail(...)` (usado por merge_when_green ao recusar) devolve
+ * um texto tipo "Erro: ..." — JSON.parse nele derruba `callTool` por
+ * acidente (SyntaxError, não pelo motivo semântico). Para testar uma
+ * RECUSA de verdade, isto é mais preciso: confirma `isError`/o texto, sem
+ * depender de um efeito colateral de parsing.
+ */
+async function callToolRaw(
+  tool: string,
+  args: Record<string, unknown> = {},
+): Promise<{ isError: boolean | undefined; text: string }> {
+  const server = createSupremoMcpServer({ userId: 'u1' })
+  const registered = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        { handler: (a: unknown, e: unknown) => Promise<{ content: Array<{ text: string }>; isError?: boolean }> }
+      >
+    }
+  )._registeredTools[tool]
+  if (!registered) throw new Error(`tool ${tool} não registrada`)
+  const result = await registered.handler(args, {})
+  return { isError: result.isError, text: result.content[0]!.text }
 }
 
 describe('slugToBranch', () => {
@@ -218,5 +271,142 @@ describe('get_project_context — continuar de onde parou', () => {
     const dep = context.otherOpenPrs[0]
     expect(dep.pr).toBe(8)
     expect(dep.note).toMatch(/não bloqueie|não mescle/i)
+  })
+})
+
+/**
+ * E2E real: o workflow da PR do checkpoint ficou vermelho, mas o checkpoint
+ * mesmo assim chegou à main. Causa raiz: `merge_when_green` decidia com o
+ * agregado `ChecksResult.state` (`getChecks` em `mcp/github.ts`) — que só
+ * conta 'failure'/'timed_out'/'cancelled' como reprovação e NUNCA compara
+ * contra a lista de required checks — em vez do `evaluateMergeEligibility`
+ * fail-closed já usado pelo Merge Controller assíncrono (webhook/fallback).
+ * Um required check 'skipped', ou que nunca chegou a rodar (ausente), podia
+ * passar. Estes testes provam que `merge_when_green` agora usa o MESMO gate
+ * fail-closed, no HEAD exato da PR.
+ */
+describe('merge_when_green — gate fail-closed no HEAD exato (bug real: vermelho/pulado/faltando mesclava)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  function allGreenChecks(): CheckSummary[] {
+    return CI_JOB_NAMES.map((name) => ({
+      name,
+      status: 'completed',
+      conclusion: 'success',
+      url: null,
+      runId: null,
+    }))
+  }
+
+  it('todos os required checks success no HEAD exato → mescla', async () => {
+    vi.mocked(gh.getChecks).mockResolvedValueOnce({
+      state: 'passed',
+      total: CI_JOB_NAMES.length,
+      passed: CI_JOB_NAMES.length,
+      failed: 0,
+      pending: 0,
+      checks: allGreenChecks(),
+      headSha: 'sha7',
+    })
+
+    // merge_when_green devolve texto solto (ok(...)), não JSON — callTool
+    // (que assume JSON) não serve aqui.
+    const result = await callToolRaw('merge_when_green', { prNumber: 7 })
+
+    expect(gh.mergePullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      7,
+      undefined,
+      'sha7',
+    )
+    expect(result.isError).toBeFalsy()
+    expect(result.text).toMatch(/mergeado/i)
+    expect(result.text).not.toMatch(/recusad/i)
+  })
+
+  it('um required check com conclusão "skipped" → RECUSA (bug real: o agregado antigo não contava skipped como falha)', async () => {
+    const checks = allGreenChecks()
+    const idx = checks.findIndex((c) => c.name === 'Políticas RLS')
+    checks[idx] = { ...checks[idx]!, conclusion: 'skipped' }
+
+    // O agregado antigo (getChecks().state) classificaria isto como 'passed'
+    // — nenhum check tem conclusion failure/timed_out/cancelled, e nenhum
+    // está pending. O NOVO gate (evaluateMergeEligibility) tem que recusar.
+    vi.mocked(gh.getChecks).mockResolvedValueOnce({
+      state: 'passed',
+      total: CI_JOB_NAMES.length,
+      passed: CI_JOB_NAMES.length,
+      failed: 0,
+      pending: 0,
+      checks,
+      headSha: 'sha7',
+    })
+
+    const result = await callToolRaw('merge_when_green', { prNumber: 7 })
+    expect(result.isError).toBe(true)
+    expect(result.text).toMatch(/recusad/i)
+    expect(result.text).toMatch(/Políticas RLS/)
+    expect(gh.mergePullRequest).not.toHaveBeenCalled()
+  })
+
+  it('um required check AUSENTE (nunca rodou) → RECUSA (bug real: o agregado antigo não comparava contra a lista de required checks)', async () => {
+    // 'End-to-end' nunca aparece na resposta do GitHub — nem sucesso, nem
+    // falha, nem pending: simplesmente não existe pra este HEAD.
+    const checks = allGreenChecks().filter((c) => c.name !== 'End-to-end')
+
+    vi.mocked(gh.getChecks).mockResolvedValueOnce({
+      state: 'passed',
+      total: checks.length,
+      passed: checks.length,
+      failed: 0,
+      pending: 0,
+      checks,
+      headSha: 'sha7',
+    })
+
+    const result = await callToolRaw('merge_when_green', { prNumber: 7 })
+    expect(result.isError).toBe(true)
+    expect(result.text).toMatch(/recusad/i)
+    expect(result.text).toMatch(/End-to-end/)
+    expect(gh.mergePullRequest).not.toHaveBeenCalled()
+  })
+
+  it('um required check ainda "in_progress" (rodando) → RECUSA, nunca mescla parcial', async () => {
+    const checks = allGreenChecks()
+    const idx = checks.findIndex((c) => c.name === 'Build de produção')
+    checks[idx] = { ...checks[idx]!, status: 'in_progress' as const, conclusion: null }
+
+    vi.mocked(gh.getChecks).mockResolvedValueOnce({
+      state: 'pending',
+      total: CI_JOB_NAMES.length,
+      passed: CI_JOB_NAMES.length - 1,
+      failed: 0,
+      pending: 1,
+      checks,
+      headSha: 'sha7',
+    })
+
+    const result = await callToolRaw('merge_when_green', { prNumber: 7 })
+    expect(result.isError).toBe(true)
+    expect(result.text).toMatch(/recusad/i)
+    expect(gh.mergePullRequest).not.toHaveBeenCalled()
+  })
+
+  it('checks pertencem a um SHA diferente do HEAD atual da PR → RECUSA (anti-TOCTOU, HEAD exato preservado)', async () => {
+    // pr.headSha (mock padrão) é 'sha7' — os checks aqui são de um SHA velho.
+    vi.mocked(gh.getChecks).mockResolvedValueOnce({
+      state: 'passed',
+      total: CI_JOB_NAMES.length,
+      passed: CI_JOB_NAMES.length,
+      failed: 0,
+      pending: 0,
+      checks: allGreenChecks(),
+      headSha: 'sha-velho-antes-do-ultimo-push',
+    })
+
+    const result = await callToolRaw('merge_when_green', { prNumber: 7 })
+    expect(result.isError).toBe(true)
+    expect(result.text).toMatch(/recusad/i)
+    expect(gh.mergePullRequest).not.toHaveBeenCalled()
   })
 })

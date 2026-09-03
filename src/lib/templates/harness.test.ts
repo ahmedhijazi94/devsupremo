@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { classifyRisk } from './verify-classifier'
+import { classifyRisk, isKnownEnvironmentalBuildFailure } from './verify-classifier'
 import {
   classifyBindProbe,
   classifyPidSignalError,
@@ -262,6 +262,48 @@ describe('classifyRisk', () => {
   })
 })
 
+/**
+ * E2E real (teste-v3-9): typecheck/lint/testes/segurança terminaram rápido,
+ * mas o `build` (nível FULL) ficou minutos travado numa limitação CONHECIDA do
+ * sandbox/ambiente (não erro de código) — e o checkpoint nunca saiu. A política
+ * correta: só o passo `build`, e só com uma assinatura ESTRITA e conhecida
+ * (porta/processo do sandbox, ou rede indisponível pra recurso externo), pode
+ * ser deferido pra CI sem travar o checkpoint local. Qualquer outra coisa —
+ * inclusive a MESMA assinatura aparecendo em outro passo — continua bloqueando.
+ */
+describe('isKnownEnvironmentalBuildFailure — assinaturas estritas (nunca heurístico amplo)', () => {
+  it('bate: porta/processo já em uso pelo sandbox', () => {
+    expect(isKnownEnvironmentalBuildFailure('Error: listen EADDRINUSE: address already in use :::3000')).toBe(
+      true,
+    )
+    expect(isKnownEnvironmentalBuildFailure('bind: address already in use')).toBe(true)
+  })
+
+  it('bate: rede indisponível pra recurso externo (DNS/fetch/certificado)', () => {
+    expect(isKnownEnvironmentalBuildFailure('Error: connect ENOTFOUND registry.npmjs.org')).toBe(true)
+    expect(isKnownEnvironmentalBuildFailure('getaddrinfo EAI_AGAIN fonts.googleapis.com')).toBe(true)
+    expect(
+      isKnownEnvironmentalBuildFailure('FetchError: request to https://fonts.googleapis.com failed, reason: fetch failed'),
+    ).toBe(true)
+    expect(isKnownEnvironmentalBuildFailure('unable to get local issuer certificate')).toBe(true)
+    expect(isKnownEnvironmentalBuildFailure('network is unreachable')).toBe(true)
+  })
+
+  it('NÃO bate: erro real de código/TypeScript/bundling/import/config — nunca vira "ambiental"', () => {
+    expect(
+      isKnownEnvironmentalBuildFailure("Type error: Property 'foo' does not exist on type 'Bar'."),
+    ).toBe(false)
+    expect(isKnownEnvironmentalBuildFailure("Module not found: Can't resolve './missing-file'")).toBe(false)
+    expect(isKnownEnvironmentalBuildFailure('SyntaxError: Unexpected token )')).toBe(false)
+    expect(isKnownEnvironmentalBuildFailure('ReferenceError: x is not defined')).toBe(false)
+    expect(isKnownEnvironmentalBuildFailure('Invalid next.config.js options detected')).toBe(false)
+  })
+
+  it('NÃO bate: saída vazia (sem evidência nenhuma) — na dúvida, fail-closed', () => {
+    expect(isKnownEnvironmentalBuildFailure('')).toBe(false)
+  })
+})
+
 describe('harness generator', () => {
   it('emite os 6 arquivos do harness (preview + status agregado)', () => {
     const files = harnessFiles()
@@ -321,5 +363,113 @@ describe('harness generator', () => {
 
   it('package.json expõe supremo:status', () => {
     expect(harnessPackageScripts()['supremo:status']).toBe('node scripts/supremo-status.mjs')
+  })
+})
+
+/**
+ * Execução REAL do `verify.mjs` gerado (não string matching) — prova o
+ * comportamento fim-a-fim que os testes puros de `isKnownEnvironmentalBuildFailure`
+ * não alcançam sozinhos: o passo `build` do nível FULL rodando de verdade,
+ * com um `next` (shim) que falha, e o restante dos passos (typecheck/lint/
+ * testes/secret scan) shimados pra sempre passar — isolando só a decisão de
+ * deferir ou não o `build`.
+ */
+describe('verify.mjs — execução real: build ambiental defere, erro real bloqueia (v3.1 finalização)', () => {
+  /** Shim executável no PATH — sai com `exitCode` e escreve `stderr` nele. */
+  function writeShim(binDir: string, name: string, exitCode: number, stderr = ''): void {
+    const file = join(binDir, name)
+    writeFileSync(file, `#!/bin/sh\n${stderr ? `echo ${JSON.stringify(stderr)} >&2\n` : ''}exit ${exitCode}\n`, 'utf8')
+    chmodSync(file, 0o755)
+  }
+
+  /**
+   * Prepara um worktree isolado: `scripts/security-audit.js` real (exit 0) +
+   * shims de tsc/eslint/vitest (sempre ok) + um shim de `next` configurável
+   * (o único passo sob teste). PATH aponta só pro shim dir — nunca herda os
+   * binários reais da máquina, então isto prova exatamente o que `verify.mjs`
+   * decide sozinho.
+   */
+  function setupProject(nextExitCode: number, nextStderr: string): { dir: string; env: NodeJS.ProcessEnv } {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-verify-e2e-'))
+    // git init: reflete o worktree real (sempre um repo) e evita o `git diff`
+    // do changedFiles() cair no modo --no-index (fora de repo) — irrelevante
+    // pro teste (nível é forçado via CLI arg 'full'), só deixa a saída limpa.
+    execFileSync('git', ['init', '-q'], { cwd: dir })
+    const binDir = join(dir, 'bin')
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+    writeFileSync(join(dir, 'scripts', 'security-audit.js'), 'process.exit(0)\n', 'utf8')
+    writeShim(binDir, 'tsc', 0)
+    writeShim(binDir, 'eslint', 0)
+    writeShim(binDir, 'vitest', 0)
+    writeShim(binDir, 'next', nextExitCode, nextStderr)
+    writeFileSync(join(dir, 'verify.mjs'), verifyScript(), 'utf8')
+    return { dir, env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` } }
+  }
+
+  function runVerifyFull(dir: string, env: NodeJS.ProcessEnv): { status: number; output: string } {
+    try {
+      const output = execFileSync(process.execPath, [join(dir, 'verify.mjs'), 'full'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+      })
+      return { status: 0, output }
+    } catch (err) {
+      const e = err as { status: number | null; stdout: string; stderr: string }
+      return { status: e.status ?? 1, output: `${e.stdout}${e.stderr}` }
+    }
+  }
+
+  it('build falha com assinatura CONHECIDA de limitação ambiental (porta ocupada) → DEFERE, verify sai com sucesso', () => {
+    const { dir, env } = setupProject(1, 'Error: listen EADDRINUSE: address already in use :::3000')
+    const { status, output } = runVerifyFull(dir, env)
+    expect(status).toBe(0)
+    expect(output).toContain('DEFERIDO')
+    expect(output).toContain('build DEFERIDO para a CI')
+  })
+
+  it('build falha com assinatura CONHECIDA de limitação ambiental (rede p/ recurso externo) → DEFERE, verify sai com sucesso', () => {
+    const { dir, env } = setupProject(1, 'FetchError: request to https://fonts.googleapis.com failed, reason: fetch failed')
+    const { status, output } = runVerifyFull(dir, env)
+    expect(status).toBe(0)
+    expect(output).toContain('DEFERIDO')
+  })
+
+  it('build falha com erro REAL de código (TypeScript/bundling) → NUNCA defere, verify falha (fail-closed)', () => {
+    const { dir, env } = setupProject(1, "Type error: Property 'foo' does not exist on type 'Bar'.")
+    const { status, output } = runVerifyFull(dir, env)
+    expect(status).not.toBe(0)
+    expect(output).not.toContain('DEFERIDO')
+    expect(output).toContain('FALHOU')
+    expect(output).toContain('verify full falhou em: build')
+  })
+
+  it('build passa normalmente → verify sai com sucesso sem menção a DEFERIDO', () => {
+    const { dir, env } = setupProject(0, '')
+    const { status, output } = runVerifyFull(dir, env)
+    expect(status).toBe(0)
+    expect(output).not.toContain('DEFERIDO')
+  })
+
+  it('a mesma assinatura "ambiental" em OUTRO passo (typecheck) nunca é deferida — só build é elegível', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-verify-e2e-'))
+    execFileSync('git', ['init', '-q'], { cwd: dir })
+    const binDir = join(dir, 'bin')
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+    writeFileSync(join(dir, 'scripts', 'security-audit.js'), 'process.exit(0)\n', 'utf8')
+    // tsc "falha" com uma mensagem que bateria no padrão ambiental — mas
+    // typecheck nunca é elegível a deferir, só build.
+    writeShim(binDir, 'tsc', 1, 'Error: connect ENOTFOUND registry.internal.example')
+    writeShim(binDir, 'eslint', 0)
+    writeShim(binDir, 'vitest', 0)
+    writeShim(binDir, 'next', 0)
+    writeFileSync(join(dir, 'verify.mjs'), verifyScript(), 'utf8')
+    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` }
+    const { status, output } = runVerifyFull(dir, env)
+    expect(status).not.toBe(0)
+    expect(output).not.toContain('DEFERIDO')
+    expect(output).toContain('verify full falhou em: typecheck')
   })
 })

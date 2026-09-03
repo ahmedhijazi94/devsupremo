@@ -1,5 +1,6 @@
 import {
   BROAD_FILE_COUNT,
+  ENV_BUILD_FAILURE_PATTERNS,
   FULL_PATTERNS,
   QUICK_PATTERNS,
   SECURITY_PATTERNS,
@@ -417,6 +418,10 @@ const FULL_PATTERNS = ${serializePatterns(FULL_PATTERNS)}
 const SECURITY_PATTERNS = ${serializePatterns(SECURITY_PATTERNS)}
 const QUICK_PATTERNS = ${serializePatterns(QUICK_PATTERNS)}
 const BROAD_FILE_COUNT = ${BROAD_FILE_COUNT}
+// Só o passo \`build\` consulta isto — ver ENV_BUILD_FAILURE_PATTERNS em
+// verify-classifier.ts (fonte única, mesma regra testada lá).
+const ENV_BUILD_FAILURE_PATTERNS = ${serializePatterns(ENV_BUILD_FAILURE_PATTERNS)}
+const isKnownEnvironmentalBuildFailure = (output) => ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
 
 function changedFiles(stagedOnly) {
   try {
@@ -490,12 +495,25 @@ const { level, reason } = forced ? { level: forced, reason: 'Nível forçado.' }
 
 console.log(\`\\n▸ verify [\${level.toUpperCase()}] — \${reason} (\${paths.length} arquivo(s))\\n\`)
 const t0 = Date.now()
+let buildDeferred = false
 for (const [label, cmd] of STEPS[level]) {
   process.stdout.write(\`  • \${label}… \`)
   try {
     execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] })
     console.log('ok')
   } catch (err) {
+    const output = \`\${err.stdout ?? ''}\${err.stderr ?? ''}\`.toString()
+    // SÓ o build pode ser deferido, e SÓ com uma assinatura CONHECIDA de
+    // limitação ambiental (porta/processo do sandbox, rede indisponível pra
+    // recurso externo). typecheck/lint/testes/secret scan NUNCA entram aqui
+    // — bloqueiam sempre. Na dúvida (assinatura não bate), cai no fail-closed
+    // de baixo: falha normal, checkpoint NÃO prossegue.
+    if (label === 'build' && isKnownEnvironmentalBuildFailure(output)) {
+      console.log('DEFERIDO (limitação ambiental do sandbox)')
+      console.log('  ℹ build falhou por limitação ambiental conhecida (porta/processo ocupado ou rede indisponível pra recurso externo) — não é erro de código. Deferido para a CI obrigatória (fail-closed lá); checkpoint local pode prosseguir.')
+      buildDeferred = true
+      continue
+    }
     console.log('FALHOU')
     if (err.stdout) process.stderr.write(err.stdout.toString())
     if (err.stderr) process.stderr.write(err.stderr.toString())
@@ -506,7 +524,8 @@ for (const [label, cmd] of STEPS[level]) {
 if (!hasLocalDb && (level === 'security' || level === 'full')) {
   console.log('  ℹ RLS pulado (sem Supabase local) — validado no gate "Políticas RLS" do CI. Para rodar local: npm run local:start && npm run test:rls')
 }
-console.log(\`\\n✓ verify \${level} passou em \${((Date.now() - t0) / 1000).toFixed(1)}s\\n\`)
+const deferredSuffix = buildDeferred ? ' — build DEFERIDO para a CI (limitação ambiental do sandbox; CI é fail-closed antes do merge)' : ''
+console.log(\`\\n✓ verify \${level} passou em \${((Date.now() - t0) / 1000).toFixed(1)}s\${deferredSuffix}\\n\`)
 `
 }
 

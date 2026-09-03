@@ -2710,6 +2710,25 @@ BACKGROUND (a CI é a barreira definitiva antes da main):
 e **não** rode \`verify:full\` em toda microalteração. LOW não é inseguro: o trabalho
 pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/CI.
 
+### Build travado por limitação ambiental não bloqueia o checkpoint (v3.1 finalização)
+No nível FULL, \`verify\` roda um \`build\` (\`next build\`). Esse passo por si só sabe
+diferenciar as duas coisas:
+
+- **Erro real** (código/TypeScript/bundling/import/config/teste): \`verify\` falha
+  normalmente (exit != 0) — **corrija o código**, nunca finja que é ambiental pra
+  destravar o checkpoint. Isso é bypass disfarçado.
+- **Limitação AMBIENTAL comprovada do sandbox** — só as duas categorias que \`verify\`
+  reconhece por assinatura conhecida na saída: porta/processo já em uso, ou rede
+  indisponível pra um recurso EXTERNO (DNS/fetch/certificado) — \`verify\` já imprime
+  \`DEFERIDO\`, **não falha**, e o \`build\` fica registrado como deferido pra CI
+  obrigatória (que roda o build de novo, fail-closed, antes de qualquer merge).
+
+**Você não decide isso à mão.** Não fique repetindo o \`build\`, esperando minutos, nem
+classificando você mesmo uma falha como "deve ser ambiental" — confie só no que
+\`verify\` reportou. Se ele deferiu, o checkpoint pode prosseguir imediatamente; se ele
+falhou (sem "DEFERIDO"), é falha real e precisa de correção antes do checkpoint. Na
+dúvida, \`verify\` falha fechado (fail-closed) — trate como falha real.
+
 ### Passos de cada pedido normal (v3.1)
 1. **Preview**: se \`.supremo/preview.port\` existir, reutilize \`http://localhost:<porta>\`
    direto — **não** rode \`preview:ensure\`. Só rode **\`npm run preview:ensure\`** se esse
@@ -2718,7 +2737,8 @@ pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/
 2. **Implemente** a mudança; veja no preview (o HMR reflete na hora).
 3. Crie/atualize **só os testes relacionados** (escritos junto).
 4. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
-5. Corrija falhas locais do hot path.
+5. Corrija falhas locais do hot path — exceto um \`build\` que \`verify\` já reportou
+   \`DEFERIDO\` (limitação ambiental do sandbox, ver acima): esse segue pro checkpoint.
 6. **Feche o pedido com UM checkpoint LOCAL** (o resumo é curto, uma linha):
    \`\`\`
    npm run checkpoint -- "<resumo do que mudou>"
@@ -2765,6 +2785,11 @@ espera nada disso; nem o daemon toca no GitHub diretamente.**
 - **NUNCA** "melhore" infraestrutura numa microfeature (LOW): não edite \`AGENTS.md\`,
   \`CLAUDE.md\`, \`tsconfig*\`, CI, \`package.json\`, migrations ou config estrutural sem
   necessidade técnica concreta do pedido. Ler as regras é ok; mexer por impulso não.
+- **NUNCA** fique repetindo/esperando minutos por um \`build\` que \`verify\` já marcou
+  \`DEFERIDO\` — ele já defere pra CI sozinho; siga pro checkpoint. E **NUNCA** classifique
+  falha real de código/TypeScript/bundling/import/config como "limitação ambiental" só
+  pra destravar o checkpoint mais rápido — só \`verify\` decide isso, por assinatura
+  conhecida da saída, nunca você por suposição.
 
 ### SEMPRE (v3.1)
 - **Continue desenvolvendo enquanto a CI roda** e o daemon integra em background.
@@ -2858,6 +2883,11 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   (LOW só lint/typecheck do que mudou + testes relacionados; HIGH/SECURITY gates fortes).
   **Não** use lista fixa nem rode \`verify:full\` em toda microalteração — o pesado
   (build/suíte/RLS/CodeQL) roda em background/CI.
+- Se o \`build\` (nível FULL) falhar e \`verify\` reportar \`DEFERIDO\` (limitação ambiental
+  comprovada do sandbox — porta/processo ocupado ou rede indisponível pra recurso
+  externo), **prosseguir pro checkpoint imediatamente** — não é erro de código, e só
+  \`verify\` decide isso, nunca você por suposição. Qualquer outra falha do \`build\` (ou
+  de typecheck/lint/testes/secret scan) continua bloqueando normalmente.
 - Fechar cada pedido concluído com **\`npm run checkpoint -- "<resumo>"\`** (checkpoint
   LOCAL, **sem rede**) e **devolver o controle imediatamente** — o daemon envia o
   changeset e o **Control Plane** publica/abre PR/CI/auto-merge, em background
@@ -2881,6 +2911,10 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - **"Melhorar" infra numa microfeature LOW** (AGENTS.md/CLAUDE.md/tsconfig/CI/package.json/
   migrations/config) sem necessidade técnica concreta — evite churn de infraestrutura
 - **Esperar ou pollar a CI depois de um checkpoint** — é assíncrona; continue
+- **Ficar repetindo/esperando minutos por um \`build\` que \`verify\` já deferiu**, ou
+  classificar você mesmo uma falha real de código/TypeScript/bundling/import/config como
+  "ambiental" pra destravar o checkpoint — só \`verify\` decide isso, por assinatura
+  conhecida, nunca por suposição sua
 - **Push direto na \`main\`; force push na \`main\`; bypass de required checks**
 - **Desativar/comentar teste, afrouxar threshold, alterar ruleset ou remover gate para
   "ficar verde"** — corrija o código (ou o teste, se errado), nunca a barreira

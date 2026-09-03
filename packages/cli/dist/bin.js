@@ -3122,7 +3122,10 @@ var init_auth = __esm({
 var keychain_exports = {};
 __export(keychain_exports, {
   accountFor: () => accountFor,
+  keychainAddScript: () => keychainAddScript,
   keychainService: () => keychainService,
+  macSaveArgs: () => macSaveArgs,
+  macSaveEnv: () => macSaveEnv,
   resolveKeychain: () => resolveKeychain
 });
 function keychainService() {
@@ -3131,19 +3134,80 @@ function keychainService() {
 function accountFor(projectId) {
   return `project:${projectId}`;
 }
+function keychainAddScript() {
+  return `
+ObjC.import('Security')
+ObjC.import('Foundation')
+function cfstr(s) { return $.NSString.alloc.initWithUTF8String(s) }
+function env(name) {
+  var v = $.NSProcessInfo.processInfo.environment.objectForKey(name)
+  return v ? v.js : null
+}
+var account = env('SUPREMO_KC_ACCOUNT')
+var service = env('SUPREMO_KC_SERVICE')
+var secret = env('SUPREMO_KC_SECRET')
+if (!account || !service || !secret) {
+  throw new Error('SUPREMO_KC_ACCOUNT/SERVICE/SECRET ausentes na env do processo.')
+}
+var delQuery = $.NSMutableDictionary.alloc.init
+delQuery.setObjectForKey(cfstr('genp'), cfstr('class'))
+delQuery.setObjectForKey(cfstr(account), cfstr('acct'))
+delQuery.setObjectForKey(cfstr(service), cfstr('svce'))
+$.SecItemDelete(delQuery) // idempotente: -U (substitui se j\xE1 existir)
+var data = cfstr(secret).dataUsingEncoding($.NSUTF8StringEncoding)
+var addQuery = $.NSMutableDictionary.alloc.init
+addQuery.setObjectForKey(cfstr('genp'), cfstr('class'))
+addQuery.setObjectForKey(cfstr(account), cfstr('acct'))
+addQuery.setObjectForKey(cfstr(service), cfstr('svce'))
+addQuery.setObjectForKey(data, cfstr('v_Data'))
+var status = $.SecItemAdd(addQuery, $())
+if (status !== 0) { throw new Error('SecItemAdd falhou: status ' + status) }
+`.trim();
+}
+function macSaveArgs(scriptPath) {
+  return { cmd: "osascript", args: ["-l", "JavaScript", scriptPath] };
+}
+function macSaveEnv(base, account, service, secret) {
+  return {
+    ...base,
+    SUPREMO_KC_ACCOUNT: account,
+    SUPREMO_KC_SERVICE: service,
+    SUPREMO_KC_SECRET: secret
+  };
+}
 function macSave(account, secret) {
-  (0, import_node_child_process2.execFileSync)(
-    "security",
-    ["add-generic-password", "-a", account, "-s", SERVICE, "-U", "-w"],
-    { input: secret, stdio: ["pipe", "ignore", "ignore"] }
+  const scriptPath = import_node_path.default.join(
+    import_node_os.default.tmpdir(),
+    `supremo-kc-${import_node_crypto.default.randomBytes(8).toString("hex")}.js`
   );
+  import_node_fs.default.writeFileSync(scriptPath, keychainAddScript(), { mode: 384 });
+  try {
+    const { cmd, args } = macSaveArgs(scriptPath);
+    (0, import_node_child_process2.execFileSync)(cmd, args, {
+      env: macSaveEnv(process.env, account, SERVICE, secret),
+      // Nem o osascript nem o script imprimem o segredo (o script só lança um
+      // status NUMÉRICO em erro) — stdout/stderr vão para PIPE (capturados,
+      // nunca impressos no terminal do usuário) em vez de 'ignore'. IMPORTANTE:
+      // com os 3 fds em 'ignore' ao mesmo tempo, confirmado empiricamente que
+      // o osascript TRAVA indefinidamente neste processo (mesmo sem prompt
+      // nenhum) — stdin pode ficar 'ignore' (não usamos), mas stdout/stderr
+      // precisam ser 'pipe' (não 'ignore') para o processo terminar.
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: KEYCHAIN_TIMEOUT_MS
+    });
+  } finally {
+    try {
+      import_node_fs.default.unlinkSync(scriptPath);
+    } catch {
+    }
+  }
 }
 function macGet(account) {
   try {
     return (0, import_node_child_process2.execFileSync)(
       "security",
       ["find-generic-password", "-a", account, "-s", SERVICE, "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: KEYCHAIN_TIMEOUT_MS }
     ).trim();
   } catch {
     return null;
@@ -3154,14 +3218,14 @@ function macRemove(account) {
     (0, import_node_child_process2.execFileSync)(
       "security",
       ["delete-generic-password", "-a", account, "-s", SERVICE],
-      { stdio: "ignore" }
+      { stdio: "ignore", timeout: KEYCHAIN_TIMEOUT_MS }
     );
   } catch {
   }
 }
 function hasSecretTool() {
   try {
-    (0, import_node_child_process2.execFileSync)("secret-tool", ["--version"], { stdio: "ignore" });
+    (0, import_node_child_process2.execFileSync)("secret-tool", ["--version"], { stdio: "ignore", timeout: KEYCHAIN_TIMEOUT_MS });
     return true;
   } catch {
     return false;
@@ -3171,7 +3235,7 @@ function linuxSave(account, secret) {
   (0, import_node_child_process2.execFileSync)(
     "secret-tool",
     ["store", "--label", SERVICE, "service", SERVICE, "account", account],
-    { input: secret, stdio: ["pipe", "ignore", "ignore"] }
+    { input: secret, stdio: ["pipe", "ignore", "ignore"], timeout: KEYCHAIN_TIMEOUT_MS }
   );
 }
 function linuxGet(account) {
@@ -3179,7 +3243,7 @@ function linuxGet(account) {
     return (0, import_node_child_process2.execFileSync)(
       "secret-tool",
       ["lookup", "service", SERVICE, "account", account],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: KEYCHAIN_TIMEOUT_MS }
     ).trim();
   } catch {
     return null;
@@ -3190,7 +3254,7 @@ function linuxRemove(account) {
     (0, import_node_child_process2.execFileSync)(
       "secret-tool",
       ["clear", "service", SERVICE, "account", account],
-      { stdio: "ignore" }
+      { stdio: "ignore", timeout: KEYCHAIN_TIMEOUT_MS }
     );
   } catch {
   }
@@ -3241,15 +3305,17 @@ function resolveKeychain(platform = process.platform) {
     remove: (p) => fileRemove(accountFor(p))
   };
 }
-var import_node_child_process2, import_node_fs, import_node_os, import_node_path, SERVICE;
+var import_node_child_process2, import_node_crypto, import_node_fs, import_node_os, import_node_path, SERVICE, KEYCHAIN_TIMEOUT_MS;
 var init_keychain = __esm({
   "src/keychain.ts"() {
     "use strict";
     import_node_child_process2 = require("node:child_process");
+    import_node_crypto = __toESM(require("node:crypto"));
     import_node_fs = __toESM(require("node:fs"));
     import_node_os = __toESM(require("node:os"));
     import_node_path = __toESM(require("node:path"));
     SERVICE = "supremo-checkpoint-daemon";
+    KEYCHAIN_TIMEOUT_MS = 2e4;
   }
 });
 
@@ -3400,15 +3466,15 @@ function defaultCheckpointDeps(cwd) {
       }
     },
     now: () => (/* @__PURE__ */ new Date()).toISOString(),
-    uuid: () => import_node_crypto.default.randomUUID()
+    uuid: () => import_node_crypto2.default.randomUUID()
   };
 }
-var import_node_child_process3, import_node_crypto, import_node_fs2, import_node_path2, HIGH_RE, MEDIUM_RE, NothingToCheckpointError, CHECKPOINT_DIR, QUEUE_FILE, NOTIFY_FILE;
+var import_node_child_process3, import_node_crypto2, import_node_fs2, import_node_path2, HIGH_RE, MEDIUM_RE, NothingToCheckpointError, CHECKPOINT_DIR, QUEUE_FILE, NOTIFY_FILE;
 var init_checkpoint = __esm({
   "src/checkpoint.ts"() {
     "use strict";
     import_node_child_process3 = require("node:child_process");
-    import_node_crypto = __toESM(require("node:crypto"));
+    import_node_crypto2 = __toESM(require("node:crypto"));
     import_node_fs2 = __toESM(require("node:fs"));
     import_node_path2 = __toESM(require("node:path"));
     HIGH_RE = [
@@ -3436,7 +3502,7 @@ var init_checkpoint = __esm({
 
 // src/changeset.ts
 function sha256Hex(buf) {
-  return import_node_crypto2.default.createHash("sha256").update(buf).digest("hex");
+  return import_node_crypto3.default.createHash("sha256").update(buf).digest("hex");
 }
 function computeChangesetSha256(cs) {
   const files = [...cs.files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
@@ -3549,12 +3615,12 @@ function defaultCommitReader(cwd) {
     }
   };
 }
-var import_node_child_process4, import_node_crypto2;
+var import_node_child_process4, import_node_crypto3;
 var init_changeset = __esm({
   "src/changeset.ts"() {
     "use strict";
     import_node_child_process4 = require("node:child_process");
-    import_node_crypto2 = __toESM(require("node:crypto"));
+    import_node_crypto3 = __toESM(require("node:crypto"));
   }
 });
 
@@ -4001,12 +4067,15 @@ var init_daemon = __esm({
 // src/bootstrap.ts
 var bootstrap_exports = {};
 __export(bootstrap_exports, {
+  RECOMMENDED_NODE_MAJORS: () => RECOMMENDED_NODE_MAJORS,
   buildEnvFile: () => buildEnvFile,
+  checkNodeVersion: () => checkNodeVersion,
   cleanRemoteUrl: () => cleanRemoteUrl,
   daemonCliOutputLooksValid: () => daemonCliOutputLooksValid,
   gitCloneArgs: () => gitCloneArgs,
   migrationDryRunSynced: () => migrationDryRunSynced,
   patchConfigMajorVersion: () => patchConfigMajorVersion,
+  previewStatusHealthy: () => previewStatusHealthy,
   projectListHasRef: () => projectListHasRef,
   resolveSupabaseBin: () => resolveSupabaseBin,
   runBootstrap: () => runBootstrap,
@@ -4106,6 +4175,16 @@ function daemonCliOutputLooksValid(output) {
     return false;
   }
 }
+function previewStatusHealthy(output) {
+  if (output === null)
+    return false;
+  try {
+    const parsed = JSON.parse(output);
+    return parsed.running === true && parsed.healthy === true;
+  } catch {
+    return false;
+  }
+}
 function validateLocalReadiness(input) {
   const issues = [];
   if (!input.projectJsonOk)
@@ -4119,12 +4198,28 @@ function validateLocalReadiness(input) {
       );
     }
   }
+  if (!input.previewHealthy)
+    issues.push("preview n\xE3o subiu saud\xE1vel");
   return { ok: issues.length === 0, issues };
 }
 function checkNpmScriptsCompatible(dest) {
   return daemonCliOutputLooksValid(
     tryExecOutIn("npx", ["--yes", "supremo-cli", "daemon", "--status"], dest)
   );
+}
+function checkNodeVersion(nodeVersion) {
+  const major = Number(nodeVersion.replace(/^v/, "").split(".")[0]);
+  if (RECOMMENDED_NODE_MAJORS.includes(major)) {
+    return { status: "ok", major };
+  }
+  return {
+    status: "warn",
+    major,
+    message: `Node ${nodeVersion} n\xE3o \xE9 uma vers\xE3o LTS testada pelo Supremo (recomendado: Node 22 LTS). Isto N\xC3O deveria travar a instala\xE7\xE3o, mas algumas depend\xEAncias podem avisar incompatibilidade (EBADENGINE) \u2014 se algo estranho acontecer, troque para Node 22 LTS e rode o bootstrap de novo.`
+  };
+}
+function checkPreviewHealthy(dest) {
+  return previewStatusHealthy(tryExecOutIn("node", ["scripts/preview.mjs", "status"], dest));
 }
 async function linkSupabaseRemote(dest, supabase) {
   const { projectRef, dbPassword, majorVersion } = supabase;
@@ -4235,6 +4330,11 @@ function readLinkedRef(dest) {
 async function runBootstrap(opts) {
   const baseUrl = opts.url.replace(/\/$/, "");
   console.log("\nSupremo Bootstrap\n");
+  const nodeCheck = checkNodeVersion(process.version);
+  if (nodeCheck.status === "warn") {
+    console.log(`\u26A0 ${nodeCheck.message}
+`);
+  }
   const held = { config: null };
   const supremoOk = await ensureAuthorized({
     name: "Supremo",
@@ -4292,7 +4392,11 @@ async function runBootstrap(opts) {
   if (config.daemon) {
     try {
       const { resolveKeychain: resolveKeychain2 } = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
-      resolveKeychain2().save(config.project.id, config.daemon.deviceSecret);
+      const keychain = resolveKeychain2();
+      keychain.save(config.project.id, config.daemon.deviceSecret);
+      if (keychain.get(config.project.id) !== config.daemon.deviceSecret) {
+        throw new Error("Secret n\xE3o confirmado no keychain ap\xF3s salvar.");
+      }
       ok("M\xE1quina autorizada (checkpoint daemon) \u2014 identidade no keychain");
       const { ensureDaemon: ensureDaemon2, daemonStatus: daemonStatus2 } = await Promise.resolve().then(() => (init_daemon(), daemon_exports));
       ensureDaemon2(dest);
@@ -4310,18 +4414,34 @@ async function runBootstrap(opts) {
       );
     }
   }
+  let previewHealthy = false;
+  try {
+    run("npm", ["run", "preview:ensure"], dest);
+    previewHealthy = checkPreviewHealthy(dest);
+    if (previewHealthy)
+      ok("Preview no ar (npm run preview:status)");
+  } catch {
+    console.log(
+      "\u2022 N\xE3o consegui subir o preview automaticamente.\n  Rode depois: npm run preview:ensure\n"
+    );
+  }
   const readiness = validateLocalReadiness({
     projectJsonOk: import_node_fs4.default.existsSync(import_node_path4.default.join(dest, ".supremo", "project.json")),
     hasDaemonIdentity: Boolean(config.daemon),
     daemonRunning,
-    npmScriptsCompatible
+    npmScriptsCompatible,
+    previewHealthy
   });
   if (readiness.ok) {
-    console.log(`
-Projeto pronto:
+    const url = "http://localhost:3000";
+    console.log(
+      `
+Projeto pronto para Codex/Claude:
 
   ${dest}
-`);
+  Preview: ${url}
+`
+    );
   } else {
     console.log(`
 \u26A0 Projeto criado, mas o workflow local n\xE3o est\xE1 100% operacional:
@@ -4330,26 +4450,15 @@ Projeto pronto:
       console.log(`  \u2022 ${issue}`);
     console.log(
       `
-  O c\xF3digo e o preview funcionam normalmente; resolva o(s) ponto(s) acima
-  antes de contar com checkpoint/publica\xE7\xE3o autom\xE1ticos.
+  O c\xF3digo funciona normalmente; resolva o(s) ponto(s) acima antes de
+  contar com checkpoint/publica\xE7\xE3o/preview autom\xE1ticos.
 
   Pasta: ${dest}
 `
     );
   }
-  if (opts.start) {
-    console.log("Subindo o preview persistente\u2026\n");
-    run("npm", ["run", "preview:ensure"], dest);
-    ok("Preview no ar \u2014 reutilizado a cada mudan\xE7a (npm run preview:status)");
-  } else {
-    console.log(`Agora:
-
-  cd ${dest}
-  npm run preview:ensure
-`);
-  }
 }
-var import_node_child_process7, import_node_fs4, import_node_path4, sleep2, run, ok, tryExec, tryExecOut, tryExecOutIn;
+var import_node_child_process7, import_node_fs4, import_node_path4, sleep2, run, ok, tryExec, tryExecOut, tryExecOutIn, RECOMMENDED_NODE_MAJORS;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
@@ -4389,6 +4498,7 @@ var init_bootstrap = __esm({
         return null;
       }
     };
+    RECOMMENDED_NODE_MAJORS = [20, 22, 24];
   }
 });
 
@@ -4649,7 +4759,7 @@ program2.command("connect").description("Configura o Claude Desktop para usar o 
   console.log(`Endpoint: ${options.url}`);
   console.log("Reinicie o Claude Desktop para carregar a conex\xE3o.");
 });
-program2.command("bootstrap <project-id>").description("Prepara o workspace local do projeto (autoriza no navegador)").requiredOption("-u, --url <url>", "URL do Supremo, ex.: https://supremo.app").option("-d, --dir <dir>", "Pasta-base onde criar o projeto (padr\xE3o: pasta atual)").option("--start", "Inicia o dev server ao final").action(
+program2.command("bootstrap <project-id>").description("Prepara o workspace local do projeto (autoriza no navegador)").requiredOption("-u, --url <url>", "URL do Supremo, ex.: https://supremo.app").option("-d, --dir <dir>", "Pasta-base onde criar o projeto (padr\xE3o: pasta atual)").option("--start", "(sem efeito \u2014 preview e daemon j\xE1 sobem sempre; aceito por compatibilidade)").action(
   async (projectId, options) => {
     const { runBootstrap: runBootstrap2 } = await Promise.resolve().then(() => (init_bootstrap(), bootstrap_exports));
     try {

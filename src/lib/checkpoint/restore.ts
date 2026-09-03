@@ -124,3 +124,38 @@ export function humanRestoreStatus(status: 'pending' | 'claimed' | 'applied' | '
   if (status === 'applied') return 'Restaurado'
   return 'Restaurando' // pending | claimed
 }
+
+// ── Badge "Ativo" (v3.1 finalização) ────────────────────────────────────────
+
+export interface ActiveCheckpointInput {
+  id: string
+  createdAt: string
+  restoredFromCheckpointId: string | null
+}
+
+/**
+ * O item "Ativo" representa o estado ATUALMENTE aplicado no projeto — não é
+ * simplesmente "a operação mais recente". Um checkpoint técnico `Restaurar
+ * "X"` é um checkpoint normal como outro qualquer (aparece no Histórico, passa
+ * por PR/CI/gates), mas SEMANTICAMENTE ele significa "o projeto voltou a ser
+ * X": por isso o Ativo migra de volta pro checkpoint X (o ALVO restaurado),
+ * nunca fica no registro técnico do restore em si. Uma alteração nova criada
+ * depois disso vira o Ativo normalmente, saindo de X.
+ *
+ * pushStatus/integration_status NUNCA entram nesta decisão — um checkpoint
+ * `integrated` pode continuar Ativo (é literalmente o estado atual do
+ * projeto). Sempre no máximo um Ativo; `null` se não houver nenhum item.
+ *
+ * Exemplo: A(dark) → B(light). B é o Ativo. Restaurar A → A volta a ser o
+ * Ativo (o registro técnico "Restaurar A" aparece no Histórico, mas não é o
+ * Ativo). Depois cria C → C vira o Ativo.
+ */
+export function computeActiveCheckpointId(
+  items: readonly ActiveCheckpointInput[],
+): string | null {
+  if (items.length === 0) return null
+  const newest = [...items].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  )[0]!
+  return newest.restoredFromCheckpointId ?? newest.id
+}

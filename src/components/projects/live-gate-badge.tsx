@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { getProjectChecks } from '@/actions/checks'
-import { cn } from '@/lib/utils'
+import { Pill } from '@/components/ui/pill'
 
 /**
  * O estado dos gates, visível de qualquer lugar do projeto.
@@ -49,11 +49,7 @@ export function LiveGateBadge({ projectId }: { projectId: string }) {
 
   if (state === 'idle') return null
 
-  const tone = {
-    pending: 'bg-wait-ink',
-    passed: 'bg-up-ink',
-    failed: 'bg-down-ink',
-  }[state]
+  const tone = { pending: 'wait', passed: 'up', failed: 'down' } as const
 
   const text = {
     pending: 'Testes rodando',
@@ -62,24 +58,10 @@ export function LiveGateBadge({ projectId }: { projectId: string }) {
   }[state]
 
   return (
-    <span
-      title={label}
-      className="text-muted inline-flex items-center gap-1.5 text-xs font-medium"
-    >
-      <span className="relative flex h-2 w-2">
-        {state === 'pending' && (
-          <span
-            className={cn(
-              'absolute inline-flex h-full w-full animate-ping rounded-full opacity-75',
-              tone,
-            )}
-          />
-        )}
-        <span
-          className={cn('relative inline-flex h-2 w-2 rounded-full', tone)}
-        />
-      </span>
-      {text}
+    <span title={label}>
+      <Pill tone={tone[state]} dot pulse={state === 'pending'}>
+        {text}
+      </Pill>
     </span>
   )
 }

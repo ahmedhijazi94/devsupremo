@@ -240,6 +240,7 @@ describe('processRestores — restore no próprio Supremo (v3.1 finalização)',
       now: () => 't',
       uuid: () => 'cpE',
       applyPatch: () => {},
+      readWorktreeFile: () => null,
     }
     const n = await processRestores(
       { ...cfg, getSecret: () => 'sup_dev_ckpt_x' },
@@ -262,6 +263,7 @@ describe('processRestores — restore no próprio Supremo (v3.1 finalização)',
       now: () => 't',
       uuid: () => 'cpE',
       applyPatch: () => {},
+      readWorktreeFile: () => null,
     }
     const n = await processRestores(
       { ...cfg, getSecret: () => 'sup_dev_ckpt_x' },

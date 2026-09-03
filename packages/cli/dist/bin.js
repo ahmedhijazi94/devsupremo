@@ -3123,9 +3123,11 @@ var keychain_exports = {};
 __export(keychain_exports, {
   accountFor: () => accountFor,
   keychainAddScript: () => keychainAddScript,
+  keychainGetScript: () => keychainGetScript,
+  keychainRemoveScript: () => keychainRemoveScript,
+  keychainScriptEnv: () => keychainScriptEnv,
   keychainService: () => keychainService,
-  macSaveArgs: () => macSaveArgs,
-  macSaveEnv: () => macSaveEnv,
+  osascriptArgs: () => osascriptArgs,
   resolveKeychain: () => resolveKeychain
 });
 function keychainService() {
@@ -3138,60 +3140,81 @@ function keychainAddScript() {
   return `
 ObjC.import('Security')
 ObjC.import('Foundation')
-function cfstr(s) { return $.NSString.alloc.initWithUTF8String(s) }
-function env(name) {
-  var v = $.NSProcessInfo.processInfo.environment.objectForKey(name)
-  return v ? v.js : null
-}
+${JXA_HELPERS}
 var account = env('SUPREMO_KC_ACCOUNT')
 var service = env('SUPREMO_KC_SERVICE')
 var secret = env('SUPREMO_KC_SECRET')
 if (!account || !service || !secret) {
   throw new Error('SUPREMO_KC_ACCOUNT/SERVICE/SECRET ausentes na env do processo.')
 }
-var delQuery = $.NSMutableDictionary.alloc.init
-delQuery.setObjectForKey(cfstr('genp'), cfstr('class'))
-delQuery.setObjectForKey(cfstr(account), cfstr('acct'))
-delQuery.setObjectForKey(cfstr(service), cfstr('svce'))
-$.SecItemDelete(delQuery) // idempotente: -U (substitui se j\xE1 existir)
+$.SecItemDelete(baseQuery(account, service)) // idempotente: substitui se j\xE1 existir
 var data = cfstr(secret).dataUsingEncoding($.NSUTF8StringEncoding)
-var addQuery = $.NSMutableDictionary.alloc.init
-addQuery.setObjectForKey(cfstr('genp'), cfstr('class'))
-addQuery.setObjectForKey(cfstr(account), cfstr('acct'))
-addQuery.setObjectForKey(cfstr(service), cfstr('svce'))
+var addQuery = baseQuery(account, service)
 addQuery.setObjectForKey(data, cfstr('v_Data'))
 var status = $.SecItemAdd(addQuery, $())
 if (status !== 0) { throw new Error('SecItemAdd falhou: status ' + status) }
 `.trim();
 }
-function macSaveArgs(scriptPath) {
+function keychainGetScript() {
+  return `
+ObjC.import('Security')
+ObjC.import('Foundation')
+ObjC.bindFunction('SecItemCopyMatching', ['i', ['@', '^@']])
+${JXA_HELPERS}
+var account = env('SUPREMO_KC_ACCOUNT')
+var service = env('SUPREMO_KC_SERVICE')
+if (!account || !service) {
+  throw new Error('SUPREMO_KC_ACCOUNT/SERVICE ausentes na env do processo.')
+}
+var query = baseQuery(account, service)
+query.setObjectForKey($.NSNumber.numberWithBool(true), cfstr('r_Data'))
+var result = Ref()
+var status = $.SecItemCopyMatching(query, result)
+if (status === 0) {
+  var str = $.NSString.alloc.initWithDataEncoding(result[0], $.NSUTF8StringEncoding)
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(str.dataUsingEncoding($.NSUTF8StringEncoding))
+} else if (status === -25300) {
+  // errSecItemNotFound: sem sa\xEDda \u2014 macGet devolve null
+} else {
+  throw new Error('SecItemCopyMatching falhou: status ' + status)
+}
+`.trim();
+}
+function keychainRemoveScript() {
+  return `
+ObjC.import('Security')
+ObjC.import('Foundation')
+${JXA_HELPERS}
+var account = env('SUPREMO_KC_ACCOUNT')
+var service = env('SUPREMO_KC_SERVICE')
+if (!account || !service) {
+  throw new Error('SUPREMO_KC_ACCOUNT/SERVICE ausentes na env do processo.')
+}
+$.SecItemDelete(baseQuery(account, service))
+`.trim();
+}
+function osascriptArgs(scriptPath) {
   return { cmd: "osascript", args: ["-l", "JavaScript", scriptPath] };
 }
-function macSaveEnv(base, account, service, secret) {
+function keychainScriptEnv(base, fields) {
   return {
     ...base,
-    SUPREMO_KC_ACCOUNT: account,
-    SUPREMO_KC_SERVICE: service,
-    SUPREMO_KC_SECRET: secret
+    SUPREMO_KC_ACCOUNT: fields.account,
+    SUPREMO_KC_SERVICE: fields.service,
+    ...fields.secret !== void 0 ? { SUPREMO_KC_SECRET: fields.secret } : {}
   };
 }
-function macSave(account, secret) {
+function runKeychainScript(script, env) {
   const scriptPath = import_node_path.default.join(
     import_node_os.default.tmpdir(),
     `supremo-kc-${import_node_crypto.default.randomBytes(8).toString("hex")}.js`
   );
-  import_node_fs.default.writeFileSync(scriptPath, keychainAddScript(), { mode: 384 });
+  import_node_fs.default.writeFileSync(scriptPath, script, { mode: 384 });
   try {
-    const { cmd, args } = macSaveArgs(scriptPath);
-    (0, import_node_child_process2.execFileSync)(cmd, args, {
-      env: macSaveEnv(process.env, account, SERVICE, secret),
-      // Nem o osascript nem o script imprimem o segredo (o script só lança um
-      // status NUMÉRICO em erro) — stdout/stderr vão para PIPE (capturados,
-      // nunca impressos no terminal do usuário) em vez de 'ignore'. IMPORTANTE:
-      // com os 3 fds em 'ignore' ao mesmo tempo, confirmado empiricamente que
-      // o osascript TRAVA indefinidamente neste processo (mesmo sem prompt
-      // nenhum) — stdin pode ficar 'ignore' (não usamos), mas stdout/stderr
-      // precisam ser 'pipe' (não 'ignore') para o processo terminar.
+    const { cmd, args } = osascriptArgs(scriptPath);
+    return (0, import_node_child_process2.execFileSync)(cmd, args, {
+      env,
+      encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: KEYCHAIN_TIMEOUT_MS
     });
@@ -3202,23 +3225,28 @@ function macSave(account, secret) {
     }
   }
 }
+function macSave(account, secret) {
+  runKeychainScript(
+    keychainAddScript(),
+    keychainScriptEnv(process.env, { account, service: SERVICE, secret })
+  );
+}
 function macGet(account) {
   try {
-    return (0, import_node_child_process2.execFileSync)(
-      "security",
-      ["find-generic-password", "-a", account, "-s", SERVICE, "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: KEYCHAIN_TIMEOUT_MS }
-    ).trim();
+    const out = runKeychainScript(
+      keychainGetScript(),
+      keychainScriptEnv(process.env, { account, service: SERVICE })
+    );
+    return out.length > 0 ? out : null;
   } catch {
     return null;
   }
 }
 function macRemove(account) {
   try {
-    (0, import_node_child_process2.execFileSync)(
-      "security",
-      ["delete-generic-password", "-a", account, "-s", SERVICE],
-      { stdio: "ignore", timeout: KEYCHAIN_TIMEOUT_MS }
+    runKeychainScript(
+      keychainRemoveScript(),
+      keychainScriptEnv(process.env, { account, service: SERVICE })
     );
   } catch {
   }
@@ -3305,7 +3333,7 @@ function resolveKeychain(platform = process.platform) {
     remove: (p) => fileRemove(accountFor(p))
   };
 }
-var import_node_child_process2, import_node_crypto, import_node_fs, import_node_os, import_node_path, SERVICE, KEYCHAIN_TIMEOUT_MS;
+var import_node_child_process2, import_node_crypto, import_node_fs, import_node_os, import_node_path, SERVICE, KEYCHAIN_TIMEOUT_MS, JXA_HELPERS;
 var init_keychain = __esm({
   "src/keychain.ts"() {
     "use strict";
@@ -3316,6 +3344,20 @@ var init_keychain = __esm({
     import_node_path = __toESM(require("node:path"));
     SERVICE = "supremo-checkpoint-daemon";
     KEYCHAIN_TIMEOUT_MS = 2e4;
+    JXA_HELPERS = `
+function cfstr(s) { return $.NSString.alloc.initWithUTF8String(s) }
+function env(name) {
+  var v = $.NSProcessInfo.processInfo.environment.objectForKey(name)
+  return v ? v.js : null
+}
+function baseQuery(account, service) {
+  var q = $.NSMutableDictionary.alloc.init
+  q.setObjectForKey(cfstr('genp'), cfstr('class'))
+  q.setObjectForKey(cfstr(account), cfstr('acct'))
+  q.setObjectForKey(cfstr(service), cfstr('svce'))
+  return q
+}
+`.trim();
   }
 });
 
@@ -4643,7 +4685,7 @@ var import_node_os2 = __toESM(require("node:os"));
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.2.1",
+  version: "1.2.2",
   description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
   license: "MIT",
   author: "Supremo",

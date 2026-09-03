@@ -8,8 +8,10 @@ import {
   cleanRemoteUrl,
   daemonCliOutputLooksValid,
   gitCloneArgs,
+  checkNodeVersion,
   migrationDryRunSynced,
   patchConfigMajorVersion,
+  previewStatusHealthy,
   projectListHasRef,
   resolveSupabaseBin,
   supabaseLinkArgs,
@@ -220,12 +222,13 @@ describe('daemonCliOutputLooksValid — detecta CLI publicada desatualizada', ()
 })
 
 describe('validateLocalReadiness — bootstrap só declara "pronto" se for verdade', () => {
-  it('tudo certo → ok, sem issues', () => {
+  it('tudo certo (daemon E preview saudáveis) → ok, sem issues', () => {
     const r = validateLocalReadiness({
       projectJsonOk: true,
       hasDaemonIdentity: true,
       daemonRunning: true,
       npmScriptsCompatible: true,
+      previewHealthy: true,
     })
     expect(r).toEqual({ ok: true, issues: [] })
   })
@@ -236,6 +239,7 @@ describe('validateLocalReadiness — bootstrap só declara "pronto" se for verda
       hasDaemonIdentity: false,
       daemonRunning: false,
       npmScriptsCompatible: null,
+      previewHealthy: true,
     })
     expect(r.ok).toBe(false)
     expect(r.issues[0]).toMatch(/project\.json/)
@@ -247,6 +251,7 @@ describe('validateLocalReadiness — bootstrap só declara "pronto" se for verda
       hasDaemonIdentity: true,
       daemonRunning: false,
       npmScriptsCompatible: true,
+      previewHealthy: true,
     })
     expect(r.ok).toBe(false)
     expect(r.issues.some((i) => i.includes('daemon não subiu'))).toBe(true)
@@ -258,18 +263,75 @@ describe('validateLocalReadiness — bootstrap só declara "pronto" se for verda
       hasDaemonIdentity: true,
       daemonRunning: true,
       npmScriptsCompatible: false,
+      previewHealthy: true,
     })
     expect(r.ok).toBe(false)
     expect(r.issues.some((i) => i.includes('desatualizada'))).toBe(true)
   })
 
-  it('sem identidade de daemon (projeto sem device) → não exige daemon/scripts', () => {
+  it('sem identidade de daemon (projeto sem device) → não exige daemon/scripts, mas AINDA exige preview', () => {
     const r = validateLocalReadiness({
       projectJsonOk: true,
       hasDaemonIdentity: false,
       daemonRunning: false,
       npmScriptsCompatible: null,
+      previewHealthy: true,
     })
     expect(r).toEqual({ ok: true, issues: [] })
+  })
+
+  it('preview não saudável → issue, MESMO com daemon perfeito (bug real: bootstrap declarava pronto com preview morto)', () => {
+    const r = validateLocalReadiness({
+      projectJsonOk: true,
+      hasDaemonIdentity: true,
+      daemonRunning: true,
+      npmScriptsCompatible: true,
+      previewHealthy: false,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.issues.some((i) => i.includes('preview'))).toBe(true)
+  })
+})
+
+describe('previewStatusHealthy — mesma forma de daemonCliOutputLooksValid, para o preview', () => {
+  it('running+healthy → true', () => {
+    expect(previewStatusHealthy('{"running":true,"healthy":true,"pid":1,"port":3000,"url":"http://localhost:3000"}')).toBe(true)
+  })
+  it('running mas não healthy → false', () => {
+    expect(previewStatusHealthy('{"running":true,"healthy":false,"pid":1}')).toBe(false)
+  })
+  it('não rodando → false', () => {
+    expect(previewStatusHealthy('{"running":false,"healthy":false,"pid":null}')).toBe(false)
+  })
+  it('null (falhou ao rodar) → false', () => {
+    expect(previewStatusHealthy(null)).toBe(false)
+  })
+  it('JSON inválido → false (fail-closed)', () => {
+    expect(previewStatusHealthy('not json')).toBe(false)
+  })
+})
+
+describe('checkNodeVersion — aviso claro, NUNCA bloqueia (seção 8)', () => {
+  it.each([20, 22, 24])('Node %i LTS → ok, sem mensagem', (major) => {
+    const r = checkNodeVersion(`v${major}.10.0`)
+    expect(r).toEqual({ status: 'ok', major })
+  })
+
+  it('Node 23 (release Current, o caso real do E2E) → warn com recomendação de Node 22 LTS', () => {
+    const r = checkNodeVersion('v23.11.0')
+    expect(r.status).toBe('warn')
+    expect(r.major).toBe(23)
+    if (r.status === 'warn') {
+      expect(r.message).toMatch(/Node 22 LTS/)
+      expect(r.message).toContain('v23.11.0')
+    }
+  })
+
+  it('Node 21 (outra release Current) → warn', () => {
+    expect(checkNodeVersion('v21.0.0').status).toBe('warn')
+  })
+
+  it('Node 18 (fora do engines atual do template, >=20) → warn', () => {
+    expect(checkNodeVersion('v18.19.0').status).toBe('warn')
   })
 })

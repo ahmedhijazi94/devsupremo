@@ -100,7 +100,7 @@ program
   .description('Prepara o workspace local do projeto (autoriza no navegador)')
   .requiredOption('-u, --url <url>', 'URL do Supremo, ex.: https://supremo.app')
   .option('-d, --dir <dir>', 'Pasta-base onde criar o projeto (padrão: pasta atual)')
-  .option('--start', 'Inicia o dev server ao final')
+  .option('--start', '(sem efeito — preview e daemon já sobem sempre; aceito por compatibilidade)')
   .action(
     async (
       projectId: string,

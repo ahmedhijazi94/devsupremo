@@ -8,6 +8,7 @@ import {
   decidePreviewAction,
   harnessFiles,
   harnessPackageScripts,
+  pickFreePreviewPort,
   previewSupervisorScript,
   supremoStatusScript,
   verifyScript,
@@ -24,6 +25,35 @@ describe('preview supervisor (v3.1) — decisão pura', () => {
   it('nada rodando (morto/ausente) → inicia', () => {
     expect(decidePreviewAction({ pidAlive: false, healthy: false })).toBe('start')
     expect(decidePreviewAction({ pidAlive: false, healthy: true })).toBe('start')
+  })
+})
+
+/**
+ * E2E real: porta 3000 já ocupada por OUTRO app fazia `preview:ensure`
+ * considerar esse processo alheio como saudável e salvar um pid nosso que
+ * logo morria/migrava de porta — falso positivo. `pickFreePreviewPort` é o
+ * algoritmo (puro) que resolve isso: nunca sobe em cima de uma porta ocupada,
+ * escolhe a próxima livre, e retorna `null` (nunca finge sucesso) se não
+ * achar nenhuma no intervalo.
+ */
+describe('preview supervisor (v3.1) — pickFreePreviewPort (colisão de porta)', () => {
+  it('porta preferida livre → usa ela mesma (comportamento inalterado no caso comum)', () => {
+    expect(pickFreePreviewPort(3000, () => true)).toBe(3000)
+  })
+  it('porta preferida OCUPADA (por outro app/projeto) → escolhe a próxima livre, nunca reusa a ocupada', () => {
+    const busy = new Set([3000, 3001])
+    expect(pickFreePreviewPort(3000, (p) => !busy.has(p))).toBe(3002)
+  })
+  it('várias portas seguidas ocupadas → segue procurando até achar uma livre', () => {
+    const busy = new Set([3000, 3001, 3002, 3003, 3004])
+    expect(pickFreePreviewPort(3000, (p) => !busy.has(p))).toBe(3005)
+  })
+  it('TODAS as portas do intervalo ocupadas → null (falha clara, NUNCA falso positivo)', () => {
+    expect(pickFreePreviewPort(3000, () => false, 5)).toBeNull()
+  })
+  it('span customizado é respeitado (não procura além dele)', () => {
+    // livre só na 3010, mas span=5 só cobre 3000-3004 → não acha, retorna null.
+    expect(pickFreePreviewPort(3000, (p) => p === 3010, 5)).toBeNull()
   })
 })
 
@@ -51,6 +81,36 @@ describe('preview supervisor (v3.1) — script gerado é determinístico', () =>
     expect(s['preview:ensure']).toBe('node scripts/preview.mjs ensure')
     expect(s['preview:status']).toBe('node scripts/preview.mjs status')
     expect(s['preview:stop']).toBe('node scripts/preview.mjs stop')
+  })
+  it('NUNCA sobe em cima de uma porta sem antes confirmar (bind-probe via node:net) que está livre', () => {
+    // O bug real era health-check HTTP sendo tratado como prova de posse. O
+    // fix exige um bind-probe (net.createServer) ANTES de startDetached —
+    // garante que o script gerado não regride pra "assume que respondeu = é
+    // meu".
+    expect(src).toContain("import net from 'node:net'")
+    expect(src).toContain('net.createServer()')
+    expect(src).toContain('function isPortFree(port)')
+    // startDetached (quem efetivamente sobe o processo) só é chamado depois
+    // de pickPort resolver uma porta confirmada livre — nunca com a porta
+    // configurada às cegas.
+    expect(src).toMatch(/const chosen = await pickPort\(PORT\)/)
+    expect(src).toMatch(/startDetached\(chosen\)/)
+  })
+  it('persiste a porta REAL em uso (pode diferir da preferida) — status/ensure seguintes checam essa, não a configurada às cegas', () => {
+    expect(src).toContain('preview.port')
+    expect(src).toContain('function readPort()')
+    expect(src).toMatch(/writeFileSync\(PORTFILE, String\(port\)\)/)
+  })
+  it('sem porta livre no intervalo → falha CLARO (stderr + exit code != 0), nunca finge sucesso', () => {
+    expect(src).toMatch(/if \(chosen === null\)/)
+    expect(src).toContain('console.error(')
+    expect(src).toMatch(/process\.exitCode = 1/)
+  })
+  it('o script gerado é JavaScript VÁLIDO (node --check)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-harness-preview-'))
+    const file = join(dir, 'preview.mjs')
+    writeFileSync(file, src, 'utf8')
+    expect(() => execFileSync(process.execPath, ['--check', file])).not.toThrow()
   })
 })
 

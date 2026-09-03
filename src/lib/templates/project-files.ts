@@ -737,7 +737,10 @@ supabase/.temp/
 supabase/.branches/
 
 # Supremo v3.1: estado por-máquina do supervisor de preview (não versionar).
+# preview.port = porta REAL em uso (pode diferir da preferida — ver ownership
+# do preview em previewSupervisorScript()).
 .supremo/preview.pid
+.supremo/preview.port
 .supremo/preview.log
 
 # Supremo v3.1: estado por-máquina do checkpoint daemon — fila de checkpoints,

@@ -667,23 +667,19 @@ describe('preview persistente — reutiliza URL real e abre proativamente (boots
     expect(agents).toMatch(/[Nn]unca\*{0,2} assuma `?localhost:3000`? de cabeça/)
   })
 
-  it('AGENTS.md: .supremo/preview.port existindo é a FONTE DA VERDADE → reutiliza a URL real, NUNCA sobe outro servidor no sandbox', () => {
-    expect(agents).toContain('Se esse arquivo existir, ele é a FONTE DA VERDADE')
-    expect(agents).toContain('reutilize `http://localhost:<porta>` direto')
+  it('AGENTS.md: reutiliza a URL real quando o preview está de pé, NUNCA sobe outro servidor no sandbox (v3.2 — health-based, não só existência do arquivo)', () => {
+    expect(agents).toContain('reutilize essa URL direto')
     expect(agents).toContain('não tente subir outro servidor dentro do sandbox')
   })
 
-  it('AGENTS.md: preview:ensure é SÓ fallback (arquivo ausente) — nunca a primeira ação obrigatória de todo pedido', () => {
-    expect(agents).toMatch(/preview:ensure.{0,20}é só o FALLBACK/)
-    expect(agents).toContain('SOMENTE quando `.supremo/preview.port` **não existir**')
-    expect(agents).toContain('Não é a primeira ação obrigatória de todo pedido')
+  it('AGENTS.md: v3.2 — a existência de `.supremo/preview.port` NÃO prova saúde (reboot mata o processo, não o arquivo)', () => {
+    expect(agents).toMatch(/[Nn]unca (trate como saudável|confie só na exist[êe]ncia do arquivo)/)
+    expect(agents).toContain('a existência do arquivo prova que já rodou uma vez, não que está de pé agora')
   })
 
-  it('AGENTS.md: passo 1 do fluxo normal também segue reutiliza-ou-fallback (não preview:ensure incondicional)', () => {
-    expect(agents).toContain(
-      'se `.supremo/preview.port` existir, reutilize `http://localhost:<porta>` direto — **não** rode `preview:ensure`',
-    )
-    expect(agents).toContain('Só rode **`npm run preview:ensure`** se esse arquivo NÃO existir')
+  it('AGENTS.md: passo 1 do fluxo normal aponta pra "Retomada automática de sessão" (não decide reutilizar/ensure sozinho)', () => {
+    expect(agents).toContain('primeiro pedido da sessão → `npm run supremo:resume` já resolveu isso')
+    expect(agents).toContain('ver "Retomada automática de sessão"')
   })
 
   it('AGENTS.md: abre/disponibiliza o preview automaticamente no início da sessão/primeiro pedido, sem o usuário pedir', () => {
@@ -709,12 +705,11 @@ describe('preview persistente — reutiliza URL real e abre proativamente (boots
     expect(agents).toMatch(/preview:status[\s\S]*devolve a URL certa/)
   })
 
-  it('CLAUDE.md: .supremo/preview.port existindo → reutiliza, NUNCA roda preview:ensure nesse caso; sem ele, preview:ensure é só fallback', () => {
+  it('CLAUDE.md: v3.2 — primeiro pedido roda supremo:resume; fora dele reutiliza direto sem confiar só na existência do arquivo', () => {
     expect(claude).toContain('.supremo/preview.port')
-    expect(claude).toContain('reutilize** `http://localhost:<porta>` direto')
-    expect(claude).toContain('não** rode `preview:ensure` nesse caso')
-    expect(claude).toContain('`preview:ensure` é só **fallback**')
-    expect(claude).toContain('nunca a primeira ação obrigatória do pedido')
+    expect(claude).toContain('npm run supremo:resume')
+    expect(claude).toContain('reutilize** a URL de')
+    expect(claude).toContain('nunca** confie só na existência do arquivo')
     expect(claude).toContain('nunca** suba outro servidor no sandbox')
   })
 
@@ -735,6 +730,69 @@ describe('preview persistente — reutiliza URL real e abre proativamente (boots
       expect(doc).not.toMatch(/garanta o preview com \*\*`npm run preview:ensure`\*\*/)
       expect(doc).not.toMatch(/Garantir o preview com \*\*`npm run preview:ensure`\*\* no início do pedido/)
     }
+  })
+})
+
+/**
+ * Retomada automática de sessão (v3.2) — E2E real: depois de fechar/reabrir o
+ * agente (ou reiniciar a máquina), o usuário nunca deveria precisar rodar
+ * bootstrap de novo. Estes testes cobrem a POLÍTICA que o agente lê (o
+ * comportamento de verdade — daemon/preview vivos vs. mortos, porta
+ * persistida, sem bootstrap/build/teste no meio do caminho — é provado em
+ * harness.test.ts, com o script `supremo-status.mjs --ensure` executado de
+ * verdade, e no smoke real de `packages/cli`).
+ */
+describe('retomada automática de sessão (v3.2) — nunca precisa de bootstrap de novo', () => {
+  const agents = norm(file('AGENTS.md'))
+  const claude = norm(file('CLAUDE.md'))
+  const pkg = JSON.parse(file('package.json')) as { scripts: Record<string, string> }
+
+  it('package.json expõe supremo:resume — a mesma rota que o supremo:status, com --ensure', () => {
+    expect(pkg.scripts['supremo:resume']).toBe('node scripts/supremo-status.mjs --ensure')
+  })
+
+  it('AGENTS.md: no início de uma sessão nova/primeiro pedido, roda supremo:resume', () => {
+    expect(agents).toMatch(/no início de uma sessão nova.{0,40}primeiro pedido/i)
+    expect(agents).toContain('npm run supremo:resume')
+  })
+
+  it('AGENTS.md: NUNCA roda bootstrap de novo numa máquina onde ele já rodou', () => {
+    expect(agents).toMatch(/NUNCA\*{0,2} rode bootstrap de novo numa máquina onde ele já rodou/)
+    expect(agents).toContain('sem nova autorização')
+  })
+
+  it('AGENTS.md: a retomada é LEVE — nunca inclui bootstrap/build/testes/install/relink/reautenticação', () => {
+    expect(agents).toMatch(/LEVE e RÁPIDA/)
+    expect(agents).toContain('rodar bootstrap de novo')
+    expect(agents).toContain('`build`')
+    expect(agents).toContain('a suíte de testes')
+    expect(agents).toMatch(/npm install.{0,20}religar dependências/)
+    expect(agents).toContain('relinkar o Supabase')
+    expect(agents).toContain('refazer qualquer autenticação')
+  })
+
+  it('AGENTS.md: SÓ no primeiro pedido — pedidos seguintes da mesma sessão NÃO repetem supremo:resume', () => {
+    expect(agents).toMatch(/Só no primeiro pedido da sessão/)
+    expect(agents).toMatch(/[Dd]o segundo pedido em diante,?\s*\*{0,2}não\*{0,2} rode `?supremo:resume` de novo/)
+  })
+
+  it('AGENTS.md: cobre tanto preview quanto daemon — vivo reutiliza, morto religa pelo mecanismo já existente', () => {
+    expect(agents).toContain('preview saudável')
+    expect(agents).toContain('preview registrado mas morto')
+    expect(agents).toMatch(/\*\*daemon\*\*.{0,60}vivo reutiliza, morto religa/)
+  })
+
+  it('AGENTS.md: existência de .supremo/preview.port NUNCA é tratada como prova de saúde (o gap real do reboot)', () => {
+    expect(agents).toContain(
+      'a existência do arquivo prova que já rodou uma vez, não que está de pé agora',
+    )
+  })
+
+  it('CLAUDE.md segue o mesmo contrato: supremo:resume só no primeiro pedido, sem bootstrap/build/testes/reauth', () => {
+    expect(claude).toContain('npm run supremo:resume')
+    expect(claude).toMatch(/no início de uma sessão nova.{0,40}primeiro pedido dela.{0,20}nunca nos seguintes/i)
+    expect(claude).toContain('sem** bootstrap, build, testes, install, relink ou reautenticação')
+    expect(claude).toContain('Rodar bootstrap de novo numa máquina onde ele já rodou')
   })
 })
 

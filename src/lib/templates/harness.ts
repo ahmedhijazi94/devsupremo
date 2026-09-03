@@ -43,6 +43,9 @@ export function harnessPackageScripts(): Record<string, string> {
     // Diagnóstico agregado (v3.1 finalização) — não é para o dev rodar no dia a
     // dia; a UI do Supremo (Histórico) é o lugar humano. JSON machine-readable.
     'supremo:status': 'node scripts/supremo-status.mjs',
+    // Retomada automática de sessão (v3.2, seção 30) — mesmo script, religa o
+    // que morreu (preview:ensure/daemon:ensure) e imprime o status final.
+    'supremo:resume': 'node scripts/supremo-status.mjs --ensure',
     'security:audit': 'node scripts/security-audit.js --deep',
     'security:report': 'node scripts/security-audit.js --report',
   }
@@ -606,11 +609,27 @@ exec node scripts/verify.mjs
  * e do checkpoint daemon num JSON só. NÃO é para o dev comum rodar no dia a dia
  * (a UI do Supremo/Histórico é o lugar humano); serve para depuração rápida.
  * Best-effort: se um dos dois não responder, o outro ainda aparece.
+ *
+ * `--ensure` (retomada automática — v3.2, seção 30): mesmo script, modo
+ * opcional. Depois do bootstrap já ter rodado uma vez NESTA máquina, o
+ * usuário nunca deveria precisar rodar bootstrap de novo — só reabrir a
+ * pasta e mandar um pedido. `--ensure` é ISSO: religa o que morreu (reboot,
+ * agente fechado) chamando os MESMOS comandos que o bootstrap já usa
+ * (`preview:ensure`/`daemon:ensure` — o supervisor de cada um já distingue
+ * vivo+saudável de zumbi/morto sozinho, sem lógica nova aqui), reusa o que já
+ * está de pé, e nunca builda/testa/reinstala/relinca/reautentica. Sempre
+ * termina imprimindo o status FINAL (inclusive a URL real do preview) — não
+ * o snapshot de antes de religar.
  */
 export function supremoStatusScript(): string {
   return `#!/usr/bin/env node
-// GERADO pelo Supremo (v3.1) — diagnóstico agregado (preview + daemon).
-// Não é para uso diário; a UI do Supremo (Histórico) é o lugar humano.
+// GERADO pelo Supremo (v3.1/v3.2) — diagnóstico agregado (preview + daemon).
+// Uso:
+//   node scripts/supremo-status.mjs           → só diagnostica (read-only)
+//   node scripts/supremo-status.mjs --ensure  → religa o que morreu, depois
+//                                                imprime o status FINAL
+// Não é para uso diário do humano — a UI do Supremo (Histórico) é o lugar
+// humano; isto é para o AGENTE, na retomada automática de sessão.
 import { execFileSync } from 'node:child_process'
 
 function tryJson(cmd, args) {
@@ -621,11 +640,39 @@ function tryJson(cmd, args) {
   }
 }
 
-const preview = tryJson('node', ['scripts/preview.mjs', 'status']) ?? { running: false, healthy: false }
-const daemon = tryJson('npx', ['--yes', 'supremo-cli', 'daemon', '--status']) ?? { running: false, healthy: false, pendingCheckpoints: 0 }
+// Best-effort: nunca lança. Se o ensure falhar (ex.: sem porta livre), o
+// status final abaixo reflete a falha real — não fingimos sucesso.
+function run(cmd, args) {
+  try {
+    execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'ignore'] })
+  } catch {
+    /* best-effort — ver comentário acima */
+  }
+}
+
+const readPreview = () => tryJson('node', ['scripts/preview.mjs', 'status']) ?? { running: false, healthy: false }
+const readDaemon = () => tryJson('npx', ['--yes', 'supremo-cli', 'daemon', '--status']) ?? { running: false, healthy: false, pendingCheckpoints: 0 }
+
+let preview = readPreview()
+let daemon = readDaemon()
+
+if (process.argv.includes('--ensure')) {
+  // Cada \`ensure\` decide sozinho reusar (já saudável), religar (rastro
+  // morto/zumbi) ou subir do zero (nada registrado) — a MESMA lógica do
+  // bootstrap, nenhuma nova aqui. Só chama quando o status leu não-saudável;
+  // já saudável não gasta o ensure à toa.
+  if (!daemon.healthy) {
+    run('npx', ['--yes', 'supremo-cli', 'daemon', '--ensure'])
+    daemon = readDaemon()
+  }
+  if (!preview.healthy) {
+    run('node', ['scripts/preview.mjs', 'ensure'])
+    preview = readPreview()
+  }
+}
 
 console.log(JSON.stringify({
-  preview: { running: !!preview.running, healthy: !!preview.healthy },
+  preview: { running: !!preview.running, healthy: !!preview.healthy, url: preview.url ?? null },
   daemon: { running: !!daemon.running, healthy: !!daemon.healthy },
   checkpoints: { pending: daemon.pendingCheckpoints ?? 0 },
 }))

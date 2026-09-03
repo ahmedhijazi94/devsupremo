@@ -7,14 +7,11 @@ import path from 'node:path'
 /**
  * Armazenamento SEGURO da identidade da máquina (device secret do checkpoint
  * daemon). O secret NUNCA fica no projeto: vai para o keychain do SO —
- *   • macOS:  Keychain via `security`;
+ *   • macOS:  Keychain via Security.framework (JXA/osascript — ver abaixo);
  *   • Linux:  libsecret via `secret-tool` (se disponível).
  * Fallback (sem keychain): arquivo 0600 no diretório de config do USUÁRIO
  * (~/.config/supremo), fora de qualquer projeto/Git. Em todos os casos o secret
  * é indexado por projeto, e nunca aparece em argv de leitura, log ou stdout.
- *
- * O `security`/`secret-tool` recebem o secret pela ENV/STDIN, nunca em argv —
- * ver saveSecret. A seleção de comando é PURA (keychainService) e testável.
  */
 
 const SERVICE = 'supremo-checkpoint-daemon'
@@ -23,21 +20,7 @@ const SERVICE = 'supremo-checkpoint-daemon'
  * Timeout de TODA chamada ao keychain do SO. `execFileSync`'s próprio
  * `timeout` é a ÚNICA coisa capaz de interromper uma syscall bloqueante de
  * verdade — o timeout de um test runner (ou qualquer código JS por cima) NÃO
- * consegue matar um processo filho travado numa chamada síncrona (o worker
- * inteiro fica bloqueado no syscall; nada em JS roda até ele retornar).
- * Sem isto, save/get/remove podiam travar indefinidamente se o daemon do
- * keychain do SO (securityd/gnome-keyring) ficar momentaneamente contendido.
- *
- * LIMITAÇÃO REAL DO macOS (documentada, não escondida — ver relatório):
- * o item é CRIADO via JXA/osascript (macSave) mas LIDO via a CLI `security`
- * (macGet/macRemove) — identidades de processo diferentes. Na PRIMEIRA vez
- * que `security` lê um item recém-criado por outro chamador, o macOS pode
- * levar alguns segundos para resolver a autorização entre eles (medido: até
- * ~19s numa máquina real). TODAS as leituras seguintes do MESMO item (o
- * daemon faz polling do MESMO account o tempo todo) são rápidas (~20-30ms,
- * confirmado empiricamente) — não é uma solicitação repetida, é UMA vez por
- * item. 20s cobre com folga essa primeira leitura sem deixar uma trava real
- * (rede fora do ar, keychain genuinely preso) passar despercebida.
+ * consegue matar um processo filho travado numa chamada síncrona.
  */
 const KEYCHAIN_TIMEOUT_MS = 20_000
 
@@ -56,106 +39,170 @@ export interface Keychain {
   remove(projectId: string): void
 }
 
-// ── macOS: grava via JXA/Security.framework (leitura/remoção via `security`) ──
+// ── macOS: Security.framework via JXA, para save/get/remove — MESMA identidade ──
 //
-// BUG REAL (E2E supremo-cli@1.2.0): `security add-generic-password ... -w`
-// SEM valor não lê de stdin — o próprio `security help add-generic-password`
-// documenta: "Specify -w as the last option to be prompted." Confirmado
-// empiricamente: mesmo com stdin redirecionado, ele abre um prompt
-// interativo ("password data for new item:") direto no terminal controlador,
-// ignora o que foi passado por pipe, e ainda assim pode retornar sucesso com
-// um valor vazio/errado. Não existe modo `-w` não-interativo na CLI oficial.
+// HISTÓRICO DO BUG (2 rodadas de E2E real):
 //
-// Fix: chamamos o Security.framework DIRETO via `osascript -l JavaScript`
-// (JXA — vem em todo macOS, sem dependência nativa/compilação, preservando o
-// bundle único do esbuild). O SCRIPT é ESTÁTICO (nunca contém o segredo —
-// gerado uma vez, sem interpolação); conta/serviço/segredo chegam ao
-// processo filho SÓ por variável de ambiente (mesmo padrão já usado no
-// código para SUPREMO_GIT_TOKEN/SUPABASE_DB_PASSWORD) — nunca em argv, nunca
-// no texto do script, nunca em stdout/stderr (stdio totalmente 'ignore').
-// As chaves do dicionário de query (class/acct/svce/v_Data) são os valores
-// LITERAIS e estáveis que os símbolos kSecClass* resolvem — o bridge do JXA
-// não expõe essas constantes C como dado, só como seletor.
+// 1ª causa: `security add-generic-password ... -w` SEM valor não lê de
+//   stdin — o próprio `security help add-generic-password` documenta:
+//   "Specify -w as the last option to be prompted." Não existe modo `-w`
+//   não-interativo na CLI oficial. Fix da rodada anterior: gravar via
+//   Security.framework direto (SecItemAdd, JXA/osascript).
 //
-// Leitura (`find-generic-password -w`) e remoção (`delete-generic-password`)
-// continuam pela CLI oficial: confirmado que NENHUMA das duas prompta (o -w
-// de LEITURA só controla o que é impresso, semântica diferente do de escrita).
+// 2ª causa (a que ESTA rodada corrige): aquele fix deixou save() via JXA MAS
+//   get()/remove() continuavam via a CLI `security`. São DUAS IDENTIDADES DE
+//   PROCESSO diferentes pedindo acesso ao MESMO item — cada combinação
+//   NOVA(criador, leitor) sofre resolução de autorização do macOS, e o E2E
+//   real mostrou que isso NÃO fica resolvido de vez: voltou a prompt
+//   repetido durante o polling do daemon (a hipótese anterior de "só na
+//   primeira vez" foi refutada pelo uso real).
+//
+// FIX: save/get/remove usam a MESMA identidade de processo (osascript
+// rodando JXA) para as TRÊS operações — nenhuma mistura com `security`.
+// Confirmado empiricamente (ver relatório): com uma ÚNICA identidade
+// consistente, 10 leituras seguidas do mesmo item ficam em ~80-100ms cada,
+// SEM nenhum prompt. `security` (CLI) não é mais chamado NENHUMA vez neste
+// arquivo para o backend do macOS.
+//
+// Cada script é ESTÁTICO (nunca contém o segredo — gerado uma vez, sem
+// interpolação); conta/serviço/segredo chegam ao processo filho SÓ por
+// variável de ambiente (mesmo padrão já usado para SUPREMO_GIT_TOKEN/
+// SUPABASE_DB_PASSWORD) — nunca em argv, nunca no texto do script, nunca em
+// stdout/stderr além do valor lido explicitamente por getScript. As chaves
+// do dicionário de query (class/acct/svce/v_Data/r_Data) são os valores
+// LITERAIS e estáveis que os símbolos kSecClass* resolvem — o bridge
+// automático do JXA não expõe essas constantes C como dado, só como
+// seletor; por isso os literais, não uma ACL customizada.
 
-/** Script JXA estático — NUNCA interpola o segredo; lê tudo de env em runtime. */
-export function keychainAddScript(): string {
-  return `
-ObjC.import('Security')
-ObjC.import('Foundation')
+const JXA_HELPERS = `
 function cfstr(s) { return $.NSString.alloc.initWithUTF8String(s) }
 function env(name) {
   var v = $.NSProcessInfo.processInfo.environment.objectForKey(name)
   return v ? v.js : null
 }
+function baseQuery(account, service) {
+  var q = $.NSMutableDictionary.alloc.init
+  q.setObjectForKey(cfstr('genp'), cfstr('class'))
+  q.setObjectForKey(cfstr(account), cfstr('acct'))
+  q.setObjectForKey(cfstr(service), cfstr('svce'))
+  return q
+}
+`.trim()
+
+/** Script JXA estático — cria/substitui o item. NUNCA interpola o segredo. */
+export function keychainAddScript(): string {
+  return `
+ObjC.import('Security')
+ObjC.import('Foundation')
+${JXA_HELPERS}
 var account = env('SUPREMO_KC_ACCOUNT')
 var service = env('SUPREMO_KC_SERVICE')
 var secret = env('SUPREMO_KC_SECRET')
 if (!account || !service || !secret) {
   throw new Error('SUPREMO_KC_ACCOUNT/SERVICE/SECRET ausentes na env do processo.')
 }
-var delQuery = $.NSMutableDictionary.alloc.init
-delQuery.setObjectForKey(cfstr('genp'), cfstr('class'))
-delQuery.setObjectForKey(cfstr(account), cfstr('acct'))
-delQuery.setObjectForKey(cfstr(service), cfstr('svce'))
-$.SecItemDelete(delQuery) // idempotente: -U (substitui se já existir)
+$.SecItemDelete(baseQuery(account, service)) // idempotente: substitui se já existir
 var data = cfstr(secret).dataUsingEncoding($.NSUTF8StringEncoding)
-var addQuery = $.NSMutableDictionary.alloc.init
-addQuery.setObjectForKey(cfstr('genp'), cfstr('class'))
-addQuery.setObjectForKey(cfstr(account), cfstr('acct'))
-addQuery.setObjectForKey(cfstr(service), cfstr('svce'))
+var addQuery = baseQuery(account, service)
 addQuery.setObjectForKey(data, cfstr('v_Data'))
 var status = $.SecItemAdd(addQuery, $())
 if (status !== 0) { throw new Error('SecItemAdd falhou: status ' + status) }
 `.trim()
 }
 
+/**
+ * Script JXA estático — lê o item e imprime SÓ o valor em stdout (nada mais).
+ * `SecItemCopyMatching` precisa de `ObjC.bindFunction` com a assinatura C
+ * explícita: o bridge AUTOMÁTICO do JXA não entende o parâmetro de saída
+ * (CFTypeRef*) e devolve lixo — confirmado empiricamente (ver relatório).
+ * Item ausente: sem saída nenhuma, sai limpo (status 0) — `macGet` trata
+ * "sem saída" como null, igual ao contrato anterior.
+ */
+export function keychainGetScript(): string {
+  return `
+ObjC.import('Security')
+ObjC.import('Foundation')
+ObjC.bindFunction('SecItemCopyMatching', ['i', ['@', '^@']])
+${JXA_HELPERS}
+var account = env('SUPREMO_KC_ACCOUNT')
+var service = env('SUPREMO_KC_SERVICE')
+if (!account || !service) {
+  throw new Error('SUPREMO_KC_ACCOUNT/SERVICE ausentes na env do processo.')
+}
+var query = baseQuery(account, service)
+query.setObjectForKey($.NSNumber.numberWithBool(true), cfstr('r_Data'))
+var result = Ref()
+var status = $.SecItemCopyMatching(query, result)
+if (status === 0) {
+  var str = $.NSString.alloc.initWithDataEncoding(result[0], $.NSUTF8StringEncoding)
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(str.dataUsingEncoding($.NSUTF8StringEncoding))
+} else if (status === -25300) {
+  // errSecItemNotFound: sem saída — macGet devolve null
+} else {
+  throw new Error('SecItemCopyMatching falhou: status ' + status)
+}
+`.trim()
+}
+
+/** Script JXA estático — remove o item (idempotente; não existir não é erro). */
+export function keychainRemoveScript(): string {
+  return `
+ObjC.import('Security')
+ObjC.import('Foundation')
+${JXA_HELPERS}
+var account = env('SUPREMO_KC_ACCOUNT')
+var service = env('SUPREMO_KC_SERVICE')
+if (!account || !service) {
+  throw new Error('SUPREMO_KC_ACCOUNT/SERVICE ausentes na env do processo.')
+}
+$.SecItemDelete(baseQuery(account, service))
+`.trim()
+}
+
 /** Args do osascript — SEM o segredo (ele só existe na env do processo filho). */
-export function macSaveArgs(scriptPath: string): { cmd: string; args: string[] } {
+export function osascriptArgs(scriptPath: string): { cmd: string; args: string[] } {
   return { cmd: 'osascript', args: ['-l', 'JavaScript', scriptPath] }
 }
 
-/** Env do processo filho — único canal por onde o segredo viaja. */
-export function macSaveEnv(
+/** Env do processo filho — único canal por onde conta/serviço/segredo viajam. */
+export function keychainScriptEnv(
   base: NodeJS.ProcessEnv,
-  account: string,
-  service: string,
-  secret: string,
+  fields: { account: string; service: string; secret?: string },
 ): NodeJS.ProcessEnv {
   return {
     ...base,
-    SUPREMO_KC_ACCOUNT: account,
-    SUPREMO_KC_SERVICE: service,
-    SUPREMO_KC_SECRET: secret,
+    SUPREMO_KC_ACCOUNT: fields.account,
+    SUPREMO_KC_SERVICE: fields.service,
+    ...(fields.secret !== undefined ? { SUPREMO_KC_SECRET: fields.secret } : {}),
   }
 }
 
-function macSave(account: string, secret: string): void {
+/**
+ * Roda um dos scripts JXA acima: escreve num arquivo temporário 0600 (nunca
+ * contém o segredo — só o script ESTÁTICO), executa via osascript com o
+ * segredo só na ENV, e sempre limpa o arquivo depois. `stdio: ['ignore',
+ * 'pipe', 'pipe']` — confirmado empiricamente que os 3 fds em 'ignore' ao
+ * mesmo tempo faz o osascript TRAVAR indefinidamente (sem prompt nenhum);
+ * stdout é capturado (não ecoado) para os scripts que retornam valor (get).
+ */
+function runKeychainScript(
+  script: string,
+  env: NodeJS.ProcessEnv,
+): string {
   const scriptPath = path.join(
     os.tmpdir(),
     `supremo-kc-${crypto.randomBytes(8).toString('hex')}.js`,
   )
-  // Script ESTÁTICO (sem segredo) — mode 0600 desde a criação.
-  fs.writeFileSync(scriptPath, keychainAddScript(), { mode: 0o600 })
+  fs.writeFileSync(scriptPath, script, { mode: 0o600 })
   try {
-    const { cmd, args } = macSaveArgs(scriptPath)
-    execFileSync(cmd, args, {
-      env: macSaveEnv(process.env, account, SERVICE, secret),
-      // Nem o osascript nem o script imprimem o segredo (o script só lança um
-      // status NUMÉRICO em erro) — stdout/stderr vão para PIPE (capturados,
-      // nunca impressos no terminal do usuário) em vez de 'ignore'. IMPORTANTE:
-      // com os 3 fds em 'ignore' ao mesmo tempo, confirmado empiricamente que
-      // o osascript TRAVA indefinidamente neste processo (mesmo sem prompt
-      // nenhum) — stdin pode ficar 'ignore' (não usamos), mas stdout/stderr
-      // precisam ser 'pipe' (não 'ignore') para o processo terminar.
+    const { cmd, args } = osascriptArgs(scriptPath)
+    return execFileSync(cmd, args, {
+      env,
+      encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: KEYCHAIN_TIMEOUT_MS,
     })
   } finally {
-    // Conteúdo do arquivo nunca teve o segredo, mas removemos de qualquer forma.
     try {
       fs.unlinkSync(scriptPath)
     } catch {
@@ -163,23 +210,29 @@ function macSave(account: string, secret: string): void {
     }
   }
 }
+
+function macSave(account: string, secret: string): void {
+  runKeychainScript(
+    keychainAddScript(),
+    keychainScriptEnv(process.env, { account, service: SERVICE, secret }),
+  )
+}
 function macGet(account: string): string | null {
   try {
-    return execFileSync(
-      'security',
-      ['find-generic-password', '-a', account, '-s', SERVICE, '-w'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: KEYCHAIN_TIMEOUT_MS },
-    ).trim()
+    const out = runKeychainScript(
+      keychainGetScript(),
+      keychainScriptEnv(process.env, { account, service: SERVICE }),
+    )
+    return out.length > 0 ? out : null
   } catch {
     return null
   }
 }
 function macRemove(account: string): void {
   try {
-    execFileSync(
-      'security',
-      ['delete-generic-password', '-a', account, '-s', SERVICE],
-      { stdio: 'ignore', timeout: KEYCHAIN_TIMEOUT_MS },
+    runKeychainScript(
+      keychainRemoveScript(),
+      keychainScriptEnv(process.env, { account, service: SERVICE }),
     )
   } catch {
     // já não existe

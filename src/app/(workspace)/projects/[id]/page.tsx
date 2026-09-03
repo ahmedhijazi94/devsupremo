@@ -276,33 +276,31 @@ export default async function ProjectPage({
         {provisioned && <SecretsCard projectId={project.id} />}
 
         {/* Histórico (v3.1) — cada pedido concluído no editor local, sem precisar
-            abrir o GitHub. Só aparece quando o projeto já usa checkpoint/daemon. */}
+            abrir o GitHub. Só aparece quando o projeto já usa checkpoint/daemon.
+            Cresce com o conteúdo — é a PÁGINA que rola, nunca uma caixa interna
+            (ver WorkspaceLayout: min-h-screen, não h-screen overflow-hidden). */}
         {checkpoints.length > 0 && (
-          <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4 sm:p-5">
+          <section className="bg-surface rounded-[var(--radius-inner)] p-4 sm:p-5">
             <SectionHeader
               icon={History}
               title="Histórico"
               subtitle="Cada alteração pedida no seu editor. Publicação, CI e segurança acontecem em background — o GitHub é infraestrutura, não algo que você precisa abrir."
             />
-            <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
-              <CheckpointHistory projectId={project.id} items={checkpoints} />
-            </div>
+            <CheckpointHistory projectId={project.id} items={checkpoints} />
           </section>
         )}
 
         {/* Atividade */}
-        <section className="bg-surface flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-[var(--radius-inner)] p-4 sm:p-5">
+        <section className="bg-surface rounded-[var(--radius-inner)] p-4 sm:p-5">
           <SectionHeader
             icon={Activity}
             title="Atividade"
             subtitle="Cada proposta do agente, com o pull request e os gates."
           />
-          <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
-            <ActivityFeed
-              items={(activity ?? []) as unknown as ActivityItem[]}
-              repoFullName={project.github_repo_full_name}
-            />
-          </div>
+          <ActivityFeed
+            items={(activity ?? []) as unknown as ActivityItem[]}
+            repoFullName={project.github_repo_full_name}
+          />
         </section>
       </div>
     </div>

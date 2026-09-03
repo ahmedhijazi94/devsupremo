@@ -2,6 +2,7 @@ import {
   BROAD_FILE_COUNT,
   ENV_BUILD_FAILURE_PATTERNS,
   FULL_PATTERNS,
+  NEXT_TSCONFIG_TYPES_GLOB_RE,
   QUICK_PATTERNS,
   SECURITY_PATTERNS,
   serializePatterns,
@@ -421,6 +422,7 @@ export function verifyScript(): string {
 //   node scripts/verify.mjs --staged   → auto, só staged (usado no pre-commit)
 //   node scripts/verify.mjs quick|security|full → força o nível
 import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 
 const FULL_PATTERNS = ${serializePatterns(FULL_PATTERNS)}
 const SECURITY_PATTERNS = ${serializePatterns(SECURITY_PATTERNS)}
@@ -430,6 +432,69 @@ const BROAD_FILE_COUNT = ${BROAD_FILE_COUNT}
 // verify-classifier.ts (fonte única, mesma regra testada lá).
 const ENV_BUILD_FAILURE_PATTERNS = ${serializePatterns(ENV_BUILD_FAILURE_PATTERNS)}
 const isKnownEnvironmentalBuildFailure = (output) => ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
+
+// Ruído CONHECIDO/transitório do Next em tsconfig.json (v3-11) — MESMA
+// detecção estrutural de isKnownNextTsconfigNoise em verify-classifier.ts
+// (idêntica à usada pelo restore em packages/cli/src/restore.ts, E2E v3-10)
+// — nunca uma heurística textual nova. Só JSON-diff estrito: qualquer coisa
+// fora do padrão exato (inclusive JSON inválido) fica fail-closed (false).
+const NEXT_TSCONFIG_TYPES_GLOB_RE = ${serializePatterns([NEXT_TSCONFIG_TYPES_GLOB_RE])}[0]
+function deepEqualJson(a, b) {
+  if (a === b) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((v, i) => deepEqualJson(v, b[i]))
+  }
+  if (typeof a === 'object' && a !== null && typeof b === 'object' && b !== null) {
+    const keysA = Object.keys(a)
+    const keysB = Object.keys(b)
+    if (keysA.length !== keysB.length) return false
+    return keysA.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqualJson(a[k], b[k]))
+  }
+  return false
+}
+function isKnownNextTsconfigNoise(before, after) {
+  let a, b
+  try {
+    a = JSON.parse(before)
+    b = JSON.parse(after)
+  } catch {
+    return false
+  }
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) return false
+  const { include: includeA, ...restA } = a
+  const { include: includeB, ...restB } = b
+  if (!Array.isArray(includeA) || !Array.isArray(includeB)) return false
+  if (!includeA.every((x) => typeof x === 'string') || !includeB.every((x) => typeof x === 'string')) return false
+  if (!deepEqualJson(restA, restB)) return false
+  const setA = new Set(includeA)
+  const setB = new Set(includeB)
+  const added = includeB.filter((x) => !setA.has(x))
+  const removed = includeA.filter((x) => !setB.has(x))
+  if (added.length === 0 && removed.length === 0) return false
+  return [...added, ...removed].every((entry) => NEXT_TSCONFIG_TYPES_GLOB_RE.test(entry))
+}
+// Só tsconfig.json (nome exato, raiz) é elegível — mesma restrição do
+// restore. Compara HEAD (último checkpoint) × worktree ATUAL: se a diferença
+// inteira bate na assinatura do Next, é ruído — mesmo já estando dirty antes
+// deste prompt (é exatamente esse o caso real, teste-v3-11).
+function knownNoisePaths(paths) {
+  if (!paths.includes('tsconfig.json')) return []
+  let before
+  try {
+    before = execSync('git show HEAD:tsconfig.json', { encoding: 'utf8' })
+  } catch {
+    return []
+  }
+  let after
+  try {
+    after = readFileSync('tsconfig.json', 'utf8')
+  } catch {
+    return []
+  }
+  return isKnownNextTsconfigNoise(before, after) ? ['tsconfig.json'] : []
+}
 
 function changedFiles(stagedOnly) {
   try {
@@ -451,16 +516,22 @@ function changedFiles(stagedOnly) {
 
 const anyMatch = (p, pats) => pats.some((re) => re.test(p))
 
-function classify(paths) {
+function classify(paths, noisePaths) {
   if (paths.length === 0) return { level: 'quick', reason: 'Nada alterado.' }
-  const full = paths.some((p) => anyMatch(p, FULL_PATTERNS))
-  const security = paths.some((p) => anyMatch(p, SECURITY_PATTERNS))
-  const cosmetic = paths.every((p) => anyMatch(p, QUICK_PATTERNS))
-  if (full || paths.length > BROAD_FILE_COUNT)
-    return { level: 'full', reason: full ? 'Arquitetura/build/config.' : \`Mudança ampla (\${paths.length}).\` }
-  if (security) return { level: 'security', reason: 'Área sensível à segurança.' }
-  if (cosmetic) return { level: 'quick', reason: 'Só cosmético.' }
-  return { level: 'quick', reason: 'Alteração de baixo risco.' }
+  const noiseSet = new Set(noisePaths ?? [])
+  const riskPaths = paths.filter((p) => !noiseSet.has(p))
+  const noiseSuffix = noiseSet.size > 0 ? ' (tsconfig.json: ruído conhecido do Next, ignorado)' : ''
+  const full = riskPaths.some((p) => anyMatch(p, FULL_PATTERNS))
+  const security = riskPaths.some((p) => anyMatch(p, SECURITY_PATTERNS))
+  const cosmetic = paths.every((p) => noiseSet.has(p) || anyMatch(p, QUICK_PATTERNS))
+  if (full || riskPaths.length > BROAD_FILE_COUNT)
+    return {
+      level: 'full',
+      reason: (full ? 'Arquitetura/build/config.' : \`Mudança ampla (\${riskPaths.length}).\`) + noiseSuffix,
+    }
+  if (security) return { level: 'security', reason: 'Área sensível à segurança.' + noiseSuffix }
+  if (cosmetic) return { level: 'quick', reason: 'Só cosmético.' + noiseSuffix }
+  return { level: 'quick', reason: 'Alteração de baixo risco.' + noiseSuffix }
 }
 
 // Os testes de RLS (*.rls.test.ts) exigem um Postgres real (service_role +
@@ -499,7 +570,9 @@ const args = process.argv.slice(2)
 const stagedOnly = args.includes('--staged')
 const forced = args.find((a) => ['quick', 'security', 'full'].includes(a))
 const paths = changedFiles(stagedOnly)
-const { level, reason } = forced ? { level: forced, reason: 'Nível forçado.' } : classify(paths)
+const { level, reason } = forced
+  ? { level: forced, reason: 'Nível forçado.' }
+  : classify(paths, knownNoisePaths(paths))
 
 console.log(\`\\n▸ verify [\${level.toUpperCase()}] — \${reason} (\${paths.length} arquivo(s))\\n\`)
 const t0 = Date.now()

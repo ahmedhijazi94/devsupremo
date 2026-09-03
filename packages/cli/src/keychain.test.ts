@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   accountFor,
   keychainAddScript,
@@ -183,6 +183,127 @@ describe('macOS — construção da chamada nunca expõe segredo/conta em argv',
     const env = keychainScriptEnv(base, { account: 'a', service: 's', secret: 'seg' })
     expect(base).not.toHaveProperty('SUPREMO_KC_SECRET')
     expect(env).not.toBe(base)
+  })
+})
+
+/**
+ * Pergunta direta respondida por estes testes: como o segredo lido por
+ * `SecItemCopyMatching` (dentro do processo `osascript`/JXA) chega ao
+ * processo Node — e prova de que esse caminho nunca vira log/erro visível.
+ *
+ * Transporte exato: o script escreve o valor no stdout do PRÓPRIO processo
+ * `osascript` (fd 1, via NSFileHandle). `runKeychainScript` chama esse
+ * processo com `stdio: ['ignore','pipe','pipe']` — nunca `'inherit'` — então
+ * esse fd é um PIPE interno, não o terminal nem o stdout do processo Node.
+ * `execFileSync` (com `encoding: 'utf8'`) lê esse pipe e RETORNA a string
+ * decodificada, síncronamente, só em memória — vira o retorno de
+ * `runKeychainScript()` → `macGet()` → `Keychain.get()`. Não existe
+ * `console.*`/`process.stdout.write`/`process.stderr.write` neste arquivo
+ * (testado abaixo) — os chamadores (bootstrap.ts, daemon.ts, bin.ts) só
+ * comparam esse valor ou o mandam como campo de request HTTP ao backend,
+ * nunca o imprimem (auditado manualmente linha a linha nesses 3 arquivos).
+ */
+describe('macOS — o segredo lido nunca é logado nem aparece em stderr (transporte via stdout PIPE interno, nunca `inherit`)', () => {
+  it('keychain.ts NUNCA chama console.*/process.std{out,err}.write em nenhum ponto — nenhum caminho deste módulo pode logar o segredo', () => {
+    const src = readFileSync(join(__dirname, 'keychain.ts'), 'utf8')
+    // Exige "(" logo depois — uma CHAMADA de verdade, não a menção em prosa
+    // que os comentários deste arquivo fazem a essas mesmas APIs ao explicar
+    // por que elas NUNCA são chamadas aqui.
+    expect(src).not.toMatch(/console\.\w+\(/)
+    expect(src).not.toMatch(/process\.stdout\.write\(/)
+    expect(src).not.toMatch(/process\.stderr\.write\(/)
+  })
+
+  it('runKeychainScript (usado por save/get/remove) usa stdio PIPE, NUNCA `inherit` — o stdout/stderr do osascript nunca alcança o terminal do usuário', () => {
+    const src = readFileSync(join(__dirname, 'keychain.ts'), 'utf8')
+    expect(src).toContain("stdio: ['ignore', 'pipe', 'pipe']")
+    expect(src).not.toMatch(/stdio:\s*['"]inherit['"]/)
+    expect(src).not.toMatch(/stdio:\s*\[[^\]]*inherit[^\]]*\]/)
+  })
+
+  it('keychainGetScript: nenhuma linha de throw referencia o valor lido (result/str) — só status numérico, igual ao script de save', () => {
+    const src = keychainGetScript()
+    const throwLines = src.split('\n').filter((l) => l.includes('throw'))
+    expect(throwLines.length).toBeGreaterThan(0)
+    for (const line of throwLines) {
+      expect(line).not.toMatch(/\+\s*(str|result)\b/)
+      expect(line).not.toContain('result)')
+      expect(line).not.toContain('str)')
+    }
+  })
+
+  it('keychainGetScript: só escreve em stdout UMA vez, e só dentro do branch de sucesso (status === 0)', () => {
+    const src = keychainGetScript()
+    const writeCalls = (src.match(/writeData\(/g) ?? []).length
+    expect(writeCalls).toBe(1)
+    const successBranch = src.slice(src.indexOf('if (status === 0)'), src.indexOf('else if'))
+    expect(successBranch).toContain('writeData')
+  })
+})
+
+describe('keychain — round-trip real (save→get x10→remove) NUNCA aparece em console/stdout/stderr do processo', () => {
+  let cfg: string
+  const prevXdg = process.env.XDG_CONFIG_HOME
+  let restores: Array<() => void> = []
+
+  beforeEach(() => {
+    cfg = mkdtempSync(join(tmpdir(), 'supremo-kc-nolog-'))
+    process.env.XDG_CONFIG_HOME = cfg
+    restores = []
+  })
+  afterEach(() => {
+    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = prevXdg
+    for (const restore of restores) restore()
+  })
+
+  it('save→get(x10, simulando polling do daemon)→remove: o valor do segredo nunca aparece em console.log/error/warn/info nem em process.stdout/stderr.write', () => {
+    // Backend de arquivo (win32) — mesmo contrato `Keychain` (save/get/remove)
+    // do backend do macOS, exercitado de ponta a ponta com um secret real,
+    // isolado (XDG_CONFIG_HOME temp) e SEM tocar o Keychain de ninguém.
+    const captured: string[] = []
+    const capture = (...args: unknown[]) => {
+      captured.push(
+        args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '),
+      )
+    }
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(capture)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(capture)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(capture)
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(capture)
+    const stdoutSpy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(((chunk: unknown) => {
+        captured.push(String(chunk))
+        return true
+      }) as typeof process.stdout.write)
+    const stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(((chunk: unknown) => {
+        captured.push(String(chunk))
+        return true
+      }) as typeof process.stderr.write)
+    restores = [
+      () => logSpy.mockRestore(),
+      () => errorSpy.mockRestore(),
+      () => warnSpy.mockRestore(),
+      () => infoSpy.mockRestore(),
+      () => stdoutSpy.mockRestore(),
+      () => stderrSpy.mockRestore(),
+    ]
+
+    const kc = resolveKeychain('win32')
+    const secret =
+      'sup_dev_ckpt_NUNCA_DEVE_APARECER_EM_LOG_' + Math.random().toString(36).slice(2)
+    kc.save('proj-nolog', secret)
+    for (let i = 0; i < 10; i++) {
+      expect(kc.get('proj-nolog')).toBe(secret)
+    }
+    kc.remove('proj-nolog')
+    expect(kc.get('proj-nolog')).toBeNull()
+
+    const allOutput = captured.join('\n')
+    expect(allOutput).not.toContain(secret)
   })
 })
 

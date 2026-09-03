@@ -11,7 +11,18 @@ import path from 'node:path'
  *   • Linux:  libsecret via `secret-tool` (se disponível).
  * Fallback (sem keychain): arquivo 0600 no diretório de config do USUÁRIO
  * (~/.config/supremo), fora de qualquer projeto/Git. Em todos os casos o secret
- * é indexado por projeto, e nunca aparece em argv de leitura, log ou stdout.
+ * é indexado por projeto, e nunca aparece em argv de leitura ou em log/stderr.
+ *
+ * TRANSPORTE do valor lido no macOS (get): o script JXA escreve o segredo no
+ * stdout do PRÓPRIO processo `osascript` (fd 1) via NSFileHandle — mas esse
+ * fd é um PIPE interno (`stdio: ['ignore','pipe','pipe']`, nunca 'inherit'),
+ * não o terminal nem o stdout do processo Node. `execFileSync` (com
+ * `encoding: 'utf8'`) lê esse pipe, decodifica e RETORNA a string —
+ * synchronamente, só na memória do processo Node — como valor de retorno de
+ * `runKeychainScript`/`macGet`. Esse valor nunca é passado para
+ * `console.*`/`process.stdout.write`/`process.stderr.write` (este arquivo não
+ * chama nenhum dos dois) — os chamadores (bootstrap.ts, daemon.ts, bin.ts) só
+ * o comparam ou o enviam como campo de request ao backend, nunca o imprimem.
  */
 
 const SERVICE = 'supremo-checkpoint-daemon'
@@ -111,7 +122,13 @@ if (status !== 0) { throw new Error('SecItemAdd falhou: status ' + status) }
 }
 
 /**
- * Script JXA estático — lê o item e imprime SÓ o valor em stdout (nada mais).
+ * Script JXA estático — lê o item e escreve SÓ o valor no stdout do processo
+ * `osascript` (nada mais é escrito lá; erro vai por `throw`, não por print).
+ * Esse stdout é um PIPE interno (ver `runKeychainScript`: `stdio:
+ * ['ignore','pipe','pipe']`, nunca `'inherit'`) — não é o terminal do
+ * usuário nem o stdout do processo Node; `execFileSync` só o lê, decodifica
+ * e devolve como string (em memória), e nada neste arquivo chama
+ * `console.*`/`process.std{out,err}.write` com esse valor.
  * `SecItemCopyMatching` precisa de `ObjC.bindFunction` com a assinatura C
  * explícita: o bridge AUTOMÁTICO do JXA não entende o parâmetro de saída
  * (CFTypeRef*) e devolve lixo — confirmado empiricamente (ver relatório).

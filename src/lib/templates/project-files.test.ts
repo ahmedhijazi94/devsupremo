@@ -37,6 +37,16 @@ function file(path: string): string {
   return entry.content
 }
 
+/**
+ * Colapsa espaços/quebras de linha em um só espaço. Os textos gerados (AGENTS.md/
+ * CLAUDE.md) quebram linha por largura (~80 colunas) na fonte, então checar uma
+ * frase exata sem isso é frágil — um reflow trivial no texto-fonte (sem mudar o
+ * conteúdo) quebraria o teste por um motivo alheio ao que ele verifica.
+ */
+function norm(s: string): string {
+  return s.replace(/\s+/g, ' ')
+}
+
 const packageJson = JSON.parse(file('package.json')) as {
   scripts: Record<string, string>
   dependencies: Record<string, string>
@@ -530,9 +540,21 @@ describe('workflow v3.1 — preview persistente + fast dev loop', () => {
     expect(ignore).toContain('.supremo/preview.log')
   })
 
-  it('AGENTS.md manda usar preview:ensure (persistente), não npm run dev à mão', () => {
+  it('AGENTS.md menciona preview:ensure (como fallback — ver describe dedicado) e proíbe npm run dev à mão', () => {
     expect(agents).toContain('preview:ensure')
     expect(agents).toMatch(/NUNCA.*npm run dev|npm run dev.*mata o preview/i)
+  })
+
+  it('AGENTS.md/CLAUDE.md: NENHUMA regra manda rodar preview:ensure obrigatoriamente no início de todo pedido/sessão', () => {
+    // Bug real corrigido: a versão anterior dizia simultaneamente "no início de
+    // todo pedido, rode preview:ensure" E "reutilize .supremo/preview.port sem
+    // subir outro servidor" — contraditório. preview:ensure agora é SÓ o
+    // fallback (arquivo ausente), nunca a primeira ação obrigatória.
+    for (const doc of [norm(agents), norm(claude)]) {
+      expect(doc).not.toMatch(/no início de todo pedido, garanta o preview/i)
+      expect(doc).not.toMatch(/garantir o preview com.*preview:ensure.*no início do pedido/i)
+      expect(doc).not.toMatch(/preview:ensure.*—\s*garante o preview persistente \(reusa se vivo/i)
+    }
   })
 
   it('AGENTS.md define hot path por risco (LOW/MEDIUM/HIGH; pesado em background)', () => {
@@ -636,28 +658,42 @@ describe('finalização v3.1 — browser integrado × QA visual, checkpoint 100%
  * REUTILIZAÇÃO da URL persistida e a abertura PROATIVA (sem pedido).
  */
 describe('preview persistente — reutiliza URL real e abre proativamente (bootstrap já iniciou)', () => {
-  const agents = file('AGENTS.md')
-  const claude = file('CLAUDE.md')
+  // norm() colapsa quebra de linha por largura — ver comentário no helper.
+  const agents = norm(file('AGENTS.md'))
+  const claude = norm(file('CLAUDE.md'))
 
   it('AGENTS.md: a URL real vem de .supremo/preview.port — nunca assume localhost:3000 de cabeça (porta pode ter sido relocada)', () => {
     expect(agents).toContain('.supremo/preview.port')
-    expect(agents).toMatch(/[Nn]unca assuma `?localhost:3000`? de cabeça/)
+    expect(agents).toMatch(/[Nn]unca\*{0,2} assuma `?localhost:3000`? de cabeça/)
   })
 
-  it('AGENTS.md: bootstrap já iniciou preview persistente → reutiliza a URL, NUNCA sobe outro servidor no sandbox', () => {
-    expect(agents).toMatch(/bootstrap já iniciou um preview\s*\n?persistente/)
-    expect(agents).toMatch(/reutilize essa mesma\s*\n?URL/)
-    expect(agents).toMatch(/não tente subir outro servidor dentro do sandbox/i)
+  it('AGENTS.md: .supremo/preview.port existindo é a FONTE DA VERDADE → reutiliza a URL real, NUNCA sobe outro servidor no sandbox', () => {
+    expect(agents).toContain('Se esse arquivo existir, ele é a FONTE DA VERDADE')
+    expect(agents).toContain('reutilize `http://localhost:<porta>` direto')
+    expect(agents).toContain('não tente subir outro servidor dentro do sandbox')
+  })
+
+  it('AGENTS.md: preview:ensure é SÓ fallback (arquivo ausente) — nunca a primeira ação obrigatória de todo pedido', () => {
+    expect(agents).toMatch(/preview:ensure.{0,20}é só o FALLBACK/)
+    expect(agents).toContain('SOMENTE quando `.supremo/preview.port` **não existir**')
+    expect(agents).toContain('Não é a primeira ação obrigatória de todo pedido')
+  })
+
+  it('AGENTS.md: passo 1 do fluxo normal também segue reutiliza-ou-fallback (não preview:ensure incondicional)', () => {
+    expect(agents).toContain(
+      'se `.supremo/preview.port` existir, reutilize `http://localhost:<porta>` direto — **não** rode `preview:ensure`',
+    )
+    expect(agents).toContain('Só rode **`npm run preview:ensure`** se esse arquivo NÃO existir')
   })
 
   it('AGENTS.md: abre/disponibiliza o preview automaticamente no início da sessão/primeiro pedido, sem o usuário pedir', () => {
     expect(agents).toMatch(/[Nn]o início da sessão ou do primeiro pedido/)
-    expect(agents).toMatch(/sem que o usuário\s*\n?precise pedir/)
+    expect(agents).toContain('sem que o usuário precise pedir')
   })
 
   it('AGENTS.md: sem pane integrado → só informa a URL real, nunca tenta abrir navegador por conta própria', () => {
-    expect(agents).toMatch(/tiver\s*\n?\s*um pane integrado, apenas \*\*informe essa URL real\*\*/)
-    expect(agents).toMatch(/não tente abrir navegador\s*\n?nenhum por conta própria/)
+    expect(agents).toContain('tiver um pane integrado, apenas **informe essa URL real**')
+    expect(agents).toContain('não tente abrir navegador nenhum por conta própria')
   })
 
   it('AGENTS.md: abrir/disponibilizar o preview não é "navegar" — as regras de não fazer QA visual continuam valendo depois', () => {
@@ -666,26 +702,39 @@ describe('preview persistente — reutiliza URL real e abre proativamente (boots
 
   it('AGENTS.md: HMR reflete as mudanças seguintes no MESMO preview (não recria a cada prompt)', () => {
     expect(agents).toMatch(/HMR reflete as mudanças no mesmo servidor/i)
-    expect(agents).toMatch(/[Nn]ão mate\/recrie o preview a cada\s*\n?prompt/)
+    expect(agents).toContain('Não mate/recrie o preview a cada prompt')
   })
 
   it('AGENTS.md: preview:status já devolve a URL certa (fonte alternativa à leitura direta do arquivo)', () => {
     expect(agents).toMatch(/preview:status[\s\S]*devolve a URL certa/)
   })
 
-  it('CLAUDE.md: reutiliza .supremo/preview.port e nunca sobe outro servidor no sandbox', () => {
+  it('CLAUDE.md: .supremo/preview.port existindo → reutiliza, NUNCA roda preview:ensure nesse caso; sem ele, preview:ensure é só fallback', () => {
     expect(claude).toContain('.supremo/preview.port')
-    expect(claude).toMatch(/bootstrap já iniciou um/)
-    expect(claude).toMatch(/nunca\*\*\s*\n?\s*suba outro servidor no sandbox/)
+    expect(claude).toContain('reutilize** `http://localhost:<porta>` direto')
+    expect(claude).toContain('não** rode `preview:ensure` nesse caso')
+    expect(claude).toContain('`preview:ensure` é só **fallback**')
+    expect(claude).toContain('nunca a primeira ação obrigatória do pedido')
+    expect(claude).toContain('nunca** suba outro servidor no sandbox')
   })
 
   it('CLAUDE.md: abre/disponibiliza automaticamente no início da sessão/primeiro pedido, sem pedido do usuário', () => {
     expect(claude).toMatch(/início da sessão\/primeiro pedido/)
-    expect(claude).toMatch(/sem que ele precise\s*\n?\s*pedir/)
+    expect(claude).toContain('sem que ele precise pedir')
   })
 
   it('CLAUDE.md: sem pane integrado, só informa a URL', () => {
-    expect(claude).toMatch(/[Ss]em pane integrado, apenas informe essa URL/)
+    expect(claude).toContain('Sem pane integrado, apenas informe essa URL')
+  })
+
+  it('AGENTS.md/CLAUDE.md: NENHUMA instrução manda rodar preview:ensure incondicionalmente no início de todo pedido/sessão — a contradição real do E2E', () => {
+    // Frase EXATA que existia antes e contradizia "reutilize .supremo/preview.port":
+    // "No início de todo pedido, garanta o preview com npm run preview:ensure."
+    for (const doc of [agents, claude]) {
+      expect(doc).not.toContain('No início de todo pedido, garanta o preview')
+      expect(doc).not.toMatch(/garanta o preview com \*\*`npm run preview:ensure`\*\*/)
+      expect(doc).not.toMatch(/Garantir o preview com \*\*`npm run preview:ensure`\*\* no início do pedido/)
+    }
   })
 })
 

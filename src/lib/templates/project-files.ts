@@ -2649,20 +2649,24 @@ outra coisa**. A CI roda em BACKGROUND e o auto-merge acontece sozinho quando to
 required checks do HEAD atual ficam verdes.
 
 ### Preview PERSISTENTE (v3.1)
-No início de todo pedido, garanta o preview com **\`npm run preview:ensure\`**. Ele é
-INFRAESTRUTURA da sessão (processo desacoplado, porta estável, HMR) — reusa se já está
-saudável, reinicia se morreu. **NUNCA** rode \`npm run dev\` à mão: um dev efêmero morre
-quando seu comando/turno termina e o preview cai. Não mate/recrie o preview a cada
-prompt; o HMR reflete as mudanças no mesmo servidor. Fim de turno, checkpoint, daemon,
-push (server-side) e CI **não** derrubam o preview — ele sobrevive ao ciclo inteiro.
+O preview é INFRAESTRUTURA da sessão (processo desacoplado, porta estável, HMR) — o
+bootstrap normalmente já deixa um no ar antes do seu primeiro pedido. **NUNCA** rode
+\`npm run dev\` à mão: um dev efêmero morre quando seu comando/turno termina e o preview
+cai. Não mate/recrie o preview a cada prompt; o HMR reflete as mudanças no mesmo
+servidor. Fim de turno, checkpoint, daemon, push (server-side) e CI **não** derrubam o
+preview — ele sobrevive ao ciclo inteiro.
 
 A URL real do preview vive em \`.supremo/preview.port\` — a porta PREFERIDA pode estar
 ocupada por outra coisa; o supervisor escolhe a próxima livre e persiste a porta REAL
-ali. **Nunca assuma \`localhost:3000\` de cabeça** — leia esse arquivo (ou \`npm run
-preview:status\`, que já devolve a URL certa). Se o **bootstrap já iniciou um preview
-persistente** (esse arquivo existe e o preview está saudável), **reutilize essa mesma
-URL** — não tente subir outro servidor dentro do sandbox; \`preview:ensure\` é
-idempotente e reconhece a instância já registrada sozinho.
+ali (ou via \`npm run preview:status\`, que já devolve a URL certa). **Se esse arquivo
+existir, ele é a FONTE DA VERDADE**: reutilize \`http://localhost:<porta>\` direto —
+**nunca** assuma \`localhost:3000\` de cabeça, e **não** rode \`preview:ensure\` nesse
+caso; não tente subir outro servidor dentro do sandbox.
+
+**\`preview:ensure\` é só o FALLBACK**: rode **\`npm run preview:ensure\`** SOMENTE
+quando \`.supremo/preview.port\` **não existir** (nenhum preview persistente registrado
+ainda) — ele sobe o preview pela primeira vez e passa a persistir a porta ali. Não é a
+primeira ação obrigatória de todo pedido.
 
 ### Browser integrado × QA visual manual (v3.1 finalização)
 **Regra canônica: o preview pertence ao usuário; a validação automatizada pertence
@@ -2707,9 +2711,10 @@ e **não** rode \`verify:full\` em toda microalteração. LOW não é inseguro: 
 pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/CI.
 
 ### Passos de cada pedido normal (v3.1)
-1. \`npm run preview:ensure\` — garante o preview persistente (reusa se vivo; reutiliza a
-   URL de \`.supremo/preview.port\` se o bootstrap já iniciou um). No início da sessão,
-   disponibilize-o automaticamente ao usuário (ver "Browser integrado × QA visual").
+1. **Preview**: se \`.supremo/preview.port\` existir, reutilize \`http://localhost:<porta>\`
+   direto — **não** rode \`preview:ensure\`. Só rode **\`npm run preview:ensure\`** se esse
+   arquivo NÃO existir (fallback: sobe o preview pela primeira vez). No início da sessão,
+   disponibilize a URL automaticamente ao usuário (ver "Browser integrado × QA visual").
 2. **Implemente** a mudança; veja no preview (o HMR reflete na hora).
 3. Crie/atualize **só os testes relacionados** (escritos junto).
 4. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
@@ -2839,10 +2844,11 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - Mudar o schema do banco online só por **migration versionada + \`npx supabase db
   push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
   "Banco de dados online" no \`AGENTS.md\`.
-- Garantir o preview com **\`npm run preview:ensure\`** no início do pedido (persistente,
-  HMR; reutiliza a URL de \`.supremo/preview.port\` se o bootstrap já iniciou um —
-  **nunca** suba outro servidor no sandbox); **nunca** \`npm run dev\` à mão (mata o
-  preview). Ver "Preview PERSISTENTE".
+- Se \`.supremo/preview.port\` existir, **reutilize** \`http://localhost:<porta>\` direto
+  — **não** rode \`preview:ensure\` nesse caso. \`preview:ensure\` é só **fallback**
+  (arquivo ausente = nenhum preview persistente ainda) — nunca a primeira ação
+  obrigatória do pedido. **Nunca** \`npm run dev\` à mão, **nunca** suba outro servidor
+  no sandbox. Ver "Preview PERSISTENTE".
 - **No início da sessão/primeiro pedido, abrir ou disponibilizar automaticamente o
   preview** ao usuário (browser integrado do host, se houver), sem que ele precise
   pedir — na URL real persistida. Sem pane integrado, apenas informe essa URL. Isso não

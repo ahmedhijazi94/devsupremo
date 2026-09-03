@@ -3844,6 +3844,7 @@ __export(daemon_exports, {
   DAEMON_PID_FILE: () => DAEMON_PID_FILE,
   NetworkError: () => NetworkError,
   backoffDelayMs: () => backoffDelayMs,
+  classifyPidSignalError: () => classifyPidSignalError,
   daemonStatus: () => daemonStatus,
   defaultDaemonHttp: () => defaultDaemonHttp,
   drainOnce: () => drainOnce,
@@ -3986,13 +3987,19 @@ function readProjectConfig(cwd) {
     return null;
   }
 }
-function pidAlive(pid) {
+function classifyPidSignalError(code) {
+  return code === "ESRCH" ? "dead" : "unknown";
+}
+function pidState(pid) {
   try {
     process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+    return "alive";
+  } catch (err) {
+    return classifyPidSignalError(err?.code);
   }
+}
+function pidAlive(pid) {
+  return pidState(pid) !== "dead";
 }
 function readPid(cwd) {
   try {
@@ -4759,7 +4766,7 @@ var import_node_os2 = __toESM(require("node:os"));
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.2.3",
+  version: "1.2.4",
   description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
   license: "MIT",
   author: "Supremo",

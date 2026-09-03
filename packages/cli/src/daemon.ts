@@ -290,13 +290,49 @@ export function readProjectConfig(cwd: string): ProjectConfig | null {
   }
 }
 
-function pidAlive(pid: number): boolean {
+/**
+ * (PURA) Classifica o erro de `process.kill(pid, 0)`. Só `ESRCH` prova que o
+ * processo NÃO existe mais. `EPERM` (comum em sandboxes/macOS — o pid existe
+ * e pode estar saudável, só não é sinalizável a partir deste contexto) ou
+ * QUALQUER outro erro NÃO prova que morreu — fica `'unknown'`.
+ *
+ * Mesma classificação já validada no supervisor de preview
+ * (`classifyPidSignalError` em `src/lib/templates/harness.ts`, que gera
+ * `scripts/preview.mjs`) — reaproveitada aqui, não uma lógica nova: os dois
+ * pacotes não compartilham módulos (o preview é gerado como script
+ * standalone pro projeto do usuário; o daemon é a própria CLI publicada),
+ * então o padrão se repete de propósito em vez de inventar outro.
+ *
+ * BUG REAL: `pidAlive` tratava EPERM como "morto" — `ensureDaemon` perdia o
+ * rastro de um daemon vivo e saudável (comum em sandboxes que isolam sinais
+ * entre contextos) e subia uma SEGUNDA instância por cima, duplicando o
+ * processo que envia checkpoints.
+ */
+export function classifyPidSignalError(code: string | null | undefined): 'dead' | 'unknown' {
+  return code === 'ESRCH' ? 'dead' : 'unknown'
+}
+
+/**
+ * Estado do pid via `process.kill(pid, 0)` — `'unknown'` (não dá pra
+ * confirmar vivo, mas também não dá pra provar morto) nunca vira `'dead'`.
+ */
+function pidState(pid: number): 'alive' | 'dead' | 'unknown' {
   try {
     process.kill(pid, 0)
-    return true
-  } catch {
-    return false
+    return 'alive'
+  } catch (err) {
+    return classifyPidSignalError((err as NodeJS.ErrnoException | undefined)?.code)
   }
+}
+
+/**
+ * `'unknown'` conta como vivo — combinado com o pidfile (o outro sinal já
+ * existente: só reflete um pid que ESTE processo escreveu ao subir um
+ * daemon) antes de decidir religar. Nunca sobe uma segunda instância só
+ * porque o SO negou o sinal (EPERM) de um processo que continua de pé.
+ */
+function pidAlive(pid: number): boolean {
+  return pidState(pid) !== 'dead'
 }
 
 function readPid(cwd: string): number | null {

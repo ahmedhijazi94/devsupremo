@@ -85,6 +85,35 @@ function cliAvailable(): boolean {
   return fs.existsSync(CLI_BIN)
 }
 
+/**
+ * Mesma técnica de `src/lib/templates/preview-ownership.test.ts` (que já
+ * prova isto pro supervisor de preview): um `--require` shim que intercepta
+ * `process.kill(pid, 0)` SÓ para o pid-alvo e lança um EPERM real (`.code
+ * === 'EPERM'`) — o mesmo formato de erro que o Node lança quando o SO nega
+ * o sinal (comum em sandboxes/macOS). Alvo é o pid REAL e vivo do daemon
+ * empacotado, artificialmente não-sinalizável — exatamente o que o sandbox
+ * faz. Nunca um pid mágico (ex.: PID 1): como root, `kill(1, 0)` costuma
+ * funcionar, o que quebraria isto em CI rodando como root.
+ */
+function writeEpermShim(dir: string): string {
+  const shimPath = path.join(dir, 'eperm-shim.cjs')
+  fs.writeFileSync(
+    shimPath,
+    "'use strict'\n" +
+      'const target = Number(process.env.SUPREMO_TEST_EPERM_PID)\n' +
+      'const realKill = process.kill.bind(process)\n' +
+      'process.kill = function (pid, signal) {\n' +
+      '  if (Number(pid) === target && signal === 0) {\n' +
+      "    const err = new Error('kill EPERM (test shim)')\n" +
+      "    err.code = 'EPERM'\n" +
+      '    throw err\n' +
+      '  }\n' +
+      '  return realKill(pid, signal)\n' +
+      '}\n',
+  )
+  return shimPath
+}
+
 describe('smoke — lifecycle real do CLI empacotado (preview + daemon + checkpoint)', () => {
   if (!cliAvailable()) {
     it.skip('packages/cli/dist/bin.js ausente — rode "npm run build" em packages/cli', () => {})
@@ -207,6 +236,58 @@ describe('smoke — lifecycle real do CLI empacotado (preview + daemon + checkpo
       expect(status.pid).not.toBeNull()
     },
     15_000,
+  )
+
+  it(
+    'kill(pid,0) do daemon retorna EPERM (macOS/sandbox) → `daemon --status`/`daemon --ensure` REUTILIZAM, nunca duplicam a instância',
+    () => {
+      // BUG REAL: EPERM (pid existe, só não sinalizável deste contexto) era
+      // tratado como "morto" — `daemon --ensure` perdia o rastro de uma
+      // instância viva e saudável e subia uma SEGUNDA por cima, duplicando
+      // quem envia checkpoints. Reproduz com o pid REAL e vivo do daemon já
+      // no ar (subido no teste anterior), via o binário EMPACOTADO de
+      // verdade — não a função importada isoladamente.
+      const pidBefore = JSON.parse(
+        execFileSync(process.execPath, [CLI_BIN, 'daemon', '--status'], {
+          cwd: dir,
+          encoding: 'utf8',
+          timeout: 10_000,
+        }),
+      ).pid as number
+
+      const shimPath = writeEpermShim(dir)
+      const epermEnv = { ...process.env, SUPREMO_TEST_EPERM_PID: String(pidBefore) }
+
+      const statusUnderEperm = JSON.parse(
+        execFileSync(
+          process.execPath,
+          ['--require', shimPath, CLI_BIN, 'daemon', '--status'],
+          { cwd: dir, encoding: 'utf8', timeout: 10_000, env: epermEnv },
+        ),
+      ) as { running: boolean; healthy: boolean; pid: number | null }
+      // Continua reportado vivo — EPERM nunca vira "morto" por engano.
+      expect(statusUnderEperm.running).toBe(true)
+      expect(statusUnderEperm.healthy).toBe(true)
+      expect(statusUnderEperm.pid).toBe(pidBefore)
+
+      execFileSync(
+        process.execPath,
+        ['--require', shimPath, CLI_BIN, 'daemon', '--ensure'],
+        { cwd: dir, stdio: 'ignore', timeout: 10_000, env: epermEnv },
+      )
+
+      // Nenhuma segunda instância: o pidfile continua apontando pro MESMO
+      // processo de antes — `--ensure` sob EPERM nunca sobrescreveu nada.
+      const pidAfter = JSON.parse(
+        execFileSync(process.execPath, [CLI_BIN, 'daemon', '--status'], {
+          cwd: dir,
+          encoding: 'utf8',
+          timeout: 10_000,
+        }),
+      ).pid as number
+      expect(pidAfter).toBe(pidBefore)
+    },
+    20_000,
   )
 
   it(

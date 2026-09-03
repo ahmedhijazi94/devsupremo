@@ -612,9 +612,9 @@ describe('finalização v3.1 — browser integrado × QA visual, checkpoint 100%
     expect(claude).toMatch(/QA visual manual/i)
   })
 
-  it('deixar o preview DISPONÍVEL (browser integrado) continua desejável', () => {
-    expect(agents).toMatch(/deixe o preview disponível/i)
-    expect(claude).toMatch(/[Dd]eixar o preview disponível/)
+  it('disponibilizar o preview (browser integrado) continua desejável', () => {
+    expect(agents).toMatch(/disponibilize automaticamente o preview|disponibilize-o automaticamente/i)
+    expect(claude).toMatch(/disponibilizar automaticamente o\s*\n?\s*preview/i)
   })
 
   it('checkpoint local nunca depende de SUPREMO_URL/rede; erro nesse sentido = CLI desatualizada', () => {
@@ -622,6 +622,70 @@ describe('finalização v3.1 — browser integrado × QA visual, checkpoint 100%
     expect(agents).toMatch(/modo avião/i)
     expect(agents).toMatch(/SUPREMO_URL/)
     expect(agents).toMatch(/não\*\*\s*\n?tente configurar nada nem exportar variável/i)
+  })
+})
+
+/**
+ * E2E: quando o bootstrap já subiu um preview persistente, o agente deve
+ * REUTILIZAR essa URL (nunca subir outro servidor) e — se o host tiver um
+ * browser/preview pane integrado — abrir/disponibilizar esse preview pro
+ * usuário automaticamente, sem que ele precise pedir, no início da sessão
+ * ou do primeiro pedido. Sem pane integrado, só informar a URL real. Nunca
+ * QA visual/navegação/cliques automáticos — isso já é coberto pelo describe
+ * "browser integrado × QA visual" acima; aqui o foco é especificamente a
+ * REUTILIZAÇÃO da URL persistida e a abertura PROATIVA (sem pedido).
+ */
+describe('preview persistente — reutiliza URL real e abre proativamente (bootstrap já iniciou)', () => {
+  const agents = file('AGENTS.md')
+  const claude = file('CLAUDE.md')
+
+  it('AGENTS.md: a URL real vem de .supremo/preview.port — nunca assume localhost:3000 de cabeça (porta pode ter sido relocada)', () => {
+    expect(agents).toContain('.supremo/preview.port')
+    expect(agents).toMatch(/[Nn]unca assuma `?localhost:3000`? de cabeça/)
+  })
+
+  it('AGENTS.md: bootstrap já iniciou preview persistente → reutiliza a URL, NUNCA sobe outro servidor no sandbox', () => {
+    expect(agents).toMatch(/bootstrap já iniciou um preview\s*\n?persistente/)
+    expect(agents).toMatch(/reutilize essa mesma\s*\n?URL/)
+    expect(agents).toMatch(/não tente subir outro servidor dentro do sandbox/i)
+  })
+
+  it('AGENTS.md: abre/disponibiliza o preview automaticamente no início da sessão/primeiro pedido, sem o usuário pedir', () => {
+    expect(agents).toMatch(/[Nn]o início da sessão ou do primeiro pedido/)
+    expect(agents).toMatch(/sem que o usuário\s*\n?precise pedir/)
+  })
+
+  it('AGENTS.md: sem pane integrado → só informa a URL real, nunca tenta abrir navegador por conta própria', () => {
+    expect(agents).toMatch(/tiver\s*\n?\s*um pane integrado, apenas \*\*informe essa URL real\*\*/)
+    expect(agents).toMatch(/não tente abrir navegador\s*\n?nenhum por conta própria/)
+  })
+
+  it('AGENTS.md: abrir/disponibilizar o preview não é "navegar" — as regras de não fazer QA visual continuam valendo depois', () => {
+    expect(agents).toMatch(/não é "navegar"/)
+  })
+
+  it('AGENTS.md: HMR reflete as mudanças seguintes no MESMO preview (não recria a cada prompt)', () => {
+    expect(agents).toMatch(/HMR reflete as mudanças no mesmo servidor/i)
+    expect(agents).toMatch(/[Nn]ão mate\/recrie o preview a cada\s*\n?prompt/)
+  })
+
+  it('AGENTS.md: preview:status já devolve a URL certa (fonte alternativa à leitura direta do arquivo)', () => {
+    expect(agents).toMatch(/preview:status[\s\S]*devolve a URL certa/)
+  })
+
+  it('CLAUDE.md: reutiliza .supremo/preview.port e nunca sobe outro servidor no sandbox', () => {
+    expect(claude).toContain('.supremo/preview.port')
+    expect(claude).toMatch(/bootstrap já iniciou um/)
+    expect(claude).toMatch(/nunca\*\*\s*\n?\s*suba outro servidor no sandbox/)
+  })
+
+  it('CLAUDE.md: abre/disponibiliza automaticamente no início da sessão/primeiro pedido, sem pedido do usuário', () => {
+    expect(claude).toMatch(/início da sessão\/primeiro pedido/)
+    expect(claude).toMatch(/sem que ele precise\s*\n?\s*pedir/)
+  })
+
+  it('CLAUDE.md: sem pane integrado, só informa a URL', () => {
+    expect(claude).toMatch(/[Ss]em pane integrado, apenas informe essa URL/)
   })
 })
 

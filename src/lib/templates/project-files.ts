@@ -2656,12 +2656,25 @@ quando seu comando/turno termina e o preview cai. Não mate/recrie o preview a c
 prompt; o HMR reflete as mudanças no mesmo servidor. Fim de turno, checkpoint, daemon,
 push (server-side) e CI **não** derrubam o preview — ele sobrevive ao ciclo inteiro.
 
+A URL real do preview vive em \`.supremo/preview.port\` — a porta PREFERIDA pode estar
+ocupada por outra coisa; o supervisor escolhe a próxima livre e persiste a porta REAL
+ali. **Nunca assuma \`localhost:3000\` de cabeça** — leia esse arquivo (ou \`npm run
+preview:status\`, que já devolve a URL certa). Se o **bootstrap já iniciou um preview
+persistente** (esse arquivo existe e o preview está saudável), **reutilize essa mesma
+URL** — não tente subir outro servidor dentro do sandbox; \`preview:ensure\` é
+idempotente e reconhece a instância já registrada sozinho.
+
 ### Browser integrado × QA visual manual (v3.1 finalização)
 **Regra canônica: o preview pertence ao usuário; a validação automatizada pertence
 a você.** ("Preview belongs to the user. Agent owns code validation.")
 
-Se o host tiver um browser/preview pane integrado, **deixe o preview disponível** para
-o usuário olhar — isso é desejável, é a experiência tipo Lovable. Mas disponibilizar o
+**No início da sessão ou do primeiro pedido**, se o host tiver um browser/preview pane
+integrado, **abra ou disponibilize automaticamente o preview** — na URL REAL persistida
+(\`.supremo/preview.port\`, não a porta preferida de cabeça) — **sem que o usuário
+precise pedir**. Isso é desejável, é a experiência tipo Lovable. Se o host **não** tiver
+um pane integrado, apenas **informe essa URL real** ao usuário; não tente abrir navegador
+nenhum por conta própria. Abrir/disponibilizar o preview no pane não é "navegar" — é só
+torná-lo visível; as regras abaixo continuam valendo depois disso. Mas disponibilizar o
 preview é diferente de **você** navegar nele:
 
 Você DEVE: manter o preview no ar; deixar o HMR atualizar; validar por CÓDIGO —
@@ -2694,7 +2707,9 @@ e **não** rode \`verify:full\` em toda microalteração. LOW não é inseguro: 
 pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/CI.
 
 ### Passos de cada pedido normal (v3.1)
-1. \`npm run preview:ensure\` — garante o preview persistente (reusa se vivo).
+1. \`npm run preview:ensure\` — garante o preview persistente (reusa se vivo; reutiliza a
+   URL de \`.supremo/preview.port\` se o bootstrap já iniciou um). No início da sessão,
+   disponibilize-o automaticamente ao usuário (ver "Browser integrado × QA visual").
 2. **Implemente** a mudança; veja no preview (o HMR reflete na hora).
 3. Crie/atualize **só os testes relacionados** (escritos junto).
 4. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
@@ -2825,9 +2840,14 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
   "Banco de dados online" no \`AGENTS.md\`.
 - Garantir o preview com **\`npm run preview:ensure\`** no início do pedido (persistente,
-  HMR); **nunca** \`npm run dev\` à mão (mata o preview). Ver "Preview PERSISTENTE".
-- **Deixar o preview disponível** ao usuário (browser integrado do host, se houver) —
-  mas validar por CÓDIGO, não navegando você mesmo. Ver "Browser integrado × QA visual".
+  HMR; reutiliza a URL de \`.supremo/preview.port\` se o bootstrap já iniciou um —
+  **nunca** suba outro servidor no sandbox); **nunca** \`npm run dev\` à mão (mata o
+  preview). Ver "Preview PERSISTENTE".
+- **No início da sessão/primeiro pedido, abrir ou disponibilizar automaticamente o
+  preview** ao usuário (browser integrado do host, se houver), sem que ele precise
+  pedir — na URL real persistida. Sem pane integrado, apenas informe essa URL. Isso não
+  é "navegar": você valida por CÓDIGO, não clicando/testando o app. Ver "Browser
+  integrado × QA visual".
 - **Rodar \`npm run verify\`** — comando padrão, adaptativo, **proporcional ao risco**
   (LOW só lint/typecheck do que mudou + testes relacionados; HIGH/SECURITY gates fortes).
   **Não** use lista fixa nem rode \`verify:full\` em toda microalteração — o pesado

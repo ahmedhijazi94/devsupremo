@@ -2648,25 +2648,60 @@ experiência é: **usuário pede → você implementa → o preview atualiza →
 outra coisa**. A CI roda em BACKGROUND e o auto-merge acontece sozinho quando todos os
 required checks do HEAD atual ficam verdes.
 
+### Retomada automática de sessão (v3.2)
+Depois que o bootstrap já rodou uma vez NESTA máquina, o usuário **nunca** deveria
+precisar rodar bootstrap de novo — nem depois de fechar/reabrir você, nem depois de
+reiniciar o computador. No dia seguinte ele só abre a pasta e manda um pedido; retomar
+o que já existe é seu trabalho, não dele.
+
+**No início de uma sessão nova / no seu PRIMEIRO pedido dela** (nunca nos pedidos
+seguintes da mesma sessão — ver o último parágrafo), rode:
+\`\`\`
+npm run supremo:resume
+\`\`\`
+Ele devolve um JSON com o estado FINAL de preview e daemon — religando sozinho o que
+morreu (reboot, agente fechado) e reaproveitando o que já está de pé, sempre pelo MESMO
+supervisor/daemon do bootstrap (nunca uma lógica nova sua):
+
+- **preview saudável** (respondeu no healthcheck) → reutiliza EXATAMENTE aquela
+  porta/URL (\`preview.url\` no JSON) — mesmo que não seja a \`3000\`.
+- **preview registrado mas morto** (\`.supremo/preview.port\` existe, mas o processo não
+  responde mais — o caso clássico de reboot) → \`supremo:resume\` religa sozinho pelo
+  supervisor já existente. **Nunca trate como saudável só porque o arquivo existe** — a
+  existência do arquivo prova que já rodou uma vez, não que está de pé agora.
+- **preview nunca registrado** → sobe pela primeira vez, mesmo fallback de sempre.
+- **daemon**: mesma lógica — vivo reutiliza, morto religa pelo mecanismo já existente,
+  **nunca** pede autorização nova nem reconfigura nada.
+
+Depois, se o host tiver browser/preview integrado, abra/disponibilize automaticamente a
+URL real do JSON ao usuário (ver "Browser integrado × QA visual" abaixo — isto não é
+"navegar").
+
+**A retomada é LEVE e RÁPIDA — nunca** inclui: rodar bootstrap de novo, \`build\`, a
+suíte de testes, \`npm install\`/religar dependências, relinkar o Supabase, ou refazer
+qualquer autenticação. Se \`supremo:resume\` já encontra os dois saudáveis, ele não
+reinicia nada — só confirma e retorna na hora.
+
+**Só no primeiro pedido da sessão.** Do segundo pedido em diante, **não** rode
+\`supremo:resume\` de novo — preview e daemon já foram confirmados de pé, e continuam
+vivos entre pedidos por conta própria (ver "Preview PERSISTENTE" abaixo). Repetir isso a
+cada prompt é overhead sem propósito nenhum.
+
 ### Preview PERSISTENTE (v3.1)
 O preview é INFRAESTRUTURA da sessão (processo desacoplado, porta estável, HMR) — o
-bootstrap normalmente já deixa um no ar antes do seu primeiro pedido. **NUNCA** rode
-\`npm run dev\` à mão: um dev efêmero morre quando seu comando/turno termina e o preview
-cai. Não mate/recrie o preview a cada prompt; o HMR reflete as mudanças no mesmo
-servidor. Fim de turno, checkpoint, daemon, push (server-side) e CI **não** derrubam o
-preview — ele sobrevive ao ciclo inteiro.
+bootstrap normalmente já deixa um no ar antes do seu primeiro pedido, e a "Retomada
+automática de sessão" acima cobre reabrir o agente ou reiniciar a máquina depois disso.
+**NUNCA** rode \`npm run dev\` à mão: um dev efêmero morre quando seu comando/turno
+termina e o preview cai. Não mate/recrie o preview a cada prompt; o HMR reflete as
+mudanças no mesmo servidor. Fim de turno, checkpoint, daemon, push (server-side) e CI
+**não** derrubam o preview — ele sobrevive ao ciclo inteiro.
 
 A URL real do preview vive em \`.supremo/preview.port\` — a porta PREFERIDA pode estar
 ocupada por outra coisa; o supervisor escolhe a próxima livre e persiste a porta REAL
-ali (ou via \`npm run preview:status\`, que já devolve a URL certa). **Se esse arquivo
-existir, ele é a FONTE DA VERDADE**: reutilize \`http://localhost:<porta>\` direto —
-**nunca** assuma \`localhost:3000\` de cabeça, e **não** rode \`preview:ensure\` nesse
-caso; não tente subir outro servidor dentro do sandbox.
-
-**\`preview:ensure\` é só o FALLBACK**: rode **\`npm run preview:ensure\`** SOMENTE
-quando \`.supremo/preview.port\` **não existir** (nenhum preview persistente registrado
-ainda) — ele sobe o preview pela primeira vez e passa a persistir a porta ali. Não é a
-primeira ação obrigatória de todo pedido.
+ali (ou via \`npm run preview:status\`, que devolve a URL certa **e** se está saudável de
+verdade — nunca confie só na existência do arquivo, ver "Retomada automática de sessão"
+acima). Fora do primeiro pedido da sessão, reutilize essa URL direto — **nunca** assuma
+\`localhost:3000\` de cabeça, e não tente subir outro servidor dentro do sandbox.
 
 ### Browser integrado × QA visual manual (v3.1 finalização)
 **Regra canônica: o preview pertence ao usuário; a validação automatizada pertence
@@ -2730,10 +2765,10 @@ falhou (sem "DEFERIDO"), é falha real e precisa de correção antes do checkpoi
 dúvida, \`verify\` falha fechado (fail-closed) — trate como falha real.
 
 ### Passos de cada pedido normal (v3.1)
-1. **Preview**: se \`.supremo/preview.port\` existir, reutilize \`http://localhost:<porta>\`
-   direto — **não** rode \`preview:ensure\`. Só rode **\`npm run preview:ensure\`** se esse
-   arquivo NÃO existir (fallback: sobe o preview pela primeira vez). No início da sessão,
-   disponibilize a URL automaticamente ao usuário (ver "Browser integrado × QA visual").
+1. **Preview**: primeiro pedido da sessão → \`npm run supremo:resume\` já resolveu isso
+   (ver "Retomada automática de sessão"); disponibilize a URL do JSON ao usuário. Nos
+   pedidos seguintes da mesma sessão, não rode nada aqui — reutilize a URL que já está
+   de pé.
 2. **Implemente** a mudança; veja no preview (o HMR reflete na hora).
 3. Crie/atualize **só os testes relacionados** (escritos junto).
 4. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
@@ -2790,6 +2825,12 @@ espera nada disso; nem o daemon toca no GitHub diretamente.**
   falha real de código/TypeScript/bundling/import/config como "limitação ambiental" só
   pra destravar o checkpoint mais rápido — só \`verify\` decide isso, por assinatura
   conhecida da saída, nunca você por suposição.
+- **NUNCA** rode bootstrap de novo numa máquina onde ele já rodou — nem depois de
+  reabrir você, nem depois de reiniciar o computador. Isso é exatamente o que
+  \`npm run supremo:resume\` existe pra evitar (ver "Retomada automática de sessão"):
+  religa preview/daemon sozinho, sem nova autorização. E **NUNCA** rode
+  \`supremo:resume\` fora do primeiro pedido da sessão — repetir a cada prompt é
+  overhead sem propósito, o preview/daemon já confirmados continuam de pé sozinhos.
 
 ### SEMPRE (v3.1)
 - **Continue desenvolvendo enquanto a CI roda** e o daemon integra em background.
@@ -2869,16 +2910,18 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - Mudar o schema do banco online só por **migration versionada + \`npx supabase db
   push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
   "Banco de dados online" no \`AGENTS.md\`.
-- Se \`.supremo/preview.port\` existir, **reutilize** \`http://localhost:<porta>\` direto
-  — **não** rode \`preview:ensure\` nesse caso. \`preview:ensure\` é só **fallback**
-  (arquivo ausente = nenhum preview persistente ainda) — nunca a primeira ação
-  obrigatória do pedido. **Nunca** \`npm run dev\` à mão, **nunca** suba outro servidor
-  no sandbox. Ver "Preview PERSISTENTE".
+- **No início de uma sessão nova/seu primeiro pedido dela** (nunca nos seguintes), rodar
+  \`npm run supremo:resume\` — religa preview e daemon sozinho se morreram (reboot, agente
+  fechado) e reutiliza se já estão de pé, **sem** bootstrap, build, testes, install,
+  relink ou reautenticação. Ver "Retomada automática de sessão". Fora do primeiro pedido,
+  **reutilize** a URL de \`.supremo/preview.port\` direto — **nunca** confie só na
+  existência do arquivo (pode ter sobrevivido a um reboot que matou o processo). **Nunca**
+  \`npm run dev\` à mão, **nunca** suba outro servidor no sandbox. Ver "Preview PERSISTENTE".
 - **No início da sessão/primeiro pedido, abrir ou disponibilizar automaticamente o
   preview** ao usuário (browser integrado do host, se houver), sem que ele precise
-  pedir — na URL real persistida. Sem pane integrado, apenas informe essa URL. Isso não
-  é "navegar": você valida por CÓDIGO, não clicando/testando o app. Ver "Browser
-  integrado × QA visual".
+  pedir — na URL real que \`supremo:resume\` devolveu. Sem pane integrado, apenas informe
+  essa URL. Isso não é "navegar": você valida por CÓDIGO, não clicando/testando o app.
+  Ver "Browser integrado × QA visual".
 - **Rodar \`npm run verify\`** — comando padrão, adaptativo, **proporcional ao risco**
   (LOW só lint/typecheck do que mudou + testes relacionados; HIGH/SECURITY gates fortes).
   **Não** use lista fixa nem rode \`verify:full\` em toda microalteração — o pesado
@@ -2915,6 +2958,10 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   classificar você mesmo uma falha real de código/TypeScript/bundling/import/config como
   "ambiental" pra destravar o checkpoint — só \`verify\` decide isso, por assinatura
   conhecida, nunca por suposição sua
+- **Rodar bootstrap de novo numa máquina onde ele já rodou** (reabrir você, reiniciar o
+  computador) — é pra isso que existe \`npm run supremo:resume\` (ver "Retomada
+  automática de sessão" no AGENTS.md); e **rodar \`supremo:resume\` fora do primeiro
+  pedido da sessão** — preview/daemon já confirmados seguem de pé sozinhos
 - **Push direto na \`main\`; force push na \`main\`; bypass de required checks**
 - **Desativar/comentar teste, afrouxar threshold, alterar ruleset ou remover gate para
   "ficar verde"** — corrija o código (ou o teste, se errado), nunca a barreira

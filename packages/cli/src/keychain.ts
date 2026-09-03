@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -18,6 +19,28 @@ import path from 'node:path'
 
 const SERVICE = 'supremo-checkpoint-daemon'
 
+/**
+ * Timeout de TODA chamada ao keychain do SO. `execFileSync`'s próprio
+ * `timeout` é a ÚNICA coisa capaz de interromper uma syscall bloqueante de
+ * verdade — o timeout de um test runner (ou qualquer código JS por cima) NÃO
+ * consegue matar um processo filho travado numa chamada síncrona (o worker
+ * inteiro fica bloqueado no syscall; nada em JS roda até ele retornar).
+ * Sem isto, save/get/remove podiam travar indefinidamente se o daemon do
+ * keychain do SO (securityd/gnome-keyring) ficar momentaneamente contendido.
+ *
+ * LIMITAÇÃO REAL DO macOS (documentada, não escondida — ver relatório):
+ * o item é CRIADO via JXA/osascript (macSave) mas LIDO via a CLI `security`
+ * (macGet/macRemove) — identidades de processo diferentes. Na PRIMEIRA vez
+ * que `security` lê um item recém-criado por outro chamador, o macOS pode
+ * levar alguns segundos para resolver a autorização entre eles (medido: até
+ * ~19s numa máquina real). TODAS as leituras seguintes do MESMO item (o
+ * daemon faz polling do MESMO account o tempo todo) são rápidas (~20-30ms,
+ * confirmado empiricamente) — não é uma solicitação repetida, é UMA vez por
+ * item. 20s cobre com folga essa primeira leitura sem deixar uma trava real
+ * (rede fora do ar, keychain genuinely preso) passar despercebida.
+ */
+const KEYCHAIN_TIMEOUT_MS = 20_000
+
 export function keychainService(): string {
   return SERVICE
 }
@@ -33,23 +56,119 @@ export interface Keychain {
   remove(projectId: string): void
 }
 
-// ── macOS: `security` ────────────────────────────────────────────────────────
+// ── macOS: grava via JXA/Security.framework (leitura/remoção via `security`) ──
+//
+// BUG REAL (E2E supremo-cli@1.2.0): `security add-generic-password ... -w`
+// SEM valor não lê de stdin — o próprio `security help add-generic-password`
+// documenta: "Specify -w as the last option to be prompted." Confirmado
+// empiricamente: mesmo com stdin redirecionado, ele abre um prompt
+// interativo ("password data for new item:") direto no terminal controlador,
+// ignora o que foi passado por pipe, e ainda assim pode retornar sucesso com
+// um valor vazio/errado. Não existe modo `-w` não-interativo na CLI oficial.
+//
+// Fix: chamamos o Security.framework DIRETO via `osascript -l JavaScript`
+// (JXA — vem em todo macOS, sem dependência nativa/compilação, preservando o
+// bundle único do esbuild). O SCRIPT é ESTÁTICO (nunca contém o segredo —
+// gerado uma vez, sem interpolação); conta/serviço/segredo chegam ao
+// processo filho SÓ por variável de ambiente (mesmo padrão já usado no
+// código para SUPREMO_GIT_TOKEN/SUPABASE_DB_PASSWORD) — nunca em argv, nunca
+// no texto do script, nunca em stdout/stderr (stdio totalmente 'ignore').
+// As chaves do dicionário de query (class/acct/svce/v_Data) são os valores
+// LITERAIS e estáveis que os símbolos kSecClass* resolvem — o bridge do JXA
+// não expõe essas constantes C como dado, só como seletor.
+//
+// Leitura (`find-generic-password -w`) e remoção (`delete-generic-password`)
+// continuam pela CLI oficial: confirmado que NENHUMA das duas prompta (o -w
+// de LEITURA só controla o que é impresso, semântica diferente do de escrita).
+
+/** Script JXA estático — NUNCA interpola o segredo; lê tudo de env em runtime. */
+export function keychainAddScript(): string {
+  return `
+ObjC.import('Security')
+ObjC.import('Foundation')
+function cfstr(s) { return $.NSString.alloc.initWithUTF8String(s) }
+function env(name) {
+  var v = $.NSProcessInfo.processInfo.environment.objectForKey(name)
+  return v ? v.js : null
+}
+var account = env('SUPREMO_KC_ACCOUNT')
+var service = env('SUPREMO_KC_SERVICE')
+var secret = env('SUPREMO_KC_SECRET')
+if (!account || !service || !secret) {
+  throw new Error('SUPREMO_KC_ACCOUNT/SERVICE/SECRET ausentes na env do processo.')
+}
+var delQuery = $.NSMutableDictionary.alloc.init
+delQuery.setObjectForKey(cfstr('genp'), cfstr('class'))
+delQuery.setObjectForKey(cfstr(account), cfstr('acct'))
+delQuery.setObjectForKey(cfstr(service), cfstr('svce'))
+$.SecItemDelete(delQuery) // idempotente: -U (substitui se já existir)
+var data = cfstr(secret).dataUsingEncoding($.NSUTF8StringEncoding)
+var addQuery = $.NSMutableDictionary.alloc.init
+addQuery.setObjectForKey(cfstr('genp'), cfstr('class'))
+addQuery.setObjectForKey(cfstr(account), cfstr('acct'))
+addQuery.setObjectForKey(cfstr(service), cfstr('svce'))
+addQuery.setObjectForKey(data, cfstr('v_Data'))
+var status = $.SecItemAdd(addQuery, $())
+if (status !== 0) { throw new Error('SecItemAdd falhou: status ' + status) }
+`.trim()
+}
+
+/** Args do osascript — SEM o segredo (ele só existe na env do processo filho). */
+export function macSaveArgs(scriptPath: string): { cmd: string; args: string[] } {
+  return { cmd: 'osascript', args: ['-l', 'JavaScript', scriptPath] }
+}
+
+/** Env do processo filho — único canal por onde o segredo viaja. */
+export function macSaveEnv(
+  base: NodeJS.ProcessEnv,
+  account: string,
+  service: string,
+  secret: string,
+): NodeJS.ProcessEnv {
+  return {
+    ...base,
+    SUPREMO_KC_ACCOUNT: account,
+    SUPREMO_KC_SERVICE: service,
+    SUPREMO_KC_SECRET: secret,
+  }
+}
 
 function macSave(account: string, secret: string): void {
-  // -w recebe o valor; para não expor em argv, passamos via stdin com -w -.
-  // `security` aceita o valor por stdin quando -w não tem argumento.
-  execFileSync(
-    'security',
-    ['add-generic-password', '-a', account, '-s', SERVICE, '-U', '-w'],
-    { input: secret, stdio: ['pipe', 'ignore', 'ignore'] },
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `supremo-kc-${crypto.randomBytes(8).toString('hex')}.js`,
   )
+  // Script ESTÁTICO (sem segredo) — mode 0600 desde a criação.
+  fs.writeFileSync(scriptPath, keychainAddScript(), { mode: 0o600 })
+  try {
+    const { cmd, args } = macSaveArgs(scriptPath)
+    execFileSync(cmd, args, {
+      env: macSaveEnv(process.env, account, SERVICE, secret),
+      // Nem o osascript nem o script imprimem o segredo (o script só lança um
+      // status NUMÉRICO em erro) — stdout/stderr vão para PIPE (capturados,
+      // nunca impressos no terminal do usuário) em vez de 'ignore'. IMPORTANTE:
+      // com os 3 fds em 'ignore' ao mesmo tempo, confirmado empiricamente que
+      // o osascript TRAVA indefinidamente neste processo (mesmo sem prompt
+      // nenhum) — stdin pode ficar 'ignore' (não usamos), mas stdout/stderr
+      // precisam ser 'pipe' (não 'ignore') para o processo terminar.
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: KEYCHAIN_TIMEOUT_MS,
+    })
+  } finally {
+    // Conteúdo do arquivo nunca teve o segredo, mas removemos de qualquer forma.
+    try {
+      fs.unlinkSync(scriptPath)
+    } catch {
+      // já não existe
+    }
+  }
 }
 function macGet(account: string): string | null {
   try {
     return execFileSync(
       'security',
       ['find-generic-password', '-a', account, '-s', SERVICE, '-w'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: KEYCHAIN_TIMEOUT_MS },
     ).trim()
   } catch {
     return null
@@ -60,7 +179,7 @@ function macRemove(account: string): void {
     execFileSync(
       'security',
       ['delete-generic-password', '-a', account, '-s', SERVICE],
-      { stdio: 'ignore' },
+      { stdio: 'ignore', timeout: KEYCHAIN_TIMEOUT_MS },
     )
   } catch {
     // já não existe
@@ -71,7 +190,7 @@ function macRemove(account: string): void {
 
 function hasSecretTool(): boolean {
   try {
-    execFileSync('secret-tool', ['--version'], { stdio: 'ignore' })
+    execFileSync('secret-tool', ['--version'], { stdio: 'ignore', timeout: KEYCHAIN_TIMEOUT_MS })
     return true
   } catch {
     return false
@@ -81,7 +200,7 @@ function linuxSave(account: string, secret: string): void {
   execFileSync(
     'secret-tool',
     ['store', '--label', SERVICE, 'service', SERVICE, 'account', account],
-    { input: secret, stdio: ['pipe', 'ignore', 'ignore'] },
+    { input: secret, stdio: ['pipe', 'ignore', 'ignore'], timeout: KEYCHAIN_TIMEOUT_MS },
   )
 }
 function linuxGet(account: string): string | null {
@@ -89,7 +208,7 @@ function linuxGet(account: string): string | null {
     return execFileSync(
       'secret-tool',
       ['lookup', 'service', SERVICE, 'account', account],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: KEYCHAIN_TIMEOUT_MS },
     ).trim()
   } catch {
     return null
@@ -100,7 +219,7 @@ function linuxRemove(account: string): void {
     execFileSync(
       'secret-tool',
       ['clear', 'service', SERVICE, 'account', account],
-      { stdio: 'ignore' },
+      { stdio: 'ignore', timeout: KEYCHAIN_TIMEOUT_MS },
     )
   } catch {
     // já não existe

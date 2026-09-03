@@ -293,12 +293,33 @@ export interface LocalReadiness {
   issues: string[]
 }
 
-/** PURA: decide se o workflow local prometido está de fato operacional. */
+/**
+ * PURA: a saída de `preview:status` tem a forma esperada E reporta saudável?
+ * (mesmo espírito de `daemonCliOutputLooksValid` — JSON machine-readable, ver
+ * `previewSupervisorScript()` no gerador do template.)
+ */
+export function previewStatusHealthy(output: string | null): boolean {
+  if (output === null) return false
+  try {
+    const parsed = JSON.parse(output) as { running?: unknown; healthy?: unknown }
+    return parsed.running === true && parsed.healthy === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * PURA: decide se o workflow local prometido está de fato operacional.
+ * "Ready" só é verdade quando device identity, daemon E preview estão de pé —
+ * nunca porque os PASSOS rodaram sem lançar exceção (foi exatamente essa
+ * folga que deixou o bootstrap declarar pronto com daemon/preview mortos).
+ */
 export function validateLocalReadiness(input: {
   projectJsonOk: boolean
   hasDaemonIdentity: boolean
   daemonRunning: boolean
   npmScriptsCompatible: boolean | null // null = não aplicável (sem identidade de daemon)
+  previewHealthy: boolean
 }): LocalReadiness {
   const issues: string[] = []
   if (!input.projectJsonOk) issues.push('.supremo/project.json ausente/incompleto')
@@ -312,6 +333,7 @@ export function validateLocalReadiness(input: {
       )
     }
   }
+  if (!input.previewHealthy) issues.push('preview não subiu saudável')
   return { ok: issues.length === 0, issues }
 }
 
@@ -320,6 +342,45 @@ function checkNpmScriptsCompatible(dest: string): boolean {
   return daemonCliOutputLooksValid(
     tryExecOutIn('npx', ['--yes', 'supremo-cli', 'daemon', '--status'], dest),
   )
+}
+
+// ── Node runtime (v3.1 finalização, seção 8) ─────────────────────────────────
+//
+// E2E real: Node 23 (release "Current", não-LTS) fez `npm ci` do projeto
+// gerado avisar (EBADENGINE) que `eslint-visitor-keys` só suporta
+// "^20.19.0 || ^22.13.0 || >=24" — Node 23 cai fora de TODAS essas faixas.
+// Confirmado NÃO-BLOQUEANTE (npm segue instalando; é warning, não erro) — por
+// isso o tratamento aqui é AVISO CLARO + recomendação de Node 22 LTS, não
+// fail-fast: não há evidência de risco real de falha, só de incompatibilidade
+// pontual de engines em devDependencies. Se isso mudar (uma versão realmente
+// quebrar o build), o fail-fast vira justificado — não hoje.
+
+export const RECOMMENDED_NODE_MAJORS = [20, 22, 24] as const // linhas LTS
+
+export type NodeVersionCheck =
+  | { status: 'ok'; major: number }
+  | { status: 'warn'; major: number; message: string }
+
+/** PURA: Node fora das linhas LTS testadas → aviso claro (nunca bloqueia). */
+export function checkNodeVersion(nodeVersion: string): NodeVersionCheck {
+  const major = Number(nodeVersion.replace(/^v/, '').split('.')[0])
+  if ((RECOMMENDED_NODE_MAJORS as readonly number[]).includes(major)) {
+    return { status: 'ok', major }
+  }
+  return {
+    status: 'warn',
+    major,
+    message:
+      `Node ${nodeVersion} não é uma versão LTS testada pelo Supremo (recomendado: ` +
+      `Node 22 LTS). Isto NÃO deveria travar a instalação, mas algumas dependências ` +
+      `podem avisar incompatibilidade (EBADENGINE) — se algo estranho acontecer, ` +
+      `troque para Node 22 LTS e rode o bootstrap de novo.`,
+  }
+}
+
+/** Roda o mesmo comando que `npm run preview:status` rodaria, no projeto gerado. */
+function checkPreviewHealthy(dest: string): boolean {
+  return previewStatusHealthy(tryExecOutIn('node', ['scripts/preview.mjs', 'status'], dest))
 }
 
 /**
@@ -478,10 +539,22 @@ export async function runBootstrap(opts: {
   projectId: string
   url: string
   dir?: string
+  /**
+   * APOSENTADO (v3.1 finalização): preview e daemon agora sobem SEMPRE, sem
+   * flag — zero-config significa não ter uma opção pra "ligar" o básico.
+   * Aceito só para não quebrar quem ainda passa `--start`; sem efeito.
+   */
   start?: boolean
 }): Promise<void> {
   const baseUrl = opts.url.replace(/\/$/, '')
   console.log('\nSupremo Bootstrap\n')
+
+  // Aviso de runtime ANTES de instalar qualquer coisa (seção 8) — nunca
+  // bloqueia (confirmado não-fatal), mas nunca fica silencioso também.
+  const nodeCheck = checkNodeVersion(process.version)
+  if (nodeCheck.status === 'warn') {
+    console.log(`⚠ ${nodeCheck.message}\n`)
+  }
 
   // Device flow do Supremo pelo padrão único do Auth Orchestrator: ENTER → abre o
   // browser no fluxo oficial → aguarda → detecta. URL/código só como fallback.
@@ -554,12 +627,21 @@ export async function runBootstrap(opts: {
 
   // v3.1 item 4: identidade da máquina no keychain (nunca no projeto) + daemon de
   // checkpoint pronto. Assim o push é silencioso — o agente só faz checkpoint local.
+  // Ordem DETERMINÍSTICA: o secret é salvo e CONFIRMADO gravado antes de subir o
+  // daemon — nunca "declara pronto" e só depois tenta salvar o secret.
   let daemonRunning = false
   let npmScriptsCompatible: boolean | null = null
   if (config.daemon) {
     try {
       const { resolveKeychain } = await import('./keychain')
-      resolveKeychain().save(config.project.id, config.daemon.deviceSecret)
+      const keychain = resolveKeychain()
+      keychain.save(config.project.id, config.daemon.deviceSecret)
+      // Confirma que o secret está de fato recuperável ANTES de subir o
+      // daemon (sem isto, um keychain "salvou" mas não persistiu — silencioso
+      // até o daemon falhar autenticação bem mais tarde).
+      if (keychain.get(config.project.id) !== config.daemon.deviceSecret) {
+        throw new Error('Secret não confirmado no keychain após salvar.')
+      }
       ok('Máquina autorizada (checkpoint daemon) — identidade no keychain')
       const { ensureDaemon, daemonStatus } = await import('./daemon')
       ensureDaemon(dest)
@@ -581,32 +663,42 @@ export async function runBootstrap(opts: {
     }
   }
 
+  // v3.1 finalização: preview PERSISTENTE sobe SEMPRE (zero-config — o usuário
+  // nunca deveria precisar rodar "npm run preview:ensure" à mão). `--start` foi
+  // aposentado: isto já não é mais opcional, é parte do bootstrap.
+  let previewHealthy = false
+  try {
+    run('npm', ['run', 'preview:ensure'], dest)
+    previewHealthy = checkPreviewHealthy(dest)
+    if (previewHealthy) ok('Preview no ar (npm run preview:status)')
+  } catch {
+    console.log(
+      '• Não consegui subir o preview automaticamente.\n  Rode depois: npm run preview:ensure\n',
+    )
+  }
+
   // Só declara "pronto" se o workflow LOCAL prometido está de fato operacional
-  // (não só "os passos rodaram sem lançar exceção").
+  // (não só "os passos rodaram sem lançar exceção") — device identity, daemon
+  // E preview saudáveis, nesta ordem.
   const readiness = validateLocalReadiness({
     projectJsonOk: fs.existsSync(path.join(dest, '.supremo', 'project.json')),
     hasDaemonIdentity: Boolean(config.daemon),
     daemonRunning,
     npmScriptsCompatible,
+    previewHealthy,
   })
 
   if (readiness.ok) {
-    console.log(`\nProjeto pronto:\n\n  ${dest}\n`)
+    const url = 'http://localhost:3000'
+    console.log(
+      `\nProjeto pronto para Codex/Claude:\n\n  ${dest}\n  Preview: ${url}\n`,
+    )
   } else {
     console.log(`\n⚠ Projeto criado, mas o workflow local não está 100% operacional:\n`)
     for (const issue of readiness.issues) console.log(`  • ${issue}`)
     console.log(
-      `\n  O código e o preview funcionam normalmente; resolva o(s) ponto(s) acima\n` +
-        `  antes de contar com checkpoint/publicação automáticos.\n\n  Pasta: ${dest}\n`,
+      `\n  O código funciona normalmente; resolva o(s) ponto(s) acima antes de\n` +
+        `  contar com checkpoint/publicação/preview automáticos.\n\n  Pasta: ${dest}\n`,
     )
-  }
-
-  if (opts.start) {
-    // v3.1: preview PERSISTENTE (detached) — sobrevive aos turnos do agente.
-    console.log('Subindo o preview persistente…\n')
-    run('npm', ['run', 'preview:ensure'], dest)
-    ok('Preview no ar — reutilizado a cada mudança (npm run preview:status)')
-  } else {
-    console.log(`Agora:\n\n  cd ${dest}\n  npm run preview:ensure\n`)
   }
 }

@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { CheckpointRecord } from './checkpoint'
 import type { CommitReader } from './changeset'
@@ -9,6 +11,10 @@ import {
   ConflictError,
   NetworkError,
   backoffDelayMs,
+  classifyPidSignalError,
+  daemonStatus,
+  DAEMON_PID_FILE,
+  ensureDaemon,
   processCheckpoint,
   processRestores,
   selectNextPending,
@@ -272,5 +278,104 @@ describe('processRestores — restore no próprio Supremo (v3.1 finalização)',
     expect(n).toBe(1)
     expect(failed).toHaveLength(1)
     expect(failed[0]).toMatchObject({ restoreRequestId: 'req-2' })
+  })
+})
+
+describe('classifyPidSignalError — EPERM/indeterminado nunca vira "morto" (mesma classificação já validada no preview)', () => {
+  it('ESRCH → dead (única prova real de que o processo não existe mais)', () => {
+    expect(classifyPidSignalError('ESRCH')).toBe('dead')
+  })
+
+  it('EPERM → unknown (existe, só não é sinalizável DESTE contexto — NUNCA "dead")', () => {
+    expect(classifyPidSignalError('EPERM')).toBe('unknown')
+  })
+
+  it('qualquer outro código, ou nenhum → unknown (nunca assume morto sem ESRCH)', () => {
+    expect(classifyPidSignalError('EINVAL')).toBe('unknown')
+    expect(classifyPidSignalError(undefined)).toBe('unknown')
+    expect(classifyPidSignalError(null)).toBe('unknown')
+  })
+})
+
+/**
+ * BUG REAL (macOS/sandboxes): `ensureDaemon`/`daemonStatus` tratavam EPERM de
+ * `process.kill(pid, 0)` como "morto" — um daemon vivo e saudável, só não
+ * sinalizável a partir deste contexto, perdia o rastro e `ensureDaemon`
+ * subia uma SEGUNDA instância por cima, duplicando quem envia checkpoints.
+ *
+ * Reproduz com um pid REAL e vivo (o processo desta suíte) — nunca um número
+ * mágico — forçando só `process.kill(<esse pid>, 0)` a lançar EPERM de
+ * verdade (`.code === 'EPERM'`, o mesmo formato que o Node lança quando o SO
+ * nega o sinal). Restaura `process.kill` original sempre, mesmo em falha.
+ */
+describe('ensureDaemon/daemonStatus — EPERM nunca duplica um daemon vivo (macOS/sandboxes)', () => {
+  function withEpermFor(pid: number, fn: () => void): void {
+    const real = process.kill.bind(process)
+    process.kill = ((target: number | string, signal?: string | number) => {
+      if (Number(target) === pid && signal === 0) {
+        const err = new Error('kill EPERM (test shim)') as NodeJS.ErrnoException
+        err.code = 'EPERM'
+        throw err
+      }
+      return real(target as number, signal as never)
+    }) as typeof process.kill
+    try {
+      fn()
+    } finally {
+      process.kill = real
+    }
+  }
+
+  function tempDaemonDir(pid: number): string {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-daemon-eperm-'))
+    mkdirSync(join(dir, dirname(DAEMON_PID_FILE)), { recursive: true })
+    writeFileSync(join(dir, DAEMON_PID_FILE), String(pid))
+    return dir
+  }
+
+  it('daemonStatus: pid vivo mas EPERM → running/healthy true (nunca "morto" por engano)', () => {
+    const dir = tempDaemonDir(process.pid)
+    try {
+      withEpermFor(process.pid, () => {
+        const status = daemonStatus(dir)
+        expect(status.running).toBe(true)
+        expect(status.healthy).toBe(true)
+        expect(status.pid).toBe(process.pid)
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('ensureDaemon: pid vivo mas EPERM → "reuse", NUNCA sobe uma segunda instância', () => {
+    const dir = tempDaemonDir(process.pid)
+    try {
+      withEpermFor(process.pid, () => {
+        expect(ensureDaemon(dir)).toBe('reuse')
+      })
+      // pidfile intacto — nunca sobrescrito com o pid de uma instância nova
+      expect(readFileSync(join(dir, DAEMON_PID_FILE), 'utf8').trim()).toBe(String(process.pid))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('processo REALMENTE morto (ESRCH, não EPERM) continua reportado como morto — fail-safe não virou fail-open', () => {
+    // pid de um processo que rodou e já terminou — garantidamente ESRCH,
+    // nunca um número mágico que poderia colidir com algo vivo de verdade.
+    // (o "start" real de ensureDaemon — que spawna um novo processo por cima
+    // de um pid morto — já é coberto E2E em lifecycle-smoke.test.ts, com o
+    // binário empacotado de verdade; aqui o alvo é só a classificação.)
+    const exited = spawnSync(process.execPath, ['-e', '1'])
+    const deadPid = exited.pid!
+    const dir = tempDaemonDir(deadPid)
+    try {
+      const status = daemonStatus(dir)
+      expect(status.running).toBe(false)
+      expect(status.healthy).toBe(false)
+      expect(status.pid).toBe(deadPid) // o pidfile em si é só lido, não "limpo"
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

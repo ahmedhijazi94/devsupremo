@@ -106,6 +106,12 @@ describe('preview supervisor (v3.1) — script gerado é determinístico', () =>
     expect(src).toContain('console.error(')
     expect(src).toMatch(/process\.exitCode = 1/)
   })
+  it('o bind-probe checa IPv4 E IPv6 (loopback + wildcard das duas) — não só IPv4 (bug real: foreign server só no wildcard IPv6 "::" passava batido)', () => {
+    expect(src).toMatch(/PROBE_HOSTS\s*=\s*\[HOST,\s*'0\.0\.0\.0',\s*'::',\s*'::1'\]/)
+    // só EADDRINUSE prova ocupação — qualquer outro erro (ex.: IPv6
+    // indisponível na máquina) não pode derrubar a varredura inteira.
+    expect(src).toContain("err.code === 'EADDRINUSE'")
+  })
   it('o script gerado é JavaScript VÁLIDO (node --check)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'supremo-harness-preview-'))
     const file = join(dir, 'preview.mjs')

@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -108,16 +109,37 @@ afterAll(async () => {
   )
 })
 
-function startForeignServer(port: number, body = 'FOREIGN-APP'): Promise<http.Server> {
+function startForeignServer(
+  port: number,
+  body = 'FOREIGN-APP',
+  host = '127.0.0.1',
+): Promise<http.Server> {
   return new Promise((resolve, reject) => {
     const server = http.createServer((_, res) => res.end(body))
     server.once('error', reject)
-    server.listen(port, '127.0.0.1', () => {
+    server.listen(port, host, () => {
       foreignServers.push(server)
       resolve(server)
     })
   })
 }
+
+// Guarda de portabilidade: se esta máquina não tiver IPv6 disponível de
+// verdade (loopback ::1 nem bind), o teste de reprodução do bug de IPv6 é
+// pulado em vez de falhar por um motivo alheio ao que ele testa.
+function detectIpv6Loopback(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.createServer()
+    probe.once('error', () => resolve(false))
+    probe.once('listening', () => probe.close(() => resolve(true)))
+    try {
+      probe.listen(0, '::1')
+    } catch {
+      resolve(false)
+    }
+  })
+}
+const HAS_IPV6 = await detectIpv6Loopback()
 
 describe('preview supervisor — colisão de porta + ownership (E2E real: outro app já na porta configurada)', () => {
   it(
@@ -181,6 +203,47 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       expect(readPersistedPort(dir)).toBeNull()
     },
     60_000,
+  )
+
+  // Achado específico do E2E real que a v1 deste fix não cobria: um
+  // `python3 -m http.server 3000` ocupou *:3000 via IPv6 (`::`), o bind-probe
+  // ERA só IPv4 (127.0.0.1) — considerou a porta livre, persistiu
+  // preview.port = 3000, e o preview real morreu ao colidir de verdade com
+  // o wildcard IPv6 ao subir. Reproduz especificamente isso: um foreign
+  // server só no wildcard IPv6 (nenhum IPv4), e confirma que agora é
+  // detectado e o preview escolhe a PRÓXIMA porta (o mesmo "3000 ocupado →
+  // 3001 escolhido" do relatório real, usando uma base aleatória por
+  // segurança de CI — ver randomBasePort()).
+  it.skipIf(!HAS_IPV6)(
+    'foreign server SÓ no wildcard IPv6 (::), sem nada em IPv4 → detectado como ocupado, preview escolhe a PRÓXIMA porta (3001 relativo à ocupada)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-ipv6-'))
+      tempDirs.push(dir)
+      writeFixtureProject(dir)
+
+      const foreignPort = randomBasePort()
+      // '::' = wildcard IPv6 — o MESMO que `python3 -m http.server` usou no
+      // E2E real. NUNCA bindamos em 127.0.0.1 aqui — é exatamente a ausência
+      // de qualquer ocupante IPv4 que fazia o probe antigo (IPv4-only)
+      // reportar "livre" incorretamente.
+      await startForeignServer(foreignPort, 'FOREIGN-IPV6-APP', '::')
+
+      const result = runPreview(dir, ['ensure'], { PORT: String(foreignPort) })
+      expect(result.status).toBe(0)
+      // Nunca declara sucesso na porta ocupada (via IPv6) pelo alheio.
+      expect(result.stdout).not.toContain(`http://localhost:${foreignPort}`)
+      expect(result.stdout).toMatch(/ocupada por outro processo — usando/)
+
+      const persistedPort = readPersistedPort(dir)
+      // Só a porta base está ocupada (só em IPv6) — a próxima já está livre
+      // nas duas famílias, então a escolha é EXATAMENTE foreignPort + 1.
+      expect(persistedPort).toBe(foreignPort + 1)
+
+      // Ownership real: quem responde na porta escolhida é o NOSSO dev
+      // server — o app alheio em IPv6 continua intacto, sem ter sido tocado.
+      await expect(fetchBody(persistedPort!)).resolves.toBe('OWN-DEV-SERVER')
+    },
+    30_000,
   )
 
   it(

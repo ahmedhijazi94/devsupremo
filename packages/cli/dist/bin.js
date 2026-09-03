@@ -3686,7 +3686,7 @@ function applyRestore(targetCheckpointId, targetSummary, projectId, deps) {
   if (hasChanges(porcelain)) {
     const changedPaths = parseChangedPaths(porcelain);
     deps.git(["add", "-A"]);
-    deps.git(["commit", "-m", "checkpoint: salvaguarda autom\xE1tica antes do restore"]);
+    deps.git(["commit", "--no-verify", "-m", "checkpoint: salvaguarda autom\xE1tica antes do restore"]);
     const autoSha = deps.git(["rev-parse", "HEAD"]).trim();
     const autoRecord = buildCheckpointRecord({
       checkpointId: deps.uuid(),
@@ -3706,7 +3706,7 @@ function applyRestore(targetCheckpointId, targetSummary, projectId, deps) {
     return { applied: false, record: null };
   }
   deps.applyPatch(patch);
-  deps.git(["commit", "-m", restoreCommitMessage(targetSummary)]);
+  deps.git(["commit", "--no-verify", "-m", restoreCommitMessage(targetSummary)]);
   const newSha = deps.git(["rev-parse", "HEAD"]).trim();
   const record = buildCheckpointRecord({
     checkpointId: deps.uuid(),
@@ -4685,7 +4685,7 @@ var import_node_os2 = __toESM(require("node:os"));
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.2.2",
+  version: "1.2.3",
   description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
   license: "MIT",
   author: "Supremo",

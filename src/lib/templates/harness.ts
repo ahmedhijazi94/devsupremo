@@ -51,6 +51,19 @@ export function harnessPackageScripts(): Record<string, string> {
  * (PURO) Decisão do supervisor de preview a partir do estado observado — testável
  * sem I/O. `reuse` = há UMA instância viva e saudável; `restart` = processo vivo
  * mas não responde (zumbi) → matar e subir; `start` = nada rodando → subir.
+ *
+ * Pré-condição que torna isto SEGURO (ver `pickFreePreviewPort` + bug real do
+ * E2E abaixo): `healthy` só pode vir de um health-check contra uma porta que o
+ * supervisor CONFIRMOU livre antes de subir o servidor ali (persistida em
+ * `.supremo/preview.port`). TCP só permite UM listener por porta — então, se a
+ * porta era livre no instante em que subimos nosso processo, quem responde
+ * nela depois só pode ser o NOSSO processo (nunca um app alheio). O bug real
+ * era outro: `previewSupervisorScript()` subia o dev server DIRETO na porta
+ * configurada sem checar se já estava ocupada — se estivesse (outro app já
+ * rodando ali), o health-check via HTTP respondia "saudável" usando a
+ * resposta do processo ALHEIO, um falso positivo, enquanto o processo que
+ * `ensure()` de fato acabara de subir podia morrer ou migrar de porta sem que
+ * ninguém percebesse.
  */
 export function decidePreviewAction(state: {
   pidAlive: boolean
@@ -62,12 +75,48 @@ export function decidePreviewAction(state: {
 }
 
 /**
+ * (PURA) Escolhe a porta para um start fresco do preview: tenta a porta
+ * configurada do projeto primeiro; se ocupada, sobe sequencialmente até achar
+ * uma livre dentro de `span`. `null` = nenhuma porta livre no intervalo — o
+ * supervisor deve falhar CLARAMENTE (stderr + exit code != 0), nunca fingir
+ * sucesso apontando pra uma porta que não é dele. `isFree` é injetado (I/O
+ * real no script gerado é um bind-probe via `node:net`; aqui é testável sem
+ * tocar rede nenhuma).
+ */
+export function pickFreePreviewPort(
+  configuredPort: number,
+  isFree: (port: number) => boolean,
+  span = 20,
+): number | null {
+  for (let port = configuredPort; port < configuredPort + span; port++) {
+    if (isFree(port)) return port
+  }
+  return null
+}
+
+/**
  * `scripts/preview.mjs` — supervisor determinístico do dev server (v3.1).
  *
  * O preview é INFRAESTRUTURA da sessão/projeto, não um processo do turno do agente.
  * Por isso o `next dev` sobe DESACOPLADO (detached + unref): sobrevive ao fim do
  * comando/turno, ao commit/push e ao verify. `ensure` mantém UMA instância saudável
  * (reusa / reinicia zumbi / inicia), em porta estável, e espera readiness.
+ *
+ * OWNERSHIP DA PORTA (fix do E2E real: porta 3000 já ocupada por outro app
+ * fazia `preview:ensure` reportar "saudável" usando a resposta do processo
+ * ALHEIO, e salvar o pid de um processo nosso que podia morrer/migrar de
+ * porta sem ninguém notar). Antes de subir um processo NOVO, o supervisor
+ * SEMPRE confirma via bind-probe (`node:net`, não HTTP) que a porta está
+ * livre; se a configurada estiver ocupada por outra coisa, procura a próxima
+ * livre (`pickPort`, mesmo algoritmo de `pickFreePreviewPort`) e persiste a
+ * porta REAL usada em \`.supremo/preview.port\` — \`status\`/\`ensure\` seguintes
+ * sempre checam essa porta persistida, nunca cegamente a configurada. Se
+ * nenhuma porta livre existir no intervalo, falha alto e claro (nunca declara
+ * sucesso). Uma instância JÁ rastreada (pid vivo) só é reusada depois de
+ * responder saudável NA PORTA PERSISTIDA — e como essa porta só foi ocupada
+ * por nós (confirmada livre antes do bind), TCP garante que ninguém mais
+ * pode estar respondendo ali: não há como um processo alheio ser confundido
+ * com o nosso nesse caminho.
  */
 export function previewSupervisorScript(): string {
   return `#!/usr/bin/env node
@@ -78,33 +127,61 @@ export function previewSupervisorScript(): string {
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
+import net from 'node:net'
 import http from 'node:http'
 
 const ROOT = process.cwd()
 const DIR = join(ROOT, '.supremo')
 const PIDFILE = join(DIR, 'preview.pid')
+const PORTFILE = join(DIR, 'preview.port') // porta REAL em uso (pode diferir de PORT — ver pickPort)
 const LOG = join(DIR, 'preview.log')
 const HOST = '127.0.0.1'
-const PORT = Number(process.env.PORT || 3000) // porta ESTÁVEL do projeto
+const PORT = Number(process.env.PORT || 3000) // porta PREFERIDA do projeto
+const PORT_SEARCH_SPAN = 20 // quantas portas tentar acima da preferida antes de desistir
 
 function readPid() {
   try { return Number(readFileSync(PIDFILE, 'utf8').trim()) || null } catch { return null }
+}
+function readPort() {
+  try {
+    const n = Number(readFileSync(PORTFILE, 'utf8').trim())
+    return Number.isFinite(n) && n > 0 ? n : null
+  } catch { return null }
 }
 function alive(pid) {
   if (!pid) return false
   try { process.kill(pid, 0); return true } catch { return false }
 }
-function health(timeoutMs = 1500) {
+// Bind-probe real (node:net) — NUNCA HTTP: uma porta ocupada por um serviço
+// não-HTTP (ou por um app que não responde em '/') ainda conta como ocupada.
+// É isto (checar ANTES de subir, nunca confiar em quem já responde lá) que
+// impede o falso positivo do bug real: nunca subimos por cima de outro app.
+function isPortFree(port) {
   return new Promise((resolve) => {
-    const req = http.get({ host: HOST, port: PORT, path: '/', timeout: timeoutMs }, (res) => {
+    const tester = net.createServer()
+    tester.once('error', () => resolve(false))
+    tester.once('listening', () => tester.close(() => resolve(true)))
+    tester.listen(port, HOST)
+  })
+}
+// Mesmo algoritmo puro de harness.pickFreePreviewPort (mantidos em sincronia).
+async function pickPort(configuredPort, span = PORT_SEARCH_SPAN) {
+  for (let port = configuredPort; port < configuredPort + span; port++) {
+    if (await isPortFree(port)) return port
+  }
+  return null
+}
+function health(port, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: HOST, port, path: '/', timeout: timeoutMs }, (res) => {
       res.resume(); resolve((res.statusCode || 0) > 0)
     })
     req.on('error', () => resolve(false))
     req.on('timeout', () => { req.destroy(); resolve(false) })
   })
 }
-async function waitReady(tries = 90) {
-  for (let i = 0; i < tries; i++) { if (await health()) return true; await new Promise((r) => setTimeout(r, 1000)) }
+async function waitReady(port, tries = 90) {
+  for (let i = 0; i < tries; i++) { if (await health(port)) return true; await new Promise((r) => setTimeout(r, 1000)) }
   return false
 }
 // Mesma decisão pura de harness.decidePreviewAction (mantidas em sincronia).
@@ -113,46 +190,67 @@ function decide(pidAlive, healthy) {
   if (pidAlive && !healthy) return 'restart'
   return 'start'
 }
-function startDetached() {
+function startDetached(port) {
   mkdirSync(DIR, { recursive: true })
   const out = openSync(LOG, 'a')
   // DESACOPLADO do pai: sobrevive ao fim do turno/comando do agente.
-  const child = spawn('npm', ['run', 'dev', '--', '--port', String(PORT)], {
+  const child = spawn('npm', ['run', 'dev', '--', '--port', String(port)], {
     cwd: ROOT,
     detached: true,
     stdio: ['ignore', out, out],
-    env: { ...process.env, PORT: String(PORT) },
+    env: { ...process.env, PORT: String(port) },
   })
   child.unref()
   writeFileSync(PIDFILE, String(child.pid))
+  writeFileSync(PORTFILE, String(port))
   return child.pid
 }
 async function ensure() {
   const pid = readPid()
-  const action = decide(alive(pid), await health())
-  if (action === 'reuse') {
-    console.log(\`✓ preview já no ar (pid \${pid}, http://localhost:\${PORT})\`)
-    return
-  }
-  if (action === 'restart') {
+  const trackedPort = readPort() ?? PORT
+  if (alive(pid)) {
+    // A porta rastreada só foi ocupada por nós (confirmada livre antes do
+    // bind) — quem responde nela agora só pode ser o nosso processo.
+    const action = decide(true, await health(trackedPort))
+    if (action === 'reuse') {
+      console.log(\`✓ preview já no ar (pid \${pid}, http://localhost:\${trackedPort})\`)
+      return
+    }
+    // zumbi (vivo mas não responde): mata e recomeça do zero (inclui achar porta de novo).
     try { process.kill(pid) } catch {}
     rmSync(PIDFILE, { force: true })
+    rmSync(PORTFILE, { force: true })
   }
-  const newPid = startDetached()
-  const ok = await waitReady()
+  // Nenhuma instância nossa viva: NUNCA assume que a porta preferida está
+  // livre só porque ninguém nosso está rastreado — confirma via bind-probe.
+  // Se estiver ocupada por outro processo/projeto, procura a próxima livre;
+  // se nenhuma existir no intervalo, falha claro em vez de dar falso positivo.
+  const chosen = await pickPort(PORT)
+  if (chosen === null) {
+    console.error(\`✗ portas \${PORT}-\${PORT + PORT_SEARCH_SPAN - 1} todas ocupadas — não consigo subir o preview. Libere uma porta ou rode com PORT=<outra>.\`)
+    process.exitCode = 1
+    return
+  }
+  if (chosen !== PORT) {
+    console.log(\`• porta \${PORT} ocupada por outro processo — usando \${chosen}\`)
+  }
+  const newPid = startDetached(chosen)
+  const ok = await waitReady(chosen)
   console.log(ok
-    ? \`✓ preview no ar (pid \${newPid}, http://localhost:\${PORT})\`
+    ? \`✓ preview no ar (pid \${newPid}, http://localhost:\${chosen})\`
     : \`• preview iniciando (pid \${newPid}) — aquecendo; veja .supremo/preview.log\`)
 }
 async function status() {
   const pid = readPid()
+  const port = readPort() ?? PORT
   const up = alive(pid)
-  console.log(JSON.stringify({ running: up, healthy: up && (await health()), pid: pid ?? null, port: PORT, url: \`http://localhost:\${PORT}\` }))
+  console.log(JSON.stringify({ running: up, healthy: up && (await health(port)), pid: pid ?? null, port, url: \`http://localhost:\${port}\` }))
 }
 function stop() {
   const pid = readPid()
   if (alive(pid)) { try { process.kill(pid) } catch {} }
   rmSync(PIDFILE, { force: true })
+  rmSync(PORTFILE, { force: true })
   console.log('✓ preview parado')
 }
 const cmd = process.argv[2] || 'ensure'

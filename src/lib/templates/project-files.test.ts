@@ -472,9 +472,10 @@ describe('workflow v3.1 — preview persistente + fast dev loop', () => {
     expect(pkg.scripts['preview:stop']).toBe('node scripts/preview.mjs stop')
   })
 
-  it('.gitignore ignora o estado por-máquina do preview (não versiona pid/log)', () => {
+  it('.gitignore ignora o estado por-máquina do preview (não versiona pid/porta/log)', () => {
     const ignore = file('.gitignore')
     expect(ignore).toContain('.supremo/preview.pid')
+    expect(ignore).toContain('.supremo/preview.port')
     expect(ignore).toContain('.supremo/preview.log')
   })
 

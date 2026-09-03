@@ -133,4 +133,45 @@ describe('applyRestore', () => {
     const summaries = queue.map((r) => r.summary)
     expect(summaries.some((s) => s.includes('Salvaguarda automática'))).toBe(true)
   })
+
+  /**
+   * E2E real: o daemon recebeu o pedido de restore, aplicou o patch no
+   * worktree (visível via HMR), mas a operação parou aí — nenhum commit,
+   * nenhum checkpoint novo, `git status` continuava com a mudança pendente.
+   * Causa: o `git commit` do restore (e da salvaguarda) roda por trás do
+   * hook LOCAL `.githooks/pre-commit` (gerado pelo scaffold — `verify.mjs
+   * --staged`, que pode incluir build) — se esse hook travar/falhar por uma
+   * limitação AMBIENTAL do sandbox, o daemon (headless, sem timeout, sem
+   * ninguém pra perceber) trava PRA SEMPRE dentro do commit. Fix: os dois
+   * commits deste fluxo usam `--no-verify` — pulam o hook local (só DX; a CI
+   * no servidor continua sendo a barreira real, inalterada).
+   */
+  describe('--no-verify: o hook LOCAL nunca pode travar o restore (testes 42-44)', () => {
+    it('o commit do checkpoint E (restore) usa --no-verify — pula o hook local que pode travar por limitação de sandbox', () => {
+      const { deps, calls } = fakeDeps({
+        queue: [record()],
+        diff: 'diff --git a/app/page.tsx b/app/page.tsx\n@@ ...',
+        shas: ['head-atual', 'novo-sha-E'],
+      })
+      applyRestore('cpB', 'deixar home minimalista', 'proj-1', deps)
+      const commitCalls = calls.filter((c) => c[0] === 'commit')
+      expect(commitCalls).toHaveLength(1)
+      expect(commitCalls[0]).toContain('--no-verify')
+    })
+
+    it('o commit da salvaguarda automática TAMBÉM usa --no-verify — a garantia "nunca perde trabalho" não pode ficar refém do mesmo hook', () => {
+      const { deps, calls } = fakeDeps({
+        queue: [record()],
+        porcelain: ' M app/dirty.ts\n',
+        diff: 'diff --git a/x b/x\n@@ ...',
+        shas: ['sha-salvaguarda', 'head-atual', 'novo-sha-E'],
+      })
+      applyRestore('cpB', 'x', 'proj-1', deps)
+      const commitCalls = calls.filter((c) => c[0] === 'commit')
+      expect(commitCalls).toHaveLength(2) // salvaguarda + E
+      for (const call of commitCalls) {
+        expect(call).toContain('--no-verify')
+      }
+    })
+  })
 })

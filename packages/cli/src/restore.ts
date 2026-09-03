@@ -22,6 +22,19 @@ import {
  *   4. se o patch é vazio (já se está no estado de B), não cria checkpoint;
  *   5. cria o checkpoint E normalmente — ele entra na MESMA fila/gates de
  *      qualquer outro checkpoint (publish/CI/merge idênticos).
+ *
+ * BUG REAL (E2E — restore aplicava o patch mas nunca concluía o checkpoint E):
+ * os dois `git commit` deste arquivo (salvaguarda e E) usam `--no-verify` —
+ * pulam o hook LOCAL `.githooks/pre-commit` (gerado pelo scaffold, roda
+ * `verify.mjs --staged`, que pode incluir um build). Esse hook travando por
+ * uma limitação AMBIENTAL do sandbox (porta ocupada, rede indisponível — nada
+ * a ver com o código restaurado) travava o `git commit` do daemon PRA SEMPRE:
+ * headless, sem ninguém pra perceber, sem timeout. O patch já tinha ido pro
+ * worktree (por isso o preview via HMR atualizava), mas o commit nunca
+ * terminava — nenhum checkpoint novo, nenhum erro reportado. O hook local é
+ * só DX (feedback rápido pro humano iterando); a barreira de verdade continua
+ * sendo a CI no servidor — publish/PR/gates continuam OBRIGATÓRIOS antes de
+ * qualquer merge, inalterados por este fix.
  */
 
 export class RestoreTargetNotFoundLocallyError extends Error {
@@ -85,11 +98,26 @@ export function applyRestore(
 
   // Segurança: NUNCA perde trabalho não commitado — salvaguarda automática antes
   // de tocar em qualquer coisa (seção 22: "prefira preservar automaticamente").
+  //
+  // `--no-verify` (aqui e no commit do restore abaixo — testes 42-44): pula o
+  // hook LOCAL `.githooks/pre-commit` (gerado pelo scaffold — roda `verify.mjs
+  // --staged`, que pode incluir um BUILD). BUG REAL (E2E): esse hook pode
+  // travar/falhar por uma limitação AMBIENTAL do sandbox (porta ocupada, rede
+  // indisponível) sem nenhuma relação com o código sendo restaurado — e como
+  // o daemon roda headless, sem ninguém pra perceber/interromper, um `git
+  // commit` bloqueado pelo hook trava a thread síncrona do daemon PRA SEMPRE:
+  // o patch já tinha sido aplicado no worktree (por isso o HMR via preview
+  // atualizava), mas o commit nunca terminava — nenhum checkpoint novo,
+  // nenhum erro reportado, `git status` ficava com a mudança pra sempre
+  // pendente. O hook local é só uma conveniência de DX (feedback rápido pro
+  // humano iterando); a barreira de verdade é sempre a CI no servidor, que
+  // esta mudança não toca — a publicação/PR/gates da CI continuam OBRIGATÓRIOS
+  // antes de qualquer merge, exatamente como antes.
   const porcelain = deps.git(['status', '--porcelain'])
   if (hasChanges(porcelain)) {
     const changedPaths = parseChangedPaths(porcelain)
     deps.git(['add', '-A'])
-    deps.git(['commit', '-m', 'checkpoint: salvaguarda automática antes do restore'])
+    deps.git(['commit', '--no-verify', '-m', 'checkpoint: salvaguarda automática antes do restore'])
     const autoSha = deps.git(['rev-parse', 'HEAD']).trim()
     const autoRecord = buildCheckpointRecord({
       checkpointId: deps.uuid(),
@@ -111,7 +139,8 @@ export function applyRestore(
   }
 
   deps.applyPatch(patch)
-  deps.git(['commit', '-m', restoreCommitMessage(targetSummary)])
+  // --no-verify: ver comentário acima (salvaguarda) — mesma razão, mesmo hook.
+  deps.git(['commit', '--no-verify', '-m', restoreCommitMessage(targetSummary)])
   const newSha = deps.git(['rev-parse', 'HEAD']).trim()
 
   const record = buildCheckpointRecord({

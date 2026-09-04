@@ -153,6 +153,51 @@ export function classifyBindProbe(errorCode: string | null | undefined): 'free' 
 }
 
 /**
+ * (PURA) Um heartbeat de saúde do preview (teste-v3-17) só conta se foi
+ * escrito DENTRO da janela de frescor — mais velho que isso, o processo
+ * que o escrevia pode ter morrido/travado, e confiar nele seria um falso
+ * positivo (a mesma classe de risco que um pidfile órfão). `nowMs`
+ * injetado (I/O real é `Date.now()`) — testável sem esperar tempo de
+ * verdade. Um `checkedAt` no FUTURO (relógio incoerente/dado corrompido)
+ * também não é fresco — fail-closed por padrão.
+ */
+export function isHeartbeatFresh(checkedAt: number, nowMs: number, staleMs: number): boolean {
+  if (!Number.isFinite(checkedAt)) return false
+  const age = nowMs - checkedAt
+  return age >= 0 && age <= staleMs
+}
+
+/**
+ * (PURA) Um heartbeat só pode ser CONFIADO se descrever a instância que
+ * temos rastreada AGORA — nunca só por estar fresco e "healthy: true"
+ * (teste-v3-17b). Sem isto, um pid reaproveitado pelo SO depois que o
+ * processo original morre faria um heartbeat velho (mas ainda dentro do
+ * TTL, escrito por um writer que ainda não notou a morte) mentir como se
+ * fosse a instância nova. Por isso exige, TODOS ao mesmo tempo:
+ * `healthy === true`; fresco (`isHeartbeatFresh`); o `pid` do heartbeat
+ * bate com o pid rastreado AGORA; o `instanceId` do heartbeat bate com o
+ * token da instância registrada AGORA (nunca aceito se não houver um
+ * token registrado); e o pid ainda é considerado vivo/presente
+ * (`current.pidAlive`). `heartbeat`/`current.instanceId` nulos (arquivo
+ * ausente, ou nenhuma instância registrada ainda) nunca são confiados —
+ * fail-closed por padrão.
+ */
+export function isHeartbeatTrusted(
+  heartbeat: { healthy: boolean; checkedAt: number; pid: number; instanceId: string } | null,
+  current: { pid: number; instanceId: string | null; pidAlive: boolean },
+  nowMs: number,
+  staleMs: number,
+): boolean {
+  if (!heartbeat) return false
+  if (heartbeat.healthy !== true) return false
+  if (!isHeartbeatFresh(heartbeat.checkedAt, nowMs, staleMs)) return false
+  if (heartbeat.pid !== current.pid) return false
+  if (!current.instanceId || heartbeat.instanceId !== current.instanceId) return false
+  if (!current.pidAlive) return false
+  return true
+}
+
+/**
  * `scripts/preview.mjs` — supervisor determinístico do dev server (v3.1).
  *
  * O preview é INFRAESTRUTURA da sessão/projeto, não um processo do turno do agente.
@@ -194,16 +239,63 @@ export function classifyBindProbe(errorCode: string | null | undefined): 'free' 
  * `.supremo/preview.pid`/`.port` só são escritos DEPOIS que uma candidata
  * nova passa no healthcheck — uma tentativa que falha NUNCA sobrescreve o
  * estado anterior, saudável ou não.
+ *
+ * REDE TAMBÉM É POR-COMANDO NO SANDBOX (E2E real, teste-v3-17 — a mesma
+ * causa do bug do SANDBOX acima, só que pra rede em vez de sinal de pid):
+ * `next dev` fica de pé num processo desacoplado, criado UMA vez; mas
+ * `health()` era chamado por um subprocesso NOVO a cada `supremo:resume` —
+ * e, nesse sandbox, CADA comando do agente ganha seu próprio namespace de
+ * rede, isolado de onde o `next dev` de verdade está escutando. Daemon
+ * healthy, preview `running=true` (PID, que já é tolerante), mas
+ * `healthy=false` pra sempre — mesmo com o browser do host (caminho de rede
+ * PRÓPRIO, persistente) respondendo 200 no MESMO instante. Testar mais
+ * famílias de endereço (v3.4.5) não ajuda: nenhum endereço, de nenhuma
+ * família, DENTRO desse namespace isolado, alcança o processo real.
+ *
+ * Fix: a VERIFICAÇÃO de saúde passa a ser feita por um processo
+ * CO-LOCALIZADO com o `next dev` — um "heartbeat" desacoplado, subido no
+ * MESMO comando que confirmou o servidor saudável pela 1ª vez (mesmo
+ * namespace, garantido), que sonda `health()` periodicamente e persiste o
+ * resultado em `.supremo/preview.health.json`. Qualquer comando FUTURO
+ * (`status`/`ensure`, em QUALQUER namespace) primeiro confia nesse heartbeat
+ * — só cai pro probe HTTP direto (o caminho de sempre, ainda funciona em
+ * ambientes sem esse isolamento) se o heartbeat estiver ausente ou velho
+ * demais (`HEALTH_STALE_MS`) pra confiar. PID vivo sozinho continua não
+ * bastando, porta aberta sozinha continua não bastando — o heartbeat só
+ * escreve `healthy: true` depois de um GET de verdade, na porta certa, que
+ * respondeu; e para de escrever (o arquivo fica velho e some) assim que o
+ * processo que ele acompanha morre — fail-closed intacto.
+ *
+ * IDENTIDADE DA INSTÂNCIA (teste-v3-17b — pid reuse). Um heartbeat só por
+ * `{healthy, checkedAt}` não prova que descreve o processo que TEMOS
+ * rastreado agora: o SO pode reaproveitar um pid depois que o processo
+ * original morre, e um heartbeat "fresco" nesse instante mentiria. Todo
+ * heartbeat carrega o `pid` e um `instanceId` (token aleatório gerado
+ * quando a instância sobe) de quem o escreveu; só é aceito se AMBOS
+ * baterem com `.supremo/preview.pid`/`.supremo/preview.instance` — o que
+ * está registrado AGORA, não o que foi lido há alguns segundos — e se o
+ * pid ainda for considerado vivo (ver `isHeartbeatTrusted`). `ensure()`
+ * invalida (remove) o heartbeat e o token da instância anterior no
+ * INSTANTE em que decide `restart` (antes mesmo da candidata nova
+ * existir), e `stop()` faz o mesmo — nunca sobra um heartbeat órfão
+ * apontando pra uma instância que já não é a registrada. O próprio
+ * heartbeat writer para de escrever (e não limpa o arquivo de quem o
+ * substituiu) assim que percebe que já não é mais a instância registrada.
+ * A escrita do arquivo é atômica (tmp + rename) — uma leitura concorrente
+ * nunca pega JSON parcial/truncado.
  */
 export function previewSupervisorScript(): string {
   return `#!/usr/bin/env node
 // GERADO pelo Supremo (v3.1) — supervisor do preview. NÃO rode 'next dev' à mão:
-//   node scripts/preview.mjs ensure   → garante 1 preview saudável (reusa/inicia)
-//   node scripts/preview.mjs status    → estado (json)
-//   node scripts/preview.mjs stop      → para
+//   node scripts/preview.mjs ensure     → garante 1 preview saudável (reusa/inicia)
+//   node scripts/preview.mjs status     → estado (json)
+//   node scripts/preview.mjs stop       → para
+//   node scripts/preview.mjs __heartbeat <pid> <port> <instanceId>  → uso INTERNO
+//                                          (ver ensure()); nunca rode isto à mão.
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync, openSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, renameSync, rmSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import net from 'node:net'
 import http from 'node:http'
 
@@ -212,9 +304,12 @@ const DIR = join(ROOT, '.supremo')
 const PIDFILE = join(DIR, 'preview.pid')
 const PORTFILE = join(DIR, 'preview.port') // porta REAL em uso (pode diferir de PORT — ver pickPort)
 const LOG = join(DIR, 'preview.log')
+const HEALTH_FILE = join(DIR, 'preview.health.json') // heartbeat co-localizado — ver ensure()/teste-v3-17
+const INSTANCEFILE = join(DIR, 'preview.instance') // token da instância ATUAL — ver teste-v3-17b (pid reuse)
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.PORT || 3000) // porta PREFERIDA do projeto
 const PORT_SEARCH_SPAN = 20 // quantas portas tentar acima da preferida antes de desistir
+const SCRIPT_PATH = 'scripts/preview.mjs' // caminho fixo do próprio gerado — usado só pra subir o heartbeat
 
 function readPid() {
   try { return Number(readFileSync(PIDFILE, 'utf8').trim()) || null } catch { return null }
@@ -331,6 +426,114 @@ async function health(port, timeoutMs = 1500) {
   }
   return false
 }
+
+// ── Heartbeat co-localizado (teste-v3-17) — ver comentário do gerador acima.
+// Escrito só por um processo que nasceu no MESMO comando que confirmou o
+// preview saudável pela 1ª vez (mesmo namespace de rede, garantido). Um
+// comando FUTURO (status/ensure, em QUALQUER namespace) confia nisto antes
+// de tentar seu PRÓPRIO probe HTTP — que pode estar isolado da porta real.
+//
+// VINCULADO À INSTÂNCIA (teste-v3-17b — pid reuse/heartbeat fantasma): um
+// heartbeat só por {healthy, checkedAt} não prova que descreve o processo
+// que TEMOS rastreado agora — um pid pode ser reaproveitado pelo SO depois
+// que o processo original morre, e um heartbeat "fresco" nesse instante
+// mentiria. Por isso todo heartbeat carrega o pid E um instanceId (token
+// aleatório gerado quando a instância sobe) da instância que o escreveu;
+// só é aceito se AMBOS baterem com o que está registrado AGORA em
+// .supremo/preview.pid e .supremo/preview.instance — nunca só o pid
+// sozinho. restart/stop invalidam (removem) o heartbeat e o token da
+// instância ANTERIOR antes de qualquer coisa nova subir, então um heartbeat
+// órfão nunca sobrevive além da instância que o gerou.
+const HEARTBEAT_INTERVAL_MS = Number(process.env.SUPREMO_PREVIEW_HEARTBEAT_INTERVAL_MS) || 1000
+const HEALTH_STALE_MS = Number(process.env.SUPREMO_PREVIEW_HEALTH_STALE_MS) || 5000
+
+function currentInstanceId() {
+  try {
+    return readFileSync(INSTANCEFILE, 'utf8').trim() || null
+  } catch {
+    return null
+  }
+}
+// Escrita ATÔMICA (tmp + rename, nunca truncate-then-write direto no
+// arquivo final): status()/ensure() de outro processo podem ler HEALTH_FILE
+// a qualquer momento, inclusive NO MEIO de uma escrita — sem isto, uma
+// leitura concorrente podia pegar um JSON truncado/vazio. rename() é
+// atômico no mesmo filesystem (mesma pasta) em POSIX: quem lê sempre vê o
+// conteúdo INTEIRO de uma escrita ou o INTEIRO da anterior, nunca uma
+// mistura.
+function writeHealthState(ok, pid, instanceId) {
+  try {
+    const data = JSON.stringify({ healthy: ok, checkedAt: Date.now(), pid, instanceId })
+    const tmp = \`\${HEALTH_FILE}.\${process.pid}.tmp\`
+    writeFileSync(tmp, data)
+    renameSync(tmp, HEALTH_FILE)
+  } catch {
+    /* best-effort — nunca trava o heartbeat por um erro de escrita */
+  }
+}
+// Mesma regra pura de harness.isHeartbeatFresh (mantidas em sincronia).
+function heartbeatFresh(checkedAt, nowMs, staleMs) {
+  if (typeof checkedAt !== 'number' || !Number.isFinite(checkedAt)) return false
+  const age = nowMs - checkedAt
+  return age >= 0 && age <= staleMs
+}
+// Mesma regra pura de harness.isHeartbeatTrusted (mantidas em sincronia).
+// pid é o pid ATUALMENTE rastreado (readPid()) — o heartbeat só conta se
+// descrever ESSA instância, viva, com o token batendo.
+function readHeartbeatHealthy(pid) {
+  try {
+    const raw = JSON.parse(readFileSync(HEALTH_FILE, 'utf8'))
+    if (raw.healthy !== true) return false
+    if (!heartbeatFresh(raw.checkedAt, Date.now(), HEALTH_STALE_MS)) return false
+    if (raw.pid !== pid) return false
+    const instance = currentInstanceId()
+    if (!instance || raw.instanceId !== instance) return false
+    if (!alive(pid)) return false
+    return true
+  } catch {
+    return false
+  }
+}
+// "Saudável" combinado: heartbeat PRIMEIRO (leitura de arquivo, quase
+// instantânea, e é o sinal CORRETO quando este comando está isolado do
+// namespace real — ver comentário do gerador) — só cai pro probe HTTP
+// direto (o caminho de sempre) se o heartbeat estiver ausente, velho
+// demais, ou não descrever mais a instância atual (pid/token).
+async function healthCombined(pid, port) {
+  if (readHeartbeatHealthy(pid)) return true
+  return health(port)
+}
+// Sobe o heartbeat DESACOPLADO (mesmo padrão de startDetached) — nasce no
+// MESMO comando que acabou de confirmar a candidata saudável via
+// waitReady(), então seu probe HTTP nunca sofre o isolamento de rede
+// por-comando: está no namespace CERTO, para sempre, enquanto o pid
+// rastreado seguir vivo.
+function startHeartbeatWriter(pid, port, instanceId) {
+  const child = spawn(process.execPath, [SCRIPT_PATH, '__heartbeat', String(pid), String(port), instanceId], {
+    cwd: ROOT,
+    detached: true,
+    stdio: 'ignore',
+  })
+  child.unref()
+}
+async function heartbeatLoop(pid, port, instanceId) {
+  // Para de escrever assim que deixarmos de ser a instância REGISTRADA
+  // (alguém nos substituiu — restart/stop) — nunca continua sondando/
+  // escrevendo por cima do heartbeat de uma instância NOVA só porque nosso
+  // próprio processo ainda está no meio de terminar.
+  while (alive(pid) && currentInstanceId() === instanceId) {
+    writeHealthState(await health(port), pid, instanceId)
+    await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_MS))
+  }
+  // Só limpa o HEALTH_FILE se AINDA formos a instância atual (morremos
+  // "naturalmente", ninguém nos substituiu ainda) — se já fomos
+  // substituídos, o arquivo já foi invalidado/reescrito por quem assumiu, e
+  // apagá-lo aqui poderia derrubar o heartbeat da instância NOVA por engano.
+  if (currentInstanceId() === instanceId) {
+    try { rmSync(HEALTH_FILE, { force: true }) } catch {}
+  }
+}
+
 // Orçamento de espera por readiness — configurável só por env (default
 // inalterado: 90 tentativas de 1s = até 90s); existe pra testes de
 // regressão simularem uma candidata que nunca fica saudável sem esperar
@@ -374,7 +577,11 @@ async function ensure() {
   // sinalizável a partir deste) NÃO prova que morreu (ver pidState/alive).
   // A prova de verdade é responder saudável na PRÓPRIA porta persistida —
   // checada aqui, SEMPRE, antes de cogitar subir qualquer coisa nova.
-  const action = decide(alive(pid), await health(trackedPort))
+  // healthCombined() (teste-v3-17): confia no heartbeat co-localizado antes
+  // de um probe HTTP que pode estar isolado do namespace real — sem isso,
+  // um comando isolado concluiria "não respondeu" e mataria/substituiria
+  // uma instância saudável de verdade só por não conseguir alcançá-la.
+  const action = decide(alive(pid), await healthCombined(pid, trackedPort))
   if (action === 'reuse') {
     console.log(\`✓ preview já no ar (pid \${pid}, http://localhost:\${trackedPort})\`)
     return
@@ -385,6 +592,12 @@ async function ensure() {
     // .supremo/preview.pid|.port ainda — só depois que a candidata nova
     // passar no healthcheck: nunca sobrescreve estado válido antes disso.
     try { process.kill(pid) } catch {}
+    // Invalida o heartbeat/token da instância ANTERIOR JÁ, e não só quando
+    // a candidata nova ficar pronta (teste-v3-17b): entre agora e a
+    // candidata nova responder saudável, ninguém deve confiar num
+    // heartbeat que ainda descreve o processo que acabamos de matar.
+    rmSync(HEALTH_FILE, { force: true })
+    rmSync(INSTANCEFILE, { force: true })
   }
   // Nenhuma instância rastreada respondeu saudável: escolhe porta (NUNCA
   // assume que a preferida está livre sem confirmar — bind-probe IPv4+IPv6,
@@ -412,24 +625,37 @@ async function ensure() {
   }
   writeFileSync(PIDFILE, String(newPid))
   writeFileSync(PORTFILE, String(chosen))
+  // Token da instância ATUAL (teste-v3-17b) — gerado agora, junto com o
+  // pid/porta desta candidata; é o que amarra o heartbeat a ELA
+  // especificamente, nunca a um pid velho reaproveitado pelo SO.
+  const instanceId = randomUUID()
+  writeFileSync(INSTANCEFILE, instanceId)
+  // waitReady() acima JÁ confirmou saudável NESTE MESMO comando/namespace —
+  // grava o heartbeat na hora (nunca deixa a 1ª leitura futura sem nada) e
+  // sobe o escritor que vai mantê-lo fresco enquanto o processo viver.
+  writeHealthState(true, newPid, instanceId)
+  startHeartbeatWriter(newPid, chosen, instanceId)
   console.log(\`✓ preview no ar (pid \${newPid}, http://localhost:\${chosen})\`)
 }
 async function status() {
   const pid = readPid()
   const port = readPort() ?? PORT
   const up = alive(pid)
-  console.log(JSON.stringify({ running: up, healthy: up && (await health(port)), pid: pid ?? null, port, url: \`http://localhost:\${port}\` }))
+  console.log(JSON.stringify({ running: up, healthy: up && (await healthCombined(pid, port)), pid: pid ?? null, port, url: \`http://localhost:\${port}\` }))
 }
 function stop() {
   const pid = readPid()
   if (alive(pid)) { try { process.kill(pid) } catch {} }
   rmSync(PIDFILE, { force: true })
   rmSync(PORTFILE, { force: true })
+  rmSync(HEALTH_FILE, { force: true })
+  rmSync(INSTANCEFILE, { force: true })
   console.log('✓ preview parado')
 }
 const cmd = process.argv[2] || 'ensure'
 if (cmd === 'ensure') await ensure()
 else if (cmd === 'status') await status()
+else if (cmd === '__heartbeat') await heartbeatLoop(Number(process.argv[3]), Number(process.argv[4]), process.argv[5])
 else if (cmd === 'stop') stop()
 else { console.error('uso: node scripts/preview.mjs ensure|status|stop'); process.exit(1) }
 void existsSync

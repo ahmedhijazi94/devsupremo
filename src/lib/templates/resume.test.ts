@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -1195,6 +1195,116 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
 
       expect(status).not.toBe(0)
       expect(result?.preview.healthy).toBe(false)
+    },
+    30_000,
+  )
+})
+
+/**
+ * "Segunda mensagem" com o preview já aberto e estável (E2E real, v3.4.6,
+ * teste-v3-17) — causa raiz confirmada: `health()` roda num subprocesso
+ * NOVO a cada `supremo:resume`, e no sandbox real (Codex) CADA COMANDO do
+ * agente ganha seu próprio namespace de rede — daemon healthy, preview
+ * `running=true`, mas `healthy=false` PARA SEMPRE, mesmo com o browser do
+ * host respondendo 200 no MESMO instante, mesmo numa 2ª/3ª mensagem com o
+ * preview já estável. Testar `127.0.0.1` e `::1` (v3.4.5) não resolve: o
+ * problema nunca foi família de endereço — nenhum endereço, de nenhuma
+ * família, alcança o processo real DENTRO desse namespace isolado.
+ *
+ * Fix: `ensure()` sobe um heartbeat co-localizado (mesmo namespace do
+ * `next dev`, garantido) que persiste saúde em `.supremo/preview.
+ * health.json`; QUALQUER comando futuro confia nesse heartbeat ANTES de um
+ * probe HTTP que pode estar isolado. Reproduzido aqui craftando o estado
+ * exato do sintoma no nível do PREFLIGHT COMPLETO (supremo-status.mjs
+ * --ensure, não só preview.mjs isolado): um preview registrado cujo probe
+ * direto genuinamente falha, ao lado de um heartbeat fresco — a "2ª
+ * mensagem" que antes travava em fail-closed indefinidamente.
+ */
+describe('supremo:resume — segunda mensagem com preview estável não pode falsear healthy=false (v3.4.6, teste-v3-17)', () => {
+  let dir: string
+
+  afterEach(() => {
+    const daemonPid = daemonState(dir).pid
+    if (daemonPid) {
+      try {
+        process.kill(daemonPid)
+      } catch {
+        /* já morto */
+      }
+    }
+    try {
+      const previewPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      if (previewPid) process.kill(previewPid)
+    } catch {
+      /* já morto/nunca subiu */
+    }
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it(
+    'preview registrado com heartbeat fresco, mas cujo probe HTTP direto desta invocação falha → supremo:resume AINDA ASSIM libera o trabalho',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      dir = mkdtempSync(join(tmpdir(), 'supremo-resume-secondmsg-'))
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'resume-secondmsg-fixture', scripts: {} }))
+      installLocalSupremoCliShim(dir)
+
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        PORT: String(port),
+        RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+        SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
+        SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '500',
+      }
+
+      // Daemon já saudável (pré-aquecido) — isola o teste no preview.
+      execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], { cwd: dir, env, stdio: 'ignore' })
+
+      // Preview REGISTRADO: pid vivo de verdade, mas NADA escuta na porta
+      // rastreada — o probe HTTP direto desta invocação genuinamente falha,
+      // reproduzindo o sintoma exato do sandbox isolado. Um heartbeat
+      // FRESCO, escrito por quem tinha acesso real ao servidor, é a única
+      // razão pra ainda considerar saudável.
+      const idle = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        detached: true,
+        stdio: 'ignore',
+      })
+      idle.unref()
+      writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+      writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+      // O heartbeat só é confiado se descrever a MESMA instância registrada
+      // agora (teste-v3-17b) — pid e instanceId batendo com preview.pid e
+      // preview.instance, nunca só {healthy, checkedAt} sozinhos.
+      writeFileSync(join(dir, '.supremo/preview.instance'), 'resume-secondmsg-instance')
+      writeFileSync(
+        join(dir, '.supremo/preview.health.json'),
+        JSON.stringify({
+          healthy: true,
+          checkedAt: Date.now(),
+          pid: idle.pid,
+          instanceId: 'resume-secondmsg-instance',
+        }),
+      )
+
+      const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        timeout: 20_000,
+      })
+      const result = JSON.parse(out) as ResumeJson
+
+      expect(result.daemon.healthy).toBe(true)
+      expect(result.preview.healthy).toBe(true)
+      expect(result.preview.url).toBe(`http://localhost:${port}`)
+      // Nunca precisou religar nada — o pid rastreado original segue de pé,
+      // intocado (nunca foi julgado morto/inalcançável e substituído).
+      expect(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()).toBe(String(idle.pid))
     },
     30_000,
   )

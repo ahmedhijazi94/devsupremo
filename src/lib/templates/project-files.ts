@@ -298,7 +298,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
       // asserção provando o isolamento. O gate ficava verde por não olhar.
       content: generateRlsTest(inferTablesFromMigration(migration)),
     },
-    { path: 'e2e/smoke.spec.ts', content: e2eSmoke(projectName, auth) },
+    { path: 'e2e/smoke.spec.ts', content: e2eSmoke(auth) },
 
     // ── Gates ─────────────────────────────────────────────────
     { path: '.github/workflows/ci.yml', content: ciWorkflow(projectName) },
@@ -2104,8 +2104,13 @@ describe('HomePage', () => {
  *
  * O template anterior gerava um teste que checava o título "Create Next App"
  * contra um layout sem título nenhum — falha garantida.
+ *
+ * O smoke test não referencia o nome do projeto: copy da home (título, h1)
+ * é conteúdo editável pelo usuário, e o gate não pode quebrar quando ele só
+ * troca esse texto. Ver `e2e/smoke.spec.ts` — o contrato fica em
+ * comportamento estável (HTTP ok, título não vazio, landmark + h1 visíveis).
  */
-function e2eSmoke(projectName: string, auth: boolean): string {
+function e2eSmoke(auth: boolean): string {
   // Com login, o E2E exercita a tela de /login e o gate da rota protegida.
   // É a cobertura real dessas telas — por isso elas ficam fora do coverage
   // unitário, como o resto do que fala com o Supabase.
@@ -2133,12 +2138,18 @@ function e2eSmoke(projectName: string, auth: boolean): string {
   return `import { test, expect } from '@playwright/test'
 
 test.describe('smoke', () => {${authTests}
-  test('a home carrega com o título do projeto', async ({ page }) => {
-    await page.goto('/')
-    await expect(page).toHaveTitle('${escapeJs(projectName)}')
-    await expect(
-      page.getByRole('heading', { level: 1, name: '${escapeJs(projectName)}' })
-    ).toBeVisible()
+  /**
+   * Contrato estável: HTTP ok, título não vazio, landmark principal e um h1
+   * visíveis. Nunca o texto exato — copy da home é editável pelo usuário, e
+   * o smoke test não pode quebrar quando ele só troca o título.
+   */
+  test('a home carrega corretamente', async ({ page }) => {
+    const response = await page.goto('/')
+
+    expect(response?.ok()).toBe(true)
+    await expect(page).toHaveTitle(/.+/)
+    await expect(page.getByRole('main')).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   })
 
   test('responde com os cabeçalhos de segurança', async ({ page }) => {

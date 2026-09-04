@@ -15,20 +15,23 @@ import { previewSupervisorScript, supremoStatusScript } from './harness'
  * é seguro porque a checagem é 100% LOCAL. Executa o script REAL gerado
  * (`supremoStatusScript()`) contra um preview REAL (`previewSupervisorScript
  * ()`, mesmo padrão de `preview-ownership.test.ts`) e um daemon SIMULADO —
- * um shim de `npx` que sobe/derruba um processo Node de verdade (pid
- * sinalizável de verdade), escrevendo no MESMO pidfile que o daemon real usa
+ * um shim que sobe/derruba um processo Node de verdade (pid sinalizável de
+ * verdade), escrevendo no MESMO pidfile que o daemon real usa
  * (`packages/cli/src/daemon.ts#DAEMON_PID_FILE`) — pra reproduzir "reboot: o
  * arquivo de estado sobrevive, o processo não" sem depender da CLI publicada
  * nem de rede.
  *
- * O shim só reconhece `daemon --ensure` — nem `daemon --status` (o status
- * agora é lido LOCAL, direto do pidfile, nunca por `npx`) nem qualquer outra
- * coisa (inclusive `bootstrap`) — qualquer chamada fora disso é INESPERADA,
- * registrada num log — prova de que a checagem nunca toca rede no caminho
- * saudável e nunca acopla bootstrap.
+ * (v3.4.4, teste-v3-15) O shim agora vive em `node_modules/.bin/supremo` — o
+ * MESMO caminho que `--ensure` resolve local (supremo-cli é devDependency
+ * PINADA do scaffold; ver LOCAL_SUPREMO_CLI_BIN em harness.ts), nunca mais um
+ * shim de `npx` no PATH. O shim só reconhece `daemon --ensure` — qualquer
+ * outra coisa (inclusive `bootstrap`) é INESPERADA, registrada num log —
+ * prova de que a checagem nunca toca rede/npx no caminho saudável nem ao
+ * religar, e nunca acopla bootstrap.
  */
 
 const DAEMON_PID_FILE_REL = '.supremo/checkpoints/daemon.pid'
+const LOCAL_SUPREMO_CLI_BIN_REL = 'node_modules/.bin/supremo'
 
 function daemonShim(): string {
   return `#!/usr/bin/env node
@@ -55,33 +58,36 @@ function readPid() {
   } catch { return null }
 }
 
-const isDaemonCmd = args[0] === '--yes' && args[1] === 'supremo-cli' && args[2] === 'daemon'
-if (!isDaemonCmd) {
+// Invocado DIRETO como node_modules/.bin/supremo (v3.4.4) — só 'daemon --ensure'.
+if (args[0] !== 'daemon' || !args.includes('--ensure')) {
   console.error('chamada inesperada: ' + JSON.stringify(args))
   process.exit(1)
 }
 
-if (args.includes('--ensure')) {
-  const pid = readPid()
-  if (!alive(pid)) {
-    fs.mkdirSync(path.dirname(PID_FILE), { recursive: true })
-    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-      detached: true,
-      stdio: 'ignore',
-    })
-    child.unref()
-    fs.writeFileSync(PID_FILE, String(child.pid))
-  }
-} else {
-  console.error('chamada inesperada (sem --ensure — status agora é local, nunca por npx): ' + JSON.stringify(args))
-  process.exit(1)
+const pid = readPid()
+if (!alive(pid)) {
+  fs.mkdirSync(path.dirname(PID_FILE), { recursive: true })
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    detached: true,
+    stdio: 'ignore',
+  })
+  child.unref()
+  fs.writeFileSync(PID_FILE, String(child.pid))
 }
 `
 }
 
+/** Instala o shim em `node_modules/.bin/supremo` (v3.4.4) — o MESMO caminho
+ * que `--ensure` resolve local, nunca mais um shim de `npx` no PATH. */
+function installLocalSupremoCliShim(dir: string): void {
+  const binDir = join(dir, 'node_modules/.bin')
+  mkdirSync(binDir, { recursive: true })
+  writeFileSync(join(binDir, 'supremo'), daemonShim(), { mode: 0o755 })
+}
+
 interface ResumeJson {
   preview: { running: boolean; healthy: boolean; url: string | null }
-  daemon: { running: boolean; healthy: boolean }
+  daemon: { running: boolean; healthy: boolean; error?: string }
   checkpoints: { pending: number }
 }
 
@@ -158,8 +164,6 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
 
   function setup(port: number): { dir: string; env: NodeJS.ProcessEnv } {
     dir = mkdtempSync(join(tmpdir(), 'supremo-resume-'))
-    const binDir = join(dir, 'bin')
-    mkdirSync(binDir, { recursive: true })
     mkdirSync(join(dir, 'scripts'), { recursive: true })
 
     writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
@@ -175,12 +179,10 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
       join(dir, 'package.json'),
       JSON.stringify({ name: 'resume-fixture', scripts: { dev: 'node scripts/dev-server.mjs' } }),
     )
-    const shimPath = join(binDir, 'npx')
-    writeFileSync(shimPath, daemonShim(), { mode: 0o755 })
+    installLocalSupremoCliShim(dir)
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
       // ensure() do supervisor real já espera internamente (waitReady) até o
@@ -217,7 +219,7 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
         stdio: 'ignore',
         timeout: 15_000,
       })
-      execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+      execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], {
         cwd: dir,
         env,
         stdio: 'ignore',
@@ -251,7 +253,7 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
         stdio: 'ignore',
         timeout: 15_000,
       })
-      execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+      execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], {
         cwd: dir,
         env,
         stdio: 'ignore',
@@ -300,7 +302,7 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
         stdio: 'ignore',
         timeout: 15_000,
       })
-      execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+      execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], {
         cwd: dir,
         env,
         stdio: 'ignore',
@@ -376,7 +378,7 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
         stdio: 'ignore',
         timeout: 15_000,
       })
-      execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+      execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], {
         cwd: dir,
         env,
         stdio: 'ignore',
@@ -512,19 +514,16 @@ if (cmd === 'status') {
 
   function setup(port: number, succeedFromCall: number): { env: NodeJS.ProcessEnv; callLogFile: string } {
     dir = mkdtempSync(join(tmpdir(), 'supremo-resume-retry-'))
-    const binDir = join(dir, 'bin')
-    mkdirSync(binDir, { recursive: true })
     mkdirSync(join(dir, 'scripts'), { recursive: true })
 
     writeFileSync(join(dir, 'scripts/preview.mjs'), flakyPreviewShim(succeedFromCall), 'utf8')
     writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'resume-retry-fixture', scripts: {} }))
-    writeFileSync(join(binDir, 'npx'), daemonShim(), { mode: 0o755 })
+    installLocalSupremoCliShim(dir)
 
     const callLogFile = join(dir, 'preview-ensure-call-count.txt')
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
       PREVIEW_ENSURE_CALL_LOG: callLogFile,
@@ -554,7 +553,7 @@ if (cmd === 'status') {
   }
 
   function preWarmDaemon(env: NodeJS.ProcessEnv): void {
-    execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+    execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], {
       cwd: dir,
       env,
       stdio: 'ignore',
@@ -708,19 +707,16 @@ if (cmd === 'status') {
     healthDelayMs: number,
   ): { env: NodeJS.ProcessEnv; callLogFile: string } {
     dir = mkdtempSync(join(tmpdir(), 'supremo-resume-timing-'))
-    const binDir = join(dir, 'bin')
-    mkdirSync(binDir, { recursive: true })
     mkdirSync(join(dir, 'scripts'), { recursive: true })
 
     writeFileSync(join(dir, 'scripts/preview.mjs'), slowToHealthyPreviewShim(), 'utf8')
     writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'resume-timing-fixture', scripts: {} }))
-    writeFileSync(join(binDir, 'npx'), daemonShim(), { mode: 0o755 })
+    installLocalSupremoCliShim(dir)
 
     const callLogFile = join(dir, 'preview-ensure-call-count.txt')
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
       PREVIEW_ENSURE_CALL_LOG: callLogFile,
@@ -736,7 +732,7 @@ if (cmd === 'status') {
   }
 
   function preWarmDaemon(env: NodeJS.ProcessEnv): void {
-    execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+    execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], {
       cwd: dir,
       env,
       stdio: 'ignore',
@@ -816,23 +812,25 @@ if (cmd === 'status') {
 })
 
 /**
- * Lifecycle local do preview em dois cenários (v3.4.3, teste-v3-15) — E2E
- * REAL. No Terminal (rede plena de um humano), `npm run supremo:resume`
- * recupera preview+daemon em ~6s com exit 0. Rodado pelo AGENTE (rede
- * restrita/proxy do sandbox), o MESMO fluxo falhava depois de ~1m30 e
- * terminava fail-closed. Investigação (cwd/env/processo pai/detach/stdio/
- * forma de iniciar daemon e preview): o preview é 100% local — `npm run
- * dev` mais um GET em localhost, sem npx nem registry — e `run()` já
- * ignora todo stdio nos dois ambientes; a diferença real é só a chamada de
- * rede do daemon (`npx --yes supremo-cli daemon --ensure`), que não tinha
- * NENHUM teto e podia ficar presa no retry/backoff interno do npm quando a
- * rede não coopera. Este bloco cobre os dois fluxos pedidos (A: projeto
- * novo, primeiro prompt; B: preview+daemon mortos, primeiro prompt da nova
- * sessão) mais a prova direta de que o novo teto FALHA RÁPIDO em vez de
- * travar — nunca um AUMENTO de timeout, o primeiro teto onde antes não
- * havia nenhum.
+ * Daemon ensure 100% local e network-free (v3.4.4, teste-v3-15) — E2E REAL.
+ *
+ * A causa raiz provada do v3-15: `npx --yes supremo-cli daemon --ensure`
+ * introduzia uma dependência de rede no hot path local — no Terminal (rede
+ * plena) resolve em segundos; no sandbox do agente (rede restrita), o
+ * retry/backoff interno do próprio npm podia travar por ~1m30 antes de
+ * desistir. A correção não é um timeout menor — é ELIMINAR a chamada de
+ * rede: `supremo-cli` é devDependency PINADA do scaffold (mesmo padrão já
+ * usado pra CLI do Supabase — `packages/cli/src/bootstrap.ts
+ * #resolveSupabaseBin`), então `node_modules/.bin/supremo` existe depois de
+ * um `npm install`/`npm ci` comum, e `--ensure` resolve esse caminho DIRETO.
+ *
+ * Os testes abaixo colocam um `npx` ENVENENADO no PATH — falha sempre e
+ * registra toda chamada recebida — pra provar que `--ensure` religa
+ * daemon+preview com sucesso mesmo com QUALQUER acesso a `npx`/registry
+ * deliberadamente indisponível, e que `npx` nunca é sequer invocado (o log
+ * de chamadas do veneno fica vazio).
  */
-describe('supremo:resume — lifecycle local do preview em dois cenários (v3.4.3, teste-v3-15)', () => {
+describe('supremo:resume — daemon ensure 100% local e network-free (v3.4.4, teste-v3-15)', () => {
   let dir: string
 
   afterEach(() => {
@@ -853,24 +851,22 @@ describe('supremo:resume — lifecycle local do preview em dois cenários (v3.4.
     rmSync(dir, { recursive: true, force: true })
   })
 
-  /** Shim de `npx` que TRAVA de propósito na chamada de `daemon --ensure` — nunca
-   * termina sozinho, só via timeout/kill externo. Simula uma rede restrita ou
-   * um proxy que nunca responde, o sintoma exato do sandbox do agente. */
-  function hangingNpxShim(): string {
+  /** `npx` que SEMPRE falha e registra a chamada — prova que, se `--ensure`
+   * ainda dependesse de rede, o teste falharia; e prova (via log vazio) que
+   * `npx` nunca chega a ser invocado quando a CLI local está disponível. */
+  function poisonedNpxShim(callLogFile: string): string {
     return `#!/usr/bin/env node
-const args = process.argv.slice(2)
-if (args[0] === '--yes' && args[1] === 'supremo-cli' && args[2] === 'daemon' && args.includes('--ensure')) {
-  setInterval(() => {}, 1000)
-} else {
-  process.exit(1)
-}
+import fs from 'node:fs'
+fs.appendFileSync(${JSON.stringify(callLogFile)}, JSON.stringify(process.argv.slice(2)) + '\\n')
+console.error('npx não deveria ser chamado — rede indisponível de propósito (teste-v3-15)')
+process.exit(1)
 `
   }
 
-  function setup(port: number, npxShim: string): { env: NodeJS.ProcessEnv } {
-    dir = mkdtempSync(join(tmpdir(), 'supremo-resume-lifecycle-'))
-    const binDir = join(dir, 'bin')
-    mkdirSync(binDir, { recursive: true })
+  function setup(port: number, installCliLocally: boolean): { env: NodeJS.ProcessEnv; poisonedNpxLog: string } {
+    dir = mkdtempSync(join(tmpdir(), 'supremo-resume-offline-'))
+    const poisonBinDir = join(dir, 'poisoned-bin')
+    mkdirSync(poisonBinDir, { recursive: true })
     mkdirSync(join(dir, 'scripts'), { recursive: true })
 
     writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
@@ -884,23 +880,27 @@ if (args[0] === '--yes' && args[1] === 'supremo-cli' && args[2] === 'daemon' && 
     )
     writeFileSync(
       join(dir, 'package.json'),
-      JSON.stringify({ name: 'resume-lifecycle-fixture', scripts: { dev: 'node scripts/dev-server.mjs' } }),
+      JSON.stringify({ name: 'resume-offline-fixture', scripts: { dev: 'node scripts/dev-server.mjs' } }),
     )
-    writeFileSync(join(binDir, 'npx'), npxShim, { mode: 0o755 })
+    if (installCliLocally) installLocalSupremoCliShim(dir)
+
+    const poisonedNpxLog = join(dir, 'poisoned-npx-call-log.jsonl')
+    writeFileSync(join(poisonBinDir, 'npx'), poisonedNpxShim(poisonedNpxLog), { mode: 0o755 })
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
+      // O ÚNICO `npx` alcançável é o envenenado — se `--ensure` tentar
+      // resolver por rede de qualquer jeito, cai nele e falha na hora.
+      PATH: `${poisonBinDir}:${process.env.PATH}`,
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
       SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
       SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '2000',
     }
-    return { env }
+    return { env, poisonedNpxLog }
   }
 
-  function runResume(env: NodeJS.ProcessEnv): { status: number; result: ResumeJson | null; elapsedMs: number } {
-    const start = Date.now()
+  function runResume(env: NodeJS.ProcessEnv): { status: number; result: ResumeJson | null } {
     try {
       const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {
         cwd: dir,
@@ -908,22 +908,18 @@ if (args[0] === '--yes' && args[1] === 'supremo-cli' && args[2] === 'daemon' && 
         encoding: 'utf8',
         timeout: 20_000,
       })
-      return { status: 0, result: JSON.parse(out) as ResumeJson, elapsedMs: Date.now() - start }
+      return { status: 0, result: JSON.parse(out) as ResumeJson }
     } catch (err) {
       const e = err as { status: number | null; stdout: string }
-      return {
-        status: e.status ?? 1,
-        result: e.stdout ? (JSON.parse(e.stdout) as ResumeJson) : null,
-        elapsedMs: Date.now() - start,
-      }
+      return { status: e.status ?? 1, result: e.stdout ? (JSON.parse(e.stdout) as ResumeJson) : null }
     }
   }
 
   it(
-    'cenário A — projeto novo, primeiro prompt: nada registrado ainda → preflight sobe preview+daemon e o preview fica pronto pra abrir sozinho',
+    'cenário A — projeto novo, primeiro prompt: religa daemon+preview OFFLINE (npx envenenado, nunca chamado)',
     () => {
       const port = 21000 + Math.floor(Math.random() * 4000)
-      const { env } = setup(port, daemonShim())
+      const { env, poisonedNpxLog } = setup(port, true)
       expect(existsSync(join(dir, '.supremo'))).toBe(false)
 
       const { status, result } = runResume(env)
@@ -931,29 +927,36 @@ if (args[0] === '--yes' && args[1] === 'supremo-cli' && args[2] === 'daemon' && 
       expect(status).toBe(0)
       expect(result?.daemon.healthy).toBe(true)
       expect(result?.preview.healthy).toBe(true)
-      // "abre automaticamente assim que ficar saudável" depende de uma URL
-      // real pronta no JSON — é o que o agente usa pra disponibilizar o pane.
-      expect(result?.preview.url).toBe(`http://localhost:${port}`)
+      // O supervisor pode legitimamente relocalizar de porta se a
+      // preferida colidir com outro teste rodando em paralelo (mesma
+      // resiliência já coberta em preview-ownership.test.ts) — o que
+      // "abre sozinho" precisa é uma URL real e consistente com o que
+      // ficou persistido, não necessariamente a porta exata sorteada.
+      const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(result?.preview.url).toBe(`http://localhost:${finalPort}`)
+      // Prova mais forte que "funcionou apesar do npx falhar": o npx
+      // envenenado nunca foi sequer CHAMADO — o log de chamadas está vazio.
+      expect(existsSync(poisonedNpxLog)).toBe(false)
     },
     30_000,
   )
 
   it(
-    'cenário B — preview+daemon mortos, primeiro prompt da nova sessão: religa os dois e o preview fica pronto pra abrir sozinho',
+    'cenário B — preview+daemon mortos, primeiro prompt da nova sessão: religa os dois OFFLINE (npx envenenado, nunca chamado)',
     () => {
       const port = 21000 + Math.floor(Math.random() * 4000)
-      const { env } = setup(port, daemonShim())
+      const { env, poisonedNpxLog } = setup(port, true)
 
-      // Sobe os dois de propósito, depois mata — "estava tudo de pé numa
-      // sessão anterior, o app fechou/a máquina reiniciou" (mesmo padrão do
-      // reboot simulado v3.2, agora sob a lente específica do v3-15).
+      // Sobe os dois de propósito com a CLI local (sem passar pelo npx
+      // envenenado — installLocalSupremoCliShim já é o caminho local), depois
+      // mata — "estava tudo de pé numa sessão anterior, o app fechou".
       execFileSync(process.execPath, [join(dir, 'scripts/preview.mjs'), 'ensure'], {
         cwd: dir,
         env,
         stdio: 'ignore',
         timeout: 15_000,
       })
-      execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+      execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], {
         cwd: dir,
         env,
         stdio: 'ignore',
@@ -968,33 +971,35 @@ if (args[0] === '--yes' && args[1] === 'supremo-cli' && args[2] === 'daemon' && 
       expect(status).toBe(0)
       expect(result?.daemon.healthy).toBe(true)
       expect(result?.preview.healthy).toBe(true)
-      // Processo NOVO (o antigo morreu de vez com SIGKILL) — o supervisor
-      // pode legitimamente relocalizar de porta se o SO ainda não soltou a
-      // anterior (mesma resiliência já coberta em preview-ownership.test.ts);
-      // o que "abre sozinho" precisa é uma URL real e consistente com o que
-      // ficou persistido, não necessariamente a MESMA porta de antes.
       const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
       expect(result?.preview.url).toBe(`http://localhost:${finalPort}`)
+      expect(existsSync(poisonedNpxLog)).toBe(false)
     },
     30_000,
   )
 
   it(
-    'rede do agente restrita (npx do daemon nunca responde) → preflight FALHA RÁPIDO e fail-closed, nunca trava ~1m30',
+    'CLI local ausente (node_modules/.bin/supremo não existe) → fail-closed com mensagem clara, nunca npx/npm install automático',
     () => {
       const port = 21000 + Math.floor(Math.random() * 4000)
-      const { env: baseEnv } = setup(port, hangingNpxShim())
-      // Teto bem curto só pro teste não gastar segundos reais — o mecanismo
-      // sob teste (o teto existe e é respeitado) independe do valor exato.
-      const env = { ...baseEnv, SUPREMO_DAEMON_ENSURE_TIMEOUT_MS: '300' }
+      // installCliLocally=false — simula node_modules nunca instalado, ou
+      // apagado/corrompido.
+      const { env, poisonedNpxLog } = setup(port, false)
+      expect(existsSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL))).toBe(false)
 
-      const { status, result, elapsedMs } = runResume(env)
+      const { status, result } = runResume(env)
 
       expect(status).not.toBe(0)
       expect(result?.daemon.healthy).toBe(false)
-      // Falhou perto do teto configurado (300ms) — nunca perto de um hang
-      // real de segundos. Alguma folga pro overhead do próprio processo.
-      expect(elapsedMs).toBeLessThan(3_000)
+      // Mensagem clara e específica — não um erro genérico.
+      expect(result?.daemon.error).toMatch(/supremo-cli local ausente/i)
+      expect(result?.daemon.error).toMatch(/npm install/i)
+      // Nunca cai pra npx/registry como "solução" — o envenenado segue mudo.
+      expect(existsSync(poisonedNpxLog)).toBe(false)
+      // Nunca tenta rodar `npm install` sozinho (isso seria bootstrap
+      // automático, fora do preflight) — node_modules continua exatamente
+      // como estava (só o node_modules/.bin do preview shim, se algum).
+      expect(existsSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL))).toBe(false)
     },
     30_000,
   )

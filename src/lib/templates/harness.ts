@@ -717,8 +717,20 @@ exec node scripts/verify.mjs
  * usada no supervisor de preview (`classifyPidSignalError` aqui) e no daemon
  * real (`packages/cli/src/daemon.ts#classifyPidSignalError`, mesmo
  * comentário lá — os pacotes não compartilham módulo, então o padrão se
- * repete de propósito, nunca uma heurística nova). `npx` só é tocado no
- * `--ensure` quando o daemon está de fato MORTO — nunca no caminho saudável.
+ * repete de propósito, nunca uma heurística nova).
+ *
+ * E2E real (teste-v3-15) — por que RELIGAR o daemon também não pode passar
+ * por `npx`: no Terminal (rede plena de um humano), `npx --yes supremo-cli
+ * daemon --ensure` resolve o pacote em segundos; rodado pelo AGENTE (rede
+ * restrita/proxy do sandbox), a MESMA chamada podia ficar presa no
+ * retry/backoff interno do próprio npm por ~1m30 antes de desistir — e só
+ * ENTÃO o preflight chegava no preview. `--ensure` agora resolve
+ * `node_modules/.bin/supremo` DIRETO (mesmo padrão já usado pra CLI do
+ * Supabase — `packages/cli/src/bootstrap.ts#resolveSupabaseBin`, `supremo-cli`
+ * PINADA como devDependency do scaffold): `npx` NUNCA é tocado, nem no
+ * caminho saudável nem ao religar. Ausente/corrompido → nunca cai pra
+ * `npx`/global nem tenta `npm install` sozinho (seria bootstrap automático,
+ * fora do preflight) — fica não-saudável com uma mensagem clara, fail-closed.
  */
 export function supremoStatusScript(): string {
   return `#!/usr/bin/env node
@@ -729,8 +741,10 @@ export function supremoStatusScript(): string {
 //                                                imprime o status FINAL
 // Não é para uso diário do humano — a UI do Supremo (Histórico) é o lugar
 // humano; isto é o PREFLIGHT LOCAL do agente, rodado antes de todo pedido
-// que muda código (v3.4) — por isso a checagem do daemon é 100% local (lê o
-// pid direto, nunca passa por npx no caminho saudável; ver comentário acima).
+// que muda código (v3.4) — por isso o daemon é 100% local: status lê o pid
+// direto, e religar (--ensure) resolve node_modules/.bin/supremo direto —
+// nunca passa por npx, nem no caminho saudável nem ao religar (v3.4.4,
+// teste-v3-15; ver comentário acima).
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 
@@ -805,6 +819,15 @@ function readDaemonLocal() {
 const readPreview = () => tryJson('node', ['scripts/preview.mjs', 'status']) ?? { running: false, healthy: false }
 const readDaemon = readDaemonLocal
 
+// ── Religar o daemon é 100% LOCAL (teste-v3-15) — supremo-cli é uma
+// devDependency PINADA do scaffold (mesmo padrão de resolveSupabaseBin em
+// packages/cli/src/bootstrap.ts): node_modules/.bin/supremo existe depois de
+// um npm install/ci comum, e é isso que \`--ensure\` roda direto. NUNCA npx,
+// NUNCA o registry, NUNCA um fallback pra instalação global (que voltaria a
+// depender de rede) — ausente/corrompido é fail-closed com mensagem clara,
+// não um \`npm install\` automático (isso seria bootstrap, fora do preflight).
+const LOCAL_SUPREMO_CLI_BIN = 'node_modules/.bin/supremo'
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -835,31 +858,40 @@ async function waitForPreviewHealthy(timeoutMs) {
 
 let preview = readPreview()
 let daemon = readDaemon()
+let daemonEnsureError = null
 
-// E2E real (teste-v3-15): no Terminal (rede plena de um humano), \`npx --yes
-// supremo-cli daemon --ensure\` resolve o pacote e religa o daemon em
-// segundos. Rodado pelo AGENTE (rede restrita/proxy do sandbox), a MESMA
-// chamada podia ficar presa no retry/backoff interno do próprio npm — sem
-// NENHUM teto aqui antes, o preflight inteiro travava ~1m30 nisso antes de
-// sequer chegar no preview, e só então fail-closed. Investigado cwd/env/
-// processo pai/detach/stdio: preview é 100% local (sem npx, sem registry —
-// só \`npm run dev\`, que já roda de qualquer cwd/env corretos, e o
-// health-check é um GET em localhost), e run() já ignora TODO stdio nos dois
-// ambientes — a diferença real é só esta chamada de rede do daemon. Um teto
-// CURTO aqui não é aumento de timeout (não existia nenhum) — é o que faz
-// essa chamada falhar rápido quando a rede não coopera, deixando o
-// fail-closed abaixo agir em segundos, não em um minuto e meio.
+// E2E real (teste-v3-15) — histórico: no Terminal (rede plena de um
+// humano), \`npx --yes supremo-cli daemon --ensure\` resolvia o pacote e
+// religava o daemon em segundos; rodado pelo AGENTE (rede restrita/proxy do
+// sandbox), a MESMA chamada podia ficar presa no retry/backoff interno do
+// próprio npm por ~1m30 antes de desistir. A v3.4.3 deste preflight só
+// pôs um teto curto nessa chamada de rede — reduzia a espera, mas não
+// eliminava a dependência de rede em si. A v3.4.4 corrige isso pela raiz:
+// \`supremo-cli\` é devDependency PINADA do scaffold (mesmo padrão de
+// resolveSupabaseBin em packages/cli/src/bootstrap.ts) — \`--ensure\` religa
+// via \`node_modules/.bin/supremo\` DIRETO (ver LOCAL_SUPREMO_CLI_BIN acima),
+// nunca mais \`npx\`, nunca mais registry, em caminho NENHUM. O teto abaixo
+// permanece (não interfere — uma invocação local não trava esperando rede)
+// mas deixou de ser necessário: é só uma rede de segurança, não a correção.
 const DAEMON_ENSURE_TIMEOUT_MS = Number(process.env.SUPREMO_DAEMON_ENSURE_TIMEOUT_MS) || 10_000
 
 if (process.argv.includes('--ensure')) {
   // Cada \`ensure\` decide sozinho reusar (já saudável), religar (rastro
   // morto/zumbi) ou subir do zero (nada registrado) — a MESMA lógica do
   // bootstrap, nenhuma nova aqui. Só chama quando o status leu não-saudável;
-  // já saudável não gasta o ensure à toa — e é só AQUI, com o daemon
-  // comprovadamente morto, que o \`npx\` (rede) é tocado.
+  // e é só AQUI, com o daemon comprovadamente morto, que a CLI local roda —
+  // sempre local, nunca rede (ver LOCAL_SUPREMO_CLI_BIN acima). Ausente/
+  // corrompido → NUNCA cai pra npx/global nem tenta \`npm install\` sozinho
+  // (seria bootstrap automático, fora do preflight) — fail-closed com
+  // mensagem clara.
   if (!daemon.healthy) {
-    run('npx', ['--yes', 'supremo-cli', 'daemon', '--ensure'], DAEMON_ENSURE_TIMEOUT_MS)
-    daemon = readDaemon()
+    if (fs.existsSync(LOCAL_SUPREMO_CLI_BIN)) {
+      run(LOCAL_SUPREMO_CLI_BIN, ['daemon', '--ensure'], DAEMON_ENSURE_TIMEOUT_MS)
+      daemon = readDaemon()
+    } else {
+      daemonEnsureError =
+        'supremo-cli local ausente (node_modules/.bin/supremo) — rode "npm install" e tente de novo.'
+    }
   }
   if (!preview.healthy) {
     run('node', ['scripts/preview.mjs', 'ensure'])
@@ -883,7 +915,11 @@ const healthy = preview.healthy && daemon.healthy
 
 console.log(JSON.stringify({
   preview: { running: !!preview.running, healthy: !!preview.healthy, url: preview.url ?? null },
-  daemon: { running: !!daemon.running, healthy: !!daemon.healthy },
+  daemon: {
+    running: !!daemon.running,
+    healthy: !!daemon.healthy,
+    ...(daemonEnsureError ? { error: daemonEnsureError } : {}),
+  },
   checkpoints: { pending: daemon.pendingCheckpoints ?? 0 },
 }))
 

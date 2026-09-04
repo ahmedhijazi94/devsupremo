@@ -389,3 +389,208 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
     30_000,
   )
 })
+
+/**
+ * Retry único quando a 1ª tentativa de `ensure` do preview falha (v3.4.1,
+ * teste-v3-13) — E2E REAL sobre um `scripts/preview.mjs` SIMULADO (não o
+ * supervisor real): a 1ª chamada de `ensure` falha de propósito (não deixa
+ * nada saudável — mesmo sintoma do E2E real: corrida de porta/processo que
+ * ainda não soltou o bind), e só a 2ª sobe um servidor de verdade. Simular
+ * (em vez de derrubar o supervisor real) é o único jeito de forçar a
+ * PRIMEIRA tentativa a falhar de forma determinística sem depender de
+ * timing de rede real entre as duas chamadas, que `supremo-status.mjs`
+ * faz de dentro do MESMO processo, sem nenhum ponto de controle do teste
+ * entre elas — mesma técnica já usada aqui pro daemon (`daemonShim()`).
+ *
+ * O daemon já está saudável ANTES do resume (pré-aquecido, mesmo padrão dos
+ * testes acima) — isola o teste no retry do PREVIEW especificamente, sem
+ * envolver o caminho do daemon.
+ */
+describe('supremo:resume — retry único quando a 1ª tentativa do preview falha (v3.4.1, teste-v3-13)', () => {
+  let dir: string
+
+  afterEach(() => {
+    const daemonPid = daemonState(dir).pid
+    if (daemonPid) {
+      try {
+        process.kill(daemonPid)
+      } catch {
+        /* já morto */
+      }
+    }
+    try {
+      const previewPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      if (previewPid) process.kill(previewPid)
+    } catch {
+      /* já morto/nunca subiu */
+    }
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  /**
+   * `succeedFromCall`: a partir de qual chamada de `ensure` o shim sobe um
+   * servidor de verdade (1 = sempre sucesso; 2 = falha só na 1ª; um número
+   * maior que o total esperado de chamadas = falha SEMPRE).
+   */
+  function flakyPreviewShim(succeedFromCall: number): string {
+    return `#!/usr/bin/env node
+import fs from 'node:fs'
+import path from 'node:path'
+import http from 'node:http'
+import { spawn } from 'node:child_process'
+
+const PID_FILE = '.supremo/preview.pid'
+const PORT_FILE = '.supremo/preview.port'
+const PORT = Number(process.env.PORT || 3000)
+
+function bumpCount() {
+  let n = 0
+  try { n = Number(fs.readFileSync(process.env.PREVIEW_ENSURE_CALL_LOG, 'utf8').trim()) } catch {}
+  n += 1
+  fs.writeFileSync(process.env.PREVIEW_ENSURE_CALL_LOG, String(n))
+  return n
+}
+function alive(pid) {
+  if (!pid) return false
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+function readState() {
+  let pid = null, port = null
+  try { pid = Number(fs.readFileSync(PID_FILE, 'utf8').trim()) } catch {}
+  try { port = Number(fs.readFileSync(PORT_FILE, 'utf8').trim()) } catch {}
+  return { pid: Number.isFinite(pid) && pid > 0 ? pid : null, port: Number.isFinite(port) ? port : null }
+}
+function waitReady(timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve) => {
+    const tryOnce = () => {
+      const req = http.get({ host: '127.0.0.1', port: PORT, timeout: 300 }, (res) => { res.resume(); resolve(true) })
+      req.on('error', () => { if (Date.now() < deadline) setTimeout(tryOnce, 50); else resolve(false) })
+      req.on('timeout', () => { req.destroy() })
+    }
+    tryOnce()
+  })
+}
+
+const cmd = process.argv[2]
+
+if (cmd === 'ensure') {
+  const count = bumpCount()
+  if (count < ${succeedFromCall}) {
+    // Falha DE PROPÓSITO (mesmo sintoma do E2E real: corrida de porta) —
+    // não escreve pid/port nenhum, sai OK (best-effort — run() do
+    // supremo-status.mjs ignora exit code mesmo).
+    process.exit(0)
+  }
+  fs.mkdirSync(path.dirname(PID_FILE), { recursive: true })
+  const child = spawn(
+    process.execPath,
+    ['-e', \`require('http').createServer((_, res) => res.end('ok')).listen(\${PORT}, '127.0.0.1')\`],
+    { detached: true, stdio: 'ignore' },
+  )
+  child.unref()
+  const ready = await waitReady(5000)
+  if (ready) {
+    fs.writeFileSync(PID_FILE, String(child.pid))
+    fs.writeFileSync(PORT_FILE, String(PORT))
+  }
+}
+
+if (cmd === 'status') {
+  const { pid, port } = readState()
+  const running = alive(pid)
+  console.log(JSON.stringify({ running, healthy: running, url: running ? \`http://localhost:\${port}\` : null }))
+}
+`
+  }
+
+  function setup(port: number, succeedFromCall: number): { env: NodeJS.ProcessEnv; callLogFile: string } {
+    dir = mkdtempSync(join(tmpdir(), 'supremo-resume-retry-'))
+    const binDir = join(dir, 'bin')
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+
+    writeFileSync(join(dir, 'scripts/preview.mjs'), flakyPreviewShim(succeedFromCall), 'utf8')
+    writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'resume-retry-fixture', scripts: {} }))
+    writeFileSync(join(binDir, 'npx'), daemonShim(), { mode: 0o755 })
+
+    const callLogFile = join(dir, 'preview-ensure-call-count.txt')
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      PORT: String(port),
+      RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+      PREVIEW_ENSURE_CALL_LOG: callLogFile,
+    }
+    return { env, callLogFile }
+  }
+
+  function runResume(env: NodeJS.ProcessEnv): { status: number; result: ResumeJson | null; stdout: string } {
+    try {
+      const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        timeout: 20_000,
+      })
+      return { status: 0, result: JSON.parse(out) as ResumeJson, stdout: out }
+    } catch (err) {
+      const e = err as { status: number | null; stdout: string }
+      return { status: e.status ?? 1, result: e.stdout ? (JSON.parse(e.stdout) as ResumeJson) : null, stdout: e.stdout }
+    }
+  }
+
+  function preWarmDaemon(env: NodeJS.ProcessEnv): void {
+    execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+      cwd: dir,
+      env,
+      stdio: 'ignore',
+    })
+  }
+
+  it(
+    '1) 1ª tentativa do ensure falha → 2) retry único recupera → 3) healthy vira true → 4) só então o resultado libera o trabalho',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      // Sucede só a partir da 2ª chamada — a 1ª está garantida a falhar.
+      const { env, callLogFile } = setup(port, 2)
+      preWarmDaemon(env)
+
+      const { status, result } = runResume(env)
+
+      expect(status).toBe(0)
+      expect(result?.preview.healthy).toBe(true)
+      expect(result?.daemon.healthy).toBe(true)
+      expect(result?.preview.url).toBe(`http://localhost:${port}`)
+      // Exatamente 2 chamadas: a 1ª (falhou) + UMA única recuperação —
+      // nunca um loop, nunca uma 3ª tentativa.
+      expect(readFileSync(callLogFile, 'utf8').trim()).toBe('2')
+    },
+    30_000,
+  )
+
+  it(
+    'retry TAMBÉM falha → supremo:resume sai com código de erro, preview.healthy fica false, NUNCA uma 3ª tentativa',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      // succeedFromCall bem maior que o total de chamadas esperado (2):
+      // toda tentativa falha, sempre.
+      const { env, callLogFile } = setup(port, 99)
+      preWarmDaemon(env)
+
+      const { status, result } = runResume(env)
+
+      expect(status).not.toBe(0)
+      expect(result?.preview.healthy).toBe(false)
+      // Mesmo com o preview morto, o daemon (pré-aquecido) segue saudável —
+      // prova que o retry/gate é por sinal PRÓPRIO de cada um, não os dois
+      // juntos escondendo qual falhou.
+      expect(result?.daemon.healthy).toBe(true)
+      // Exatamente 2 chamadas — a 1ª + a única recuperação permitida.
+      // NUNCA um loop tentando de novo indefinidamente.
+      expect(readFileSync(callLogFile, 'utf8').trim()).toBe('2')
+    },
+    30_000,
+  )
+})

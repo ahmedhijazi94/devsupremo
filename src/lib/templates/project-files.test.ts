@@ -1177,15 +1177,6 @@ describe('E2E — o CI instala os motores que a suíte usa', () => {
 })
 
 describe('E2E — o smoke test corresponde ao app gerado', () => {
-  it('o título que o teste espera é o que o layout define', () => {
-    const layout = file('app/layout.tsx')
-    const spec = file('e2e/smoke.spec.ts')
-
-    const layoutTitle = layout.match(/title:\s*'([^']+)'/)?.[1]
-    expect(layoutTitle).toBe('meu-app')
-    expect(spec).toContain(`toHaveTitle('${layoutTitle}')`)
-  })
-
   it('o h1 que o teste procura existe na página', () => {
     expect(file('app/page.tsx')).toContain('meu-app')
     expect(file('e2e/smoke.spec.ts')).toContain('level: 1')
@@ -1193,6 +1184,54 @@ describe('E2E — o smoke test corresponde ao app gerado', () => {
 
   it('não sobrou o placeholder do create-next-app', () => {
     expect(file('e2e/smoke.spec.ts')).not.toContain('Create Next App')
+  })
+
+  // Bug real (v3-18): o smoke test exigia o h1 com o nome exato do projeto.
+  // O usuário renomeou o título da home para "Horizonte" — a aplicação
+  // funcionava, mas o gate E2E quebrava em chromium e mobile porque copy
+  // mutável pelo usuário tinha virado parte do contrato do teste padrão.
+  describe('o contrato não depende do texto exato da home — só de comportamento', () => {
+    const spec = file('e2e/smoke.spec.ts')
+
+    it('continua idêntico quando o texto do h1 muda completamente', () => {
+      const regressionFiles = buildProjectFiles({
+        projectName: 'v3-18',
+        description: 'App de teste',
+      })
+      const generatedPage = regressionFiles.find(
+        (entry) => entry.path === 'app/page.tsx',
+      )
+      const generatedSpec = regressionFiles.find(
+        (entry) => entry.path === 'e2e/smoke.spec.ts',
+      )
+      const h1Text = (source: string): string | undefined =>
+        source.match(/<h1[^>]*>\s*([^<]+?)\s*<\/h1>/)?.[1]?.trim()
+      const editedPage = (generatedPage?.content ?? '').replace(
+        /(<h1[^>]*>\s*)v3-18(\s*<\/h1>)/,
+        '$1Horizonte$2',
+      )
+
+      expect(h1Text(generatedPage?.content ?? '')).toBe('v3-18')
+      expect(h1Text(editedPage)).toBe('Horizonte')
+      expect(generatedSpec?.content).toBe(spec)
+    })
+
+    it('nunca referencia o nome do projeto nem copy específica', () => {
+      expect(spec).not.toContain('meu-app')
+      expect(spec).not.toContain('Horizonte')
+    })
+
+    it('não fixa o texto do h1 nem do título — checa que existem', () => {
+      expect(spec).toContain("getByRole('heading', { level: 1 })")
+      expect(spec).not.toMatch(/heading',\s*{\s*level:\s*1,\s*name:/)
+      expect(spec).toContain('toHaveTitle(/.+/)')
+      expect(spec).not.toMatch(/toHaveTitle\('/)
+    })
+
+    it('ainda exige a home carregar de verdade: resposta ok e main visível', () => {
+      expect(spec).toContain('response?.ok()')
+      expect(spec).toContain("getByRole('main')")
+    })
   })
 })
 

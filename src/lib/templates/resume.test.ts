@@ -814,3 +814,188 @@ if (cmd === 'status') {
     30_000,
   )
 })
+
+/**
+ * Lifecycle local do preview em dois cenários (v3.4.3, teste-v3-15) — E2E
+ * REAL. No Terminal (rede plena de um humano), `npm run supremo:resume`
+ * recupera preview+daemon em ~6s com exit 0. Rodado pelo AGENTE (rede
+ * restrita/proxy do sandbox), o MESMO fluxo falhava depois de ~1m30 e
+ * terminava fail-closed. Investigação (cwd/env/processo pai/detach/stdio/
+ * forma de iniciar daemon e preview): o preview é 100% local — `npm run
+ * dev` mais um GET em localhost, sem npx nem registry — e `run()` já
+ * ignora todo stdio nos dois ambientes; a diferença real é só a chamada de
+ * rede do daemon (`npx --yes supremo-cli daemon --ensure`), que não tinha
+ * NENHUM teto e podia ficar presa no retry/backoff interno do npm quando a
+ * rede não coopera. Este bloco cobre os dois fluxos pedidos (A: projeto
+ * novo, primeiro prompt; B: preview+daemon mortos, primeiro prompt da nova
+ * sessão) mais a prova direta de que o novo teto FALHA RÁPIDO em vez de
+ * travar — nunca um AUMENTO de timeout, o primeiro teto onde antes não
+ * havia nenhum.
+ */
+describe('supremo:resume — lifecycle local do preview em dois cenários (v3.4.3, teste-v3-15)', () => {
+  let dir: string
+
+  afterEach(() => {
+    const daemonPid = daemonState(dir).pid
+    if (daemonPid) {
+      try {
+        process.kill(daemonPid)
+      } catch {
+        /* já morto */
+      }
+    }
+    try {
+      const previewPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      if (previewPid) process.kill(previewPid)
+    } catch {
+      /* já morto/nunca subiu */
+    }
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  /** Shim de `npx` que TRAVA de propósito na chamada de `daemon --ensure` — nunca
+   * termina sozinho, só via timeout/kill externo. Simula uma rede restrita ou
+   * um proxy que nunca responde, o sintoma exato do sandbox do agente. */
+  function hangingNpxShim(): string {
+    return `#!/usr/bin/env node
+const args = process.argv.slice(2)
+if (args[0] === '--yes' && args[1] === 'supremo-cli' && args[2] === 'daemon' && args.includes('--ensure')) {
+  setInterval(() => {}, 1000)
+} else {
+  process.exit(1)
+}
+`
+  }
+
+  function setup(port: number, npxShim: string): { env: NodeJS.ProcessEnv } {
+    dir = mkdtempSync(join(tmpdir(), 'supremo-resume-lifecycle-'))
+    const binDir = join(dir, 'bin')
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+
+    writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+    writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
+    writeFileSync(
+      join(dir, 'scripts/dev-server.mjs'),
+      "import http from 'node:http'\n" +
+        'const port = Number(process.env.PORT || 3000)\n' +
+        "http.createServer((_, res) => res.end('ok')).listen(port, '127.0.0.1')\n",
+      'utf8',
+    )
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'resume-lifecycle-fixture', scripts: { dev: 'node scripts/dev-server.mjs' } }),
+    )
+    writeFileSync(join(binDir, 'npx'), npxShim, { mode: 0o755 })
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      PORT: String(port),
+      RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+      SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
+      SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '2000',
+    }
+    return { env }
+  }
+
+  function runResume(env: NodeJS.ProcessEnv): { status: number; result: ResumeJson | null; elapsedMs: number } {
+    const start = Date.now()
+    try {
+      const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        timeout: 20_000,
+      })
+      return { status: 0, result: JSON.parse(out) as ResumeJson, elapsedMs: Date.now() - start }
+    } catch (err) {
+      const e = err as { status: number | null; stdout: string }
+      return {
+        status: e.status ?? 1,
+        result: e.stdout ? (JSON.parse(e.stdout) as ResumeJson) : null,
+        elapsedMs: Date.now() - start,
+      }
+    }
+  }
+
+  it(
+    'cenário A — projeto novo, primeiro prompt: nada registrado ainda → preflight sobe preview+daemon e o preview fica pronto pra abrir sozinho',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      const { env } = setup(port, daemonShim())
+      expect(existsSync(join(dir, '.supremo'))).toBe(false)
+
+      const { status, result } = runResume(env)
+
+      expect(status).toBe(0)
+      expect(result?.daemon.healthy).toBe(true)
+      expect(result?.preview.healthy).toBe(true)
+      // "abre automaticamente assim que ficar saudável" depende de uma URL
+      // real pronta no JSON — é o que o agente usa pra disponibilizar o pane.
+      expect(result?.preview.url).toBe(`http://localhost:${port}`)
+    },
+    30_000,
+  )
+
+  it(
+    'cenário B — preview+daemon mortos, primeiro prompt da nova sessão: religa os dois e o preview fica pronto pra abrir sozinho',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      const { env } = setup(port, daemonShim())
+
+      // Sobe os dois de propósito, depois mata — "estava tudo de pé numa
+      // sessão anterior, o app fechou/a máquina reiniciou" (mesmo padrão do
+      // reboot simulado v3.2, agora sob a lente específica do v3-15).
+      execFileSync(process.execPath, [join(dir, 'scripts/preview.mjs'), 'ensure'], {
+        cwd: dir,
+        env,
+        stdio: 'ignore',
+        timeout: 15_000,
+      })
+      execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+        cwd: dir,
+        env,
+        stdio: 'ignore',
+      })
+      const previewPidBefore = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      const daemonPidBefore = daemonState(dir).pid!
+      process.kill(previewPidBefore, 'SIGKILL')
+      process.kill(daemonPidBefore, 'SIGKILL')
+
+      const { status, result } = runResume(env)
+
+      expect(status).toBe(0)
+      expect(result?.daemon.healthy).toBe(true)
+      expect(result?.preview.healthy).toBe(true)
+      // Processo NOVO (o antigo morreu de vez com SIGKILL) — o supervisor
+      // pode legitimamente relocalizar de porta se o SO ainda não soltou a
+      // anterior (mesma resiliência já coberta em preview-ownership.test.ts);
+      // o que "abre sozinho" precisa é uma URL real e consistente com o que
+      // ficou persistido, não necessariamente a MESMA porta de antes.
+      const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(result?.preview.url).toBe(`http://localhost:${finalPort}`)
+    },
+    30_000,
+  )
+
+  it(
+    'rede do agente restrita (npx do daemon nunca responde) → preflight FALHA RÁPIDO e fail-closed, nunca trava ~1m30',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      const { env: baseEnv } = setup(port, hangingNpxShim())
+      // Teto bem curto só pro teste não gastar segundos reais — o mecanismo
+      // sob teste (o teto existe e é respeitado) independe do valor exato.
+      const env = { ...baseEnv, SUPREMO_DAEMON_ENSURE_TIMEOUT_MS: '300' }
+
+      const { status, result, elapsedMs } = runResume(env)
+
+      expect(status).not.toBe(0)
+      expect(result?.daemon.healthy).toBe(false)
+      // Falhou perto do teto configurado (300ms) — nunca perto de um hang
+      // real de segundos. Alguma folga pro overhead do próprio processo.
+      expect(elapsedMs).toBeLessThan(3_000)
+    },
+    30_000,
+  )
+})

@@ -183,6 +183,12 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
       PATH: `${binDir}:${process.env.PATH}`,
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+      // ensure() do supervisor real já espera internamente (waitReady) até o
+      // dev-server.mjs (HTTP puro, sobe quase instantâneo) responder — a
+      // janela de polling do preflight abaixo não é o que estes testes
+      // cobrem; encurtada só pra não gastar os 4s de produção à toa.
+      SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
+      SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '2000',
     }
     return { dir, env }
   }
@@ -522,6 +528,12 @@ if (cmd === 'status') {
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
       PREVIEW_ENSURE_CALL_LOG: callLogFile,
+      // O shim decide healthy por CONTAGEM de chamada, não por tempo — a
+      // janela de polling do preflight não muda o resultado aqui, só quanto
+      // tempo o teste espera até desistir. Encurtada só pra não gastar os
+      // 4s de produção à toa quando a resposta já é definitiva na 1ª leitura.
+      SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
+      SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '100',
     }
     return { env, callLogFile }
   }
@@ -590,6 +602,214 @@ if (cmd === 'status') {
       // Exatamente 2 chamadas — a 1ª + a única recuperação permitida.
       // NUNCA um loop tentando de novo indefinidamente.
       expect(readFileSync(callLogFile, 'utf8').trim()).toBe('2')
+    },
+    30_000,
+  )
+})
+
+/**
+ * Janela curta de polling depois do ensure (v3.4.2, teste-v3-14) — E2E REAL.
+ * Cenário observado: `supremo:resume` religava o preview corretamente — o
+ * processo ficava `running=true` na hora — mas o Next ainda estava
+ * compilando a 1ª rota, então `healthy=false` por alguns segundos. Uma ÚNICA
+ * leitura de status logo depois do `ensure` (o que o preflight fazia antes
+ * do v3.4.1) é uma corrida: o preflight abortava cedo demais, e o MESMO
+ * comando, rodado poucos segundos depois sem nenhuma intervenção, já
+ * mostrava `healthy=true`. Não é falha de restart — é corrida de timing.
+ *
+ * Este shim reproduz o sintoma exato: `ensure` grava pid/porta e sobe um
+ * processo real IMEDIATAMENTE (`running=true` na hora), mas o servidor HTTP
+ * só começa a escutar depois de `HEALTH_DELAY_MS` (simula o Next
+ * compilando) — `healthy` só vira `true` quando o probe HTTP de verdade
+ * (mesmo `health()` do supervisor real) alcançar a porta já escutando.
+ */
+describe('supremo:resume — janela curta de polling depois do ensure (v3.4.2, teste-v3-14)', () => {
+  let dir: string
+
+  afterEach(() => {
+    const daemonPid = daemonState(dir).pid
+    if (daemonPid) {
+      try {
+        process.kill(daemonPid)
+      } catch {
+        /* já morto */
+      }
+    }
+    try {
+      const previewPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      if (previewPid) process.kill(previewPid)
+    } catch {
+      /* já morto/nunca subiu */
+    }
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function slowToHealthyPreviewShim(): string {
+    return `#!/usr/bin/env node
+import fs from 'node:fs'
+import path from 'node:path'
+import http from 'node:http'
+import { spawn } from 'node:child_process'
+
+const PID_FILE = '.supremo/preview.pid'
+const PORT_FILE = '.supremo/preview.port'
+const PORT = Number(process.env.PORT || 3000)
+const DELAY_MS = Number(process.env.HEALTH_DELAY_MS || 800)
+
+function alive(pid) {
+  if (!pid) return false
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+function readState() {
+  let pid = null
+  try { pid = Number(fs.readFileSync(PID_FILE, 'utf8').trim()) } catch {}
+  return { pid: Number.isFinite(pid) && pid > 0 ? pid : null }
+}
+function health(port, timeoutMs) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: timeoutMs }, (res) => { res.resume(); resolve((res.statusCode || 0) > 0) })
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+  })
+}
+
+const cmd = process.argv[2]
+
+if (cmd === 'ensure') {
+  let n = 0
+  try { n = Number(fs.readFileSync(process.env.PREVIEW_ENSURE_CALL_LOG, 'utf8').trim()) } catch {}
+  fs.writeFileSync(process.env.PREVIEW_ENSURE_CALL_LOG, String(n + 1))
+
+  fs.mkdirSync(path.dirname(PID_FILE), { recursive: true })
+  // Processo real sobe NA HORA (running=true imediato) — só o LISTEN do
+  // servidor HTTP é adiado, exatamente o sintoma do E2E real (Next ainda
+  // compilando a 1ª rota: o processo já existe, a porta ainda não responde).
+  const child = spawn(
+    process.execPath,
+    ['-e', \`setTimeout(() => { require('http').createServer((_, res) => res.end('ok')).listen(\${PORT}, '127.0.0.1') }, \${DELAY_MS})\`],
+    { detached: true, stdio: 'ignore' },
+  )
+  child.unref()
+  fs.writeFileSync(PID_FILE, String(child.pid))
+  fs.writeFileSync(PORT_FILE, String(PORT))
+}
+
+if (cmd === 'status') {
+  const { pid } = readState()
+  const running = alive(pid)
+  const healthy = running && (await health(PORT, 1500))
+  console.log(JSON.stringify({ running, healthy, url: healthy ? \`http://localhost:\${PORT}\` : null }))
+}
+`
+  }
+
+  function setup(
+    port: number,
+    healthDelayMs: number,
+  ): { env: NodeJS.ProcessEnv; callLogFile: string } {
+    dir = mkdtempSync(join(tmpdir(), 'supremo-resume-timing-'))
+    const binDir = join(dir, 'bin')
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+
+    writeFileSync(join(dir, 'scripts/preview.mjs'), slowToHealthyPreviewShim(), 'utf8')
+    writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'resume-timing-fixture', scripts: {} }))
+    writeFileSync(join(binDir, 'npx'), daemonShim(), { mode: 0o755 })
+
+    const callLogFile = join(dir, 'preview-ensure-call-count.txt')
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      PORT: String(port),
+      RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+      PREVIEW_ENSURE_CALL_LOG: callLogFile,
+      HEALTH_DELAY_MS: String(healthDelayMs),
+      // Janela de polling real (não instantânea) — precisa ser MAIOR que
+      // healthDelayMs pra dar tempo do servidor terminar de subir, e o
+      // intervalo precisa ser menor que a folga entre eles pra provar que é
+      // um POLLING (várias leituras), não uma segunda leitura só por sorte.
+      SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '150',
+      SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '3000',
+    }
+    return { env, callLogFile }
+  }
+
+  function preWarmDaemon(env: NodeJS.ProcessEnv): void {
+    execFileSync(join(dir, 'bin/npx'), ['--yes', 'supremo-cli', 'daemon', '--ensure'], {
+      cwd: dir,
+      env,
+      stdio: 'ignore',
+    })
+  }
+
+  function runResume(env: NodeJS.ProcessEnv): { status: number; result: ResumeJson | null; elapsedMs: number } {
+    const start = Date.now()
+    try {
+      const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        timeout: 20_000,
+      })
+      return { status: 0, result: JSON.parse(out) as ResumeJson, elapsedMs: Date.now() - start }
+    } catch (err) {
+      const e = err as { status: number | null; stdout: string }
+      return {
+        status: e.status ?? 1,
+        result: e.stdout ? (JSON.parse(e.stdout) as ResumeJson) : null,
+        elapsedMs: Date.now() - start,
+      }
+    }
+  }
+
+  it(
+    'processo inicia imediatamente (running=true) mas health só vira true ~800ms depois → preflight ESPERA e conclui com sucesso, sem falso negativo',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      const { env, callLogFile } = setup(port, 800)
+      preWarmDaemon(env)
+
+      const { status, result, elapsedMs } = runResume(env)
+
+      expect(status).toBe(0)
+      expect(result?.preview.healthy).toBe(true)
+      expect(result?.daemon.healthy).toBe(true)
+      // Prova que ESPEROU de verdade (não passou batido antes do processo
+      // ficar pronto) — mas sem estourar a janela de 3s configurada.
+      expect(elapsedMs).toBeGreaterThanOrEqual(750)
+      expect(elapsedMs).toBeLessThan(3_000)
+      // Ficou saudável dentro da 1ª janela — a 2ª tentativa de ensure NUNCA
+      // precisou rodar.
+      expect(readFileSync(callLogFile, 'utf8').trim()).toBe('1')
+    },
+    30_000,
+  )
+
+  it(
+    'caminho saudável (já healthy antes do ensure) continua imediato — nenhum polling, nenhuma chamada de ensure',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      const { env, callLogFile } = setup(port, 0)
+      preWarmDaemon(env)
+      // Sobe o preview de propósito ANTES do resume, já saudável.
+      execFileSync(process.execPath, [join(dir, 'scripts/preview.mjs'), 'ensure'], {
+        cwd: dir,
+        env,
+        stdio: 'ignore',
+      })
+
+      const start = Date.now()
+      const { status, result } = runResume(env)
+      const elapsedMs = Date.now() - start
+
+      expect(status).toBe(0)
+      expect(result?.preview.healthy).toBe(true)
+      // Já saudável: o bloco de ensure/polling inteiro é pulado — rápido de
+      // verdade, nunca perto da janela de 3s configurada.
+      expect(elapsedMs).toBeLessThan(1_000)
+      // Nenhuma chamada NOVA de ensure — só a que o teste fez pra pré-aquecer.
+      expect(readFileSync(callLogFile, 'utf8').trim()).toBe('1')
     },
     30_000,
   )

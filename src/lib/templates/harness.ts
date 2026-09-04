@@ -802,6 +802,34 @@ function readDaemonLocal() {
 const readPreview = () => tryJson('node', ['scripts/preview.mjs', 'status']) ?? { running: false, healthy: false }
 const readDaemon = readDaemonLocal
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// E2E real (teste-v3-14): logo depois de \`ensure\` subir/religar o preview, o
+// processo já está \`running=true\`, mas o Next ainda pode estar compilando a
+// 1ª rota — \`healthy=false\` por alguns segundos, sem nada estar de fato
+// quebrado. Uma ÚNICA leitura de \`preview.mjs status\` logo em seguida (o que
+// o preflight fazia antes) é uma corrida, não uma prova de falha: o mesmo
+// comando, rodado poucos segundos depois sem nenhuma intervenção, já
+// mostrava \`healthy=true\`. Por isso, depois de CADA \`ensure\`, o preflight dá
+// ao preview uma janela CURTA e LIMITADA pra ficar saudável — polling local
+// leve (só relê o pidfile/porta e faz um GET em localhost, nunca rede
+// externa), nunca um loop sem fim: para assim que \`healthy\` vira true, ou no
+// mais tardar quando a janela esgota.
+const PREVIEW_POLL_INTERVAL_MS = Number(process.env.SUPREMO_PREFLIGHT_POLL_INTERVAL_MS) || 300
+const PREVIEW_POLL_TIMEOUT_MS = Number(process.env.SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS) || 4000
+
+async function waitForPreviewHealthy(timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let state = readPreview()
+  while (!state.healthy && Date.now() < deadline) {
+    await sleep(PREVIEW_POLL_INTERVAL_MS)
+    state = readPreview()
+  }
+  return state
+}
+
 let preview = readPreview()
 let daemon = readDaemon()
 
@@ -817,17 +845,18 @@ if (process.argv.includes('--ensure')) {
   }
   if (!preview.healthy) {
     run('node', ['scripts/preview.mjs', 'ensure'])
-    preview = readPreview()
+    preview = await waitForPreviewHealthy(PREVIEW_POLL_TIMEOUT_MS)
 
     // E2E real (teste-v3-13): a primeira tentativa do supervisor pode falhar
-    // (ex.: corrida de porta, processo anterior que ainda não soltou o bind) —
-    // sem retry, o preview ficava morto e o agente seguia editando/fazendo
-    // checkpoint mesmo assim. UMA única recuperação extra, pelo MESMO
-    // supervisor (nenhuma lógica nova, nunca um loop): só roda quando a
-    // primeira tentativa realmente não deixou o preview saudável.
+    // de verdade (ex.: corrida de porta, processo anterior que ainda não
+    // soltou o bind) — sem retry, o preview ficava morto e o agente seguia
+    // editando/fazendo checkpoint mesmo assim. UMA única recuperação extra,
+    // pelo MESMO supervisor (nenhuma lógica nova, nunca um loop): só roda
+    // quando a janela de espera acima esgotou e o preview REALMENTE não
+    // ficou saudável — não por causa de uma leitura cedo demais.
     if (!preview.healthy) {
       run('node', ['scripts/preview.mjs', 'ensure'])
-      preview = readPreview()
+      preview = await waitForPreviewHealthy(PREVIEW_POLL_TIMEOUT_MS)
     }
   }
 }

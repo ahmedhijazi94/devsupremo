@@ -3,7 +3,6 @@ import Link from 'next/link'
 import {
   Settings,
   User,
-  KeyRound,
   GitBranch,
   Database,
   ArrowRight,
@@ -22,38 +21,27 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [
-    { count: githubCount },
-    { count: supabaseCount },
-    { count: tokenCount },
-  ] = await Promise.all([
-    supabase
-      .from('github_accounts')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', user.id),
-    supabase
-      .from('supabase_accounts')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', user.id),
-    supabase
-      .from('mcp_tokens')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .is('revoked_at', null),
-  ])
+  const [{ count: githubCount }, { count: supabaseCount }] =
+    await Promise.all([
+      supabase
+        .from('github_accounts')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id),
+      supabase
+        .from('supabase_accounts')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id),
+    ])
 
+  // v3.4 — o link de gerenciamento de tokens (arquitetura antiga) saiu daqui.
+  // A tabela por trás dele e as RLS policies continuam intactas no backend;
+  // só a UI de configuração saiu.
   const links = [
     {
       href: '/accounts',
       icon: GitBranch,
       title: 'Contas conectadas',
       description: `${githubCount ?? 0} GitHub · ${supabaseCount ?? 0} Supabase`,
-    },
-    {
-      href: '/mcps',
-      icon: KeyRound,
-      title: 'Tokens de MCP',
-      description: `${tokenCount ?? 0} token${tokenCount === 1 ? '' : 's'} ativo${tokenCount === 1 ? '' : 's'}`,
     },
   ]
 
@@ -135,14 +123,7 @@ export default async function SettingsPage() {
 
       <Card className="border-down bg-down/30 space-y-3 rounded-[var(--radius-inner)] border p-5">
         <h2 className="text-down-ink font-semibold">Encerrar sessão</h2>
-        <p className="text-muted text-sm">
-          Sai apenas deste navegador. Os tokens de MCP continuam válidos —
-          revogue-os em{' '}
-          <Link href="/mcps" className="underline underline-offset-2">
-            Integração MCP
-          </Link>{' '}
-          se quiser cortar o acesso dos agentes.
-        </p>
+        <p className="text-muted text-sm">Sai apenas deste navegador.</p>
         <form action="/auth/logout" method="POST">
           <button
             type="submit"

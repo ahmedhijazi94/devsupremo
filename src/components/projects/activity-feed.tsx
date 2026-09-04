@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import {
   GitPullRequest,
   GitCommit,
@@ -53,12 +52,8 @@ export function ActivityFeed({ items, repoFullName }: ActivityFeedProps) {
         <Sparkles className="text-muted mx-auto mb-3 h-6 w-6" />
         <p className="text-sm font-medium">Nenhuma mudança ainda</p>
         <p className="text-muted mx-auto mt-1 max-w-sm text-sm">
-          Conecte um agente em{' '}
-          <Link href="/mcps" className="underline underline-offset-2">
-            Integração MCP
-          </Link>{' '}
-          e peça a primeira alteração. Cada proposta aparece aqui com o PR e o
-          resultado dos gates.
+          Peça a primeira alteração ao seu agente. Cada proposta aparece aqui
+          com o PR e o resultado dos gates.
         </p>
       </div>
     )

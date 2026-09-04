@@ -23,7 +23,7 @@ const PILLARS = [
   {
     icon: Zap,
     title: 'De qualquer máquina',
-    body: 'Claude Code, Antigravity, Codex ou Cursor conectam por MCP remoto, sem instalar nada.',
+    body: 'Claude Code, Antigravity, Codex ou Cursor rodam localmente — checkpoint e preview ficam sincronizados sozinhos.',
   },
   {
     icon: Globe,

@@ -27,7 +27,7 @@ export function ActivateProjectButton({
         toast.error(result.error)
         return
       }
-      toast.success('Projeto ativado! O MCP já sabe o contexto.')
+      toast.success('Projeto ativado! O agente já sabe o contexto.')
       router.refresh()
     })
   }

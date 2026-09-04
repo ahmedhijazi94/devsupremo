@@ -9,7 +9,7 @@ const inter = Inter({ subsets: ['latin'] })
 export const metadata: Metadata = {
   title: 'Supremo — Plataforma de Apps via IA',
   description:
-    'Crie apps profissionais com segurança máxima via IA. Multi-conta, multi-MCP, pipeline de testes automática.',
+    'Crie apps profissionais com segurança máxima via IA. Multi-conta, multi-agente, pipeline de testes automática.',
 }
 
 export default function RootLayout({

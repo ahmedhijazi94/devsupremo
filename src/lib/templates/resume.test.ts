@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -150,38 +150,141 @@ function waitUntilDead(pid: number, timeoutMs = 5000): boolean {
   return !alivePid(pid)
 }
 
+type LinuxProcessIdentity = {
+  pid: number
+  startTimeTicks: string
+}
+
+type PreviewProcessSnapshot =
+  | { kind: 'linux'; members: LinuxProcessIdentity[] }
+  | { kind: 'portable'; processGroupIds: number[] }
+
+type SignalState = 'observable' | 'absent' | 'unknown'
+
 /**
- * O preview nasce com `detached: true`, portanto seu PID também é o líder
- * do grupo que contém npm + dev server. Esperar o grupo inteiro evita deixar
- * o servidor filho órfão depois que o processo npm termina.
+ * `kill(pid, 0)` não distingue processo executando, zumbi e PID reutilizado;
+ * `EPERM` nem sequer prova existência. No runner Linux, `/proc` fornece a
+ * identidade estável (pid + starttime) e o estado real de cada membro do
+ * grupo destacado sem tentar sinalizá-lo.
  */
-function processGroupAlive(pid: number): boolean {
-  if (process.platform === 'win32') return alivePid(pid)
+function readLinuxProcessStat(
+  pid: number,
+): { state: string; processGroupId: number; startTimeTicks: string } | null {
+  if (process.platform !== 'linux') return null
   try {
-    process.kill(-pid, 0)
-    return true
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code !== 'ESRCH'
+    const raw = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const commandEnd = raw.lastIndexOf(')')
+    if (commandEnd < 0) return null
+    const fields = raw.slice(commandEnd + 2).trim().split(/\s+/)
+    const state = fields[0]
+    const processGroupId = Number(fields[2])
+    const startTimeTicks = fields[19]
+    if (!state || !Number.isFinite(processGroupId) || !startTimeTicks) return null
+    return { state, processGroupId, startTimeTicks }
+  } catch {
+    return null
   }
 }
 
-function waitUntilProcessGroupDead(pid: number, timeoutMs = 5000): boolean {
+function capturePreviewProcesses(processGroupIds: number[]): PreviewProcessSnapshot {
+  const uniqueGroupIds = [...new Set(processGroupIds.filter((pid) => pid > 0))]
+  if (process.platform === 'linux' && existsSync('/proc')) {
+    const wanted = new Set(uniqueGroupIds)
+    const members: LinuxProcessIdentity[] = []
+    for (const entry of readdirSync('/proc', { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue
+      const pid = Number(entry.name)
+      const stat = readLinuxProcessStat(pid)
+      if (stat && wanted.has(stat.processGroupId)) {
+        members.push({ pid, startTimeTicks: stat.startTimeTicks })
+      }
+    }
+    return { kind: 'linux', members }
+  }
+  return { kind: 'portable', processGroupIds: uniqueGroupIds }
+}
+
+function signalState(target: number): SignalState {
+  try {
+    process.kill(target, 0)
+    return 'observable'
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ESRCH'
+      ? 'absent'
+      : 'unknown'
+  }
+}
+
+function linuxProcessTerminated(identity: LinuxProcessIdentity): boolean {
+  const current = readLinuxProcessStat(identity.pid)
+  if (!current) return true
+  if (current.startTimeTicks !== identity.startTimeTicks) return true
+  return ['Z', 'X', 'x'].includes(current.state)
+}
+
+function previewProcessesTerminated(
+  snapshot: PreviewProcessSnapshot,
+  instanceInvalidated: boolean,
+): boolean {
+  if (snapshot.kind === 'linux') {
+    return snapshot.members.every(linuxProcessTerminated)
+  }
+  return snapshot.processGroupIds.every((processGroupId) => {
+    const state = signalState(process.platform === 'win32' ? processGroupId : -processGroupId)
+    if (state === 'absent') return true
+    // EPERM é indeterminado. Só o aceitamos depois que o par pid+instanceId
+    // deixou de ser a instância registrada; nunca o promovemos a "vivo".
+    return state === 'unknown' && instanceInvalidated
+  })
+}
+
+function waitUntilPreviewProcessesTerminate(
+  snapshot: PreviewProcessSnapshot,
+  instanceInvalidated: boolean,
+  timeoutMs = 5000,
+): boolean {
   const start = Date.now()
-  while (processGroupAlive(pid) && Date.now() - start < timeoutMs) {
+  while (
+    !previewProcessesTerminated(snapshot, instanceInvalidated) &&
+    Date.now() - start < timeoutMs
+  ) {
     sleepMs(50)
   }
-  return !processGroupAlive(pid)
+  return previewProcessesTerminated(snapshot, instanceInvalidated)
+}
+
+function signalCapturedPreviewProcesses(
+  snapshot: PreviewProcessSnapshot,
+  signal: NodeJS.Signals,
+): void {
+  if (snapshot.kind === 'linux') {
+    for (const identity of snapshot.members) {
+      if (linuxProcessTerminated(identity)) continue
+      try {
+        process.kill(identity.pid, signal)
+      } catch {
+        /* ESRCH/EPERM: a confirmação vem da identidade capturada. */
+      }
+    }
+    return
+  }
+  for (const processGroupId of snapshot.processGroupIds) {
+    try {
+      process.kill(
+        process.platform === 'win32' ? processGroupId : -processGroupId,
+        signal,
+      )
+    } catch {
+      /* ESRCH/EPERM: a confirmação vem do estado da instância. */
+    }
+  }
 }
 
 function killProcessGroupAndWait(pid: number, timeoutMs = 3000): void {
-  try {
-    process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL')
-  } catch {
-    /* já morto */
-  }
-  const start = Date.now()
-  while (processGroupAlive(pid) && Date.now() - start < timeoutMs) {
-    sleepMs(50)
+  const snapshot = capturePreviewProcesses([pid])
+  signalCapturedPreviewProcesses(snapshot, 'SIGKILL')
+  if (!waitUntilPreviewProcessesTerminate(snapshot, true, timeoutMs)) {
+    throw new Error(`Grupo do preview ${pid} não terminou.`)
   }
 }
 
@@ -1090,9 +1193,14 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
   let dir: string
   let fixtureEnv: NodeJS.ProcessEnv
 
-  type TrackedFixtureProcess = {
-    kind: 'preview' | 'heartbeat'
+  type TrackedFixtureProcess =
+    | { kind: 'preview'; pid: number }
+    | { kind: 'heartbeat'; pid: number; instanceId: string }
+    | { kind: 'heartbeat-stopped'; pid: number; instanceId: string }
+
+  type PreviewInstance = {
     pid: number
+    instanceId: string
   }
 
   /**
@@ -1102,28 +1210,46 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
    */
   function previewSupervisorWithLifecycleTracking(): string {
     const source = previewSupervisorScript()
-    const processLogWrite = (kind: TrackedFixtureProcess['kind']): string =>
+    const previewStartedWrite =
       `  if (process.env.RESUME_TEST_PROCESS_LOG && child.pid) {\n` +
-      `    writeFileSync(process.env.RESUME_TEST_PROCESS_LOG, JSON.stringify({ kind: '${kind}', pid: child.pid }) + '\\n', { flag: 'a' })\n` +
+      `    writeFileSync(process.env.RESUME_TEST_PROCESS_LOG, JSON.stringify({ kind: 'preview', pid: child.pid }) + '\\n', { flag: 'a' })\n` +
+      `  }\n`
+    const heartbeatStartedWrite =
+      `  if (process.env.RESUME_TEST_PROCESS_LOG && child.pid) {\n` +
+      `    writeFileSync(process.env.RESUME_TEST_PROCESS_LOG, JSON.stringify({ kind: 'heartbeat', pid: child.pid, instanceId }) + '\\n', { flag: 'a' })\n` +
+      `  }\n`
+    const heartbeatStoppedWrite =
+      `  if (process.env.RESUME_TEST_PROCESS_LOG) {\n` +
+      `    writeFileSync(process.env.RESUME_TEST_PROCESS_LOG, JSON.stringify({ kind: 'heartbeat-stopped', pid: process.pid, instanceId }) + '\\n', { flag: 'a' })\n` +
       `  }\n`
 
     const heartbeatNeedle =
       '  child.unref()\n}\nasync function heartbeatLoop'
     const previewNeedle =
       '  child.unref()\n  // NÃO grava PIDFILE/PORTFILE aqui'
+    const heartbeatStoppedNeedle =
+      "  if (currentInstanceId() === instanceId) {\n    try { rmSync(HEALTH_FILE, { force: true }) } catch {}\n  }\n}\n\n// Orçamento de espera"
 
     const withHeartbeatTracking = source.replace(
       heartbeatNeedle,
-      `${processLogWrite('heartbeat')}${heartbeatNeedle}`,
+      `${heartbeatStartedWrite}${heartbeatNeedle}`,
     )
-    const withAllTracking = withHeartbeatTracking.replace(
+    const withPreviewTracking = withHeartbeatTracking.replace(
       previewNeedle,
-      `${processLogWrite('preview')}${previewNeedle}`,
+      `${previewStartedWrite}${previewNeedle}`,
+    )
+    const withAllTracking = withPreviewTracking.replace(
+      heartbeatStoppedNeedle,
+      heartbeatStoppedNeedle.replace(
+        '\n}\n\n// Orçamento de espera',
+        `\n${heartbeatStoppedWrite}}\n\n// Orçamento de espera`,
+      ),
     )
 
     if (
       withHeartbeatTracking === source ||
-      withAllTracking === withHeartbeatTracking
+      withPreviewTracking === withHeartbeatTracking ||
+      withAllTracking === withPreviewTracking
     ) {
       throw new Error('Não foi possível instrumentar o lifecycle da fixture.')
     }
@@ -1141,18 +1267,91 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
     }
   }
 
+  function currentPreviewInstance(): PreviewInstance | null {
+    try {
+      const pid = Number(
+        readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim(),
+      )
+      const instanceId = readFileSync(
+        join(dir, '.supremo/preview.instance'),
+        'utf8',
+      ).trim()
+      return Number.isFinite(pid) && pid > 0 && instanceId
+        ? { pid, instanceId }
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  function waitUntilPreviewInstanceInvalidated(
+    instance: PreviewInstance | null,
+    timeoutMs = 5000,
+  ): boolean {
+    if (!instance) return true
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      const current = currentPreviewInstance()
+      if (
+        !current ||
+        current.pid !== instance.pid ||
+        current.instanceId !== instance.instanceId
+      ) {
+        return true
+      }
+      sleepMs(50)
+    }
+    return false
+  }
+
+  function waitUntilHeartbeatWritersStop(
+    started: Extract<TrackedFixtureProcess, { kind: 'heartbeat' }>[],
+    timeoutMs = 5000,
+  ): boolean {
+    const expected = started.map(({ pid, instanceId }) => `${pid}:${instanceId}`)
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      const stopped = new Set(
+        trackedFixtureProcesses()
+          .filter(
+            (
+              process,
+            ): process is Extract<
+              TrackedFixtureProcess,
+              { kind: 'heartbeat-stopped' }
+            > => process.kind === 'heartbeat-stopped',
+          )
+          .map(({ pid, instanceId }) => `${pid}:${instanceId}`),
+      )
+      if (expected.every((identity) => stopped.has(identity))) return true
+      sleepMs(50)
+    }
+    return expected.length === 0
+  }
+
   afterEach(() => {
     const daemonPid = daemonState(dir).pid
     const tracked = trackedFixtureProcesses()
     const previewPids = tracked
       .filter(({ kind }) => kind === 'preview')
       .map(({ pid }) => pid)
-    const heartbeatPids = tracked
-      .filter(({ kind }) => kind === 'heartbeat')
-      .map(({ pid }) => pid)
-    const hadCurrentInstance = existsSync(join(dir, '.supremo/preview.instance'))
+    const heartbeatWriters = tracked.filter(
+      (
+        process,
+      ): process is Extract<TrackedFixtureProcess, { kind: 'heartbeat' }> =>
+        process.kind === 'heartbeat',
+    )
+    const previewInstance = currentPreviewInstance()
+    const previewSnapshot = capturePreviewProcesses([
+      ...previewPids,
+      ...(previewInstance ? [previewInstance.pid] : []),
+    ])
+    const heartbeatSnapshot = capturePreviewProcesses(
+      heartbeatWriters.map(({ pid }) => pid),
+    )
 
     let stopError: unknown
+    let instanceInvalidated = false
     let previewStopped = false
     let heartbeatStopped = false
     let daemonStopped = false
@@ -1173,13 +1372,26 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
         stopError = err
       }
 
-      // `stop` invalida preview.instance; cada writer destacado observa isso
-      // e termina. Esperamos os PIDs reais, nunca um timeout arbitrário antes
-      // de apagar o diretório onde eles escrevem.
-      previewStopped = previewPids.every((pid) =>
-        waitUntilProcessGroupDead(pid),
+      // `stop` remove pid+instanceId sincronicamente, invalidando ESTA
+      // instância. No Linux, npm pode morrer sem propagar SIGTERM ao filho
+      // `dev`; o cleanup do teste encerra os membros que capturou antes do
+      // stop e observa pid+starttime/estado em /proc. Assim um zumbi, PID
+      // reutilizado ou EPERM nunca é confundido com a instância original.
+      instanceInvalidated = waitUntilPreviewInstanceInvalidated(
+        previewInstance,
       )
-      heartbeatStopped = heartbeatPids.every((pid) => waitUntilDead(pid))
+      signalCapturedPreviewProcesses(previewSnapshot, 'SIGTERM')
+      previewStopped =
+        instanceInvalidated &&
+        waitUntilPreviewProcessesTerminate(
+          previewSnapshot,
+          instanceInvalidated,
+        )
+
+      // O ACK é escrito no fim do heartbeatLoop instrumentado da fixture,
+      // depois da última escrita possível em `.supremo`. Não depende de
+      // kill(pid, 0), que pode responder EPERM ou enxergar um zumbi.
+      heartbeatStopped = waitUntilHeartbeatWritersStop(heartbeatWriters)
 
       if (daemonPid && alivePid(daemonPid)) {
         try {
@@ -1192,17 +1404,24 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
     } finally {
       // Se o lifecycle falhar, o teste reprova abaixo; o fallback existe só
       // para a própria falha não deixar processos órfãos na máquina/CI.
-      for (const pid of previewPids) {
-        if (processGroupAlive(pid)) killProcessGroupAndWait(pid)
+      if (!previewProcessesTerminated(previewSnapshot, instanceInvalidated)) {
+        signalCapturedPreviewProcesses(previewSnapshot, 'SIGKILL')
+        waitUntilPreviewProcessesTerminate(
+          previewSnapshot,
+          instanceInvalidated,
+          3000,
+        )
       }
-      for (const pid of heartbeatPids) {
-        if (alivePid(pid)) killAndWait(pid)
+      if (!heartbeatStopped) {
+        signalCapturedPreviewProcesses(heartbeatSnapshot, 'SIGKILL')
+        waitUntilPreviewProcessesTerminate(heartbeatSnapshot, true, 3000)
       }
       if (daemonPid && alivePid(daemonPid)) killAndWait(daemonPid)
 
       const noOrphans =
-        previewPids.every((pid) => !processGroupAlive(pid)) &&
-        heartbeatPids.every((pid) => !alivePid(pid)) &&
+        previewProcessesTerminated(previewSnapshot, instanceInvalidated) &&
+        (heartbeatStopped ||
+          previewProcessesTerminated(heartbeatSnapshot, true)) &&
         (!daemonPid || !alivePid(daemonPid))
       if (!noOrphans) {
         throw new Error('Cleanup da fixture deixou processo órfão.')
@@ -1217,7 +1436,7 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
     expect(previewStopped).toBe(true)
     expect(heartbeatStopped).toBe(true)
     expect(daemonStopped).toBe(true)
-    if (hadCurrentInstance) expect(heartbeatPids.length).toBeGreaterThan(0)
+    if (previewInstance) expect(heartbeatWriters.length).toBeGreaterThan(0)
   })
 
   function setup(port: number): { env: NodeJS.ProcessEnv } {

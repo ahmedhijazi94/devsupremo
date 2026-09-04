@@ -303,14 +303,33 @@ async function pickPort(configuredPort, span = PORT_SEARCH_SPAN) {
   }
   return null
 }
-function health(port, timeoutMs = 1500) {
+// BUG REAL (E2E, teste-v3-16): o healthcheck testava SÓ HOST (127.0.0.1) —
+// daemon saudável, preview \`running=true\`, mas o preflight reportava
+// \`healthy=false\` e fail-closed, enquanto \`curl localhost:PORTA\`/o browser
+// do host respondiam 200 no MESMO instante. Causa: em sandboxes cujo
+// netstack não é dual-stack de verdade (comum fora do macOS — bindv6only
+// de kernel, ou a implementação de rede do próprio sandbox), um servidor
+// que bindou no wildcard \`::\` pode aceitar \`::1\`/\`localhost\` e recusar
+// \`127.0.0.1\` — mesma classe de problema que \`PROBE_HOSTS\` acima já trata
+// pro bind-probe (não é indeterminado, é fail-closed correto SÓ se NENHUM
+// endereço responder). \`health()\` agora testa as DUAS famílias de loopback,
+// na ordem — \`127.0.0.1\` primeiro (mantém o caminho comum exatamente tão
+// rápido quanto antes: só tenta \`::1\` se o primeiro falhar de verdade).
+const LOOPBACK_HOSTS = [HOST, '::1']
+function healthOnce(host, port, timeoutMs) {
   return new Promise((resolve) => {
-    const req = http.get({ host: HOST, port, path: '/', timeout: timeoutMs }, (res) => {
+    const req = http.get({ host, port, path: '/', timeout: timeoutMs }, (res) => {
       res.resume(); resolve((res.statusCode || 0) > 0)
     })
     req.on('error', () => resolve(false))
     req.on('timeout', () => { req.destroy(); resolve(false) })
   })
+}
+async function health(port, timeoutMs = 1500) {
+  for (const host of LOOPBACK_HOSTS) {
+    if (await healthOnce(host, port, timeoutMs)) return true
+  }
+  return false
 }
 // Orçamento de espera por readiness — configurável só por env (default
 // inalterado: 90 tentativas de 1s = até 90s); existe pra testes de

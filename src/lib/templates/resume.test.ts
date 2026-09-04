@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -1000,6 +1001,200 @@ process.exit(1)
       // automático, fora do preflight) — node_modules continua exatamente
       // como estava (só o node_modules/.bin do preview shim, se algum).
       expect(existsSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL))).toBe(false)
+    },
+    30_000,
+  )
+})
+
+/**
+ * Falso negativo do health-check do preview (v3.4.5, teste-v3-16) — E2E
+ * REAL. Sintoma: daemon healthy, preview `running=true`, mas o preflight
+ * reportava `healthy=false` e fail-closed — no MESMO instante,
+ * `curl localhost:PORTA`/o browser do host respondiam 200. `supremo:resume`
+ * no Terminal já provado funcionando, inclusive cold start.
+ *
+ * Causa raiz: `health()` (em previewSupervisorScript, harness.ts) testava
+ * SÓ 127.0.0.1. Num sandbox cujo netstack não é dual-stack de verdade, um
+ * dev server que bindou no wildcard `::` pode aceitar `::1`/`localhost` e
+ * recusar `127.0.0.1` — falso negativo, não falha de restart. Fix: `health()`
+ * agora testa as duas famílias de loopback (127.0.0.1 primeiro, ::1 se a
+ * primeira falhar) antes de concluir não-saudável.
+ *
+ * Reproduzido aqui de forma determinística com nosso PRÓPRIO dev server
+ * bindando SÓ em `::1` (nunca 127.0.0.1) — não depende de nenhuma config
+ * específica de sandbox — cobrindo os dois fluxos pedidos: projeto novo
+ * (cenário A) e serviços mortos numa nova sessão (cenário B).
+ */
+// Mesma guarda de portabilidade de preview-ownership.test.ts: se esta
+// máquina não tiver IPv6 loopback de verdade, os testes que dependem dele
+// pulam em vez de falhar por um motivo alheio ao que provam.
+function detectIpv6Loopback(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.createServer()
+    probe.once('error', () => resolve(false))
+    probe.once('listening', () => probe.close(() => resolve(true)))
+    try {
+      probe.listen(0, '::1')
+    } catch {
+      resolve(false)
+    }
+  })
+}
+const HAS_IPV6 = await detectIpv6Loopback()
+
+describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, teste-v3-16)', () => {
+  let dir: string
+
+  afterEach(() => {
+    const daemonPid = daemonState(dir).pid
+    if (daemonPid) {
+      try {
+        process.kill(daemonPid)
+      } catch {
+        /* já morto */
+      }
+    }
+    try {
+      const previewPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      if (previewPid) process.kill(previewPid)
+    } catch {
+      /* já morto/nunca subiu */
+    }
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function setup(port: number): { env: NodeJS.ProcessEnv } {
+    dir = mkdtempSync(join(tmpdir(), 'supremo-resume-ipv6only-'))
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+
+    writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+    writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
+    // O dev server real do projeto SÓ aceita ::1 — reproduz o sintoma exato
+    // do E2E: o processo sobe normalmente (running=true), mas um probe
+    // IPv4-only nunca conecta, mesmo com 'localhost'/o browser do host
+    // (que resolvem por ::1) respondendo 200 no mesmo instante.
+    writeFileSync(
+      join(dir, 'scripts/dev-server.mjs'),
+      "import http from 'node:http'\n" +
+        'const port = Number(process.env.PORT || 3000)\n' +
+        "http.createServer((_, res) => res.end('ok')).listen(port, '::1')\n",
+      'utf8',
+    )
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'resume-ipv6only-fixture', scripts: { dev: 'node scripts/dev-server.mjs' } }),
+    )
+    // Daemon simulado pelo MESMO caminho local que --ensure resolve de
+    // verdade (node_modules/.bin/supremo) — main já não passa mais por
+    // npx (v3.4.4); estes testes são só sobre o health-check do preview.
+    installLocalSupremoCliShim(dir)
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PORT: String(port),
+      RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+      SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
+      SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '2000',
+    }
+    return { env }
+  }
+
+  function runResume(env: NodeJS.ProcessEnv): { status: number; result: ResumeJson | null } {
+    try {
+      const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        timeout: 20_000,
+      })
+      return { status: 0, result: JSON.parse(out) as ResumeJson }
+    } catch (err) {
+      const e = err as { status: number | null; stdout: string }
+      return { status: e.status ?? 1, result: e.stdout ? (JSON.parse(e.stdout) as ResumeJson) : null }
+    }
+  }
+
+  it.skipIf(!HAS_IPV6)(
+    'cenário A — projeto novo, primeiro prompt: dev server só aceita ::1 → preflight AINDA ASSIM considera saudável e prossegue',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      const { env } = setup(port)
+      expect(existsSync(join(dir, '.supremo'))).toBe(false)
+
+      const { status, result } = runResume(env)
+
+      expect(status).toBe(0)
+      expect(result?.daemon.healthy).toBe(true)
+      expect(result?.preview.healthy).toBe(true)
+      expect(result?.preview.url).toBe(`http://localhost:${port}`)
+    },
+    30_000,
+  )
+
+  it.skipIf(!HAS_IPV6)(
+    'cenário B — preview+daemon mortos, primeiro prompt da nova sessão: dev server só aceita ::1 → religa e AINDA ASSIM considera saudável',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      const { env } = setup(port)
+
+      execFileSync(process.execPath, [join(dir, 'scripts/preview.mjs'), 'ensure'], {
+        cwd: dir,
+        env,
+        stdio: 'ignore',
+        timeout: 15_000,
+      })
+      execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], {
+        cwd: dir,
+        env,
+        stdio: 'ignore',
+      })
+      const previewPidBefore = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      const daemonPidBefore = daemonState(dir).pid!
+      process.kill(previewPidBefore, 'SIGKILL')
+      process.kill(daemonPidBefore, 'SIGKILL')
+
+      const { status, result } = runResume(env)
+
+      expect(status).toBe(0)
+      expect(result?.daemon.healthy).toBe(true)
+      expect(result?.preview.healthy).toBe(true)
+      const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(result?.preview.url).toBe(`http://localhost:${finalPort}`)
+    },
+    30_000,
+  )
+
+  it(
+    'preview genuinamente indisponível (dev server nunca sobe) → continua fail-closed',
+    () => {
+      const port = 21000 + Math.floor(Math.random() * 4000)
+      dir = mkdtempSync(join(tmpdir(), 'supremo-resume-ipv6only-down-'))
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
+      // 'dev' que sai imediatamente sem bindar em nada — genuinamente fora
+      // do ar, nenhuma família de loopback tem o que responder.
+      writeFileSync(
+        join(dir, 'package.json'),
+        JSON.stringify({ name: 'resume-genuinely-down-fixture', scripts: { dev: 'node -e "process.exit(1)"' } }),
+      )
+      installLocalSupremoCliShim(dir)
+
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        PORT: String(port),
+        RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+        SUPREMO_PREVIEW_WAIT_TRIES: '2',
+        SUPREMO_PREVIEW_WAIT_INTERVAL_MS: '50',
+        SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
+        SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '200',
+      }
+
+      const { status, result } = runResume(env)
+
+      expect(status).not.toBe(0)
+      expect(result?.preview.healthy).toBe(false)
     },
     30_000,
   )

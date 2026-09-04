@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -579,12 +579,20 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
  * acesso real ao servidor.
  */
 describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolado do namespace real, teste-v3-17)', () => {
-  function writeHealthFile(dir: string, healthy: boolean, ageMs: number): void {
+  // pid/instanceId (teste-v3-17b): o heartbeat só é confiado se descrever a
+  // MESMA instância rastreada agora — por isso todo fixture escreve os DOIS,
+  // e writeInstanceFile permite construir cenários de descompasso de
+  // propósito (pid errado, instanceId errado, ou nenhum registrado).
+  function writeHealthFile(dir: string, healthy: boolean, ageMs: number, pid: number, instanceId: string): void {
     mkdirSync(join(dir, '.supremo'), { recursive: true })
     writeFileSync(
       join(dir, '.supremo/preview.health.json'),
-      JSON.stringify({ healthy, checkedAt: Date.now() - ageMs }),
+      JSON.stringify({ healthy, checkedAt: Date.now() - ageMs, pid, instanceId }),
     )
+  }
+  function writeInstanceFile(dir: string, instanceId: string): void {
+    mkdirSync(join(dir, '.supremo'), { recursive: true })
+    writeFileSync(join(dir, '.supremo/preview.instance'), instanceId)
   }
 
   function spawnIdleProcess(): ReturnType<typeof spawn> {
@@ -594,6 +602,23 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
     })
     idle.unref()
     return idle
+  }
+
+  // Depois de matar um pid, ele fica ZUMBI até o processo do teste (pai real,
+  // via spawn()) reapá-lo — kill(pid,0) continua sem lançar até isso
+  // acontecer, mesmo com o processo já morto. Espera de verdade em vez de
+  // checar na hora (que corria risco de flakiness por essa janela).
+  async function waitUntilDead(pid: number, timeoutMs = 5000): Promise<boolean> {
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      try {
+        process.kill(pid, 0)
+      } catch {
+        return true
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return false
   }
 
   it(
@@ -647,7 +672,8 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       try {
         writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
         writeFileSync(join(dir, '.supremo/preview.port'), String(port))
-        writeHealthFile(dir, true, 500) // fresco — dentro da janela padrão de 5s
+        writeInstanceFile(dir, 'instance-rescue')
+        writeHealthFile(dir, true, 500, idle.pid!, 'instance-rescue') // fresco — dentro da janela padrão de 5s
 
         const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
           running: boolean
@@ -680,8 +706,9 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       try {
         writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
         writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        writeInstanceFile(dir, 'instance-stale')
         // Escrito há mais tempo que o teto configurado — nunca confiado.
-        writeHealthFile(dir, true, 10_000)
+        writeHealthFile(dir, true, 10_000, idle.pid!, 'instance-stale')
 
         const status = JSON.parse(
           runPreview(dir, ['status'], { PORT: String(port), SUPREMO_PREVIEW_HEALTH_STALE_MS: '5000' }).stdout,
@@ -719,7 +746,8 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       try {
         writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
         writeFileSync(join(dir, '.supremo/preview.port'), String(port))
-        writeHealthFile(dir, true, 500)
+        writeInstanceFile(dir, 'instance-nokill')
+        writeHealthFile(dir, true, 500, idle.pid!, 'instance-nokill')
 
         const result = runPreview(dir, ['ensure'], { PORT: String(port) })
         expect(result.status).toBe(0)
@@ -769,5 +797,213 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       }
     },
     15_000,
+  )
+
+  it(
+    'heartbeat fresco + healthy=true mas com PID DIFERENTE do rastreado agora → rejeitado (nunca um falso positivo por pid reaproveitado, teste-v3-17b)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-pidmismatch-'))
+      tempDirs.push(dir)
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      const port = await pickFreeTestPort()
+      const idle = spawnIdleProcess()
+
+      try {
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        writeInstanceFile(dir, 'instance-pidmismatch')
+        // O heartbeat descreve um pid QUALQUER, nunca o que está rastreado
+        // agora — nem chega a ser "de outra instância nossa", é só um número
+        // diferente. Isolado, um heartbeat assim é indistinguível de um pid
+        // reaproveitado pelo SO depois que o processo original morreu.
+        writeHealthFile(dir, true, 500, idle.pid! + 1, 'instance-pidmismatch')
+
+        const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
+          running: boolean
+          healthy: boolean
+        }
+        expect(status.running).toBe(true)
+        expect(status.healthy).toBe(false)
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
+      }
+    },
+    15_000,
+  )
+
+  it(
+    'heartbeat fresco + healthy=true + PID certo, mas instanceId NÃO bate com o token registrado agora → rejeitado (teste-v3-17b)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-instancemismatch-'))
+      tempDirs.push(dir)
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      const port = await pickFreeTestPort()
+      const idle = spawnIdleProcess()
+
+      try {
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        writeInstanceFile(dir, 'instance-CORRENTE')
+        // Pid bate, mas o token da instância no heartbeat é de uma geração
+        // ANTERIOR (ex.: um heartbeat writer órfão que ainda não notou que
+        // foi substituído) — mesmo pid não basta sozinho.
+        writeHealthFile(dir, true, 500, idle.pid!, 'instance-ANTIGA')
+
+        const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
+          running: boolean
+          healthy: boolean
+        }
+        expect(status.running).toBe(true)
+        expect(status.healthy).toBe(false)
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
+      }
+    },
+    15_000,
+  )
+
+  it(
+    'heartbeat com pid certo mas NENHUMA instância registrada (.supremo/preview.instance ausente) → rejeitado, nunca aceito "por padrão" (teste-v3-17b)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-noinstance-'))
+      tempDirs.push(dir)
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      const port = await pickFreeTestPort()
+      const idle = spawnIdleProcess()
+
+      try {
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        // Nenhum writeInstanceFile() — .supremo/preview.instance não existe.
+        writeHealthFile(dir, true, 500, idle.pid!, 'instance-orfa')
+
+        const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
+          running: boolean
+          healthy: boolean
+        }
+        expect(status.running).toBe(true)
+        expect(status.healthy).toBe(false)
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
+      }
+    },
+    15_000,
+  )
+
+  it(
+    'restart (candidata anterior zumbi) invalida heartbeat/token da instância ANTERIOR — a instância NOVA nunca herda pid/instanceId velhos (teste-v3-17b)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-restart-instance-'))
+      tempDirs.push(dir)
+      writeFixtureProject(dir)
+      const port = await pickFreeTestPort()
+      // Zumbi: pid vivo, mas não é quem serve a porta rastreada — nada
+      // escuta nela, então o probe direto falha de verdade.
+      const idle = spawnIdleProcess()
+
+      try {
+        mkdirSync(join(dir, '.supremo'), { recursive: true })
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        writeInstanceFile(dir, 'instance-STALE-leftover')
+        // Heartbeat de um pid alheio (nem é o zumbi) — nunca seria confiado
+        // de qualquer forma (pid não bate), então decide() vê
+        // pidAlive=true (zumbi) + healthy=false → 'restart'.
+        writeHealthFile(dir, true, 500, 999_999, 'instance-STALE-leftover')
+
+        const result = runPreview(dir, ['ensure'], { PORT: String(port) }, 30_000)
+        expect(result.status).toBe(0)
+        expect(result.stdout).toMatch(/preview no ar/)
+
+        // O zumbi original foi morto — nunca confundido com a instância nova.
+        expect(await waitUntilDead(idle.pid!)).toBe(true)
+
+        const newInstance = readFileSync(join(dir, '.supremo/preview.instance'), 'utf8').trim()
+        const newPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+        const health = JSON.parse(readFileSync(join(dir, '.supremo/preview.health.json'), 'utf8')) as {
+          healthy: boolean
+          pid: number
+          instanceId: string
+        }
+        // A instância NOVA nunca herda o token/pid da anterior invalidada —
+        // e o heartbeat gravado descreve EXATAMENTE a instância nova.
+        expect(newInstance).not.toBe('instance-STALE-leftover')
+        expect(newPid).not.toBe(idle.pid)
+        expect(newPid).not.toBe(999_999)
+        expect(health.healthy).toBe(true)
+        expect(health.pid).toBe(newPid)
+        expect(health.instanceId).toBe(newInstance)
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
+        try {
+          const trackedPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+          if (trackedPid) process.kill(trackedPid)
+        } catch {
+          /* já morto */
+        }
+      }
+    },
+    30_000,
+  )
+
+  it(
+    'heartbeat é escrito ATOMICAMENTE — depois de ensure(), nenhum arquivo .tmp sobra e o JSON está sempre completo e consistente com pid/instância registrados (teste-v3-17b)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-atomic-'))
+      tempDirs.push(dir)
+      writeFixtureProject(dir)
+      const port = await pickFreeTestPort()
+
+      const result = runPreview(dir, ['ensure'], { PORT: String(port) }, 30_000)
+      try {
+        expect(result.status).toBe(0)
+
+        const entries = readdirSync(join(dir, '.supremo'))
+        expect(entries.some((f) => f.endsWith('.tmp'))).toBe(false)
+
+        const pid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+        const instanceId = readFileSync(join(dir, '.supremo/preview.instance'), 'utf8').trim()
+        const health = JSON.parse(readFileSync(join(dir, '.supremo/preview.health.json'), 'utf8')) as {
+          healthy: boolean
+          checkedAt: number
+          pid: number
+          instanceId: string
+        }
+        expect(health.healthy).toBe(true)
+        expect(health.pid).toBe(pid)
+        expect(health.instanceId).toBe(instanceId)
+        expect(Number.isFinite(health.checkedAt)).toBe(true)
+      } finally {
+        try {
+          const trackedPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+          if (trackedPid) process.kill(trackedPid)
+        } catch {
+          /* já morto */
+        }
+      }
+    },
+    30_000,
   )
 })

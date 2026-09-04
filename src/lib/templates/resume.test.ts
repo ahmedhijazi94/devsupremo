@@ -1277,9 +1277,18 @@ describe('supremo:resume — segunda mensagem com preview estável não pode fal
       idle.unref()
       writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
       writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+      // O heartbeat só é confiado se descrever a MESMA instância registrada
+      // agora (teste-v3-17b) — pid e instanceId batendo com preview.pid e
+      // preview.instance, nunca só {healthy, checkedAt} sozinhos.
+      writeFileSync(join(dir, '.supremo/preview.instance'), 'resume-secondmsg-instance')
       writeFileSync(
         join(dir, '.supremo/preview.health.json'),
-        JSON.stringify({ healthy: true, checkedAt: Date.now() }),
+        JSON.stringify({
+          healthy: true,
+          checkedAt: Date.now(),
+          pid: idle.pid,
+          instanceId: 'resume-secondmsg-instance',
+        }),
       )
 
       const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {

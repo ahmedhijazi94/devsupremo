@@ -10,6 +10,8 @@ import {
   decidePreviewAction,
   harnessFiles,
   harnessPackageScripts,
+  isHeartbeatFresh,
+  isHeartbeatTrusted,
   pickFreePreviewPort,
   previewSupervisorScript,
   supremoStatusScript,
@@ -102,6 +104,53 @@ describe('preview supervisor (v3.1) — classifyBindProbe (erro indeterminado nu
   })
 })
 
+describe('preview supervisor (v3.1) — isHeartbeatFresh (teste-v3-17)', () => {
+  it('idade 0 e idade exatamente no limite → fresco', () => {
+    expect(isHeartbeatFresh(1000, 1000, 5000)).toBe(true)
+    expect(isHeartbeatFresh(1000, 6000, 5000)).toBe(true)
+  })
+  it('idade além do limite → não fresco', () => {
+    expect(isHeartbeatFresh(1000, 6001, 5000)).toBe(false)
+  })
+  it('checkedAt no FUTURO (relógio incoerente/dado corrompido) → nunca fresco, fail-closed', () => {
+    expect(isHeartbeatFresh(6000, 1000, 5000)).toBe(false)
+  })
+  it('checkedAt não-finito (NaN/Infinity) → nunca fresco', () => {
+    expect(isHeartbeatFresh(NaN, 1000, 5000)).toBe(false)
+    expect(isHeartbeatFresh(Number.POSITIVE_INFINITY, 1000, 5000)).toBe(false)
+  })
+})
+
+describe('preview supervisor (v3.1) — isHeartbeatTrusted: identidade da instância (teste-v3-17b, pid reuse)', () => {
+  const heartbeat = { healthy: true, checkedAt: 1000, pid: 111, instanceId: 'abc' }
+  const current = { pid: 111, instanceId: 'abc', pidAlive: true }
+
+  it('healthy=true + fresco + pid/instanceId batendo + pid vivo → confiado', () => {
+    expect(isHeartbeatTrusted(heartbeat, current, 1000, 5000)).toBe(true)
+  })
+  it('healthy=false → nunca confiado, mesmo fresco e com identidade batendo', () => {
+    expect(isHeartbeatTrusted({ ...heartbeat, healthy: false }, current, 1000, 5000)).toBe(false)
+  })
+  it('velho demais → nunca confiado, mesmo com identidade batendo', () => {
+    expect(isHeartbeatTrusted(heartbeat, current, 10_000, 5000)).toBe(false)
+  })
+  it('pid do heartbeat DIFERENTE do pid rastreado agora → rejeitado (o caso central do pid reuse)', () => {
+    expect(isHeartbeatTrusted({ ...heartbeat, pid: 999 }, current, 1000, 5000)).toBe(false)
+  })
+  it('instanceId do heartbeat DIFERENTE do token registrado agora → rejeitado, mesmo com pid certo', () => {
+    expect(isHeartbeatTrusted({ ...heartbeat, instanceId: 'velho' }, current, 1000, 5000)).toBe(false)
+  })
+  it('nenhuma instância registrada agora (current.instanceId null) → nunca confiado, mesmo "batendo" por coincidência', () => {
+    expect(isHeartbeatTrusted(heartbeat, { ...current, instanceId: null }, 1000, 5000)).toBe(false)
+  })
+  it('pid não é mais considerado vivo → rejeitado mesmo com tudo mais batendo', () => {
+    expect(isHeartbeatTrusted(heartbeat, { ...current, pidAlive: false }, 1000, 5000)).toBe(false)
+  })
+  it('heartbeat nulo (arquivo ausente/ilegível) → nunca confiado', () => {
+    expect(isHeartbeatTrusted(null, current, 1000, 5000)).toBe(false)
+  })
+})
+
 describe('preview supervisor (v3.1) — script gerado é determinístico', () => {
   const src = previewSupervisorScript()
   it('sobe DESACOPLADO (detached + unref) para sobreviver ao turno', () => {
@@ -180,8 +229,67 @@ describe('preview supervisor (v3.1) — script gerado é determinístico', () =>
     // alive() tratava EPERM como falso — então uma instância saudável mas
     // não-sinalizável (sandbox) nunca era detectada. Fix: healthCombined
     // (heartbeat + probe HTTP, teste-v3-17) é chamado incondicionalmente,
-    // direto no decide().
-    expect(src).toMatch(/const action = decide\(alive\(pid\), await healthCombined\(trackedPort\)\)/)
+    // direto no decide(). Recebe `pid` (teste-v3-17b) pra validar que o
+    // heartbeat descreve a MESMA instância rastreada, não um pid reaproveitado.
+    expect(src).toMatch(/const action = decide\(alive\(pid\), await healthCombined\(pid, trackedPort\)\)/)
+  })
+  it('readHeartbeatHealthy() só confia num heartbeat que bate pid E instanceId com o registrado AGORA, e cujo pid ainda está vivo (teste-v3-17b)', () => {
+    expect(src).toContain('if (raw.pid !== pid) return false')
+    expect(src).toContain('if (!instance || raw.instanceId !== instance) return false')
+    expect(src).toContain('if (!alive(pid)) return false')
+  })
+  it('writeHealthState() grava pid/instanceId junto com healthy/checkedAt — o heartbeat sozinho carrega tudo que readHeartbeatHealthy precisa pra validar identidade (teste-v3-17b)', () => {
+    expect(src).toContain(
+      'const data = JSON.stringify({ healthy: ok, checkedAt: Date.now(), pid, instanceId })',
+    )
+  })
+  it('writeHealthState() escreve o heartbeat ATOMICAMENTE (tmp + rename) — status() nunca lê JSON parcial (teste-v3-17b)', () => {
+    expect(src).toContain('const tmp = `${HEALTH_FILE}.${process.pid}.tmp`')
+    expect(src).toContain('writeFileSync(tmp, data)')
+    expect(src).toContain('renameSync(tmp, HEALTH_FILE)')
+  })
+  it('ensure() gera um instanceId NOVO pra cada candidata bem-sucedida (nova ou reiniciada) — nunca reaproveita o token anterior (teste-v3-17b)', () => {
+    expect(src).toContain('const instanceId = randomUUID()')
+    expect(src).toContain('writeFileSync(INSTANCEFILE, instanceId)')
+    expect(src).toContain('writeHealthState(true, newPid, instanceId)')
+    expect(src).toContain('startHeartbeatWriter(newPid, chosen, instanceId)')
+  })
+  it('ensure() invalida heartbeat + token da instância ANTERIOR no INSTANTE do restart — antes mesmo de escolher a porta da candidata nova, nunca deixa um heartbeat órfão vivo enquanto ela sobe (teste-v3-17b)', () => {
+    const ensureBody = src.slice(src.indexOf('async function ensure()'), src.indexOf('async function status()'))
+    const restartIdx = ensureBody.indexOf("if (action === 'restart')")
+    const pickPortIdx = ensureBody.indexOf('const chosen = await pickPort')
+    const rmHealthIdx = ensureBody.indexOf('rmSync(HEALTH_FILE')
+    const rmInstanceIdx = ensureBody.indexOf('rmSync(INSTANCEFILE')
+    expect(restartIdx).toBeGreaterThan(-1)
+    expect(pickPortIdx).toBeGreaterThan(-1)
+    expect(rmHealthIdx).toBeGreaterThan(restartIdx)
+    expect(rmInstanceIdx).toBeGreaterThan(restartIdx)
+    expect(rmHealthIdx).toBeLessThan(pickPortIdx)
+    expect(rmInstanceIdx).toBeLessThan(pickPortIdx)
+  })
+  it('heartbeat writer para de escrever (e nunca limpa o arquivo de quem o substituiu) assim que deixa de ser a instância registrada (teste-v3-17b)', () => {
+    expect(src).toContain('while (alive(pid) && currentInstanceId() === instanceId)')
+    const heartbeatLoopBody = src.slice(
+      src.indexOf('async function heartbeatLoop('),
+      src.indexOf('// Orçamento de espera por readiness'),
+    )
+    expect(heartbeatLoopBody).toContain('if (currentInstanceId() === instanceId) {')
+  })
+  it('stop() remove TODO o estado persistido — pid, porta, heartbeat E o token da instância (teste-v3-17b)', () => {
+    const stopBody = src.slice(src.indexOf('function stop()'), src.indexOf('const cmd = process.argv[2]'))
+    expect(stopBody).toContain('rmSync(PIDFILE, { force: true })')
+    expect(stopBody).toContain('rmSync(PORTFILE, { force: true })')
+    expect(stopBody).toContain('rmSync(HEALTH_FILE, { force: true })')
+    expect(stopBody).toContain('rmSync(INSTANCEFILE, { force: true })')
+  })
+  it('__heartbeat writer nasce no MESMO comando que confirmou a candidata saudável (dentro de ensure(), nunca em status()) — nunca é recriado a cada status()', () => {
+    const statusBody = src.slice(src.indexOf('async function status()'), src.indexOf('function stop()'))
+    expect(statusBody).not.toContain('startHeartbeatWriter')
+    const ensureBody = src.slice(src.indexOf('async function ensure()'), src.indexOf('async function status()'))
+    expect(ensureBody).toContain('startHeartbeatWriter(newPid, chosen, instanceId)')
+  })
+  it('heartbeat writer só renova checkedAt depois de um probe HTTP real, e grava healthy:false explícito (nunca só deixa expirar) se o probe falhar', () => {
+    expect(src).toContain('writeHealthState(await health(port), pid, instanceId)')
   })
   it('candidata nova que NÃO fica saudável NUNCA sobrescreve .supremo/preview.pid|.port — estado anterior é preservado', () => {
     // startDetached não grava mais os arquivos de estado — só ensure() grava,

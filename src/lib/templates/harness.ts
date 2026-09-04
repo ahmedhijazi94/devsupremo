@@ -744,9 +744,12 @@ function tryJson(cmd, args) {
 
 // Best-effort: nunca lança. Se o ensure falhar (ex.: sem porta livre), o
 // status final abaixo reflete a falha real — não fingimos sucesso.
-function run(cmd, args) {
+// \`timeoutMs\` é opcional (undefined = sem teto, como sempre foi) — usado só
+// na chamada do daemon abaixo (teste-v3-15); nunca é um AUMENTO de timeout,
+// é o primeiro teto onde antes não existia nenhum.
+function run(cmd, args, timeoutMs) {
   try {
-    execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'ignore'] })
+    execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'ignore'], ...(timeoutMs ? { timeout: timeoutMs } : {}) })
   } catch {
     /* best-effort — ver comentário acima */
   }
@@ -833,6 +836,21 @@ async function waitForPreviewHealthy(timeoutMs) {
 let preview = readPreview()
 let daemon = readDaemon()
 
+// E2E real (teste-v3-15): no Terminal (rede plena de um humano), \`npx --yes
+// supremo-cli daemon --ensure\` resolve o pacote e religa o daemon em
+// segundos. Rodado pelo AGENTE (rede restrita/proxy do sandbox), a MESMA
+// chamada podia ficar presa no retry/backoff interno do próprio npm — sem
+// NENHUM teto aqui antes, o preflight inteiro travava ~1m30 nisso antes de
+// sequer chegar no preview, e só então fail-closed. Investigado cwd/env/
+// processo pai/detach/stdio: preview é 100% local (sem npx, sem registry —
+// só \`npm run dev\`, que já roda de qualquer cwd/env corretos, e o
+// health-check é um GET em localhost), e run() já ignora TODO stdio nos dois
+// ambientes — a diferença real é só esta chamada de rede do daemon. Um teto
+// CURTO aqui não é aumento de timeout (não existia nenhum) — é o que faz
+// essa chamada falhar rápido quando a rede não coopera, deixando o
+// fail-closed abaixo agir em segundos, não em um minuto e meio.
+const DAEMON_ENSURE_TIMEOUT_MS = Number(process.env.SUPREMO_DAEMON_ENSURE_TIMEOUT_MS) || 10_000
+
 if (process.argv.includes('--ensure')) {
   // Cada \`ensure\` decide sozinho reusar (já saudável), religar (rastro
   // morto/zumbi) ou subir do zero (nada registrado) — a MESMA lógica do
@@ -840,7 +858,7 @@ if (process.argv.includes('--ensure')) {
   // já saudável não gasta o ensure à toa — e é só AQUI, com o daemon
   // comprovadamente morto, que o \`npx\` (rede) é tocado.
   if (!daemon.healthy) {
-    run('npx', ['--yes', 'supremo-cli', 'daemon', '--ensure'])
+    run('npx', ['--yes', 'supremo-cli', 'daemon', '--ensure'], DAEMON_ENSURE_TIMEOUT_MS)
     daemon = readDaemon()
   }
   if (!preview.healthy) {

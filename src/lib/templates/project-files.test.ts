@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   CI_JOB_NAMES,
@@ -247,6 +249,36 @@ describe('lockfile — sem ele o CI quebra antes de instalar', () => {
 
     const extra = [...inLock].filter((name) => !declared.has(name))
     expect(extra).toEqual([])
+  })
+})
+
+/**
+ * supremo-cli PINADA como devDependency (v3.4.4, teste-v3-15) — o preflight
+ * local (supremo:resume) resolve node_modules/.bin/supremo direto, sem npx,
+ * sem registry (ver LOCAL_SUPREMO_CLI_BIN em harness.ts; comportamento REAL
+ * provado em resume.test.ts). A versão fica centralizada numa única
+ * constante do scaffold (SUPREMO_CLI_DEV_DEPENDENCY_VERSION em
+ * project-files.ts) — este teste prova que ela não fica pra trás da versão
+ * de verdade publicada em packages/cli, o que deixaria projetos novos
+ * nascendo com uma CLI desatualizada sem ninguém perceber.
+ */
+describe('supremo-cli — devDependency pinada não diverge da versão publicada (v3.4.4, teste-v3-15)', () => {
+  it('a versão pinada no scaffold bate com packages/cli/package.json', () => {
+    const publishedVersion = (
+      JSON.parse(
+        fs.readFileSync(path.join(process.cwd(), 'packages/cli/package.json'), 'utf8'),
+      ) as { version: string }
+    ).version
+
+    expect(packageJson.devDependencies['supremo-cli']).toBe(publishedVersion)
+  })
+
+  it('o bin declarado em packages/cli/package.json é "supremo" — o mesmo nome que o preflight resolve', () => {
+    const cliPkg = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'packages/cli/package.json'), 'utf8'),
+    ) as { bin: Record<string, string> }
+
+    expect(Object.keys(cliPkg.bin)).toEqual(['supremo'])
   })
 })
 

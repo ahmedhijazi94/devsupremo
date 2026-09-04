@@ -123,6 +123,19 @@ const DEPENDENCIES = {
   zod: '^4.5.2',
 } as const
 
+// CLI do Supremo PINADA como devDependency (teste-v3-15) — MESMO padrão já
+// usado acima pra CLI do Supabase: `node_modules/.bin/supremo` fica disponível
+// depois de um `npm install`/`npm ci`, e o preflight local (supremo:resume)
+// resolve esse caminho DIRETO, sem `npx`, sem tocar o registry. O sandbox do
+// agente pode ter rede restrita; religar o daemon não pode depender dela.
+// Centralizada aqui de propósito — é a ÚNICA string com a versão pinada; bump
+// esta constante ao publicar uma versão nova de packages/cli e todo projeto
+// criado (ou reinstalado) depois já nasce com ela. Projetos existentes
+// continuam na versão que já tinham até rodar `npm install` de novo — o
+// backend do Supremo aceita checkpoints de qualquer versão publicada da CLI
+// (não há acoplamento de protocolo a esta versão específica).
+const SUPREMO_CLI_DEV_DEPENDENCY_VERSION = '1.2.6'
+
 const DEV_DEPENDENCIES = {
   '@playwright/test': '^1.62.1',
   '@tailwindcss/postcss': '^4.3.3',
@@ -141,6 +154,7 @@ const DEV_DEPENDENCIES = {
   // local (node_modules/.bin/supabase), nunca uma instalação global arbitrária —
   // dois computadores/agentes se comportam igual.
   supabase: '2.116.0',
+  'supremo-cli': SUPREMO_CLI_DEV_DEPENDENCY_VERSION,
   tailwindcss: '^4.3.3',
   typescript: '^5.9.3',
   vitest: '^3.2.7',

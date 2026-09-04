@@ -818,14 +818,37 @@ if (process.argv.includes('--ensure')) {
   if (!preview.healthy) {
     run('node', ['scripts/preview.mjs', 'ensure'])
     preview = readPreview()
+
+    // E2E real (teste-v3-13): a primeira tentativa do supervisor pode falhar
+    // (ex.: corrida de porta, processo anterior que ainda não soltou o bind) —
+    // sem retry, o preview ficava morto e o agente seguia editando/fazendo
+    // checkpoint mesmo assim. UMA única recuperação extra, pelo MESMO
+    // supervisor (nenhuma lógica nova, nunca um loop): só roda quando a
+    // primeira tentativa realmente não deixou o preview saudável.
+    if (!preview.healthy) {
+      run('node', ['scripts/preview.mjs', 'ensure'])
+      preview = readPreview()
+    }
   }
 }
+
+const healthy = preview.healthy && daemon.healthy
 
 console.log(JSON.stringify({
   preview: { running: !!preview.running, healthy: !!preview.healthy, url: preview.url ?? null },
   daemon: { running: !!daemon.running, healthy: !!daemon.healthy },
   checkpoints: { pending: daemon.pendingCheckpoints ?? 0 },
 }))
+
+// O preflight (--ensure) só "termina" de verdade com os dois saudáveis — sai
+// com código de erro pra nunca depender só do agente ter lido o JSON: se
+// mesmo depois de religar (com o retry acima) preview ou daemon continuarem
+// não-saudáveis, o comando falha de verdade (exit != 0), sinal pro agente
+// parar e não editar/checkpoint (ver AGENTS.md/CLAUDE.md — teste-v3-13).
+// No modo \`status\` (sem --ensure), só diagnostica — nunca falha por isso.
+if (process.argv.includes('--ensure') && !healthy) {
+  process.exitCode = 1
+}
 `
 }
 

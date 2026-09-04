@@ -797,6 +797,33 @@ describe('retomada automática de sessão (v3.2) — nunca precisa de bootstrap 
     expect(claude).toContain('sem** bootstrap, build, testes, install, relink ou reautenticação')
     expect(claude).toContain('Rodar bootstrap de novo numa máquina onde ele já rodou')
   })
+
+  // teste-v3-13: preview morto detectado, 1ª tentativa de religar falhou, e o
+  // agente seguiu editando/checkpointando mesmo assim — só a 2ª mensagem do
+  // usuário ("cadê o preview?") destravou. supremo:resume agora faz UMA
+  // única recuperação extra e só "termina" com os dois healthy de verdade.
+  it('AGENTS.md: falha do preview mesmo após religar → PARE, não edite nem faça checkpoint (v3.4.1, teste-v3-13)', () => {
+    expect(agents).toMatch(/UMA única nova tentativa/)
+    expect(agents).toMatch(/sai com código de erro \(exit != 0\)/)
+    expect(agents).toMatch(/PARE: não implemente a mudança, não faça checkpoint/)
+    expect(agents).toContain('teste-v3-13')
+  })
+
+  it('AGENTS.md: passo 1 do fluxo normal para no preflight se ele sair com erro (v3.4.1)', () => {
+    expect(agents).toMatch(/Se ele sair com código de erro.{0,120}PARE aqui/)
+    expect(agents).toContain('não siga para os passos 2-6')
+  })
+
+  it('AGENTS.md: item NUNCA reforça o hard-stop do preflight (não edita/checkpointa em falha)', () => {
+    expect(agents).toMatch(
+      /NUNCA\*{0,2} edite código nem faça checkpoint quando `?supremo:resume`? sair com/,
+    )
+  })
+
+  it('CLAUDE.md: mesma regra de retry único + hard-stop do preflight (v3.4.1, teste-v3-13)', () => {
+    expect(claude).toMatch(/UMA nova tentativa antes de checar de novo/)
+    expect(claude).toMatch(/o comando sai com código de erro: PARE, não edite nem faça checkpoint/)
+  })
 })
 
 /**

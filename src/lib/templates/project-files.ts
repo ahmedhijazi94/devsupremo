@@ -2686,6 +2686,18 @@ Depois, se o host tiver browser/preview integrado, abra/disponibilize automatica
 URL real do JSON ao usuário (ver "Browser integrado × QA visual" abaixo — isto não é
 "navegar").
 
+**O preflight só "termina" com os dois de verdade \`healthy\` — nunca prossiga com
+um deles ainda morto.** Se a primeira tentativa de religar o preview falhar (ex.:
+corrida de porta), \`supremo:resume\` já faz sozinho UMA única nova tentativa pelo
+MESMO supervisor (nunca um loop) e confere a saúde de novo antes de imprimir o
+status final. **Se, mesmo assim, \`preview.healthy\` ou \`daemon.healthy\` continuar
+\`false\`, o comando sai com código de erro (exit != 0)** — nesse caso PARE: não
+implemente a mudança, não faça checkpoint, e informe a falha ao usuário no seu
+resumo (com o que o JSON reportou). E2E real (teste-v3-13): a primeira tentativa do
+supervisor falhou, o agente seguiu editando e fazendo checkpoint mesmo assim, e o
+preview ficou morto até uma segunda mensagem do usuário perguntando "cadê o
+preview?" — exatamente o que esta regra existe para nunca mais deixar acontecer.
+
 **É LEVE e RÁPIDA de propósito — só assim dá pra rodar antes de TODO pedido sem custo
 perceptível.** A checagem é 100% LOCAL: healthcheck HTTP em localhost pro preview (o
 mesmo supervisor de sempre) e leitura direta do pid do daemon — nenhuma chamada de rede
@@ -2835,7 +2847,9 @@ dúvida, \`verify\` falha fechado (fail-closed) — trate como falha real.
 1. **Preflight**: rode \`npm run supremo:resume\` (ver "Retomada automática de sessão" —
    é local, rápido, e só religa o que estiver de fato morto); disponibilize a URL do
    JSON ao usuário. Todo pedido que muda código, não só o primeiro — no caminho
-   saudável o custo é próximo de zero.
+   saudável o custo é próximo de zero. **Se ele sair com código de erro** (preview ou
+   daemon ainda não \`healthy\` mesmo depois da nova tentativa automática), **PARE
+   aqui** — não siga para os passos 2-6; informe a falha ao usuário.
 2. **Implemente** a mudança; veja no preview (o HMR reflete na hora).
 3. Crie/atualize **só os testes relacionados** (escritos junto).
 4. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
@@ -2898,7 +2912,11 @@ espera nada disso; nem o daemon toca no GitHub diretamente.**
   religa preview/daemon sozinho, sem nova autorização. E **NUNCA** pule o
   \`supremo:resume\` antes de um pedido que muda código achando que "já rodou nesta
   sessão" — você não tem como confirmar isso com segurança (o host pode restaurar a
-  mesma conversa sem avisar), e o custo no caminho saudável é próximo de zero.
+  mesma conversa sem avisar), e o custo no caminho saudável é próximo de zero. E
+  **NUNCA** edite código nem faça checkpoint quando \`supremo:resume\` sair com
+  código de erro (preview ou daemon continuam \`healthy: false\` mesmo depois da
+  nova tentativa automática) — pare e informe a falha, nunca assuma que vai se
+  resolver sozinho no próximo pedido.
 - **NUNCA** rode \`npm run sync\` fora do primeiro pedido da sessão — política PRÓPRIA
   de sincronização entre máquinas, independente do \`supremo:resume\` (que agora roda
   em todo pedido) — nenhuma consulta remota a cada prompt. E **NUNCA** tente
@@ -2992,10 +3010,14 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   pid do daemon lido direto; nenhuma rede, nenhum \`npx\` no caminho saudável) que religa
   preview e daemon sozinho se morreram e reutiliza se já estão de pé, **sem** bootstrap,
   build, testes, install, relink ou reautenticação; no caminho saudável o custo é
-  próximo de zero. Ver "Retomada automática de sessão". **Nunca** confie só na
-  existência de \`.supremo/preview.port\` (pode ter sobrevivido a um reboot que matou o
-  processo) — é exatamente o que o \`supremo:resume\` reconfirma a cada vez. **Nunca**
-  \`npm run dev\` à mão, **nunca** suba outro servidor no sandbox. Ver "Preview PERSISTENTE".
+  próximo de zero. Se a primeira tentativa de religar falhar, ele já faz sozinho UMA
+  nova tentativa antes de checar de novo — **se mesmo assim preview ou daemon
+  continuarem não-saudáveis, o comando sai com código de erro: PARE, não edite nem
+  faça checkpoint, informe a falha.** Ver "Retomada automática de sessão". **Nunca**
+  confie só na existência de \`.supremo/preview.port\` (pode ter sobrevivido a um
+  reboot que matou o processo) — é exatamente o que o \`supremo:resume\` reconfirma a
+  cada vez. **Nunca** \`npm run dev\` à mão, **nunca** suba outro servidor no sandbox.
+  Ver "Preview PERSISTENTE".
 - **Só no primeiro pedido da sessão** (regra PRÓPRIA do \`sync\`, independente do
   \`supremo:resume\` acima — que agora roda em todo pedido), rodar \`npm run sync\` — checagem LEVE
   (uma consulta, timeout curto, nunca GitHub) do checkpoint mais recente conhecido do

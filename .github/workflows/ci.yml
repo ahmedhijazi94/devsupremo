@@ -90,7 +90,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level=high
+      # npm audit --audit-level=high continua obrigatório e fail-closed.
+      # O guard só adiciona retry limitado para instabilidade transitória
+      # de infraestrutura/rede do registry (429/5xx, timeout, ECONNRESET/
+      # ETIMEDOUT...) — vulnerabilidade real ou qualquer outro erro do npm
+      # falha imediatamente, sem retry. Ver src/lib/ci/npm-audit-classify.ts.
+      - run: npx tsx scripts/npm-audit-guard.mts
 
   secrets:
     name: Varredura de segredos

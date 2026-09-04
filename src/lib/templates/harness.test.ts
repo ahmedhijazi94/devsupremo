@@ -463,8 +463,33 @@ describe('harness generator', () => {
     writeFileSync(file, src, 'utf8')
     expect(() => execFileSync(process.execPath, ['--check', file])).not.toThrow()
     expect(src).toContain('scripts/preview.mjs')
-    expect(src).toContain("'daemon', '--status'")
     expect(src).toContain('checkpoints')
+  })
+
+  /**
+   * E2E real (teste-v3-12, v3.4): antes, o STATUS do daemon passava por
+   * `npx --yes supremo-cli daemon --status` — sem versão pinada, isso confere
+   * a versão mais recente no registry TODA vez (uma chamada de rede), mesmo
+   * com o pacote em cache. Tolerável rodando uma vez por sessão; deixa de ser
+   * "praticamente imperceptível" quando `--ensure` passa a rodar antes de
+   * TODO pedido (a correção deste ajuste — não dá mais pra confiar em
+   * detectar "primeiro pedido da sessão"). O status do daemon agora é 100%
+   * local — lê o pidfile direto, nunca por `npx` — e `npx` só é tocado no
+   * `--ensure` quando o daemon está de fato morto (religar de verdade).
+   */
+  it('o daemon --status NUNCA passa por npx — leitura local direta do pidfile (v3.4, correção do preflight)', () => {
+    const src = supremoStatusScript()
+    expect(src).not.toContain("'daemon', '--status'")
+    expect(src).not.toMatch(/npx[^\\n]*daemon[^\\n]*--status/)
+    // A ÚNICA chamada de npx pro daemon é --ensure (religar de verdade) —
+    // continua reaproveitando o mecanismo publicado, nunca uma lógica nova.
+    expect(src).toContain("'daemon', '--ensure'")
+    // Leitura local: mesmo pidfile que o daemon real usa
+    // (packages/cli/src/daemon.ts#DAEMON_PID_FILE), mesma classificação de
+    // process.kill(pid, 0) (ESRCH = morto, qualquer outro erro = vivo).
+    expect(src).toContain('.supremo/checkpoints/daemon.pid')
+    expect(src).toContain('process.kill(pid, 0)')
+    expect(src).toMatch(/code === 'ESRCH'/)
   })
 
   it('package.json expõe supremo:status', () => {

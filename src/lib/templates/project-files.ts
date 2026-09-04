@@ -2648,14 +2648,23 @@ experiência é: **usuário pede → você implementa → o preview atualiza →
 outra coisa**. A CI roda em BACKGROUND e o auto-merge acontece sozinho quando todos os
 required checks do HEAD atual ficam verdes.
 
-### Retomada automática de sessão (v3.2)
+### Retomada automática de sessão — preflight local (v3.4)
 Depois que o bootstrap já rodou uma vez NESTA máquina, o usuário **nunca** deveria
 precisar rodar bootstrap de novo — nem depois de fechar/reabrir você, nem depois de
 reiniciar o computador. No dia seguinte ele só abre a pasta e manda um pedido; retomar
 o que já existe é seu trabalho, não dele.
 
-**No início de uma sessão nova / no seu PRIMEIRO pedido dela** (nunca nos pedidos
-seguintes da mesma sessão — ver o último parágrafo), rode:
+**Você não tem como saber com confiança se este é o "primeiro pedido de uma sessão
+nova".** O host pode restaurar a MESMA conversa depois de fechar/reabrir (ex.: Cmd+Q e
+reabrir) sem nenhum sinal claro de que o processo reiniciou — e é exatamente nesse
+reinício que preview/daemon podem ter morrido. E2E real: o agente achou que continuava
+na mesma sessão, nunca rodou a retomada; editou e fez checkpoint normalmente (o daemon
+tinha voltado sozinho), mas o preview ficou morto (\`ERR_CONNECTION_REFUSED\`) —
+\`supremo:status\` confirmava \`preview.healthy=false\` o tempo todo, e nada chamou o
+supervisor pra religar.
+
+Por isso a regra não depende mais de detectar "sessão nova": **antes de QUALQUER pedido
+que vá alterar código**, rode:
 \`\`\`
 npm run supremo:resume
 \`\`\`
@@ -2677,15 +2686,23 @@ Depois, se o host tiver browser/preview integrado, abra/disponibilize automatica
 URL real do JSON ao usuário (ver "Browser integrado × QA visual" abaixo — isto não é
 "navegar").
 
-**A retomada é LEVE e RÁPIDA — nunca** inclui: rodar bootstrap de novo, \`build\`, a
-suíte de testes, \`npm install\`/religar dependências, relinkar o Supabase, ou refazer
-qualquer autenticação. Se \`supremo:resume\` já encontra os dois saudáveis, ele não
-reinicia nada — só confirma e retorna na hora.
+**É LEVE e RÁPIDA de propósito — só assim dá pra rodar antes de TODO pedido sem custo
+perceptível.** A checagem é 100% LOCAL: healthcheck HTTP em localhost pro preview (o
+mesmo supervisor de sempre) e leitura direta do pid do daemon — nenhuma chamada de rede
+externa, nenhuma consulta ao Supremo/GitHub, nem sequer o \`npx\` do pacote da CLI no
+caminho saudável (só é tocado se precisar religar de verdade um processo morto).
+\`supremo:resume\` **nunca** inclui: rodar bootstrap de novo, \`build\`, a suíte de
+testes, \`npm install\`/religar dependências, relinkar o Supabase, ou refazer qualquer
+autenticação. Quando os dois já estão saudáveis (o caso comum, do 2º pedido em diante)
+ele **não reinicia nada** — confirma e retorna quase instantaneamente.
 
-**Só no primeiro pedido da sessão.** Do segundo pedido em diante, **não** rode
-\`supremo:resume\` de novo — preview e daemon já foram confirmados de pé, e continuam
-vivos entre pedidos por conta própria (ver "Preview PERSISTENTE" abaixo). Repetir isso a
-cada prompt é overhead sem propósito nenhum.
+**Roda antes de todo pedido que muda código — nunca só uma vez por sessão.** Não existe
+mais uma regra de "primeiro pedido": o custo no caminho saudável é próximo de zero,
+então rodar de novo não é desperdício — é exatamente o que torna a retomada confiável
+mesmo quando o host restaura a mesma conversa sem avisar. (O \`sync\` de sincronização
+entre máquinas, na seção seguinte, mantém sua PRÓPRIA regra de "só no primeiro pedido
+da sessão" — é sobre estado remoto entre máquinas, um problema diferente do de religar
+processos locais mortos, e continua fora do escopo deste ajuste.)
 
 ### Sincronização entre máquinas (v3.3)
 O mesmo projeto Supremo pode ser trabalhado em máquinas diferentes (PC de dia, notebook
@@ -2693,8 +2710,8 @@ O mesmo projeto Supremo pode ser trabalhado em máquinas diferentes (PC de dia, 
 e outra máquina pode ter publicado checkpoints novos nesse meio-tempo — **sem** você
 precisar pensar em \`git pull\`.
 
-**Logo depois de \`supremo:resume\`, ainda no primeiro pedido da sessão** (nunca nos
-seguintes — mesma regra de "só uma vez" acima), rode:
+**Só no primeiro pedido da sessão** (regra PRÓPRIA do \`sync\` — diferente do
+\`supremo:resume\` acima, que agora roda antes de todo pedido; nunca nos seguintes), rode:
 \`\`\`
 npm run sync
 \`\`\`
@@ -2815,10 +2832,10 @@ falhou (sem "DEFERIDO"), é falha real e precisa de correção antes do checkpoi
 dúvida, \`verify\` falha fechado (fail-closed) — trate como falha real.
 
 ### Passos de cada pedido normal (v3.1)
-1. **Preview**: primeiro pedido da sessão → \`npm run supremo:resume\` já resolveu isso
-   (ver "Retomada automática de sessão"); disponibilize a URL do JSON ao usuário. Nos
-   pedidos seguintes da mesma sessão, não rode nada aqui — reutilize a URL que já está
-   de pé.
+1. **Preflight**: rode \`npm run supremo:resume\` (ver "Retomada automática de sessão" —
+   é local, rápido, e só religa o que estiver de fato morto); disponibilize a URL do
+   JSON ao usuário. Todo pedido que muda código, não só o primeiro — no caminho
+   saudável o custo é próximo de zero.
 2. **Implemente** a mudança; veja no preview (o HMR reflete na hora).
 3. Crie/atualize **só os testes relacionados** (escritos junto).
 4. Rode **\`npm run verify\`** (adaptativo, proporcional ao risco — ver acima).
@@ -2878,11 +2895,13 @@ espera nada disso; nem o daemon toca no GitHub diretamente.**
 - **NUNCA** rode bootstrap de novo numa máquina onde ele já rodou — nem depois de
   reabrir você, nem depois de reiniciar o computador. Isso é exatamente o que
   \`npm run supremo:resume\` existe pra evitar (ver "Retomada automática de sessão"):
-  religa preview/daemon sozinho, sem nova autorização. E **NUNCA** rode
-  \`supremo:resume\` fora do primeiro pedido da sessão — repetir a cada prompt é
-  overhead sem propósito, o preview/daemon já confirmados continuam de pé sozinhos.
-- **NUNCA** rode \`npm run sync\` fora do primeiro pedido da sessão (mesma regra do
-  \`supremo:resume\`) — nenhuma consulta remota a cada prompt. E **NUNCA** tente
+  religa preview/daemon sozinho, sem nova autorização. E **NUNCA** pule o
+  \`supremo:resume\` antes de um pedido que muda código achando que "já rodou nesta
+  sessão" — você não tem como confirmar isso com segurança (o host pode restaurar a
+  mesma conversa sem avisar), e o custo no caminho saudável é próximo de zero.
+- **NUNCA** rode \`npm run sync\` fora do primeiro pedido da sessão — política PRÓPRIA
+  de sincronização entre máquinas, independente do \`supremo:resume\` (que agora roda
+  em todo pedido) — nenhuma consulta remota a cada prompt. E **NUNCA** tente
   sincronizar você mesmo com \`git pull\`/\`git fetch\`/\`git merge\` à mão: \`sync\` já faz
   isso da forma segura (fast-forward só quando o worktree está limpo e o checkpoint
   remoto já integrou) — ver "Sincronização entre máquinas". Havendo alterações locais
@@ -2967,14 +2986,18 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - Mudar o schema do banco online só por **migration versionada + \`npx supabase db
   push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
   "Banco de dados online" no \`AGENTS.md\`.
-- **No início de uma sessão nova/seu primeiro pedido dela** (nunca nos seguintes), rodar
-  \`npm run supremo:resume\` — religa preview e daemon sozinho se morreram (reboot, agente
-  fechado) e reutiliza se já estão de pé, **sem** bootstrap, build, testes, install,
-  relink ou reautenticação. Ver "Retomada automática de sessão". Fora do primeiro pedido,
-  **reutilize** a URL de \`.supremo/preview.port\` direto — **nunca** confie só na
-  existência do arquivo (pode ter sobrevivido a um reboot que matou o processo). **Nunca**
+- **Antes de todo pedido que muda código** (nunca só "no primeiro" — o host pode
+  restaurar a mesma conversa sem avisar, então não dá pra confiar em detectar "sessão
+  nova"), rodar \`npm run supremo:resume\` — checagem 100% LOCAL (healthcheck do preview,
+  pid do daemon lido direto; nenhuma rede, nenhum \`npx\` no caminho saudável) que religa
+  preview e daemon sozinho se morreram e reutiliza se já estão de pé, **sem** bootstrap,
+  build, testes, install, relink ou reautenticação; no caminho saudável o custo é
+  próximo de zero. Ver "Retomada automática de sessão". **Nunca** confie só na
+  existência de \`.supremo/preview.port\` (pode ter sobrevivido a um reboot que matou o
+  processo) — é exatamente o que o \`supremo:resume\` reconfirma a cada vez. **Nunca**
   \`npm run dev\` à mão, **nunca** suba outro servidor no sandbox. Ver "Preview PERSISTENTE".
-- **Logo em seguida, ainda no primeiro pedido**, rodar \`npm run sync\` — checagem LEVE
+- **Só no primeiro pedido da sessão** (regra PRÓPRIA do \`sync\`, independente do
+  \`supremo:resume\` acima — que agora roda em todo pedido), rodar \`npm run sync\` — checagem LEVE
   (uma consulta, timeout curto, nunca GitHub) do checkpoint mais recente conhecido do
   projeto; sincroniza por fast-forward SÓ se o worktree estiver limpo e o checkpoint
   remoto já foi **publicado com sucesso** pelo Supremo (uma branch real — \`main\` se já
@@ -3026,8 +3049,10 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   conhecida, nunca por suposição sua
 - **Rodar bootstrap de novo numa máquina onde ele já rodou** (reabrir você, reiniciar o
   computador) — é pra isso que existe \`npm run supremo:resume\` (ver "Retomada
-  automática de sessão" no AGENTS.md); e **rodar \`supremo:resume\` fora do primeiro
-  pedido da sessão** — preview/daemon já confirmados seguem de pé sozinhos
+  automática de sessão" no AGENTS.md); e **pular o \`supremo:resume\` antes de um pedido
+  que muda código** achando que "já é a mesma sessão" — o host pode restaurar a mesma
+  conversa sem avisar, então a checagem roda sempre; o custo no caminho saudável é
+  próximo de zero
 - **Rodar \`sync\` fora do primeiro pedido da sessão**, ou tentar sincronizar você mesmo
   com \`git pull\`/\`fetch\`/\`merge\` à mão — \`npm run sync\` já faz isso com segurança
   (fast-forward só se limpo e já publicado com sucesso pelo Supremo); ver "Sincronização

@@ -6,36 +6,53 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { previewSupervisorScript, supremoStatusScript } from './harness'
 
 /**
- * Retomada automática de sessão (v3.2) — E2E REAL. `npm run supremo:resume`
- * (= `node scripts/supremo-status.mjs --ensure`) é o ÚNICO comando que a
- * regra gerada (AGENTS.md/CLAUDE.md) manda rodar no primeiro pedido de uma
- * sessão nova. Executa o script REAL gerado (`supremoStatusScript()`) contra
- * um preview REAL (`previewSupervisorScript()`, mesmo padrão de
- * `preview-ownership.test.ts`) e um daemon SIMULADO — um shim de `npx` que
- * sobe/derruba um processo Node de verdade (pid sinalizável de verdade),
- * pra reproduzir "reboot: o arquivo de estado sobrevive, o processo não" sem
- * depender da CLI publicada nem de rede.
+ * Preflight local de retomada (v3.4, ex-"retomada automática de sessão"
+ * v3.2) — E2E REAL. `npm run supremo:resume` (= `node scripts/supremo-status
+ * .mjs --ensure`) agora roda ANTES DE TODO pedido que muda código — não só
+ * "no primeiro da sessão" (a antiga regra: o host pode restaurar a MESMA
+ * conversa depois de fechar/reabrir sem nenhum sinal de reinício — E2E real,
+ * teste-v3-12 — então não dá pra confiar em detectar "sessão nova"). Isso só
+ * é seguro porque a checagem é 100% LOCAL. Executa o script REAL gerado
+ * (`supremoStatusScript()`) contra um preview REAL (`previewSupervisorScript
+ * ()`, mesmo padrão de `preview-ownership.test.ts`) e um daemon SIMULADO —
+ * um shim de `npx` que sobe/derruba um processo Node de verdade (pid
+ * sinalizável de verdade), escrevendo no MESMO pidfile que o daemon real usa
+ * (`packages/cli/src/daemon.ts#DAEMON_PID_FILE`) — pra reproduzir "reboot: o
+ * arquivo de estado sobrevive, o processo não" sem depender da CLI publicada
+ * nem de rede.
  *
- * O shim nunca reconhece nada além de `daemon --status`/`daemon --ensure` —
- * qualquer outra coisa (inclusive `bootstrap`) é uma chamada INESPERADA,
- * registrada num log — prova de que a retomada nunca acopa bootstrap.
+ * O shim só reconhece `daemon --ensure` — nem `daemon --status` (o status
+ * agora é lido LOCAL, direto do pidfile, nunca por `npx`) nem qualquer outra
+ * coisa (inclusive `bootstrap`) — qualquer chamada fora disso é INESPERADA,
+ * registrada num log — prova de que a checagem nunca toca rede no caminho
+ * saudável e nunca acopla bootstrap.
  */
+
+const DAEMON_PID_FILE_REL = '.supremo/checkpoints/daemon.pid'
 
 function daemonShim(): string {
   return `#!/usr/bin/env node
 import fs from 'node:fs'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
 
 const args = process.argv.slice(2)
 fs.appendFileSync(process.env.RESUME_TEST_CALL_LOG, JSON.stringify(args) + '\\n')
 
-function readState() {
-  try { return JSON.parse(fs.readFileSync(process.env.RESUME_TEST_DAEMON_STATE, 'utf8')) } catch { return { pid: null } }
-}
-function writeState(s) { fs.writeFileSync(process.env.RESUME_TEST_DAEMON_STATE, JSON.stringify(s)) }
+// MESMO local que o daemon real usa (packages/cli/src/daemon.ts#DAEMON_PID_FILE)
+// — supremo-status.mjs (v3.4) lê esse arquivo DIRETO pro status, sem passar
+// por este shim; o shim só existe pro --ensure (religar de verdade).
+const PID_FILE = '${DAEMON_PID_FILE_REL}'
+
 function alive(pid) {
   if (!pid) return false
   try { process.kill(pid, 0); return true } catch { return false }
+}
+function readPid() {
+  try {
+    const pid = Number(fs.readFileSync(PID_FILE, 'utf8').trim())
+    return Number.isFinite(pid) && pid > 0 ? pid : null
+  } catch { return null }
 }
 
 const isDaemonCmd = args[0] === '--yes' && args[1] === 'supremo-cli' && args[2] === 'daemon'
@@ -44,22 +61,19 @@ if (!isDaemonCmd) {
   process.exit(1)
 }
 
-if (args.includes('--status')) {
-  const { pid } = readState()
-  const running = alive(pid)
-  console.log(JSON.stringify({ running, healthy: running, pid: running ? pid : null, pendingCheckpoints: 0 }))
-} else if (args.includes('--ensure')) {
-  const { pid } = readState()
+if (args.includes('--ensure')) {
+  const pid = readPid()
   if (!alive(pid)) {
+    fs.mkdirSync(path.dirname(PID_FILE), { recursive: true })
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       detached: true,
       stdio: 'ignore',
     })
     child.unref()
-    writeState({ pid: child.pid })
+    fs.writeFileSync(PID_FILE, String(child.pid))
   }
 } else {
-  console.error('chamada inesperada (sem --status/--ensure): ' + JSON.stringify(args))
+  console.error('chamada inesperada (sem --ensure — status agora é local, nunca por npx): ' + JSON.stringify(args))
   process.exit(1)
 }
 `
@@ -71,9 +85,11 @@ interface ResumeJson {
   checkpoints: { pending: number }
 }
 
+/** Lê o MESMO pidfile local que supremo-status.mjs (v3.4) e o daemon real usam. */
 function daemonState(dir: string): { pid: number | null } {
   try {
-    return JSON.parse(readFileSync(join(dir, 'daemon-fake-state.json'), 'utf8')) as { pid: number | null }
+    const pid = Number(readFileSync(join(dir, DAEMON_PID_FILE_REL), 'utf8').trim())
+    return { pid: Number.isFinite(pid) && pid > 0 ? pid : null }
   } catch {
     return { pid: null }
   }
@@ -167,7 +183,6 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
       PATH: `${binDir}:${process.env.PATH}`,
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
-      RESUME_TEST_DAEMON_STATE: join(dir, 'daemon-fake-state.json'),
     }
     return { dir, env }
   }

@@ -24,6 +24,9 @@ import {
 export interface MergeGateway {
   getPullRequest(prNumber: number): Promise<{
     headSha: string
+    /** Branch de origem da PR (ex.: `supremo/cp-<sha>`) — usado só pro
+     * cleanup de integration branch (v3-13), nunca pra decisão de merge. */
+    headRef: string
     nodeId: string
     merged: boolean
     state: string
@@ -33,6 +36,10 @@ export interface MergeGateway {
   allowAutoMerge(): Promise<boolean>
   enableNativeAutoMerge(nodeId: string): Promise<boolean>
   merge(prNumber: number, expectedSha: string): Promise<{ sha: string }>
+  /** Apaga uma branch. Silencioso se ela já não existe (idempotente) — ver
+   * `mcp/github.ts#deleteBranch`. Só chamado pelo cleanup pós-merge (v3-13),
+   * nunca pela decisão de merge em si. */
+  deleteBranch(branch: string): Promise<void>
 }
 
 export interface ReconcileResult {

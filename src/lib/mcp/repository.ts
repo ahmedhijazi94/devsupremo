@@ -335,6 +335,35 @@ export async function getProjectByRepoFullName(
   }
 }
 
+/**
+ * Localiza o projeto pelo id (worker, sem userId — mesmo padrão de
+ * `getProjectByRepoFullName`). Usado pelo fallback de reconciliation (v3-14)
+ * pra resolver repo/branch padrão a partir de um `project_id` vindo de
+ * `checkpoints` (não do próprio `listProjectsForReconcile`, que filtra por
+ * `integration_state` — uma PR já `merged` não está mais nesse conjunto).
+ */
+export async function getProjectById(projectId: string): Promise<WorkerProject | null> {
+  const { data, error } = await db()
+    .from('projects')
+    .select('id, user_id, github_repo_full_name, default_branch, active_branch')
+    .eq('id', projectId)
+    .maybeSingle<{
+      id: string
+      user_id: string
+      github_repo_full_name: string | null
+      default_branch: string | null
+      active_branch: string | null
+    }>()
+  if (error || !data || !data.github_repo_full_name) return null
+  return {
+    id: data.id,
+    userId: data.user_id,
+    repoFullName: data.github_repo_full_name,
+    defaultBranch: data.default_branch || 'main',
+    activeBranch: data.active_branch || data.default_branch || 'main',
+  }
+}
+
 export interface IntegrationMeta {
   mergeMode: 'native' | 'supremo_managed' | null
   protectionLevel: 'github_native' | 'supremo_managed' | null

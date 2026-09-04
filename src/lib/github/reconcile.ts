@@ -5,6 +5,7 @@ import {
   type ReconcileResult,
 } from './merge-controller'
 import type { IntegrationState, MergeMode } from './merge-policy'
+import { isSupremoIntegrationRef } from './webhook'
 
 /**
  * Caminho ÚNICO de reconciliation da v3. TANTO o webhook (event-driven) QUANTO o
@@ -104,4 +105,95 @@ export async function reconcileProjectPr(input: {
     merged: result.merged,
   })
   return result
+}
+
+// ── Cleanup de integration branch pós-merge (v3-13) ─────────────────────────
+
+export interface BranchCleanupOutcome {
+  /** Chegou a checar se devia apagar (mesmo que a resposta tenha sido "não"). */
+  attempted: boolean
+  deleted: boolean
+  /** null só quando nem deu pra saber a branch (erro na releitura da PR). */
+  branch: string | null
+  reason: string
+}
+
+/**
+ * Decisão PURA: esta branch pode ser candidata a cleanup automático?
+ *   - reaproveita `isSupremoIntegrationRef` (webhook.ts) — o MESMO namespace
+ *     `supremo/` que já é a fronteira de autoridade pra disparar reconciliação;
+ *     nunca uma heurística nova/paralela;
+ *   - defesa explícita adicional: NUNCA a `defaultBranch` (mesmo que, por
+ *     algum bug, uma PR aparecesse com head == main — o que o GitHub já
+ *     impede sozinho, mas "nunca excluir main" é regra obrigatória demais
+ *     pra depender só de um efeito colateral do namespace).
+ */
+export function isManagedIntegrationBranch(branch: string, defaultBranch: string): boolean {
+  return isSupremoIntegrationRef(branch) && branch !== defaultBranch
+}
+
+/**
+ * Cleanup da integration_branch de uma PR — SÓ depois de uma reconciliação
+ * que já confirmou `merged: true` (quem chama decide isso; ver
+ * `result.merged` em `reconcileProjectPr`). Regras (v3-13, E2E v3-12: PRs
+ * antigas já integradas deixavam `supremo/cp-*` pra trás no repositório):
+ *
+ *   - CONFIRMA DE NOVO direto no GitHub antes de apagar — nunca reaproveita
+ *     o resultado da reconciliação que já aconteceu pra uma operação
+ *     destrutiva; se por qualquer motivo a PR não estiver mais `merged` numa
+ *     releitura fresca, a branch é preservada;
+ *   - só toca branch no namespace gerenciado (`isManagedIntegrationBranch`) —
+ *     nunca `main`, nunca uma branch arbitrária/de terceiro;
+ *   - NUNCA lança: falha aqui (rede, rate limit, permissão) não pode desfazer
+ *     o merge nem marcar o checkpoint como falho — quem chama já persistiu
+ *     merge/checkpoint ANTES disto rodar, e este cleanup é sempre best-effort;
+ *   - idempotente: `deleteBranch` (mcp/github.ts) já é silencioso se a branch
+ *     não existe mais — chamar de novo (o próximo webhook ou o fallback
+ *     periódico) é sempre seguro, sem estado especial de "já tentei".
+ */
+export async function cleanupIntegrationBranchIfMerged(
+  gateway: MergeGateway,
+  input: { prNumber: number; defaultBranch: string },
+  log?: ReconcileLogger,
+): Promise<BranchCleanupOutcome> {
+  try {
+    const pr = await gateway.getPullRequest(input.prNumber)
+    if (!pr.merged) {
+      return {
+        attempted: false,
+        deleted: false,
+        branch: pr.headRef,
+        reason: 'PR não confirmada como mesclada nesta releitura — branch preservada.',
+      }
+    }
+    if (!isManagedIntegrationBranch(pr.headRef, input.defaultBranch)) {
+      return {
+        attempted: false,
+        deleted: false,
+        branch: pr.headRef,
+        reason: 'Fora do namespace supremo/ (ou é a branch padrão) — nunca tocada.',
+      }
+    }
+    await gateway.deleteBranch(pr.headRef)
+    log?.event('integration_branch_cleanup', { prNumber: input.prNumber, branch: pr.headRef })
+    return {
+      attempted: true,
+      deleted: true,
+      branch: pr.headRef,
+      reason: 'PR confirmada mesclada — branch de integração removida.',
+    }
+  } catch (error) {
+    log?.event('integration_branch_cleanup_error', {
+      prNumber: input.prNumber,
+      message: error instanceof Error ? error.message : 'erro',
+    })
+    // Nunca lança: o merge/checkpoint já foram persistidos por quem chamou;
+    // o próximo reconcile (webhook ou fallback) tenta o cleanup de novo.
+    return {
+      attempted: true,
+      deleted: false,
+      branch: null,
+      reason: 'Erro ao consultar/apagar — será tentado de novo na próxima reconciliação.',
+    }
+  }
 }

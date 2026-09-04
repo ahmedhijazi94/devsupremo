@@ -14,11 +14,18 @@ const green: CheckRun[] = REQUIRED.map((name) => ({
 function gateway(over: Partial<MergeGateway> & { headSha?: string; checksHeadSha?: string } = {}): MergeGateway {
   const head = over.headSha ?? SHA
   return {
-    getPullRequest: vi.fn(async () => ({ headSha: head, nodeId: 'PR_node', merged: false, state: 'open' })),
+    getPullRequest: vi.fn(async () => ({
+      headSha: head,
+      headRef: 'supremo/cp-x',
+      nodeId: 'PR_node',
+      merged: false,
+      state: 'open',
+    })),
     getChecks: vi.fn(async () => ({ checks: green, headSha: over.checksHeadSha ?? head })),
     allowAutoMerge: vi.fn(async () => true),
     enableNativeAutoMerge: vi.fn(async () => true),
     merge: vi.fn(async () => ({ sha: head })),
+    deleteBranch: vi.fn(async () => {}),
     ...over,
   }
 }
@@ -92,7 +99,13 @@ describe('reconcileMerge — modo SUPREMO_MANAGED', () => {
     const gw = gateway({
       getPullRequest: vi.fn(async () => {
         call += 1
-        return { headSha: call === 1 ? SHA : SHA2, nodeId: 'PR', merged: false, state: 'open' }
+        return {
+          headSha: call === 1 ? SHA : SHA2,
+          headRef: 'supremo/cp-x',
+          nodeId: 'PR',
+          merged: false,
+          state: 'open',
+        }
       }),
       getChecks: vi.fn(async () => ({ checks: green, headSha: SHA })),
     })
@@ -110,7 +123,13 @@ describe('reconcileMerge — modo SUPREMO_MANAGED', () => {
 
   it('PR já mesclada → noop idempotente', async () => {
     const gw = gateway({
-      getPullRequest: vi.fn(async () => ({ headSha: SHA, nodeId: 'PR', merged: true, state: 'closed' })),
+      getPullRequest: vi.fn(async () => ({
+        headSha: SHA,
+        headRef: 'supremo/cp-x',
+        nodeId: 'PR',
+        merged: true,
+        state: 'closed',
+      })),
     })
     const r = await reconcileMerge(gw, { prNumber: 7, requiredChecks: REQUIRED, mode: 'supremo_managed' })
     expect(r.merged).toBe(true)

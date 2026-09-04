@@ -135,10 +135,83 @@ export function isKnownNextTsconfigNoise(before: string, after: string): boolean
   return [...added, ...removed].every((entry) => NEXT_TYPES_GLOB_RE.test(entry))
 }
 
+/**
+ * Migrations são FORWARD-ONLY (v3-12): uma vez aplicadas no Supabase remoto,
+ * `supabase/migrations/**` nunca pode ser apagado/revertido/modificado pelo
+ * restore de CÓDIGO — restore volta a APLICAÇÃO a um checkpoint anterior,
+ * nunca o schema. Sem esta proteção, o patch HEAD→alvo (um checkpoint mais
+ * antigo, sem migrations que já existem agora) mostra essas migrations como
+ * "deletadas" — aplicar isso apaga do worktree E do commit compensatório do
+ * restore, enquanto o schema remoto continua com elas aplicadas: o repo fica
+ * pra trás do banco real. E2E real (v3-12): checkpoint A sem migration →
+ * duas migrations criadas/aplicadas depois → restaurar A apagou as duas do
+ * Git, sem nunca desfazer nada no Supabase.
+ */
+export const MIGRATIONS_PATHSPEC = 'supabase/migrations'
+
+export interface MigrationDiffEntry {
+  /** Código bruto de `git diff --name-status` (A/D/M/R100/C100/T/...). */
+  status: string
+  path: string
+}
+
+/**
+ * Parseia `git diff --name-status` de forma estrita: só aceita linhas
+ * `STATUS\tPATH` (rename/copy vêm como `STATUS\tOLD\tNEW` — usamos o NOVO
+ * path, é o que importa pra decidir o que preservar). Qualquer linha que não
+ * bate nesse formato é ignorada — nunca interpreta lixo como um path de
+ * migration real (fail-closed por omissão, não por acidente de parsing).
+ */
+export function parseNameStatus(output: string): MigrationDiffEntry[] {
+  const entries: MigrationDiffEntry[] = []
+  for (const line of output.split('\n')) {
+    const parts = line.split('\t').filter((p) => p.length > 0)
+    if (parts.length < 2) continue
+    const status = parts[0]!
+    if (!/^[AMDRCT]\d*$/.test(status)) continue
+    const path = parts[parts.length - 1]! // rename/copy: o path NOVO
+    entries.push({ status, path })
+  }
+  return entries
+}
+
+/**
+ * Classifica as migrations tocadas pelo diff HEAD→alvo em duas categorias,
+ * SEMPRE preservadas (nunca aplicadas pelo restore — ver `applyRestore`):
+ *   - `preservedPaths`: TODAS — inclui o caso normal/esperado (`D`: a
+ *     migration existe agora mas não no checkpoint antigo, exatamente o bug
+ *     do v3-12) e qualquer outro (`A`, `R`, `C`, `T`);
+ *   - `conflicts`: subconjunto onde o MESMO path existe nos dois lados mas
+ *     com CONTEÚDO diferente (`M`, ou rename/copy/type-change — qualquer
+ *     coisa que não seja simplesmente "só existe de um lado") — um sinal de
+ *     que uma migration HISTÓRICA foi editada in-place em algum checkpoint,
+ *     o que nunca deveria acontecer; reportado separadamente pro chamador
+ *     sinalizar, mesmo sendo preservada (nunca reescrita) do mesmo jeito.
+ */
+export function classifyMigrationDiff(entries: readonly MigrationDiffEntry[]): {
+  preservedPaths: string[]
+  conflicts: string[]
+} {
+  const preservedPaths = entries.map((e) => e.path)
+  const conflicts = entries.filter((e) => e.status !== 'A' && e.status !== 'D').map((e) => e.path)
+  return { preservedPaths, conflicts }
+}
+
 export interface RestoreOutcome {
   /** false quando o worktree já estava igual ao alvo — nada a restaurar. */
   applied: boolean
   record: CheckpointRecord | null
+  /** Paths sob supabase/migrations/** que o restore encontrou diferentes
+   * entre o estado atual e o alvo e por isso PRESERVOU intactos (nunca
+   * tocados pelo patch aplicado) — nunca vazio quando havia migrations
+   * posteriores ao alvo, mesmo se `applied` for false. */
+  preservedMigrations: string[]
+  /** Subconjunto de `preservedMigrations` onde o CONTEÚDO da mesma migration
+   * diverge entre atual e alvo (não é só "existe de um lado") — sinal de uma
+   * migration histórica editada in-place; o chamador deve sinalizar isto
+   * (nunca é motivo pra falhar o restore, e a migration É preservada do
+   * mesmo jeito — só o alerta é diferente). */
+  migrationConflicts: string[]
 }
 
 // ── Orquestração (I/O injetável) ─────────────────────────────────────────────
@@ -232,9 +305,48 @@ export function applyRestore(
   }
 
   const currentHead = deps.git(['rev-parse', 'HEAD']).trim()
-  const patch = deps.git(['diff', '--binary', currentHead, targetSha])
+
+  // Proteção FORWARD-ONLY de migrations (v3-12, ver comentário em
+  // MIGRATIONS_PATHSPEC acima): descobre TUDO que o patch bruto HEAD→alvo
+  // tocaria sob supabase/migrations/** — SEMPRE preservado, nunca aplicado,
+  // não importa a direção (deletado/adicionado/modificado). Uma consulta
+  // separada e ESCOPADA (nunca lê o conteúdo dos arquivos, só nomes+status),
+  // ANTES do patch real — se falhar (ex.: diretório não existe ainda em
+  // nenhum dos dois lados), não há nada a proteger.
+  let migrationStatusOutput = ''
+  try {
+    migrationStatusOutput = deps.git([
+      'diff',
+      '--name-status',
+      currentHead,
+      targetSha,
+      '--',
+      MIGRATIONS_PATHSPEC,
+    ])
+  } catch {
+    migrationStatusOutput = ''
+  }
+  const { preservedPaths: preservedMigrations, conflicts: migrationConflicts } = classifyMigrationDiff(
+    parseNameStatus(migrationStatusOutput),
+  )
+
+  // O patch REAL exclui supabase/migrations/** inteiramente (pathspec magic
+  // `:(exclude)`, testado com git de verdade) — nunca um filtro de TEXTO
+  // sobre o patch já gerado (frágil pra diffs binários/multi-arquivo). Migrations
+  // ficam EXATAMENTE como estão no worktree atual, mesmo restaurando pra um
+  // checkpoint mais antigo que não as tinha: restore nunca executa down
+  // migration, nunca desfaz schema remoto — só a APLICAÇÃO volta no tempo.
+  const patch = deps.git([
+    'diff',
+    '--binary',
+    currentHead,
+    targetSha,
+    '--',
+    '.',
+    `:(exclude)${MIGRATIONS_PATHSPEC}`,
+  ])
   if (isEmptyPatch(patch)) {
-    return { applied: false, record: null }
+    return { applied: false, record: null, preservedMigrations, migrationConflicts }
   }
 
   deps.applyPatch(patch)
@@ -254,7 +366,7 @@ export function applyRestore(
   })
   deps.appendQueue(record)
   deps.notifyDaemon()
-  return { applied: true, record }
+  return { applied: true, record, preservedMigrations, migrationConflicts }
 }
 
 /** Extrai os paths tocados de um `git diff --binary` unificado (para o registro). */

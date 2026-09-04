@@ -677,9 +677,10 @@ describe('preview persistente — reutiliza URL real e abre proativamente (boots
     expect(agents).toContain('a existência do arquivo prova que já rodou uma vez, não que está de pé agora')
   })
 
-  it('AGENTS.md: passo 1 do fluxo normal aponta pra "Retomada automática de sessão" (não decide reutilizar/ensure sozinho)', () => {
-    expect(agents).toContain('primeiro pedido da sessão → `npm run supremo:resume` já resolveu isso')
+  it('AGENTS.md: passo 1 do fluxo normal roda o preflight (não decide reutilizar/ensure sozinho) — antes de TODO pedido, não só o primeiro (v3.4)', () => {
+    expect(agents).toContain('**Preflight**: rode `npm run supremo:resume`')
     expect(agents).toContain('ver "Retomada automática de sessão"')
+    expect(agents).toMatch(/Todo pedido que muda código, não só o primeiro/)
   })
 
   it('AGENTS.md: abre/disponibiliza o preview automaticamente no início da sessão/primeiro pedido, sem o usuário pedir', () => {
@@ -705,11 +706,11 @@ describe('preview persistente — reutiliza URL real e abre proativamente (boots
     expect(agents).toMatch(/preview:status[\s\S]*devolve a URL certa/)
   })
 
-  it('CLAUDE.md: v3.2 — primeiro pedido roda supremo:resume; fora dele reutiliza direto sem confiar só na existência do arquivo', () => {
+  it('CLAUDE.md: v3.4 — preflight roda antes de TODO pedido; nunca confia só na existência do arquivo de preview', () => {
     expect(claude).toContain('.supremo/preview.port')
     expect(claude).toContain('npm run supremo:resume')
-    expect(claude).toContain('reutilize** a URL de')
-    expect(claude).toContain('nunca** confie só na existência do arquivo')
+    expect(claude).toMatch(/Antes de todo pedido que muda código/)
+    expect(claude).toMatch(/\*\*Nunca\*\* confie só na existência de/)
     expect(claude).toContain('nunca** suba outro servidor no sandbox')
   })
 
@@ -751,9 +752,10 @@ describe('retomada automática de sessão (v3.2) — nunca precisa de bootstrap 
     expect(pkg.scripts['supremo:resume']).toBe('node scripts/supremo-status.mjs --ensure')
   })
 
-  it('AGENTS.md: no início de uma sessão nova/primeiro pedido, roda supremo:resume', () => {
-    expect(agents).toMatch(/no início de uma sessão nova.{0,40}primeiro pedido/i)
+  it('AGENTS.md: antes de TODO pedido que muda código (não só o primeiro — o host pode restaurar a mesma sessão), roda supremo:resume (v3.4)', () => {
+    expect(agents).toMatch(/antes de QUALQUER pedido que vá alterar código/i)
     expect(agents).toContain('npm run supremo:resume')
+    expect(agents).toMatch(/host pode restaurar a MESMA conversa/)
   })
 
   it('AGENTS.md: NUNCA roda bootstrap de novo numa máquina onde ele já rodou', () => {
@@ -771,9 +773,10 @@ describe('retomada automática de sessão (v3.2) — nunca precisa de bootstrap 
     expect(agents).toContain('refazer qualquer autenticação')
   })
 
-  it('AGENTS.md: SÓ no primeiro pedido — pedidos seguintes da mesma sessão NÃO repetem supremo:resume', () => {
-    expect(agents).toMatch(/Só no primeiro pedido da sessão/)
-    expect(agents).toMatch(/[Dd]o segundo pedido em diante,?\s*\*{0,2}não\*{0,2} rode `?supremo:resume` de novo/)
+  it('AGENTS.md: NÃO existe mais regra de "só primeiro pedido" — supremo:resume roda antes de TODO pedido, custo próximo de zero quando saudável (v3.4)', () => {
+    expect(agents).toMatch(/[Rr]oda antes de todo pedido que muda código — nunca só uma vez por sessão/)
+    expect(agents).toMatch(/[Nn]ão existe mais uma regra de "primeiro pedido"/)
+    expect(agents).toContain('custo no caminho saudável é próximo de zero')
   })
 
   it('AGENTS.md: cobre tanto preview quanto daemon — vivo reutiliza, morto religa pelo mecanismo já existente', () => {
@@ -788,9 +791,9 @@ describe('retomada automática de sessão (v3.2) — nunca precisa de bootstrap 
     )
   })
 
-  it('CLAUDE.md segue o mesmo contrato: supremo:resume só no primeiro pedido, sem bootstrap/build/testes/reauth', () => {
+  it('CLAUDE.md segue o mesmo contrato: supremo:resume roda antes de TODO pedido, sem bootstrap/build/testes/reauth (v3.4)', () => {
     expect(claude).toContain('npm run supremo:resume')
-    expect(claude).toMatch(/no início de uma sessão nova.{0,40}primeiro pedido dela.{0,20}nunca nos seguintes/i)
+    expect(claude).toMatch(/Antes de todo pedido que muda código.{0,60}nunca só "no primeiro"/i)
     expect(claude).toContain('sem** bootstrap, build, testes, install, relink ou reautenticação')
     expect(claude).toContain('Rodar bootstrap de novo numa máquina onde ele já rodou')
   })
@@ -816,8 +819,9 @@ describe('sincronização entre máquinas (v3.3) — sem git pull manual, sem po
     expect(pkg.scripts.sync).toBe('npx --yes supremo-cli sync')
   })
 
-  it('AGENTS.md: sync roda logo depois de supremo:resume, ainda no primeiro pedido', () => {
-    expect(agents).toMatch(/[Ll]ogo depois de `?supremo:resume`?.{0,40}primeiro pedido/)
+  it('AGENTS.md: sync mantém regra PRÓPRIA de só primeiro pedido — independente do supremo:resume, que agora roda todo pedido (v3.4)', () => {
+    expect(agents).toMatch(/[Ss]ó no primeiro pedido da sessão.{0,40}regra PRÓPRIA do `?sync`?/)
+    expect(agents).toMatch(/`?supremo:resume`? acima.{0,20}que agora roda antes de todo pedido/)
     expect(agents).toContain('npm run sync')
   })
 

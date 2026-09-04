@@ -44,13 +44,17 @@ export function harnessPackageScripts(): Record<string, string> {
     // Diagnóstico agregado (v3.1 finalização) — não é para o dev rodar no dia a
     // dia; a UI do Supremo (Histórico) é o lugar humano. JSON machine-readable.
     'supremo:status': 'node scripts/supremo-status.mjs',
-    // Retomada automática de sessão (v3.2, seção 30) — mesmo script, religa o
-    // que morreu (preview:ensure/daemon:ensure) e imprime o status final.
+    // Preflight local de retomada (v3.4) — mesmo script, religa o que morreu
+    // (preview:ensure/daemon:ensure) e imprime o status final. Antes era só
+    // "primeiro pedido da sessão"; agora roda ANTES DE TODO pedido que muda
+    // código — 100% local (pid do daemon lido direto, sem npx no caminho
+    // saudável), custo próximo de zero quando já está tudo de pé.
     'supremo:resume': 'node scripts/supremo-status.mjs --ensure',
-    // Sincronização entre máquinas (v3.3, seção 31) — SÓ no primeiro pedido da
-    // sessão, DEPOIS de supremo:resume. Checagem leve (um SELECT, nunca
-    // GitHub), timeout curto embutido; fast-forward automático só quando
-    // seguro. A CLI vem por npx, como checkpoint/daemon acima.
+    // Sincronização entre máquinas (v3.3, seção 31) — política PRÓPRIA, SÓ no
+    // primeiro pedido da sessão (independente de supremo:resume acima, que
+    // agora roda todo pedido). Checagem leve (um SELECT, nunca GitHub),
+    // timeout curto embutido; fast-forward automático só quando seguro. A
+    // CLI vem por npx, como checkpoint/daemon acima.
     sync: 'npx --yes supremo-cli sync',
     'security:audit': 'node scripts/security-audit.js --deep',
     'security:report': 'node scripts/security-audit.js --report',
@@ -688,27 +692,47 @@ exec node scripts/verify.mjs
  * (a UI do Supremo/Histórico é o lugar humano); serve para depuração rápida.
  * Best-effort: se um dos dois não responder, o outro ainda aparece.
  *
- * `--ensure` (retomada automática — v3.2, seção 30): mesmo script, modo
- * opcional. Depois do bootstrap já ter rodado uma vez NESTA máquina, o
- * usuário nunca deveria precisar rodar bootstrap de novo — só reabrir a
- * pasta e mandar um pedido. `--ensure` é ISSO: religa o que morreu (reboot,
- * agente fechado) chamando os MESMOS comandos que o bootstrap já usa
- * (`preview:ensure`/`daemon:ensure` — o supervisor de cada um já distingue
- * vivo+saudável de zumbi/morto sozinho, sem lógica nova aqui), reusa o que já
- * está de pé, e nunca builda/testa/reinstala/relinca/reautentica. Sempre
- * termina imprimindo o status FINAL (inclusive a URL real do preview) — não
- * o snapshot de antes de religar.
+ * `--ensure` (preflight local de retomada — v3.4, ex-"retomada automática de
+ * sessão" v3.2/seção 30): mesmo script, modo opcional. Depois do bootstrap já
+ * ter rodado uma vez NESTA máquina, o usuário nunca deveria precisar rodar
+ * bootstrap de novo — só reabrir a pasta e mandar um pedido. `--ensure` é
+ * ISSO: religa o que morreu (reboot, agente fechado) chamando os MESMOS
+ * mecanismos que o bootstrap já usa (`preview:ensure`/o supervisor do daemon
+ * — cada um já distingue vivo+saudável de zumbi/morto sozinho, sem lógica
+ * nova aqui), reusa o que já está de pé, e nunca builda/testa/reinstala/
+ * relinca/reautentica. Sempre termina imprimindo o status FINAL (inclusive a
+ * URL real do preview) — não o snapshot de antes de religar.
+ *
+ * E2E real (teste-v3-12) — por que a checagem do DAEMON não pode passar por
+ * npx no caminho saudável: a versão anterior lia `daemon --status` via
+ * `npx --yes supremo-cli ...`; sem versão pinada, o npx confere a versão mais
+ * recente no registry TODA vez, mesmo com o pacote em cache — uma chamada de
+ * rede. Isso era tolerável rodando uma vez por sessão; deixa de ser MÍNIMO
+ * quando `--ensure` passa a rodar antes de TODO pedido (a correção deste
+ * ajuste — a antiga regra de "só no primeiro pedido da sessão" não é
+ * confiável: o host pode restaurar a MESMA conversa depois de fechar/reabrir
+ * o agente sem nenhum sinal de que o processo reiniciou, e é exatamente
+ * nesse reinício que preview/daemon podem ter morrido). A leitura do daemon
+ * abaixo é 100% LOCAL — mesma classificação de `process.kill(pid, 0)` já
+ * usada no supervisor de preview (`classifyPidSignalError` aqui) e no daemon
+ * real (`packages/cli/src/daemon.ts#classifyPidSignalError`, mesmo
+ * comentário lá — os pacotes não compartilham módulo, então o padrão se
+ * repete de propósito, nunca uma heurística nova). `npx` só é tocado no
+ * `--ensure` quando o daemon está de fato MORTO — nunca no caminho saudável.
  */
 export function supremoStatusScript(): string {
   return `#!/usr/bin/env node
-// GERADO pelo Supremo (v3.1/v3.2) — diagnóstico agregado (preview + daemon).
+// GERADO pelo Supremo (v3.1/v3.4) — diagnóstico agregado (preview + daemon).
 // Uso:
 //   node scripts/supremo-status.mjs           → só diagnostica (read-only)
 //   node scripts/supremo-status.mjs --ensure  → religa o que morreu, depois
 //                                                imprime o status FINAL
 // Não é para uso diário do humano — a UI do Supremo (Histórico) é o lugar
-// humano; isto é para o AGENTE, na retomada automática de sessão.
+// humano; isto é o PREFLIGHT LOCAL do agente, rodado antes de todo pedido
+// que muda código (v3.4) — por isso a checagem do daemon é 100% local (lê o
+// pid direto, nunca passa por npx no caminho saudável; ver comentário acima).
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
 
 function tryJson(cmd, args) {
   try {
@@ -728,8 +752,55 @@ function run(cmd, args) {
   }
 }
 
+// ── Daemon: leitura LOCAL direta do pidfile (nunca via npx — ver comentário
+// no gerador). Mesma classificação de process.kill(pid, 0) do supervisor de
+// preview e do daemon real (packages/cli/src/daemon.ts#classifyPidSignalError).
+const DAEMON_PID_FILE = '.supremo/checkpoints/daemon.pid'
+const QUEUE_FILE = '.supremo/checkpoints/queue.jsonl'
+const RETRIABLE = new Set(['local', 'upload_pending', 'publishing'])
+
+function classifyPidSignalError(code) {
+  return code === 'ESRCH' ? 'dead' : 'unknown'
+}
+
+function daemonPidAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return classifyPidSignalError(err && err.code) !== 'dead'
+  }
+}
+
+function readDaemonLocal() {
+  let pid = null
+  try {
+    const raw = Number(fs.readFileSync(DAEMON_PID_FILE, 'utf8').trim())
+    if (Number.isFinite(raw) && raw > 0) pid = raw
+  } catch {
+    /* sem pidfile — daemon nunca rodou nesta máquina */
+  }
+  const running = pid !== null && daemonPidAlive(pid)
+  let pendingCheckpoints = 0
+  try {
+    for (const line of fs.readFileSync(QUEUE_FILE, 'utf8').split('\\n')) {
+      const t = line.trim()
+      if (!t) continue
+      try {
+        const rec = JSON.parse(t)
+        if (RETRIABLE.has(rec.pushStatus)) pendingCheckpoints += 1
+      } catch {
+        /* linha corrompida — ignora, mesma tolerância de parseQueue */
+      }
+    }
+  } catch {
+    /* sem fila ainda: 0 pendências */
+  }
+  return { running, healthy: running, pendingCheckpoints }
+}
+
 const readPreview = () => tryJson('node', ['scripts/preview.mjs', 'status']) ?? { running: false, healthy: false }
-const readDaemon = () => tryJson('npx', ['--yes', 'supremo-cli', 'daemon', '--status']) ?? { running: false, healthy: false, pendingCheckpoints: 0 }
+const readDaemon = readDaemonLocal
 
 let preview = readPreview()
 let daemon = readDaemon()
@@ -738,7 +809,8 @@ if (process.argv.includes('--ensure')) {
   // Cada \`ensure\` decide sozinho reusar (já saudável), religar (rastro
   // morto/zumbi) ou subir do zero (nada registrado) — a MESMA lógica do
   // bootstrap, nenhuma nova aqui. Só chama quando o status leu não-saudável;
-  // já saudável não gasta o ensure à toa.
+  // já saudável não gasta o ensure à toa — e é só AQUI, com o daemon
+  // comprovadamente morto, que o \`npx\` (rede) é tocado.
   if (!daemon.healthy) {
     run('npx', ['--yes', 'supremo-cli', 'daemon', '--ensure'])
     daemon = readDaemon()

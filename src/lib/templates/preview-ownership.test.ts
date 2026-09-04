@@ -28,6 +28,22 @@ function randomBasePort(): number {
   return 20000 + Math.floor(Math.random() * 20000)
 }
 
+/** Confirma por bind-e-solta (não só sorteio) que a porta está livre AGORA —
+ * pros testes de heartbeat (teste-v3-17) que exigem que o probe HTTP direto
+ * genuinamente falhe: sem isso, uma colisão rara com outro teste/serviço
+ * fazia o probe direto SUCEDER por acaso, quebrando a premissa do teste. */
+function pickFreeTestPort(): Promise<number> {
+  return new Promise((resolve) => {
+    const probe = net.createServer()
+    probe.once('error', () => resolve(pickFreeTestPort()))
+    probe.listen(randomBasePort(), '127.0.0.1', () => {
+      const address = probe.address()
+      const port = typeof address === 'object' && address ? address.port : randomBasePort()
+      probe.close(() => resolve(port))
+    })
+  })
+}
+
 function writeFixtureProject(dir: string): void {
   mkdirSync(join(dir, 'scripts'), { recursive: true })
   writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
@@ -531,6 +547,225 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
           /* já morto */
         }
         rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    15_000,
+  )
+})
+
+/**
+ * Heartbeat co-localizado (E2E real, teste-v3-17) — causa raiz confirmada:
+ * `health()` roda num subprocesso NOVO a cada `supremo:resume`, e no
+ * sandbox real (Codex) cada comando do agente ganha seu PRÓPRIO namespace
+ * de rede, isolado de onde o `next dev` de verdade está escutando — daemon
+ * healthy, preview `running=true` (PID, já tolerante — ver testes acima),
+ * mas `healthy=false` PARA SEMPRE, mesmo com o browser do host respondendo
+ * 200 no MESMO instante. Testar mais famílias de endereço (v3.4.5) não
+ * ajuda: nenhum endereço, de nenhuma família, alcança o processo real
+ * DENTRO desse namespace isolado.
+ *
+ * Fix: `ensure()` sobe um heartbeat DESACOPLADO no MESMO comando que
+ * confirmou o servidor saudável pela 1ª vez (mesmo namespace, garantido) —
+ * ele sonda `health()` periodicamente e persiste o resultado em
+ * `.supremo/preview.health.json`. Comandos FUTUROS (`status`/`ensure`, em
+ * QUALQUER namespace) confiam nesse heartbeat ANTES de tentar seu próprio
+ * probe HTTP direto.
+ *
+ * Os testes abaixo reproduzem a corrida de forma DETERMINÍSTICA — sem
+ * depender de nenhuma config específica de sandbox — craftando o estado
+ * exato do sintoma: um probe HTTP direto que genuinamente falha (porta sem
+ * nada escutando, o mesmo efeito observável de "este comando está isolado
+ * da porta real") ao lado de um heartbeat FRESCO escrito por quem tinha
+ * acesso real ao servidor.
+ */
+describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolado do namespace real, teste-v3-17)', () => {
+  function writeHealthFile(dir: string, healthy: boolean, ageMs: number): void {
+    mkdirSync(join(dir, '.supremo'), { recursive: true })
+    writeFileSync(
+      join(dir, '.supremo/preview.health.json'),
+      JSON.stringify({ healthy, checkedAt: Date.now() - ageMs }),
+    )
+  }
+
+  function spawnIdleProcess(): ReturnType<typeof spawn> {
+    const idle = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    idle.unref()
+    return idle
+  }
+
+  it(
+    'heartbeat real: ensure() sobe um escritor que mantém preview.health.json fresco enquanto o processo vive',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-real-'))
+      tempDirs.push(dir)
+      writeFixtureProject(dir)
+      const port = randomBasePort()
+
+      const result = runPreview(dir, ['ensure'], {
+        PORT: String(port),
+        SUPREMO_PREVIEW_HEARTBEAT_INTERVAL_MS: '150',
+      })
+      expect(result.status).toBe(0)
+
+      // Só o waitReady() já grava o heartbeat na hora — nem precisa esperar
+      // o escritor desacoplado ter seu 1º tick.
+      const first = JSON.parse(readFileSync(join(dir, '.supremo/preview.health.json'), 'utf8')) as {
+        healthy: boolean
+        checkedAt: number
+      }
+      expect(first.healthy).toBe(true)
+      expect(Date.now() - first.checkedAt).toBeLessThan(2_000)
+
+      // Espera o escritor desacoplado ticar de verdade (intervalo curto só
+      // pro teste) e confirma que o heartbeat continua sendo REESCRITO, não
+      // é só a escrita inicial do ensure().
+      await new Promise((r) => setTimeout(r, 400))
+      const second = JSON.parse(readFileSync(join(dir, '.supremo/preview.health.json'), 'utf8')) as {
+        healthy: boolean
+        checkedAt: number
+      }
+      expect(second.healthy).toBe(true)
+      expect(second.checkedAt).toBeGreaterThan(first.checkedAt)
+    },
+    30_000,
+  )
+
+  it(
+    'probe HTTP direto falha (nada escuta na porta rastreada) mas heartbeat fresco diz saudável → status() AINDA reporta healthy:true',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-rescue-'))
+      tempDirs.push(dir)
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      const port = await pickFreeTestPort()
+      const idle = spawnIdleProcess()
+
+      try {
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        writeHealthFile(dir, true, 500) // fresco — dentro da janela padrão de 5s
+
+        const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
+          running: boolean
+          healthy: boolean
+        }
+        expect(status.running).toBe(true)
+        expect(status.healthy).toBe(true)
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
+      }
+    },
+    15_000,
+  )
+
+  it(
+    'heartbeat VELHO demais (além de HEALTH_STALE_MS) + probe direto falhando → status() reporta healthy:false (fail-closed)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-stale-'))
+      tempDirs.push(dir)
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      const port = await pickFreeTestPort()
+      const idle = spawnIdleProcess()
+
+      try {
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        // Escrito há mais tempo que o teto configurado — nunca confiado.
+        writeHealthFile(dir, true, 10_000)
+
+        const status = JSON.parse(
+          runPreview(dir, ['status'], { PORT: String(port), SUPREMO_PREVIEW_HEALTH_STALE_MS: '5000' }).stdout,
+        ) as { running: boolean; healthy: boolean }
+        expect(status.running).toBe(true)
+        expect(status.healthy).toBe(false)
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
+      }
+    },
+    15_000,
+  )
+
+  it(
+    'ensure() com heartbeat fresco mas probe direto falhando → REUSA (nunca mata nem substitui a instância saudável de verdade)',
+    async () => {
+      // Prova a parte mais perigosa do bug: sem o heartbeat, decide() veria
+      // pidAlive=true + healthy=false (o probe isolado falhando) e mandaria
+      // 'restart' — matando um processo PERFEITAMENTE saudável só porque
+      // ESTE comando não conseguia alcançá-lo, e subindo outra instância
+      // (que, no sandbox real, ficaria IGUALMENTE inalcançável do próximo
+      // comando — um ciclo sem fim de reinícios inúteis).
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-noKill-'))
+      tempDirs.push(dir)
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      const port = await pickFreeTestPort()
+      const idle = spawnIdleProcess()
+
+      try {
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        writeHealthFile(dir, true, 500)
+
+        const result = runPreview(dir, ['ensure'], { PORT: String(port) })
+        expect(result.status).toBe(0)
+        expect(result.stdout).toMatch(/já no ar/)
+        expect(result.stdout).not.toMatch(/ocupada por outro processo/)
+
+        // O idle original segue vivo, intocado — nunca foi morto/substituído.
+        expect(() => process.kill(idle.pid!, 0)).not.toThrow()
+        expect(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()).toBe(String(idle.pid))
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
+      }
+    },
+    15_000,
+  )
+
+  it(
+    'sem heartbeat nenhum + probe direto falhando → status() continua reportando healthy:false (comportamento padrão preservado)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-absent-'))
+      tempDirs.push(dir)
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      const port = await pickFreeTestPort()
+      const idle = spawnIdleProcess()
+
+      try {
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+        // Nenhum preview.health.json escrito.
+
+        const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
+          healthy: boolean
+        }
+        expect(status.healthy).toBe(false)
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
       }
     },
     15_000,

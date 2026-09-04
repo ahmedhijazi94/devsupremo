@@ -178,9 +178,10 @@ describe('preview supervisor (v3.1) — script gerado é determinístico', () =>
   it('ensure() checa a saúde da porta rastreada SEMPRE (não só quando alive(pid) é true) — nunca perde uma instância saudável por EPERM', () => {
     // O bug real: a checagem de saúde ficava DENTRO de `if (alive(pid))`, e
     // alive() tratava EPERM como falso — então uma instância saudável mas
-    // não-sinalizável (sandbox) nunca era detectada. Fix: health(trackedPort)
-    // é chamado incondicionalmente, direto no decide().
-    expect(src).toMatch(/const action = decide\(alive\(pid\), await health\(trackedPort\)\)/)
+    // não-sinalizável (sandbox) nunca era detectada. Fix: healthCombined
+    // (heartbeat + probe HTTP, teste-v3-17) é chamado incondicionalmente,
+    // direto no decide().
+    expect(src).toMatch(/const action = decide\(alive\(pid\), await healthCombined\(trackedPort\)\)/)
   })
   it('candidata nova que NÃO fica saudável NUNCA sobrescreve .supremo/preview.pid|.port — estado anterior é preservado', () => {
     // startDetached não grava mais os arquivos de estado — só ensure() grava,

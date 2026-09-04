@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -432,5 +432,107 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       expect(pidAfterSecond).toBe(pidAfterFirst)
     },
     30_000,
+  )
+
+  // E2E real (teste-v3-16): daemon saudável, preview `running=true`, mas o
+  // preflight reportava `healthy=false` e fail-closed — no MESMO instante,
+  // `curl localhost:PORTA`/o browser do host respondiam 200. Causa: o
+  // healthcheck testava SÓ 127.0.0.1; em sandboxes cujo netstack não é
+  // dual-stack de verdade, um dev server que bindou no wildcard `::` pode
+  // aceitar `::1`/`localhost` e recusar `127.0.0.1`. Reproduzido aqui de
+  // forma determinística (não depende de nenhuma config específica de
+  // sandbox): nosso PRÓPRIO dev server bindando SÓ em `::1` — `fetchBody`
+  // (IPv4-only, mesmo formato do health() antigo) falha de verdade contra
+  // ele, provando a corrida é real — mas `ensure`/`status` (health()
+  // corrigido, testa as duas famílias) continuam reportando saudável.
+  it.skipIf(!HAS_IPV6)(
+    'nosso PRÓPRIO dev server só aceita ::1 (nunca 127.0.0.1) → ensure/status consideram saudável — antes: falso negativo (teste-v3-16)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-ipv6only-'))
+      tempDirs.push(dir)
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      writeFileSync(
+        join(dir, 'dev-server.mjs'),
+        "import http from 'node:http'\n" +
+          'const port = Number(process.env.PORT || 3000)\n' +
+          "http.createServer((_, res) => res.end('OWN-DEV-SERVER')).listen(port, '::1')\n",
+      )
+      writeFileSync(
+        join(dir, 'package.json'),
+        JSON.stringify({ name: 'preview-ipv6only-fixture', scripts: { dev: 'node dev-server.mjs' } }),
+      )
+
+      const port = randomBasePort()
+      const ensureResult = runPreview(dir, ['ensure'], { PORT: String(port) })
+      expect(ensureResult.status).toBe(0)
+      // ensure() confirmou saudável ANTES de gravar o estado — se o health()
+      // antigo (127.0.0.1-only) estivesse em vigor, isto teria impresso "não
+      // respondeu" e NUNCA gravado pidfile/portfile (ver startDetached()).
+      expect(ensureResult.stdout).toMatch(/preview no ar/)
+      expect(readPersistedPort(dir)).toBe(port)
+
+      // Prova direta da corrida: um probe IPv4-only (mesmo formato do
+      // health() antigo) contra o MESMO processo/porta falha de verdade.
+      await expect(fetchBody(port)).rejects.toThrow()
+
+      // status() — a mesma checagem que supremo-status.mjs usa via `preview
+      // status` — ainda assim reporta saudável: o servidor RESPONDE de
+      // verdade, só não por essa família específica.
+      const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
+        running: boolean
+        healthy: boolean
+      }
+      expect(status.running).toBe(true)
+      expect(status.healthy).toBe(true)
+    },
+    30_000,
+  )
+
+  // Companion do teste acima: fail-closed continua intacto quando NENHUMA
+  // família responde de verdade — a correção do v3-16 nunca "inventa" saúde,
+  // só deixa de ignorar uma família que responde de verdade.
+  it(
+    'processo vivo mas NADA escuta na porta rastreada (nenhuma família) → status continua reportando não-saudável (fail-closed preservado)',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-genuinely-down-'))
+      // NÃO entra em tempDirs de propósito: o afterAll ali chama `preview.mjs
+      // stop`, que manda process.kill(pid) (SIGTERM de verdade) no pid
+      // registrado — aqui o pid é um processo idle criado só pra este teste
+      // (nunca o processo de teste em si); matamos e limpamos manualmente.
+      mkdirSync(join(dir, '.supremo'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+
+      const port = randomBasePort()
+      // Processo REAL e vivo, mas que não escuta porta nenhuma — running=true
+      // vem de process.kill(pid,0); a prova real de saúde precisa vir do
+      // healthcheck (as DUAS famílias tentadas, nenhuma responde), não do
+      // pid sozinho.
+      const idle = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        detached: true,
+        stdio: 'ignore',
+      })
+      idle.unref()
+      try {
+        writeFileSync(join(dir, '.supremo/preview.pid'), String(idle.pid))
+        writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+
+        const status = JSON.parse(runPreview(dir, ['status'], { PORT: String(port) }).stdout) as {
+          running: boolean
+          healthy: boolean
+        }
+        expect(status.running).toBe(true)
+        expect(status.healthy).toBe(false)
+      } finally {
+        try {
+          if (idle.pid) process.kill(idle.pid)
+        } catch {
+          /* já morto */
+        }
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    15_000,
   )
 })

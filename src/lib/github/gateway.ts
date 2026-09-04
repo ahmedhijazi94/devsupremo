@@ -1,5 +1,6 @@
 import {
   allowAutoMerge,
+  deleteBranch,
   enableNativeAutoMerge,
   getChecks,
   getPullRequest,
@@ -19,6 +20,7 @@ export function githubMergeGateway(creds: GithubCredentials): MergeGateway {
       const pr = await getPullRequest(creds, prNumber)
       return {
         headSha: pr.headSha,
+        headRef: pr.headRef,
         nodeId: pr.nodeId,
         merged: pr.merged,
         state: pr.state,
@@ -32,5 +34,6 @@ export function githubMergeGateway(creds: GithubCredentials): MergeGateway {
     enableNativeAutoMerge: (nodeId) => enableNativeAutoMerge(creds, nodeId),
     merge: (prNumber, expectedSha) =>
       mergePullRequest(creds, prNumber, undefined, expectedSha),
+    deleteBranch: (branch) => deleteBranch(creds, branch),
   }
 }

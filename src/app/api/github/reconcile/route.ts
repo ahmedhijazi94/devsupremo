@@ -3,18 +3,20 @@ import { githubMergeGateway } from '@/lib/github/gateway'
 import {
   RECONCILABLE_STATES,
   checkpointStatusFromReconcile,
+  cleanupIntegrationBranchIfMerged,
   reconcileProjectPr,
   resolveRequiredChecks,
   type ReconcileLogger,
 } from '@/lib/github/reconcile'
 import { getOpenPullRequestNumber } from '@/lib/mcp/github'
 import {
+  getProjectById,
   listProjectsForReconcile,
   readIntegrationMeta,
   writeIntegrationMeta,
 } from '@/lib/mcp/repository'
 import { mcpDataClient } from '@/lib/mcp/tokens'
-import { reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
+import { listPendingIntegrationBranchCleanups, reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
 
 /**
  * Fallback periódico de reconciliation (Vercel Cron) — a REDE DE SEGURANÇA do
@@ -60,8 +62,9 @@ export async function GET(req: Request): Promise<Response> {
       if (prNumber == null) continue
 
       const meta = await readIntegrationMeta(project.id)
+      const gateway = githubMergeGateway(creds)
       const result = await reconcileProjectPr({
-        gateway: githubMergeGateway(creds),
+        gateway,
         prNumber,
         requiredChecks: resolveRequiredChecks({}),
         mode: meta.mergeMode ?? 'supremo_managed',
@@ -76,6 +79,18 @@ export async function GET(req: Request): Promise<Response> {
         { projectId: project.id, prNumber },
         checkpointStatusFromReconcile(result),
       )
+      // Cleanup da integration_branch (v3-13) — MESMO caminho do webhook, pra
+      // isto ser repetível aqui também (rede de segurança) se o webhook tiver
+      // perdido/falhado o cleanup dele. Nunca lança: best-effort, não afeta
+      // merge/checkpoint já persistidos acima.
+      if (result.merged) {
+        const cleanup = await cleanupIntegrationBranchIfMerged(
+          gateway,
+          { prNumber, defaultBranch: project.defaultBranch },
+          logger,
+        )
+        logger.event('integration_branch_cleanup_outcome', { ...cleanup })
+      }
       reconciled += 1
     } catch (error) {
       logger.event('reconciliation_error', {
@@ -85,5 +100,51 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  return Response.json({ ok: true, candidates: projects.length, reconciled })
+  // Retry de cleanup pendente (v3-14) — SEGUNDA varredura, deste MESMO ciclo
+  // do fallback. Necessário porque, uma vez que a PR mergeou de verdade
+  // (push_status='integrated'), o projeto sai de RECONCILABLE_STATES e a PR,
+  // já fechada, não aparece mais via getOpenPullRequestNumber — sem isto,
+  // nada no fallback voltava a visitar uma PR já integrada pra retentar um
+  // cleanup que falhou (rede/rate-limit do GitHub), mesmo com o projeto
+  // parado, sem nenhuma alteração nova. `listPendingIntegrationBranchCleanups`
+  // reaproveita dados que o reconcile normal já grava (nenhuma coluna nova).
+  // Chama `cleanupIntegrationBranchIfMerged` DIRETO (sem reconcileProjectPr —
+  // já sabemos que mergeou pelo checkpoint; a função em si já confirma de
+  // novo no GitHub antes de apagar) — mesmo caminho único, nunca lança.
+  const pendingCleanups = await listPendingIntegrationBranchCleanups(mcpDataClient())
+  logger.event('cleanup_retry_sweep', { candidates: pendingCleanups.length })
+  let cleanedUp = 0
+  for (const pending of pendingCleanups) {
+    try {
+      const project = await getProjectById(pending.projectId)
+      if (!project) continue
+      const token = await appTokenForRepo(project.repoFullName)
+      const creds = installationCreds(token, project.repoFullName, project.defaultBranch)
+      const gateway = githubMergeGateway(creds)
+      const cleanup = await cleanupIntegrationBranchIfMerged(
+        gateway,
+        { prNumber: pending.prNumber, defaultBranch: project.defaultBranch },
+        logger,
+      )
+      logger.event('integration_branch_cleanup_outcome', { ...cleanup, retry: true })
+      if (cleanup.deleted) cleanedUp += 1
+    } catch (error) {
+      // Best-effort: idêntico à varredura principal — nunca deixa um erro
+      // aqui derrubar o resto do sweep nem afetar merge/checkpoint (já
+      // persistidos há muito, em outro ciclo).
+      logger.event('cleanup_retry_error', {
+        projectId: pending.projectId,
+        prNumber: pending.prNumber,
+        message: error instanceof Error ? error.message : 'erro',
+      })
+    }
+  }
+
+  return Response.json({
+    ok: true,
+    candidates: projects.length,
+    reconciled,
+    cleanupCandidates: pendingCleanups.length,
+    cleanedUp,
+  })
 }

@@ -2,6 +2,7 @@ import { appInstallationToken, installationCreds } from '@/lib/github/app'
 import { githubMergeGateway } from '@/lib/github/gateway'
 import {
   checkpointStatusFromReconcile,
+  cleanupIntegrationBranchIfMerged,
   reconcileProjectPr,
   resolveRequiredChecks,
   type ReconcileLogger,
@@ -95,6 +96,19 @@ export async function POST(req: Request): Promise<Response> {
         { projectId: project.id, prNumber },
         checkpointStatusFromReconcile(result),
       )
+      // Cleanup da integration_branch (v3-13) — SÓ depois de merge/checkpoint
+      // já persistidos acima, e só quando a reconciliação confirmou merged.
+      // Nunca lança (best-effort): uma falha aqui não pode desfazer nada do
+      // que já foi gravado. E2E v3-12: PRs antigas já integradas deixavam
+      // `supremo/cp-*` pra trás — este cleanup fecha esse rastro.
+      if (result.merged) {
+        const cleanup = await cleanupIntegrationBranchIfMerged(
+          gateway,
+          { prNumber, defaultBranch: project.defaultBranch },
+          logger,
+        )
+        logger.event('integration_branch_cleanup_outcome', { ...cleanup })
+      }
     }
   } catch (error) {
     // 200 mesmo assim: evitar retry-storm do GitHub; o fallback periódico recupera.

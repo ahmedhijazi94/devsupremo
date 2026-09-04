@@ -271,6 +271,62 @@ export async function reconcileCheckpointsForPr(
   }
 }
 
+export interface PendingBranchCleanup {
+  projectId: string
+  prNumber: number
+  integrationBranch: string
+}
+
+/**
+ * Candidatos ao fallback RETENTAR o cleanup de integration branch (v3-14):
+ * checkpoints cuja PR já foi confirmada `integrated`/`merged` E que ainda
+ * têm uma `integration_branch` registrada — o cleanup pode ter falhado
+ * (rede/rate-limit do GitHub) sem deixar nenhum outro rastro de "pendente".
+ *
+ * BUG REAL: uma vez que `push_status` vira `'integrated'`, o PROJETO sai de
+ * `RECONCILABLE_STATES` (webhook/reconcile) e a PR, já fechada, não aparece
+ * mais em `getOpenPullRequestNumber` — nada no fallback periódico voltava a
+ * visitar essa PR pra retentar um cleanup que falhou. Esta consulta reabre
+ * exatamente essa porta, reaproveitando dados que `reconcileCheckpointsForPr`
+ * já grava (nenhuma coluna nova, nenhuma migration).
+ *
+ * Deduplicado por (project_id, pr_number) em memória — 2+ checkpoints da
+ * MESMA PR (reuse/synchronize, ver v3-8) não geram 2 tentativas de cleanup
+ * na mesma varredura. `limit` (default 200, mesmo teto de
+ * `listProjectsForReconcile`) mantém a varredura limitada: uma vez que o
+ * cleanup de fato funciona (branch some), o próximo ciclo do fallback nem
+ * precisa mais achar essa PR entre os `created_at` mais recentes — best-
+ * effort, não uma fila que precisa de baixa/ack explícito.
+ */
+export async function listPendingIntegrationBranchCleanups(
+  client: SupabaseClient,
+  limit = 200,
+): Promise<PendingBranchCleanup[]> {
+  const { data, error } = await client
+    .from('checkpoints')
+    .select('project_id, pr_number, integration_branch, created_at')
+    .eq('push_status', 'integrated')
+    .eq('integration_status', 'merged')
+    .not('integration_branch', 'is', null)
+    .not('pr_number', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error || !data) return []
+
+  const seen = new Set<string>()
+  const out: PendingBranchCleanup[] = []
+  for (const row of data as Array<Record<string, unknown>>) {
+    const projectId = row.project_id as string
+    const prNumber = row.pr_number as number
+    const integrationBranch = row.integration_branch as string
+    const key = `${projectId}:${prNumber}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ projectId, prNumber, integrationBranch })
+  }
+  return out
+}
+
 // ── Restore (v3.1 finalização) ───────────────────────────────────────────────
 
 export interface RestoreRequestRow {

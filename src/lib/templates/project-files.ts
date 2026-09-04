@@ -2359,12 +2359,18 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - uses: supabase/setup-cli@v1
-        if: needs.changes.outputs.db == 'true'
-        with:
-          version: latest
+      # CLI da Supabase vem do devDependency PINADO (package.json), nunca da
+      # action oficial de setup — ela resolve "latest" via API do GitHub a
+      # cada run, e um rate limit ali derruba o job ANTES de qualquer
+      # validação de policy (bug real do E2E, teste-v3-18: "Failed to
+      # resolve latest Supabase CLI release: rate limit exceeded" — não é
+      # falha de RLS nenhuma, é dependência externa do setup). npm ci
+      # ANTES de qualquer comando supabase — é o que materializa
+      # node_modules/.bin/supabase, a MESMA versão pinada usada localmente.
       - if: needs.changes.outputs.db == 'true'
-        run: supabase start
+        run: npm ci
+      - if: needs.changes.outputs.db == 'true'
+        run: ./node_modules/.bin/supabase start
 
       # O start sobe o banco, mas quem aplica as migrations do repositório
       # é o db reset. Sem isto o teste falha com "Could not find the table
@@ -2372,16 +2378,14 @@ jobs:
       # tabela em vez de falha de policy.
       - name: Aplicar as migrations do repositório
         if: needs.changes.outputs.db == 'true'
-        run: supabase db reset --no-seed
+        run: ./node_modules/.bin/supabase db reset --no-seed
 
       - name: Exportar credenciais locais
         if: needs.changes.outputs.db == 'true'
         run: |
-          echo "SUPABASE_URL=$(supabase status -o env | grep API_URL | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
-          echo "SUPABASE_ANON_KEY=$(supabase status -o env | grep ANON_KEY | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
-          echo "SUPABASE_SERVICE_ROLE_KEY=$(supabase status -o env | grep SERVICE_ROLE_KEY | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
-      - if: needs.changes.outputs.db == 'true'
-        run: npm ci
+          echo "SUPABASE_URL=$(./node_modules/.bin/supabase status -o env | grep API_URL | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
+          echo "SUPABASE_ANON_KEY=$(./node_modules/.bin/supabase status -o env | grep ANON_KEY | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(./node_modules/.bin/supabase status -o env | grep SERVICE_ROLE_KEY | cut -d= -f2- | tr -d '\\"')" >> $GITHUB_ENV
       - name: Provar isolamento entre contas
         if: needs.changes.outputs.db == 'true'
         run: npm run test:rls

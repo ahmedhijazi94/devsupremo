@@ -41,3 +41,30 @@ describe('Página do projeto — Histórico/Atividade nunca ficam presos num scr
     expect(source).toContain('ActivityFeed')
   })
 })
+
+/**
+ * Regressão (header sticky): o cabeçalho principal (nome/status/excluir)
+ * fica fixo no topo durante o scroll — sem criar NENHUM scroll interno (essa
+ * é exatamente a regressão que o bloco acima já protege; este teste garante
+ * que a mudança do header não a reintroduz).
+ */
+describe('Página do projeto — cabeçalho principal fica sticky, sem criar scroll interno', () => {
+  const file = join(dirname(fileURLToPath(import.meta.url)), 'page.tsx')
+  const source = readFileSync(file, 'utf8')
+  const tokens = classTokens(source)
+
+  it('o <header> usa `sticky` com um `top` definido (fica visível durante o scroll)', () => {
+    const headerMatch = /<header\s+className=(?:"([^"]*)"|'([^']*)'|`([^`]*)`)/.exec(source)
+    expect(headerMatch).not.toBeNull()
+    const headerClasses = (headerMatch![1] ?? headerMatch![2] ?? headerMatch![3] ?? '').split(/\s+/)
+    expect(headerClasses).toContain('sticky')
+    expect(headerClasses.some((t) => /^top-\d/.test(t))).toBe(true)
+    expect(headerClasses.some((t) => /^z-\d/.test(t))).toBe(true)
+  })
+
+  it('continua sem `max-h-[...]`/`overflow-y-auto`/`overflow-hidden` em lugar nenhum — sticky não é scroll interno', () => {
+    expect(tokens.some((t) => /^max-h-\[/.test(t))).toBe(false)
+    expect(tokens).not.toContain('overflow-y-auto')
+    expect(tokens).not.toContain('overflow-hidden')
+  })
+})

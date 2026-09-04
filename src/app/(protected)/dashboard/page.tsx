@@ -193,11 +193,11 @@ export default async function DashboardPage() {
           {changeList.length === 0 ? (
             <div className="bg-sunken rounded-[var(--radius-inner)] px-5 py-10 text-center">
               <CardNote>
-                Conecte um agente em{' '}
-                <Link href="/mcps" className="underline underline-offset-2">
-                  MCP
+                Abra um{' '}
+                <Link href="/projects" className="underline underline-offset-2">
+                  projeto
                 </Link>{' '}
-                e peça a primeira alteração.
+                e peça a primeira alteração ao seu agente.
               </CardNote>
             </div>
           ) : (

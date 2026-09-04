@@ -176,8 +176,13 @@ export default async function ProjectPage({
           Dashboard
         </Link>
 
-        {/* Cabeçalho */}
-        <header className="bg-surface rounded-[var(--radius-inner)] p-4 sm:p-5">
+        {/* Cabeçalho — sticky: fica visível durante o scroll da página. `top`
+            casa com o padding do wrapper (`p-3 sm:p-4`) pra manter a mesma
+            distância da borda que já tinha em repouso; `z-10` garante que o
+            conteúdo que rola por baixo nunca apareça por cima. Não cria
+            scroll interno nenhum — quem rola continua sendo a página inteira
+            (ver WorkspaceLayout/page.test.ts). */}
+        <header className="bg-surface sticky top-3 z-10 rounded-[var(--radius-inner)] p-4 sm:top-4 sm:p-5">
           <div className="flex items-start gap-4">
             <div className="min-w-0 flex-1">
               <h1 className="text-ink truncate text-lg font-semibold tracking-tight sm:text-xl">

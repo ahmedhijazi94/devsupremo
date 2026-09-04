@@ -141,6 +141,50 @@ function killAndWait(pid: number, timeoutMs = 3000): void {
   }
 }
 
+/** Aguarda um processo terminar sem enviar sinal novo. */
+function waitUntilDead(pid: number, timeoutMs = 5000): boolean {
+  const start = Date.now()
+  while (alivePid(pid) && Date.now() - start < timeoutMs) {
+    sleepMs(50)
+  }
+  return !alivePid(pid)
+}
+
+/**
+ * O preview nasce com `detached: true`, portanto seu PID também é o líder
+ * do grupo que contém npm + dev server. Esperar o grupo inteiro evita deixar
+ * o servidor filho órfão depois que o processo npm termina.
+ */
+function processGroupAlive(pid: number): boolean {
+  if (process.platform === 'win32') return alivePid(pid)
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+function waitUntilProcessGroupDead(pid: number, timeoutMs = 5000): boolean {
+  const start = Date.now()
+  while (processGroupAlive(pid) && Date.now() - start < timeoutMs) {
+    sleepMs(50)
+  }
+  return !processGroupAlive(pid)
+}
+
+function killProcessGroupAndWait(pid: number, timeoutMs = 3000): void {
+  try {
+    process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL')
+  } catch {
+    /* já morto */
+  }
+  const start = Date.now()
+  while (processGroupAlive(pid) && Date.now() - start < timeoutMs) {
+    sleepMs(50)
+  }
+}
+
 describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática de sessão real (v3.2)', () => {
   let dir: string
 
@@ -1044,30 +1088,147 @@ const HAS_IPV6 = await detectIpv6Loopback()
 
 describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, teste-v3-16)', () => {
   let dir: string
+  let fixtureEnv: NodeJS.ProcessEnv
+
+  type TrackedFixtureProcess = {
+    kind: 'preview' | 'heartbeat'
+    pid: number
+  }
+
+  /**
+   * Instrumenta SOMENTE a cópia da fixture para registrar os PIDs destacados
+   * que o supervisor real cria. O script de produção e seu lifecycle não são
+   * alterados; as duas inserções apenas observam `child.pid` antes do `unref()`.
+   */
+  function previewSupervisorWithLifecycleTracking(): string {
+    const source = previewSupervisorScript()
+    const processLogWrite = (kind: TrackedFixtureProcess['kind']): string =>
+      `  if (process.env.RESUME_TEST_PROCESS_LOG && child.pid) {\n` +
+      `    writeFileSync(process.env.RESUME_TEST_PROCESS_LOG, JSON.stringify({ kind: '${kind}', pid: child.pid }) + '\\n', { flag: 'a' })\n` +
+      `  }\n`
+
+    const heartbeatNeedle =
+      '  child.unref()\n}\nasync function heartbeatLoop'
+    const previewNeedle =
+      '  child.unref()\n  // NÃO grava PIDFILE/PORTFILE aqui'
+
+    const withHeartbeatTracking = source.replace(
+      heartbeatNeedle,
+      `${processLogWrite('heartbeat')}${heartbeatNeedle}`,
+    )
+    const withAllTracking = withHeartbeatTracking.replace(
+      previewNeedle,
+      `${processLogWrite('preview')}${previewNeedle}`,
+    )
+
+    if (
+      withHeartbeatTracking === source ||
+      withAllTracking === withHeartbeatTracking
+    ) {
+      throw new Error('Não foi possível instrumentar o lifecycle da fixture.')
+    }
+    return withAllTracking
+  }
+
+  function trackedFixtureProcesses(): TrackedFixtureProcess[] {
+    try {
+      return readFileSync(join(dir, 'tracked-processes.jsonl'), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as TrackedFixtureProcess)
+    } catch {
+      return []
+    }
+  }
 
   afterEach(() => {
     const daemonPid = daemonState(dir).pid
-    if (daemonPid) {
-      try {
-        process.kill(daemonPid)
-      } catch {
-        /* já morto */
-      }
-    }
+    const tracked = trackedFixtureProcesses()
+    const previewPids = tracked
+      .filter(({ kind }) => kind === 'preview')
+      .map(({ pid }) => pid)
+    const heartbeatPids = tracked
+      .filter(({ kind }) => kind === 'heartbeat')
+      .map(({ pid }) => pid)
+    const hadCurrentInstance = existsSync(join(dir, '.supremo/preview.instance'))
+
+    let stopError: unknown
+    let previewStopped = false
+    let heartbeatStopped = false
+    let daemonStopped = false
+
     try {
-      const previewPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
-      if (previewPid) process.kill(previewPid)
-    } catch {
-      /* já morto/nunca subiu */
+      try {
+        execFileSync(
+          process.execPath,
+          [join(dir, 'scripts/preview.mjs'), 'stop'],
+          {
+            cwd: dir,
+            env: fixtureEnv,
+            stdio: 'ignore',
+            timeout: 5000,
+          },
+        )
+      } catch (err) {
+        stopError = err
+      }
+
+      // `stop` invalida preview.instance; cada writer destacado observa isso
+      // e termina. Esperamos os PIDs reais, nunca um timeout arbitrário antes
+      // de apagar o diretório onde eles escrevem.
+      previewStopped = previewPids.every((pid) =>
+        waitUntilProcessGroupDead(pid),
+      )
+      heartbeatStopped = heartbeatPids.every((pid) => waitUntilDead(pid))
+
+      if (daemonPid && alivePid(daemonPid)) {
+        try {
+          process.kill(daemonPid)
+        } catch {
+          /* já morto */
+        }
+      }
+      daemonStopped = daemonPid ? waitUntilDead(daemonPid) : true
+    } finally {
+      // Se o lifecycle falhar, o teste reprova abaixo; o fallback existe só
+      // para a própria falha não deixar processos órfãos na máquina/CI.
+      for (const pid of previewPids) {
+        if (processGroupAlive(pid)) killProcessGroupAndWait(pid)
+      }
+      for (const pid of heartbeatPids) {
+        if (alivePid(pid)) killAndWait(pid)
+      }
+      if (daemonPid && alivePid(daemonPid)) killAndWait(daemonPid)
+
+      const noOrphans =
+        previewPids.every((pid) => !processGroupAlive(pid)) &&
+        heartbeatPids.every((pid) => !alivePid(pid)) &&
+        (!daemonPid || !alivePid(daemonPid))
+      if (!noOrphans) {
+        throw new Error('Cleanup da fixture deixou processo órfão.')
+      }
+
+      // Uma única remoção, somente depois que nenhum processo pode voltar a
+      // escrever em `.supremo` — sem retry que masque a race.
+      rmSync(dir, { recursive: true, force: true })
     }
-    rmSync(dir, { recursive: true, force: true })
+
+    expect(stopError).toBeUndefined()
+    expect(previewStopped).toBe(true)
+    expect(heartbeatStopped).toBe(true)
+    expect(daemonStopped).toBe(true)
+    if (hadCurrentInstance) expect(heartbeatPids.length).toBeGreaterThan(0)
   })
 
   function setup(port: number): { env: NodeJS.ProcessEnv } {
     dir = mkdtempSync(join(tmpdir(), 'supremo-resume-ipv6only-'))
     mkdirSync(join(dir, 'scripts'), { recursive: true })
 
-    writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+    writeFileSync(
+      join(dir, 'scripts/preview.mjs'),
+      previewSupervisorWithLifecycleTracking(),
+      'utf8',
+    )
     writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
     // O dev server real do projeto SÓ aceita ::1 — reproduz o sintoma exato
     // do E2E: o processo sobe normalmente (running=true), mas um probe
@@ -1093,9 +1254,11 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
       ...process.env,
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+      RESUME_TEST_PROCESS_LOG: join(dir, 'tracked-processes.jsonl'),
       SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
       SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '2000',
     }
+    fixtureEnv = env
     return { env }
   }
 
@@ -1150,8 +1313,8 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
       })
       const previewPidBefore = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
       const daemonPidBefore = daemonState(dir).pid!
-      process.kill(previewPidBefore, 'SIGKILL')
-      process.kill(daemonPidBefore, 'SIGKILL')
+      killProcessGroupAndWait(previewPidBefore)
+      killAndWait(daemonPidBefore)
 
       const { status, result } = runResume(env)
 
@@ -1171,7 +1334,11 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
       dir = mkdtempSync(join(tmpdir(), 'supremo-resume-ipv6only-down-'))
       mkdirSync(join(dir, 'scripts'), { recursive: true })
 
-      writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+      writeFileSync(
+        join(dir, 'scripts/preview.mjs'),
+        previewSupervisorWithLifecycleTracking(),
+        'utf8',
+      )
       writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
       // 'dev' que sai imediatamente sem bindar em nada — genuinamente fora
       // do ar, nenhuma família de loopback tem o que responder.
@@ -1185,11 +1352,13 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
         ...process.env,
         PORT: String(port),
         RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+        RESUME_TEST_PROCESS_LOG: join(dir, 'tracked-processes.jsonl'),
         SUPREMO_PREVIEW_WAIT_TRIES: '2',
         SUPREMO_PREVIEW_WAIT_INTERVAL_MS: '50',
         SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '20',
         SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '200',
       }
+      fixtureEnv = env
 
       const { status, result } = runResume(env)
 

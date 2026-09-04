@@ -1281,10 +1281,50 @@ describe('geração de teste de RLS', () => {
     )
   })
 
-  it('o CI tem um job que roda os testes de RLS', () => {
+  it('o CI tem um job que roda os testes de RLS, sem depender de supabase/setup-cli (teste-v3-18)', () => {
     const ci = file('.github/workflows/ci.yml')
     expect(ci).toContain('npm run test:rls')
-    expect(ci).toContain('supabase/setup-cli')
+    // Bug real (E2E v3-18): supabase/setup-cli@v1 resolve "latest" via API
+    // do GitHub A CADA run do CI — um rate limit ali ("Failed to resolve
+    // latest Supabase CLI release: rate limit exceeded") derrubava o job
+    // ANTES de qualquer validação de RLS, sem nunca ter sido falha de
+    // policy nenhuma. A CLI já vem pinada como devDependency (package.json)
+    // — o job usa essa, local, sem nenhum lookup de rede.
+    expect(ci).not.toContain('supabase/setup-cli')
+    expect(ci).not.toMatch(/version:\s*latest/)
+  })
+
+  it('job de RLS usa a CLI local pinada (node_modules/.bin/supabase) em TODOS os comandos supabase — nunca uma global/de PATH (teste-v3-18)', () => {
+    const ci = file('.github/workflows/ci.yml')
+    const rlsJob = ci.slice(ci.indexOf('\n  rls:'), ci.indexOf('\n  dependencies:'))
+    expect(rlsJob).toContain('./node_modules/.bin/supabase start')
+    expect(rlsJob).toContain('./node_modules/.bin/supabase db reset --no-seed')
+    expect(rlsJob).toContain('./node_modules/.bin/supabase status -o env')
+    // Nenhuma chamada NUA "supabase ..." (sem o prefixo local) sobrou —
+    // garante que não ficou nenhum comando ainda apontando pra uma CLI
+    // global/de PATH em vez da versão pinada.
+    expect(rlsJob).not.toMatch(/run: supabase /)
+    expect(rlsJob).not.toMatch(/\$\(supabase /)
+  })
+
+  it('job de RLS roda npm ci ANTES de qualquer comando supabase — sem isso node_modules/.bin/supabase nem existe ainda (teste-v3-18)', () => {
+    const ci = file('.github/workflows/ci.yml')
+    const rlsJob = ci.slice(ci.indexOf('\n  rls:'), ci.indexOf('\n  dependencies:'))
+    const npmCiIdx = rlsJob.indexOf('run: npm ci')
+    const supabaseStartIdx = rlsJob.indexOf('run: ./node_modules/.bin/supabase start')
+    expect(npmCiIdx).toBeGreaterThan(-1)
+    expect(supabaseStartIdx).toBeGreaterThan(-1)
+    expect(npmCiIdx).toBeLessThan(supabaseStartIdx)
+  })
+
+  it('job de RLS continua fail-closed e provando isolamento de verdade — só pula quando nenhuma policy mudou, nunca finge sucesso', () => {
+    const ci = file('.github/workflows/ci.yml')
+    const rlsJob = ci.slice(ci.indexOf('\n  rls:'), ci.indexOf('\n  dependencies:'))
+    expect(rlsJob).toContain("needs.changes.outputs.db != 'true'")
+    expect(rlsJob).toContain("needs.changes.outputs.db == 'true'")
+    expect(rlsJob).toContain('Provar isolamento entre contas')
+    expect(rlsJob).toContain('npm run test:rls')
+    expect(rlsJob).toContain('Aplicar as migrations do repositório')
   })
 })
 

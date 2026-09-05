@@ -8,8 +8,49 @@ import { drainDatabaseRequests, requestDatabase, startDatabaseWorker } from './d
 const dirs: string[] = []
 const stops: Array<() => void> = []
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const stop of stops.splice(0)) stop()
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+})
+it('recusa pedido que é symlink sem executar seu conteúdo', async () => {
+  const cwd = workspace()
+  const target = path.join(cwd, 'external.json')
+  fs.writeFileSync(target, JSON.stringify({ operation: 'migrate', expiresAt: Date.now() + 5000 }))
+  fs.symlinkSync(target, path.join(cwd, '.supremo/database-queue', `${randomUUID()}.request.json`))
+  const execute = vi.fn()
+  await drainDatabaseRequests(cwd, execute)
+  expect(execute).not.toHaveBeenCalled()
+})
+it('trocar o caminho após fstat não troca o arquivo lido pelo daemon', async () => {
+  const cwd = workspace()
+  const request = path.join(cwd, '.supremo/database-queue', `${randomUUID()}.request.json`)
+  const target = path.join(cwd, 'replacement.json')
+  fs.writeFileSync(request, JSON.stringify({ operation: 'status', expiresAt: Date.now() + 5000 }))
+  fs.writeFileSync(target, JSON.stringify({ operation: 'migrate', expiresAt: Date.now() + 5000 }))
+  const fstat = fs.fstatSync
+  vi.spyOn(fs, 'fstatSync').mockImplementationOnce((fd) => {
+    const stat = fstat(fd)
+    fs.renameSync(request, path.join(cwd, 'original.json'))
+    fs.symlinkSync(target, request)
+    return stat
+  })
+  const execute = vi.fn(async () => ({}))
+  await drainDatabaseRequests(cwd, execute)
+  expect(execute).toHaveBeenCalledExactlyOnceWith('status')
+})
+it('recusa arquivo que cresce além do limite depois do fstat', async () => {
+  const cwd = workspace()
+  const request = path.join(cwd, '.supremo/database-queue', `${randomUUID()}.request.json`)
+  fs.writeFileSync(request, JSON.stringify({ operation: 'migrate', expiresAt: Date.now() + 5000 }))
+  const fstat = fs.fstatSync
+  vi.spyOn(fs, 'fstatSync').mockImplementationOnce((fd) => {
+    const stat = fstat(fd)
+    fs.appendFileSync(request, ' '.repeat(2048))
+    return stat
+  })
+  const execute = vi.fn()
+  await drainDatabaseRequests(cwd, execute)
+  expect(execute).not.toHaveBeenCalled()
 })
 function workspace(): string {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-db-queue-'))

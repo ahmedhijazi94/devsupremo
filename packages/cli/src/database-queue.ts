@@ -14,6 +14,28 @@ function writeAtomic(file: string, value: unknown): void {
   fs.renameSync(temporary, file)
 }
 
+function readRequest(file: string): unknown {
+  // Não seguir symlinks nem bloquear ao abrir um FIFO. fstat e read usam o
+  // mesmo descritor: renomear/trocar o caminho não troca o arquivo inspecionado.
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
+  try {
+    const stat = fs.fstatSync(fd)
+    if (!stat.isFile() || stat.size > 1024) throw new Error('Pedido de banco inválido.')
+    // Limite também na leitura: o inode pode crescer depois do fstat.
+    const buffer = Buffer.alloc(1025)
+    let length = 0
+    while (length < buffer.length) {
+      const count = fs.readSync(fd, buffer, length, buffer.length - length, length)
+      if (count === 0) break
+      length += count
+    }
+    if (length > 1024) throw new Error('Pedido de banco inválido.')
+    return JSON.parse(buffer.toString('utf8', 0, length)) as unknown
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 // A fila transporta apenas operações conhecidas. Não contém credenciais, URLs,
 // refs, comandos de shell ou caminhos escolhidos pelo solicitante.
 export async function requestDatabase(cwd: string, operation: DatabaseOperation): Promise<unknown> {
@@ -58,9 +80,7 @@ export async function drainDatabaseRequests(
     let result: { ok: boolean; data?: unknown; error?: string }
     let expiresAt = 0
     try {
-      const stat = fs.lstatSync(request)
-      if (!stat.isFile() || stat.size > 1024) throw new Error('Pedido de banco inválido.')
-      const body: unknown = JSON.parse(fs.readFileSync(request, 'utf8'))
+      const body = readRequest(request)
       if (!body || typeof body !== 'object') throw new Error('Pedido de banco inválido.')
       const input = body as Record<string, unknown>
       if (Object.keys(input).sort().join(',') !== 'expiresAt,operation' ||

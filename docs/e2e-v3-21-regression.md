@@ -62,7 +62,7 @@ prometida volta a 40 segundos por tarefa.
 ## Validação
 
 - 910 testes do Supremo; cobertura de linhas de 91,43%.
-- 201 testes da CLI, incluindo fila sem keychain no cliente, resposta de recusa,
+- 204 testes da CLI, incluindo fila sem keychain no cliente, resposta de recusa,
   rejeição de pedidos inválidos/expirados e ausência de duplicação durante operação lenta.
 - Teste executável prova checks simultâneos e build somente depois de todos passarem.
 - Migration real do v3-21 aceita pelo guard corrigido, sem aplicá-la ao banco remoto.
@@ -79,3 +79,12 @@ distribuir o scaffold/CLI e reiniciar uma vez somente o daemon antigo no termina
 autorizado. O preview e a identidade do dispositivo devem ser preservados.
 Então executar `db anonymous-auth`, `db migrate` e validar duas sessões isoladas
 no navegador. As verificações locais não substituem essa rodada remota final.
+
+## Correção do alerta CodeQL na PR 51
+
+A leitura do pedido verificava `lstat(path)` antes de `readFile(path)`, permitindo
+troca do arquivo entre as duas operações. Agora o daemon abre uma vez com
+`O_NOFOLLOW | O_NONBLOCK`, verifica com `fstat(fd)` e lê pelo mesmo descritor.
+A leitura tem limite de 1025 bytes para detectar crescimento após a verificação,
+e o descritor é fechado em `finally`. Três testes reproduzem symlink inicial,
+troca do caminho após fstat e crescimento do arquivo. Nenhum alerta foi suprimido.

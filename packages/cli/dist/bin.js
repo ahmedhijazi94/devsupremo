@@ -3674,6 +3674,27 @@ function writeAtomic(file, value) {
   import_node_fs3.default.writeFileSync(temporary, JSON.stringify(value), { mode: 384, flag: "wx" });
   import_node_fs3.default.renameSync(temporary, file);
 }
+function readRequest(file) {
+  const fd = import_node_fs3.default.openSync(file, import_node_fs3.default.constants.O_RDONLY | import_node_fs3.default.constants.O_NOFOLLOW | import_node_fs3.default.constants.O_NONBLOCK);
+  try {
+    const stat = import_node_fs3.default.fstatSync(fd);
+    if (!stat.isFile() || stat.size > 1024)
+      throw new Error("Pedido de banco inv\xE1lido.");
+    const buffer = Buffer.alloc(1025);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = import_node_fs3.default.readSync(fd, buffer, length, buffer.length - length, length);
+      if (count === 0)
+        break;
+      length += count;
+    }
+    if (length > 1024)
+      throw new Error("Pedido de banco inv\xE1lido.");
+    return JSON.parse(buffer.toString("utf8", 0, length));
+  } finally {
+    import_node_fs3.default.closeSync(fd);
+  }
+}
 async function requestDatabase(cwd, operation) {
   const dir = directory(cwd);
   let heartbeat = 0;
@@ -3718,10 +3739,7 @@ async function drainDatabaseRequests(cwd, execute) {
     let result;
     let expiresAt = 0;
     try {
-      const stat = import_node_fs3.default.lstatSync(request);
-      if (!stat.isFile() || stat.size > 1024)
-        throw new Error("Pedido de banco inv\xE1lido.");
-      const body = JSON.parse(import_node_fs3.default.readFileSync(request, "utf8"));
+      const body = readRequest(request);
       if (!body || typeof body !== "object")
         throw new Error("Pedido de banco inv\xE1lido.");
       const input = body;

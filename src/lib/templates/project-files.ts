@@ -8,6 +8,12 @@ import {
   type CapabilityId,
 } from '@/lib/capabilities'
 
+export {
+  isManagedPath,
+  MANAGED_PATHS,
+  PLATFORM_MANAGED_PATHS,
+} from './managed-paths'
+
 /**
  * Manifesto de arquivos de um projeto novo.
  *
@@ -134,7 +140,7 @@ const DEPENDENCIES = {
 // continuam na versão que já tinham até rodar `npm install` de novo — o
 // backend do Supremo aceita checkpoints de qualquer versão publicada da CLI
 // (não há acoplamento de protocolo a esta versão específica).
-const SUPREMO_CLI_DEV_DEPENDENCY_VERSION = '1.2.6'
+const SUPREMO_CLI_DEV_DEPENDENCY_VERSION = '1.2.7'
 
 const DEV_DEPENDENCIES = {
   '@playwright/test': '^1.62.1',
@@ -369,61 +375,6 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
   }
 
   return files
-}
-
-// ─────────────────────────────────────────────────────────────
-// Atualização de base — quais arquivos o template pode reescrever
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Os arquivos de base ("rails"): infraestrutura pura que o Supremo é dono, não
- * o app. Não mora funcionalidade aqui — o agente não edita esses à mão. São
- * exatamente onde os consertos entram (cookies do preview no cliente/servidor
- * Supabase e no proxy, o inspector, o CI adaptativo), então atualizar a base de
- * um projeto que já existe traz esses consertos sem recriar o projeto.
- *
- * O que NÃO está aqui é scaffold — página, migration, teste do app, doc,
- * package.json. É onde a funcionalidade, o schema e as dependências do app
- * vivem. Numa atualização esses só nascem se faltarem; nunca são sobrescritos,
- * porque sobrescrever apagaria o trabalho do agente.
- *
- * Ainda assim a atualização vira um PR pelos gates, revisável: se um projeto
- * customizou um arquivo de base à mão (um domínio a mais na CSP do next.config,
- * por exemplo), o diff mostra antes do merge.
- */
-export const MANAGED_PATHS: ReadonlySet<string> = new Set([
-  // Ferramentas e configuração
-  'tsconfig.json',
-  'next.config.ts',
-  'eslint.config.mjs',
-  'postcss.config.mjs',
-  'vitest.config.ts',
-  'vitest.setup.ts',
-  'playwright.config.ts',
-  'vercel.json',
-  '.gitignore',
-  '.nvmrc',
-  // Infra da aplicação
-  'lib/utils.ts',
-  'components/preview-inspector.tsx',
-  'proxy.ts',
-  'lib/supabase/client.ts',
-  'lib/supabase/server.ts',
-  'app/auth/callback/route.ts',
-  'app/auth/signout/route.ts',
-  // Gates e segurança
-  '.github/workflows/ci.yml',
-  'scripts/security-audit.js',
-  // Local dev harness (base infra do Supremo)
-  'scripts/verify.mjs',
-  'scripts/setup-local.mjs',
-  '.githooks/pre-commit',
-  '.githooks/pre-push',
-])
-
-/** Este arquivo é rail (o Supremo reescreve) ou scaffold (só cria se faltar)? */
-export function isManagedPath(path: string): boolean {
-  return MANAGED_PATHS.has(path)
 }
 
 // ═════════════════════════════════════════════════════════════

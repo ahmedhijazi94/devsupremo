@@ -14,6 +14,7 @@ import { applyRestore, defaultRestoreDeps, restoreCommitMessage } from './restor
 import { defaultCheckpointDeps } from './checkpoint'
 import { processCheckpoint, type DaemonContext, type DaemonHttp } from './daemon'
 import { defaultCommitReader } from './changeset'
+import { MANAGED_PATHS } from '../../../src/lib/templates/managed-paths'
 
 /**
  * Regressão E2E (repositório git DE VERDADE, não fakes): restore request →
@@ -400,4 +401,137 @@ describe('restore — E2E real: migrations FORWARD-ONLY nunca são apagadas/reve
     },
     20_000,
   )
+})
+
+/**
+ * Regressão E2E v3-18: depois de smoke e workflow receberem hotfixes na main,
+ * restaurar um checkpoint anterior também restaurava as versões defeituosas
+ * desses rails. O conteúdo da página deve voltar, mas infraestrutura gerenciada
+ * e migrations precisam permanecer exatamente como estão no workspace atual.
+ */
+describe('restore — E2E real: conteúdo volta, infraestrutura gerenciada permanece atual (v3-18)', () => {
+  let dir: string
+
+  afterEach(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  function git(args: string[]): string {
+    return execFileSync('git', args, {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  }
+
+  function queueRow(over: Partial<CheckpointRecord>): CheckpointRecord {
+    return buildCheckpointRecord({
+      checkpointId: 'placeholder',
+      projectId: 'proj-1',
+      commitSha: 'placeholder',
+      parentCheckpointId: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      summary: 'placeholder',
+      changedPaths: [],
+      ...over,
+    }) as CheckpointRecord
+  }
+
+  it('restaura código do usuário sem fazer downgrade de smoke, workflow ou migrations', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-restore-managed-e2e-'))
+    git(['init', '-q'])
+    git(['config', 'user.email', 'e2e@supremo.test'])
+    git(['config', 'user.name', 'Supremo E2E'])
+
+    fs.mkdirSync(path.join(dir, 'app'), { recursive: true })
+    fs.mkdirSync(path.join(dir, 'e2e'), { recursive: true })
+    fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true })
+    fs.mkdirSync(path.join(dir, 'supabase', 'migrations'), { recursive: true })
+    fs.writeFileSync(path.join(dir, '.gitignore'), '.supremo/checkpoints/\n')
+
+    const oldPage = 'export default function Page() { return <main><h1>Landing antiga</h1></main> }\n'
+    const oldSmoke =
+      "await expect(page.getByRole('heading', { level: 1, name: 'v3-18' })).toBeVisible()\n"
+    const oldWorkflow = 'uses: supabase/setup-cli@v1\nwith:\n  version: latest\n'
+    const initialMigration = '-- schema inicial\ncreate table profiles (id uuid primary key);\n'
+
+    // Checkpoint antigo: conteúdo e rails anteriores aos hotfixes.
+    fs.writeFileSync(path.join(dir, 'app', 'page.tsx'), oldPage)
+    fs.writeFileSync(path.join(dir, 'e2e', 'smoke.spec.ts'), oldSmoke)
+    fs.writeFileSync(path.join(dir, '.github', 'workflows', 'ci.yml'), oldWorkflow)
+    fs.writeFileSync(
+      path.join(dir, 'supabase', 'migrations', '001_initial.sql'),
+      initialMigration,
+    )
+    git(['add', '-A'])
+    git(['commit', '-q', '-m', 'checkpoint: A (antes dos hotfixes)'])
+    const shaA = git(['rev-parse', 'HEAD']).trim()
+
+    const currentPage =
+      'export default function Page() { return <main><h1>Horizonte atual</h1></main> }\n'
+    const currentSmoke =
+      "await expect(page.locator('main')).toBeVisible()\nawait expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible()\n"
+    const currentWorkflow =
+      'run: npm ci\nrun: ./node_modules/.bin/supabase db lint --level error\n'
+    const currentMigration = '-- evolução atual\nalter table profiles add column name text;\n'
+
+    // Estado atual: conteúdo novo, rails corrigidos e migration posterior.
+    fs.writeFileSync(path.join(dir, 'app', 'page.tsx'), currentPage)
+    fs.writeFileSync(path.join(dir, 'e2e', 'smoke.spec.ts'), currentSmoke)
+    fs.writeFileSync(path.join(dir, '.github', 'workflows', 'ci.yml'), currentWorkflow)
+    fs.writeFileSync(
+      path.join(dir, 'supabase', 'migrations', '002_add_name.sql'),
+      currentMigration,
+    )
+    git(['add', '-A'])
+    git(['commit', '-q', '-m', 'checkpoint: B (hotfixes atuais)'])
+    const shaB = git(['rev-parse', 'HEAD']).trim()
+
+    const queue = [
+      queueRow({ checkpointId: 'cpA', commitSha: shaA, summary: 'A antigo' }),
+      queueRow({
+        checkpointId: 'cpB',
+        commitSha: shaB,
+        parentCheckpointId: 'cpA',
+        summary: 'B atual',
+      }),
+    ]
+    const queuePath = path.join(dir, QUEUE_FILE)
+    fs.mkdirSync(path.dirname(queuePath), { recursive: true })
+    fs.writeFileSync(queuePath, serializeQueue(queue))
+
+    const outcome = applyRestore(
+      'cpA',
+      'A antigo',
+      'proj-1',
+      defaultRestoreDeps(defaultCheckpointDeps(dir), dir),
+    )
+
+    expect(outcome.applied).toBe(true)
+    expect(outcome.record?.restoredFromCheckpointId).toBe('cpA')
+    expect(fs.readFileSync(path.join(dir, 'app', 'page.tsx'), 'utf8')).toBe(oldPage)
+    expect(fs.readFileSync(path.join(dir, 'e2e', 'smoke.spec.ts'), 'utf8')).toBe(currentSmoke)
+    expect(fs.readFileSync(path.join(dir, '.github', 'workflows', 'ci.yml'), 'utf8')).toBe(
+      currentWorkflow,
+    )
+    expect(
+      fs.readFileSync(path.join(dir, 'supabase', 'migrations', '001_initial.sql'), 'utf8'),
+    ).toBe(initialMigration)
+    expect(
+      fs.readFileSync(path.join(dir, 'supabase', 'migrations', '002_add_name.sql'), 'utf8'),
+    ).toBe(currentMigration)
+
+    const headAfter = git(['rev-parse', 'HEAD']).trim()
+    expect(headAfter).not.toBe(shaA)
+    expect(headAfter).not.toBe(shaB)
+    const restoredPaths = git(['diff', '--name-only', shaB, headAfter])
+      .split('\n')
+      .filter(Boolean)
+    expect(restoredPaths).toEqual(['app/page.tsx'])
+    for (const managedPath of MANAGED_PATHS) {
+      expect(restoredPaths).not.toContain(managedPath)
+    }
+    expect(restoredPaths.some((file) => file.startsWith('supabase/migrations/'))).toBe(false)
+    expect(git(['status', '--porcelain']).trim()).toBe('')
+  })
 })

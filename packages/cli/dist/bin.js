@@ -3667,6 +3667,47 @@ var init_changeset = __esm({
   }
 });
 
+// ../../src/lib/templates/managed-paths.ts
+var PLATFORM_MANAGED_PATHS, MANAGED_PATHS;
+var init_managed_paths = __esm({
+  "../../src/lib/templates/managed-paths.ts"() {
+    "use strict";
+    PLATFORM_MANAGED_PATHS = [
+      // Ferramentas e configuração
+      "tsconfig.json",
+      "next.config.ts",
+      "eslint.config.mjs",
+      "postcss.config.mjs",
+      "vitest.config.ts",
+      "vitest.setup.ts",
+      "playwright.config.ts",
+      "vercel.json",
+      ".gitignore",
+      ".nvmrc",
+      // Infra da aplicação
+      "lib/utils.ts",
+      "components/preview-inspector.tsx",
+      "proxy.ts",
+      "lib/supabase/client.ts",
+      "lib/supabase/server.ts",
+      "app/auth/callback/route.ts",
+      "app/auth/signout/route.ts",
+      // Gates e segurança
+      ".github/workflows/ci.yml",
+      "e2e/smoke.spec.ts",
+      "scripts/security-audit.js",
+      // Local dev harness (base infra do Supremo)
+      "scripts/verify.mjs",
+      "scripts/setup-local.mjs",
+      ".githooks/pre-commit",
+      ".githooks/pre-push"
+    ];
+    MANAGED_PATHS = new Set(
+      PLATFORM_MANAGED_PATHS
+    );
+  }
+});
+
 // src/restore.ts
 function findLocalCommitForCheckpoint(queue, checkpointId) {
   const rec = queue.find((r) => r.checkpointId === checkpointId);
@@ -3808,7 +3849,7 @@ function applyRestore(targetCheckpointId, targetSummary, projectId, deps) {
     targetSha,
     "--",
     ".",
-    `:(exclude)${MIGRATIONS_PATHSPEC}`
+    ...RESTORE_PRESERVED_PATHS.map((managedPath) => `:(exclude)${managedPath}`)
   ]);
   if (isEmptyPatch(patch)) {
     return { applied: false, record: null, preservedMigrations, migrationConflicts };
@@ -3859,13 +3900,14 @@ function defaultRestoreDeps(base, cwd) {
     }
   };
 }
-var import_node_child_process5, import_node_fs3, import_node_path3, RestoreTargetNotFoundLocallyError, NEXT_TYPES_GLOB_RE, MIGRATIONS_PATHSPEC;
+var import_node_child_process5, import_node_fs3, import_node_path3, RestoreTargetNotFoundLocallyError, NEXT_TYPES_GLOB_RE, MIGRATIONS_PATHSPEC, RESTORE_PRESERVED_PATHS;
 var init_restore = __esm({
   "src/restore.ts"() {
     "use strict";
     import_node_child_process5 = require("node:child_process");
     import_node_fs3 = __toESM(require("node:fs"));
     import_node_path3 = __toESM(require("node:path"));
+    init_managed_paths();
     init_checkpoint();
     RestoreTargetNotFoundLocallyError = class extends Error {
       constructor() {
@@ -3877,6 +3919,10 @@ var init_restore = __esm({
     };
     NEXT_TYPES_GLOB_RE = /^\.?\/?\.next\/(dev\/)?types\/\*\*\/\*\.ts$/;
     MIGRATIONS_PATHSPEC = "supabase/migrations";
+    RESTORE_PRESERVED_PATHS = [
+      MIGRATIONS_PATHSPEC,
+      ...PLATFORM_MANAGED_PATHS
+    ];
   }
 });
 
@@ -4957,7 +5003,7 @@ var import_node_os2 = __toESM(require("node:os"));
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.2.6",
+  version: "1.2.7",
   description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
   license: "MIT",
   author: "Supremo",

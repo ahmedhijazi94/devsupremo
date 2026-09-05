@@ -1,3 +1,4 @@
+import { anonymousSessionHelper } from './anonymous-session'
 import fs from 'node:fs'
 import path from 'node:path'
 import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
@@ -74,7 +75,7 @@ export {
 // padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
 // nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
 // próprio Supremo (migration 017, NÃO aplicada).
-export const TEMPLATE_VERSION = '3.5.0'
+export const TEMPLATE_VERSION = '3.6.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.1.0'
@@ -292,6 +293,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'lib/utils.ts', content: libUtils() },
 
     ...designSystemFiles(),
+    { path: 'lib/supabase/anonymous.ts', content: anonymousSessionHelper() },
 
     // ── Design system ─────────────────────────────────────────
     // Primitivos prontos para o agente construir telas coerentes. Ficam em
@@ -727,6 +729,7 @@ supabase/.branches/
 # Supremo v3.1: estado por-máquina do supervisor de preview (não versionar).
 # preview.port = porta REAL em uso (pode diferir da preferida — ver ownership
 # do preview em previewSupervisorScript()).
+.supremo/database.json
 .supremo/preview.pid
 .supremo/preview.port
 .supremo/preview.log
@@ -2646,7 +2649,7 @@ ${description}
 - Erro tratado explicitamente — nunca \`catch\` vazio.
 
 ### Banco
-- Migrations versionadas em \`supabase/migrations/\`, nunca aplicadas só por API.
+- Migrations versionadas em \`supabase/migrations/\`; \`supremo db migrate\` aplica o arquivo e registra o histórico, nunca SQL avulso.
 - Foreign key com \`ON DELETE\` explícito.
 - Índice em toda foreign key.
 - \`created_at\` e \`updated_at\` em toda tabela.
@@ -2964,6 +2967,29 @@ Hooks de git, os required checks e a proteção da \`main\` são o enforcement i
 se você ignorar estas instruções, eles reprovam. Você NÃO tem caminho para desativar
 ruleset, remover checks, reduzir proteção, dar bypass ou force push.
 
+## Contexto de design reutilizável
+Leia os documentos de regras uma vez no início da sessão e mantenha o contexto.
+Consulte DESIGN.md quando a tarefa alterar interface; releia apenas trechos alterados
+ou relevantes se perdeu o contexto, mudou a direção visual ou atualizou a base.
+Registre decisões visuais duráveis em DESIGN.md. Não refaça pesquisa, descoberta de
+skills ou leitura integral a cada ajuste. Skills externas seguem as regras do host;
+o scaffold não pode sobrescrever essas regras. Nada disso substitui o preflight local.
+
+## Persistência privada sem tela de login
+Quando a feature precisar de identidade privada sem login, use Anonymous Auth:
+1. \`npx supremo db anonymous-auth\` habilita sob demanda apenas no development
+   autorizado; preserva limites de requisição, CAPTCHA e demais configurações.
+2. Use \`ensurePrivateSession\` de \`lib/supabase/anonymous.ts\` antes da feature.
+   Reutiliza cookies e evita novas identidades em renderizações concorrentes.
+3. Valide sessão e inputs no servidor; grave com o cliente da sessão, nunca service_role.
+   Usuário anônimo usa role authenticated: policies devem comparar \`auth.uid()\`
+   com o dono da linha em USING e WITH CHECK. Nunca dê acesso compartilhado a anon.
+4. Falha de auth, migration ou backend aparece como erro recuperável, preservando o
+   formulário. Não use localStorage como fallback silencioso para dados da feature
+   nem mostre sucesso sem confirmação do backend. Estado de formulário não é persistência.
+A identidade é daquele navegador: limpar cookies perde acesso; não promete sincronização
+entre dispositivos. Produção exige configuração/promoção separada e revisão antiabuso.
+
 ## Banco de dados: desenvolvimento e produção
 
 O link em \`supabase/.temp/project-ref\` identifica um banco remoto, mas NÃO prova
@@ -2974,9 +3000,14 @@ Use a CLI local pinada do projeto (\`npx supabase …\`, nunca a global).
 - Crie migrations versionadas com \`npx supabase migration new <nome>\`.
 - Experimente em Supabase local ou em um projeto remoto dedicado ao desenvolvimento.
 - Registre os ambientes e os refs NÃO secretos em \`ARCHITECTURE.md\`.
-- Antes do primeiro uso de um remoto para escrita, confirme seu papel com o dono.
-  Se o app já tem usuários/dados reais, trate esse banco como PRODUÇÃO.
-- \`npx supabase db push\` só aplica ao ambiente de desenvolvimento confirmado.
+- Consulte \`npx supremo db status\`: JSON emitido pelo servidor autenticado.
+  \`.supremo/database.json\` é só snapshot informativo, nunca autorização.
+- Banco recém-provisionado pelo Supremo é registrado como \`development\` no control plane.
+  Vínculos antigos/externos continuam \`unknown\`; não invente a classificação.
+- Depois de criar a migration, execute \`npx supremo db migrate\` automaticamente,
+  sem pedir confirmação quando o servidor reconhecer development. A CLI verifica
+  também o ref local e o banco usado pelo preview. Nunca contorne uma recusa usando
+  \`supabase db push\`, SQL direto ou trocando o ref/ambiente manualmente.
   Produção tem promoção separada da versão validada e backup/recuperação definidos.
   Nunca aplique SQL experimental em produção para desbloquear o preview.
 - Leituras: \`npx supabase db pull\` / \`npx supabase db diff\` conforme o alvo.
@@ -3009,7 +3040,9 @@ Leia \`AGENTS.md\` primeiro — o **ciclo de desenvolvimento v3** está lá (reg
 canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 
 ## Sempre
-- Ler \`AGENTS.md\`, \`SECURITY.md\`, \`ARCHITECTURE.md\` e \`DESIGN.md\` antes de escrever código
+- Ler \`AGENTS.md\`, \`SECURITY.md\` e \`ARCHITECTURE.md\` no início da sessão;
+  consultar \`DESIGN.md\` para tarefas visuais. Reutilizar o contexto já lido e
+  reler apenas mudanças relevantes ou quando o contexto tiver sido perdido.
 - Seguir o **ciclo de desenvolvimento v3** do \`AGENTS.md\`
 - Implementar do servidor para fora
 - Ativar RLS em toda tabela nova **e escrever o teste de isolamento**

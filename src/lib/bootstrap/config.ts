@@ -1,3 +1,5 @@
+import { readEnvironment } from '@/lib/database-environment/store'
+import { describeEnvironment } from '@/lib/database-environment/policy'
 import {
   getGithubCredentials,
   getSupabaseCredentials,
@@ -94,6 +96,7 @@ async function resolveCloneToken(
  *   • nada disto entra no Git (o .env.local é gitignored) nem em log.
  */
 export interface BootstrapConfig {
+  database?: ReturnType<typeof describeEnvironment>
   project: {
     id: string
     name: string
@@ -216,6 +219,7 @@ export async function resolveBootstrapConfig(
       fullName: gh.repoFullName,
       branch: gh.branch,
     },
+    database: describeEnvironment(await readEnvironment(createServiceClient(), project.id), project.supabase_project_ref),
     gitToken: clone.token,
     gitTokenScope: clone.scope,
     env,

@@ -151,8 +151,8 @@ program
           console.error('✗ .supremo/project.json ausente/incompleto.')
           process.exit(1)
         }
-        const { resolveKeychain } = await import('./keychain')
-        const kc = resolveKeychain()
+        const keychainModule = await import('./keychain')
+        const kc = keychainModule.resolveKeychain()
         const n = await daemon.drainOnce({
           projectId: cfg.projectId,
           apiBaseUrl: cfg.apiBaseUrl,
@@ -194,8 +194,8 @@ program
       )
       return
     }
-    const { resolveKeychain } = await import('./keychain')
-    const kc = resolveKeychain()
+    const keychainModule = await import('./keychain')
+    const kc = keychainModule.resolveKeychain()
     const deviceSecret = kc.get(cfg.projectId)
     const http = daemon.defaultDaemonHttp(cfg.apiBaseUrl)
 
@@ -212,6 +212,22 @@ program
       }),
     )
     console.log(JSON.stringify({ action: outcome.action.kind, message: outcome.message }))
+  })
+
+program
+  .command('db <operation>')
+  .description('Banco development: status, migrate ou anonymous-auth (autoridade do servidor)')
+  .action(async (operation: string) => {
+    try {
+      if (operation !== 'status' && operation !== 'migrate' && operation !== 'anonymous-auth') {
+        throw new Error('Use db status, db migrate ou db anonymous-auth.')
+      }
+      const database = await import('./database')
+      console.log(JSON.stringify(await database.runDatabase(operation)))
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : 'Falha ao acessar o banco.')
+      process.exitCode = 1
+    }
   })
 
 guardUnknownCommand(process.argv.slice(2))

@@ -973,8 +973,8 @@ var require_command = __commonJS({
   "node_modules/commander/lib/command.js"(exports2) {
     var EventEmitter = require("node:events").EventEmitter;
     var childProcess = require("node:child_process");
-    var path7 = require("node:path");
-    var fs7 = require("node:fs");
+    var path8 = require("node:path");
+    var fs8 = require("node:fs");
     var process2 = require("node:process");
     var { Argument: Argument2, humanReadableArgName } = require_argument();
     var { CommanderError: CommanderError2 } = require_error();
@@ -1916,13 +1916,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
         let launchWithNode = false;
         const sourceExt = [".js", ".ts", ".tsx", ".mjs", ".cjs"];
         function findFile(baseDir, baseName) {
-          const localBin = path7.resolve(baseDir, baseName);
-          if (fs7.existsSync(localBin))
+          const localBin = path8.resolve(baseDir, baseName);
+          if (fs8.existsSync(localBin))
             return localBin;
-          if (sourceExt.includes(path7.extname(baseName)))
+          if (sourceExt.includes(path8.extname(baseName)))
             return void 0;
           const foundExt = sourceExt.find(
-            (ext) => fs7.existsSync(`${localBin}${ext}`)
+            (ext) => fs8.existsSync(`${localBin}${ext}`)
           );
           if (foundExt)
             return `${localBin}${foundExt}`;
@@ -1935,21 +1935,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
         if (this._scriptPath) {
           let resolvedScriptPath;
           try {
-            resolvedScriptPath = fs7.realpathSync(this._scriptPath);
+            resolvedScriptPath = fs8.realpathSync(this._scriptPath);
           } catch (err) {
             resolvedScriptPath = this._scriptPath;
           }
-          executableDir = path7.resolve(
-            path7.dirname(resolvedScriptPath),
+          executableDir = path8.resolve(
+            path8.dirname(resolvedScriptPath),
             executableDir
           );
         }
         if (executableDir) {
           let localFile = findFile(executableDir, executableFile);
           if (!localFile && !subcommand._executableFile && this._scriptPath) {
-            const legacyName = path7.basename(
+            const legacyName = path8.basename(
               this._scriptPath,
-              path7.extname(this._scriptPath)
+              path8.extname(this._scriptPath)
             );
             if (legacyName !== this._name) {
               localFile = findFile(
@@ -1960,7 +1960,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
           }
           executableFile = localFile || executableFile;
         }
-        launchWithNode = sourceExt.includes(path7.extname(executableFile));
+        launchWithNode = sourceExt.includes(path8.extname(executableFile));
         let proc;
         if (process2.platform !== "win32") {
           if (launchWithNode) {
@@ -2817,7 +2817,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @return {Command}
        */
       nameFromFilename(filename) {
-        this._name = path7.basename(filename, path7.extname(filename));
+        this._name = path8.basename(filename, path8.extname(filename));
         return this;
       }
       /**
@@ -2831,10 +2831,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @param {string} [path]
        * @return {(string|null|Command)}
        */
-      executableDir(path8) {
-        if (path8 === void 0)
+      executableDir(path9) {
+        if (path9 === void 0)
           return this._executableDir;
-        this._executableDir = path8;
+        this._executableDir = path9;
         return this;
       }
       /**
@@ -3623,18 +3623,18 @@ function defaultCommitReader(cwd) {
         const status = parts[i++] ?? "";
         if (status.startsWith("R") || status.startsWith("C")) {
           const oldPath = parts[i++] ?? "";
-          const path7 = parts[i++] ?? "";
-          changes.push({ status, path: path7, oldPath });
+          const path8 = parts[i++] ?? "";
+          changes.push({ status, path: path8, oldPath });
         } else {
-          const path7 = parts[i++] ?? "";
-          changes.push({ status, path: path7 });
+          const path8 = parts[i++] ?? "";
+          changes.push({ status, path: path8 });
         }
       }
       return changes;
     },
-    content: (sha, path7) => {
+    content: (sha, path8) => {
       try {
-        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path7}`], {
+        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path8}`], {
           cwd,
           stdio: ["ignore", "pipe", "ignore"],
           maxBuffer: 64 * 1024 * 1024
@@ -3649,9 +3649,9 @@ function defaultCommitReader(cwd) {
       const authorEmail = text(["show", "-s", "--format=%ae", sha]).trim();
       return { message: message || "checkpoint", authorName, authorEmail };
     },
-    executable: (sha, path7) => {
+    executable: (sha, path8) => {
       try {
-        const line = text(["ls-tree", sha, path7]);
+        const line = text(["ls-tree", sha, path8]);
         return line.slice(0, 6) === "100755";
       } catch {
         return false;
@@ -3780,8 +3780,8 @@ function parseNameStatus(output) {
     const status = parts[0];
     if (!/^[AMDRCT]\d*$/.test(status))
       continue;
-    const path7 = parts[parts.length - 1];
-    entries.push({ status, path: path7 });
+    const path8 = parts[parts.length - 1];
+    entries.push({ status, path: path8 });
   }
   return entries;
 }
@@ -4615,6 +4615,12 @@ async function runBootstrap(opts) {
     mode: 384
   });
   ok("Environment p\xFAblico configurado");
+  import_node_fs5.default.mkdirSync(import_node_path5.default.join(dest, ".supremo"), { recursive: true });
+  import_node_fs5.default.writeFileSync(import_node_path5.default.join(dest, ".supremo/database.json"), JSON.stringify(config.database ?? {
+    environment: "unknown",
+    projectRef: config.supabase?.projectRef ?? null,
+    automaticMigrations: false
+  }, null, 2) + "\n");
   run("npm", ["ci"], dest);
   ok("Depend\xEAncias instaladas");
   const linked = config.supabase?.projectRef ? await linkSupabaseRemote(dest, config.supabase) : false;
@@ -4630,8 +4636,8 @@ async function runBootstrap(opts) {
   let npmScriptsCompatible = null;
   if (config.daemon) {
     try {
-      const { resolveKeychain: resolveKeychain2 } = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
-      const keychain = resolveKeychain2();
+      const keychainModule = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
+      const keychain = keychainModule.resolveKeychain();
       keychain.save(config.project.id, config.daemon.deviceSecret);
       if (keychain.get(config.project.id) !== config.daemon.deviceSecret) {
         throw new Error("Secret n\xE3o confirmado no keychain ap\xF3s salvar.");
@@ -4866,6 +4872,73 @@ var init_sync = __esm({
   }
 });
 
+// src/database.ts
+var database_exports = {};
+__export(database_exports, {
+  runDatabase: () => runDatabase,
+  validateLocalTarget: () => validateLocalTarget
+});
+function validateLocalTarget(cwd, status) {
+  if (status.environment !== "development" || !status.automaticMigrations || !status.projectRef) {
+    throw new Error("Banco n\xE3o reconhecido como development pelo Supremo. Produ\xE7\xE3o e ambiente desconhecido est\xE3o protegidos.");
+  }
+  const linked = import_node_fs7.default.readFileSync(import_node_path7.default.join(cwd, "supabase/.temp/project-ref"), "utf8").trim();
+  const env = import_node_fs7.default.readFileSync(import_node_path7.default.join(cwd, ".env.local"), "utf8");
+  const url = /^NEXT_PUBLIC_SUPABASE_URL\s*=\s*["']?([^\s"']+)/m.exec(env)?.[1];
+  if (linked !== status.projectRef || url !== `https://${status.projectRef}.supabase.co`) {
+    throw new Error("O banco do preview ou o link local diverge do development registrado. Nenhuma altera\xE7\xE3o foi enviada.");
+  }
+  return status.projectRef;
+}
+async function runDatabase(operation, cwd = process.cwd()) {
+  const config = readProjectConfig(cwd);
+  if (!config)
+    throw new Error("Execute o bootstrap para identificar o projeto.");
+  const secret = resolveKeychain().get(config.projectId);
+  if (!secret)
+    throw new Error("Dispositivo sem autoriza\xE7\xE3o. Execute o bootstrap.");
+  const url = new URL("/api/database", config.apiBaseUrl);
+  if (url.protocol !== "https:" && !(["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) && url.protocol === "http:")) {
+    throw new Error("O endpoint do Supremo deve usar HTTPS.");
+  }
+  const request = async (op, extra = {}) => {
+    const res = await fetch(url, {
+      method: "POST",
+      redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, operation: op, ...extra }),
+      signal: AbortSignal.timeout(6e4)
+    });
+    const data = await res.json();
+    if (!res.ok)
+      throw new Error(data.error ?? `Banco indispon\xEDvel (HTTP ${res.status}).`);
+    return data;
+  };
+  const status = await request("status");
+  import_node_fs7.default.writeFileSync(import_node_path7.default.join(cwd, ".supremo/database.json"), JSON.stringify(status, null, 2) + "\n");
+  if (operation === "status")
+    return status;
+  const expectedRef = validateLocalTarget(cwd, status);
+  if (operation === "anonymous-auth")
+    return request(operation, { expectedRef });
+  const directory = import_node_path7.default.join(cwd, "supabase/migrations");
+  const migrations = import_node_fs7.default.readdirSync(directory).filter((name) => name.endsWith(".sql")).sort().map((name) => ({
+    path: `supabase/migrations/${name}`,
+    content: import_node_fs7.default.readFileSync(import_node_path7.default.join(directory, name), "utf8")
+  }));
+  return request(operation, { expectedRef, migrations });
+}
+var import_node_fs7, import_node_path7;
+var init_database = __esm({
+  "src/database.ts"() {
+    "use strict";
+    import_node_fs7 = __toESM(require("node:fs"));
+    import_node_path7 = __toESM(require("node:path"));
+    init_daemon();
+    init_keychain();
+  }
+});
+
 // node_modules/commander/esm.mjs
 var import_index = __toESM(require_commander(), 1);
 var {
@@ -4933,7 +5006,7 @@ var package_default = {
 };
 
 // src/command-guard.ts
-var KNOWN_COMMANDS = ["bootstrap", "checkpoint", "daemon", "sync"];
+var KNOWN_COMMANDS = ["bootstrap", "checkpoint", "daemon", "sync", "db"];
 function isKnownOrGlobal(firstArg) {
   if (!firstArg)
     return true;
@@ -5047,8 +5120,8 @@ program2.command("daemon").description("Checkpoint daemon: envia checkpoints em 
         console.error("\u2717 .supremo/project.json ausente/incompleto.");
         process.exit(1);
       }
-      const { resolveKeychain: resolveKeychain2 } = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
-      const kc = resolveKeychain2();
+      const keychainModule = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
+      const kc = keychainModule.resolveKeychain();
       const n = await daemon.drainOnce({
         projectId: cfg.projectId,
         apiBaseUrl: cfg.apiBaseUrl,
@@ -5081,8 +5154,8 @@ program2.command("sync").description(
     );
     return;
   }
-  const { resolveKeychain: resolveKeychain2 } = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
-  const kc = resolveKeychain2();
+  const keychainModule = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
+  const kc = keychainModule.resolveKeychain();
   const deviceSecret = kc.get(cfg.projectId);
   const http = daemon.defaultDaemonHttp(cfg.apiBaseUrl);
   const outcome = await sync.runSync(
@@ -5098,6 +5171,18 @@ program2.command("sync").description(
     })
   );
   console.log(JSON.stringify({ action: outcome.action.kind, message: outcome.message }));
+});
+program2.command("db <operation>").description("Banco development: status, migrate ou anonymous-auth (autoridade do servidor)").action(async (operation) => {
+  try {
+    if (operation !== "status" && operation !== "migrate" && operation !== "anonymous-auth") {
+      throw new Error("Use db status, db migrate ou db anonymous-auth.");
+    }
+    const database = await Promise.resolve().then(() => (init_database(), database_exports));
+    console.log(JSON.stringify(await database.runDatabase(operation)));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Falha ao acessar o banco.");
+    process.exitCode = 1;
+  }
 });
 guardUnknownCommand(process.argv.slice(2));
 if (process.argv.length === 2)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CheckpointDeps, CheckpointRecord } from './checkpoint'
+import { PLATFORM_MANAGED_PATHS } from '../../../src/lib/templates/managed-paths'
 import {
   applyRestore,
   classifyMigrationDiff,
@@ -8,6 +9,7 @@ import {
   isKnownNextTsconfigNoise,
   MIGRATIONS_PATHSPEC,
   parseNameStatus,
+  RESTORE_PRESERVED_PATHS,
   restoreCommitMessage,
   RestoreTargetNotFoundLocallyError,
   type RestoreDeps,
@@ -134,6 +136,33 @@ describe('applyRestore', () => {
     // nenhuma operação destrutiva de histórico
     expect(calls.flat()).not.toContain('reset')
     expect(calls.flat()).not.toContain('checkout')
+  })
+
+  it('o patch exclui migrations e TODOS os rails da fonte canônica — nunca uma lista paralela/ad-hoc', () => {
+    const { deps, calls } = fakeDeps({
+      queue: [record()],
+      diff: 'diff --git a/app/page.tsx b/app/page.tsx\n@@ ...',
+      shas: ['head-atual', 'novo-sha-E'],
+    })
+
+    applyRestore('cpB', 'deixar home minimalista', 'proj-1', deps)
+
+    expect(RESTORE_PRESERVED_PATHS).toEqual([
+      MIGRATIONS_PATHSPEC,
+      ...PLATFORM_MANAGED_PATHS,
+    ])
+    const patchCall = calls.find(
+      (call) => call[0] === 'diff' && call.includes('--binary') && !call.includes('--name-status'),
+    )
+    expect(patchCall).toEqual([
+      'diff',
+      '--binary',
+      'head-atual',
+      'sha-B',
+      '--',
+      '.',
+      ...RESTORE_PRESERVED_PATHS.map((managedPath) => `:(exclude)${managedPath}`),
+    ])
   })
 
   it('worktree sujo → salvaguarda automática ANTES de restaurar (nunca perde trabalho)', () => {

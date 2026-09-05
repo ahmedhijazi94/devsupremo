@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { PLATFORM_MANAGED_PATHS } from '../../../src/lib/templates/managed-paths'
 import {
   buildCheckpointRecord,
   hasChanges,
@@ -148,6 +149,16 @@ export function isKnownNextTsconfigNoise(before: string, after: string): boolean
  * Git, sem nunca desfazer nada no Supabase.
  */
 export const MIGRATIONS_PATHSPEC = 'supabase/migrations'
+
+/**
+ * Estado que um Restore nunca leva para trás. Migrations têm semântica
+ * forward-only; os demais paths vêm da MESMA fonte usada pelo template sync
+ * para decidir quais rails pertencem à plataforma.
+ */
+export const RESTORE_PRESERVED_PATHS: readonly string[] = [
+  MIGRATIONS_PATHSPEC,
+  ...PLATFORM_MANAGED_PATHS,
+]
 
 export interface MigrationDiffEntry {
   /** Código bruto de `git diff --name-status` (A/D/M/R100/C100/T/...). */
@@ -330,12 +341,11 @@ export function applyRestore(
     parseNameStatus(migrationStatusOutput),
   )
 
-  // O patch REAL exclui supabase/migrations/** inteiramente (pathspec magic
-  // `:(exclude)`, testado com git de verdade) — nunca um filtro de TEXTO
-  // sobre o patch já gerado (frágil pra diffs binários/multi-arquivo). Migrations
-  // ficam EXATAMENTE como estão no worktree atual, mesmo restaurando pra um
-  // checkpoint mais antigo que não as tinha: restore nunca executa down
-  // migration, nunca desfaz schema remoto — só a APLICAÇÃO volta no tempo.
+  // O patch REAL exclui migrations E todos os rails gerenciados pelo Supremo
+  // via pathspec magic `:(exclude)` — nunca um filtro de TEXTO sobre o patch
+  // já gerado (frágil pra diffs binários/multi-arquivo). Assim, Restore volta
+  // somente conteúdo/código do usuário: migrations ficam forward-only e a
+  // infraestrutura permanece byte-idêntica à versão atual do workspace.
   const patch = deps.git([
     'diff',
     '--binary',
@@ -343,7 +353,7 @@ export function applyRestore(
     targetSha,
     '--',
     '.',
-    `:(exclude)${MIGRATIONS_PATHSPEC}`,
+    ...RESTORE_PRESERVED_PATHS.map((managedPath) => `:(exclude)${managedPath}`),
   ])
   if (isEmptyPatch(patch)) {
     return { applied: false, record: null, preservedMigrations, migrationConflicts }

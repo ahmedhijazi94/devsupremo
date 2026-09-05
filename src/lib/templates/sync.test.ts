@@ -17,6 +17,7 @@ describe('isManagedPath', () => {
     expect(isManagedPath('lib/supabase/server.ts')).toBe(true)
     expect(isManagedPath('proxy.ts')).toBe(true)
     expect(isManagedPath('.github/workflows/ci.yml')).toBe(true)
+    expect(isManagedPath('e2e/smoke.spec.ts')).toBe(true)
   })
 
   it('trata conteúdo do app como scaffold', () => {

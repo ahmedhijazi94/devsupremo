@@ -75,7 +75,7 @@ export {
 // padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
 // nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
 // próprio Supremo (migration 017, NÃO aplicada).
-export const TEMPLATE_VERSION = '3.6.0'
+export const TEMPLATE_VERSION = '3.6.1'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.1.0'
@@ -730,6 +730,7 @@ supabase/.branches/
 # preview.port = porta REAL em uso (pode diferir da preferida — ver ownership
 # do preview em previewSupervisorScript()).
 .supremo/database.json
+.supremo/database-queue/
 .supremo/preview.pid
 .supremo/preview.port
 .supremo/preview.log
@@ -2841,6 +2842,10 @@ BACKGROUND (a CI é a barreira definitiva antes da main):
 \`npm run verify\` é adaptativo e escolhe isso (QUICK/SECURITY/FULL) pelo git diff — use-o
 e **não** rode \`verify:full\` em toda microalteração. LOW não é inseguro: o trabalho
 pesado (build, suíte completa, RLS, CodeQL, security gates) roda em BACKGROUND/CI.
+O verify já inclui tipos, lint e testes: não rode esses comandos separadamente
+antes dele, salvo para investigar uma falha específica. Não escreva testes que
+apenas repetem texto, classes CSS ou a estrutura do JSX em alterações cosméticas.
+Teste comportamento e decisões; preserve os testes de segurança e isolamento.
 
 ### Build travado por limitação ambiental não bloqueia o checkpoint (v3.1 finalização)
 No nível FULL, \`verify\` roda um \`build\` (\`next build\`). Esse passo por si só sabe
@@ -3002,6 +3007,10 @@ Use a CLI local pinada do projeto (\`npx supabase …\`, nunca a global).
 - Registre os ambientes e os refs NÃO secretos em \`ARCHITECTURE.md\`.
 - Consulte \`npx supremo db status\`: JSON emitido pelo servidor autenticado.
   \`.supremo/database.json\` é só snapshot informativo, nunca autorização.
+- Os comandos de banco usam a fila local do daemon autorizado, assim como os
+  checkpoints. O agente não precisa acessar o keychain nem ter credenciais.
+  Se o canal estiver indisponível, atualize/reinicie somente o daemon no terminal
+  autorizado; não refaça bootstrap nem reinicie o preview saudável.
 - Banco recém-provisionado pelo Supremo é registrado como \`development\` no control plane.
   Vínculos antigos/externos continuam \`unknown\`; não invente a classificação.
 - Depois de criar a migration, execute \`npx supremo db migrate\` automaticamente,

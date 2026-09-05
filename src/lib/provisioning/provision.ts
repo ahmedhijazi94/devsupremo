@@ -1,3 +1,6 @@
+import { createServiceClient } from '@/lib/supabase/admin'
+import { readEnvironment, registerDevelopment } from '@/lib/database-environment/store'
+import { requireDevelopment } from '@/lib/database-environment/policy'
 import { randomInt } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decryptToken, encryptToken } from '@/lib/crypto'
@@ -306,11 +309,16 @@ export async function provisionProject(params: {
           files,
           {
             existingRef: ctx.supabaseProjectRef as string | undefined,
+            verifyDevelopment: async (ref) => {
+              const record = await readEnvironment(createServiceClient(), projectId)
+              requireDevelopment(record, ref, ref)
+            },
             existingPasswordEncrypted:
               (ctx.dbPasswordEncrypted as string | undefined) ?? null,
             // Persiste o ref do projeto Supabase assim que criado (antes de migrar).
             onProjectCreated: async (ref, enc) => {
               await persist({ supabaseProjectRef: ref, dbPasswordEncrypted: enc })
+              await registerDevelopment(createServiceClient(), projectId, ref)
             },
           },
         )
@@ -545,6 +553,7 @@ export async function provisionSupabase(
   opts: {
     /** Ref de um projeto Supabase já criado (retry) — reutiliza, não recria. */
     existingRef?: string | undefined
+    verifyDevelopment?: (ref: string) => Promise<void>
     existingPasswordEncrypted?: string | null | undefined
     /** Chamado assim que o projeto é criado, para persistir o ref na hora. */
     onProjectCreated?: (
@@ -554,6 +563,7 @@ export async function provisionSupabase(
   } = {},
 ): Promise<SupabaseProvisionResult> {
   const warnings: string[] = []
+  if (opts.existingRef && !opts.verifyDevelopment) throw new Error('Retry exige classificação development verificada antes de escrever no banco existente.')
 
   const { data: account } = await supabase
     .from('supabase_accounts')
@@ -618,6 +628,8 @@ export async function provisionSupabase(
     }
   }
 
+  if (opts.verifyDevelopment) await opts.verifyDevelopment(ref)
+
   const ready = await waitForSupabaseProject(ref, token)
 
   if (!ready) throw new Error('Banco ainda em preparação. Retome o provisionamento; o banco criado será reutilizado.')
@@ -625,6 +637,7 @@ export async function provisionSupabase(
   const migrations = files.filter((file) => /^supabase\/migrations\/[^/]+\.sql$/.test(file.path))
     .sort((a, b) => a.path.localeCompare(b.path))
   for (const migration of migrations) {
+    if (opts.verifyDevelopment) await opts.verifyDevelopment(ref)
     const response = await fetch(`${SUPABASE_API}/v1/projects/${ref}/database/query`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

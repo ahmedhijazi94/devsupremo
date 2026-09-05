@@ -14,6 +14,7 @@ import { defaultAuthIO, ensureAuthorized, openBrowser } from './auth'
  */
 
 export interface BootstrapConfig {
+  database?: { environment: string; projectRef: string | null; automaticMigrations: boolean }
   project: {
     id: string
     name: string
@@ -605,6 +606,10 @@ export async function runBootstrap(opts: {
     mode: 0o600,
   })
   ok('Environment público configurado')
+  fs.mkdirSync(path.join(dest, '.supremo'), { recursive: true })
+  fs.writeFileSync(path.join(dest, '.supremo/database.json'), JSON.stringify(config.database ?? {
+    environment: 'unknown', projectRef: config.supabase?.projectRef ?? null, automaticMigrations: false,
+  }, null, 2) + '\n')
 
   run('npm', ['ci'], dest)
   ok('Dependências instaladas')
@@ -633,8 +638,8 @@ export async function runBootstrap(opts: {
   let npmScriptsCompatible: boolean | null = null
   if (config.daemon) {
     try {
-      const { resolveKeychain } = await import('./keychain')
-      const keychain = resolveKeychain()
+      const keychainModule = await import('./keychain')
+      const keychain = keychainModule.resolveKeychain()
       keychain.save(config.project.id, config.daemon.deviceSecret)
       // Confirma que o secret está de fato recuperável ANTES de subir o
       // daemon (sem isto, um keychain "salvou" mas não persistiu — silencioso

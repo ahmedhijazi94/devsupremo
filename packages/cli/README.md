@@ -33,3 +33,15 @@ CI para a próxima edição.
 
 O token de git usado no clone é efêmero e nunca aparece em URL, argv, `.git/config`,
 stdout ou log. `service_role` nunca é entregue.
+
+### Banco de desenvolvimento
+
+- `supremo db status`: classificação JSON consultada no Supremo autenticado.
+- `supremo db migrate`: aplica migrations versionadas apenas no development
+  registrado, verificando o vínculo e o banco usado pelo preview.
+- `supremo db anonymous-auth`: habilita identidade anônima sob demanda apenas no
+  development, preservando as demais opções de segurança e verificando prontidão.
+
+`.supremo/database.json` é um snapshot informativo. A autorização vem do servidor
+em cada escrita. Produção e bancos sem classificação são recusados; não há fallback
+para armazenamento local. O fluxo não espera CI nem reinicia o preview.

@@ -149,6 +149,12 @@ jobs:
           chmod +x gitleaks
       - name: Rodar Gitleaks
         run: ./gitleaks detect --source . --redact --exit-code 1 --no-banner
+      - name: Verificar CLI como distribuída no scaffold (sem allowlist do Supremo)
+        run: |
+          mkdir -p "$RUNNER_TEMP/scaffold-secrets/tools/supremo-cli/dist"
+          cp packages/cli/dist/bin.js "$RUNNER_TEMP/scaffold-secrets/tools/supremo-cli/dist/bin.js"
+          cd "$RUNNER_TEMP/scaffold-secrets"
+          "$GITHUB_WORKSPACE/gitleaks" detect --source . --no-git --redact --exit-code 1 --no-banner
 
   codeql:
     name: Análise estática

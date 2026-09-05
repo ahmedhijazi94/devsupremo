@@ -179,28 +179,6 @@ for (const file of sqlFiles) {
     }
   }
 
-  // Policy que libera tudo é pior que policy nenhuma: parece proteção.
-  const permissive = [
-    ...source.matchAll(
-      /CREATE POLICY\s+["'][^"']+["']\s+ON\s+["']?(\w+)["']?[\s\S]{0,200}?(USING|WITH CHECK)\s*\(\s*true\s*\)/gi,
-    ),
-  ]
-
-  for (const match of permissive) {
-    const lineNumber =
-      lines.findIndex(
-        (l) => l.includes(`CREATE POLICY`) && l.includes(match[1]),
-      ) + 1 || 1
-    finding(
-      'HIGH',
-      'RLS',
-      rel(file),
-      lineNumber,
-      match[0].split('\n')[0],
-      `Policy em "${match[1]}" usa ${match[2]} (true) — libera a tabela para qualquer um. ` +
-        `Escreva a condição de dono: auth.uid() = user_id.`,
-    )
-  }
 }
 
 // Estado final das policies: uma correção forward-only deve poder remover uma
@@ -226,6 +204,30 @@ for (const file of sqlFiles.filter((f) => f.includes(`${path.sep}migrations${pat
     })
   }
 }
+// Exceção estreita: envio write-only demonstrado pelo schema, nunca por comentário
+// no endpoint. DDL complexo não reconhecido continua sujeito à revisão de auth.
+const publicSubmissionTables = new Set()
+const migrationSql = sqlFiles.filter((f) => f.includes(`${path.sep}migrations${path.sep}`))
+  .sort().map((file) => fs.readFileSync(file, 'utf8').replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '')).join('\n')
+for (const match of migrationSql.matchAll(/CREATE\s+TABLE\s+(?:public\.)?(\w+)\s*\(([^;]+)\)\s*;/gi)) {
+  const table = match[1].toLowerCase()
+  const body = match[2]
+  if (/\b(?:references|user_id|owner_id|org_id|organization_id|team_id|workspace_id|account_id|tenant_id|company_id|group_id)\b/i.test(body)) continue
+  const tablePattern = `(?:(?:public|"public")\\s*\\.\\s*)?"?${table}"?`
+  const alters = [...migrationSql.matchAll(new RegExp(`ALTER\\s+TABLE\\s+${tablePattern}\\s+([^;]+);`, 'gi'))]
+  if (!alters.some((alter) => /^ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*$/i.test(alter[1]))) continue
+  if (alters.some((alter) => !/^ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*$/i.test(alter[1]))) continue
+  const policies = [...finalPolicies.values()].filter((policy) => policy.table === table)
+  if (policies.length && policies.every((policy) => policy.command === 'INSERT'
+    && /^\s*true\s*$/i.test(policy.check ?? '') && !policy.using)) publicSubmissionTables.add(table)
+}
+for (const policy of finalPolicies.values()) {
+  if (![policy.using, policy.check].some((condition) => /^\s*true\s*$/i.test(condition ?? ''))) continue
+  if (publicSubmissionTables.has(policy.table) && policy.command === 'INSERT') continue
+  finding('HIGH', 'RLS', rel(policy.file), policy.line, policy.code,
+    `Policy irrestrita em "${policy.table}". Somente INSERT write-only sem ownership admite condição true; proteja dados privados por dono/escopo.`)
+}
+
 for (const policy of finalPolicies.values()) {
   if (!['ALL', 'INSERT'].includes(policy.command)) continue
   if (!/^(memberships|org_members|organization_members|team_members)$/.test(policy.table)) continue
@@ -347,6 +349,15 @@ for (const file of tsFiles) {
     continue
   }
 
+  // Apenas INSERT direto nas tabelas write-only conhecidas. SELECT/returning,
+  // RPC, Storage, SQL dinâmico e clientes privilegiados não recebem a exceção.
+  const inserts = [...source.matchAll(/\.\s*from\s*\(\s*['"](\w+)['"]\s*\)\s*\.\s*insert\s*\(/g)].filter((match) => /^\.\s*from\s*\(/.test(clean.slice(match.index)))
+  const fromCount = [...clean.matchAll(/\.\s*from\s*\(/g)].length
+  const publicWriteOnly = inserts.length > 0 && inserts.length === fromCount
+    && inserts.every((insert) => publicSubmissionTables.has(insert[1].toLowerCase()))
+    && !/\.\s*(select|update|delete|upsert|rpc)\s*\(|\.\s*storage\b|service_role|serviceRole|SUPABASE_SERVICE_ROLE_KEY|createAdminClient/i.test(clean)
+  if (publicWriteOnly) continue
+
   const lineNumber =
     lines.findIndex((l) => /export\s+(async\s+)?function/.test(l)) + 1 || 1
 
@@ -356,9 +367,8 @@ for (const file of tsFiles) {
     rel(file),
     lineNumber,
     lines[lineNumber - 1] ?? '',
-    'Server Action ou Route Handler sem verificação de sessão. São endpoints ' +
-      'POST públicos: qualquer um pode chamá-los diretamente. Use requireUser() ' +
-      'ou supabase.auth.getUser() antes de qualquer acesso a dados.',
+    'Acesso a dados sem verificação de sessão ou contrato reconhecido de INSERT público write-only. ' +
+      'Para dados privados, valide identidade e escopo; para envio público, mantenha RLS sem leitura/update/delete.',
   )
 }
 

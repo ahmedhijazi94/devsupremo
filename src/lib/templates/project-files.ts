@@ -76,7 +76,7 @@ export {
 // padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
 // nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
 // próprio Supremo (migration 017, NÃO aplicada).
-export const TEMPLATE_VERSION = '3.6.3'
+export const TEMPLATE_VERSION = '3.6.4'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.1.0'
@@ -2607,7 +2607,7 @@ Todos rodam no CI a cada pull request e precisam passar antes do merge.
 | \`npm run typecheck\` | TypeScript strict, zero erros |
 | \`npm run lint\` | ESLint, zero erros |
 | \`npm test\` | Testes unitários |
-| \`npm run test:coverage\` | Cobertura mínima de 70% |
+| \`npm run test:coverage\` | Cobertura mínima de 80% |
 | \`npm run test:rls\` | Isolamento entre contas no banco |
 | \`npm run test:e2e\` | Fluxos críticos no navegador |
 | \`npm run audit:security\` | RLS, autorização, IDOR, segredos, XSS |
@@ -2660,7 +2660,8 @@ ${description}
 - Nunca expor a service role key ao bundle do cliente.
 - Nunca confiar em \`user_id\` vindo do corpo da requisição — use \`auth.uid()\`.
 - Server Actions para mutação; Route Handlers para integração externa.
-- Toda Server Action começa verificando a sessão.
+- Toda Server Action valida inputs e permissões no servidor. Exija sessão somente
+  quando a operação depender de identidade; envio público não exige autenticação.
 
 ### Código
 - Zero \`any\`. Tipos explícitos.
@@ -2676,8 +2677,13 @@ ${description}
 - **Toda tabela com ownership/isolamento exige prova executável de isolamento cruzado.**\n  Registre \`isolationTest('public.nome_da_tabela', fixture)\` de \`supabase/isolation.ts\`\n  na suíte \`*.rls.test.ts\`. A fixture fornece uma linha do dono e tokens de dois usuários\n  distintos; o helper executa leitura legítima, leitura/UPDATE/DELETE cruzados e confirma\n  preservação da linha. Mantenha também testes específicos de INSERT e permissões da feature.\n  \`npm run test:rls\` cruza TODAS as migrations com provas aprovadas na execução atual;\n  comentário, teste vazio, skip/todo ou arquivo não executado não contam. A integração\n  bloqueia quando falta prova por tabela, inclusive em modo rápido. Isto roda no job RLS\n  em background; não acrescente banco nem suíte RLS ao hot path de edição.
 
 ### Testes
-Escreva o teste junto com o código, não depois. Cobertura mínima de 70%,
-exigida pelo CI — não é sugestão.
+Escreva o teste junto com o código, não depois. Cobertura mínima de 80%,
+em linhas, funções, branches e statements, exigida pelo CI — não é sugestão.
+Teste os fluxos da feature: envio válido, validação inválida, falha do backend,
+carregamento, sucesso e tentativa repetida. Renderizar a página não prova o formulário.
+Ao mudar lógica de decisão, rode \`npm run test:coverage\` localmente para detectar
+lacunas antes de publicar; passar \`npm test\` não comprova o threshold. Não reduza
+cobertura nem exclua a feature para ficar verde.
 
 ## Ciclo de desenvolvimento (v3.1 — rápido e assíncrono)
 
@@ -3006,8 +3012,29 @@ Registre decisões visuais duráveis em DESIGN.md. Não refaça pesquisa, descob
 skills ou leitura integral a cada ajuste. Skills externas seguem as regras do host;
 o scaffold não pode sobrescrever essas regras. Nada disso substitui o preflight local.
 
-## Persistência privada sem tela de login
-Quando a feature precisar de identidade privada sem login, use Anonymous Auth:
+## Decisão de arquitetura: persistência e identidade
+Escolha o modelo mais simples que satisfaça o requisito, por feature/tabela.
+Persistência + "sem login" NÃO implica Anonymous Auth. Não acrescente login,
+identidade anônima, user_id ou ownership sem requisito de acesso por pessoa.
+A capability Auth disponível no scaffold não obriga autenticar uma feature pública.
+
+| Requisito | Modelo | Prova de segurança |
+| --- | --- | --- |
+| Public submission / write-only: contato, sugestão, lead, newsletter, orçamento; formulário de nome e mensagem sem login, com persistência | Sem login, sem identidade anônima, sem user_id. RLS permite somente INSERT público; SELECT/UPDATE/DELETE públicos negados | INSERT válido persiste; leitura/update/delete públicos negados, inclusive para sessão existente. Sem teste cross-user nesta tabela sem ownership |
+| Dados privados por usuário sem login visível: cada pessoa vê apenas os próprios dados, favoritos ou histórico privado | Identidade anônima persistente + ownership + RLS | Prova cross-user executável e INSERT em nome alheio negado |
+| Dados privados com conta | Autenticação normal + ownership + RLS | Prova cross-user executável e INSERT em nome alheio negado |
+
+No envio público, não invente listagem, histórico privado ou edição. Valide com
+Zod no servidor e constraints no banco; limite tamanho e abuso. Uma policy de
+INSERT público também permite acesso direto à API: proteções só na Server Action
+não limitam esse caminho. Use controles de banco ou entrada exclusivamente pelo
+servidor quando o requisito antiabuso exigir. Não use service_role como atalho.
+Não encadeie SELECT/returning no INSERT write-only; confirme o resultado do backend
+sem conceder leitura. Teste persistência com fixture privilegiada apenas no teste.
+RLS permanece obrigatório; o gate genérico só exige cross-user com ownership.
+
+### Dados privados sem tela de login (somente o segundo caso)
+Quando o requisito exigir acesso privado por pessoa sem conta, use Anonymous Auth:
 1. \`npx supremo db anonymous-auth\` habilita sob demanda apenas no development
    autorizado; preserva limites de requisição, CAPTCHA e demais configurações.
 2. Use \`ensurePrivateSession\` de \`lib/supabase/anonymous.ts\` antes da feature.
@@ -3080,7 +3107,9 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   reler apenas mudanças relevantes ou quando o contexto tiver sido perdido.
 - Seguir o **ciclo de desenvolvimento v3** do \`AGENTS.md\`
 - Implementar do servidor para fora
-- Ativar RLS em toda tabela nova **e escrever o teste de isolamento**
+- Ativar RLS em toda tabela nova e testar suas permissões; **teste cross-user somente com ownership**.
+- Seguir a decisão de arquitetura do AGENTS.md: envio público não exige identidade;
+  dados privados sem login podem usar Anonymous Auth; dados com conta usam autenticação normal.
 - Validar entrada com Zod no servidor
 - Mudanças de banco: migration versionada, validada primeiro no desenvolvimento.
   Nunca aplicar SQL experimental no remoto de produção. Ver a separação de
@@ -3193,10 +3222,34 @@ function securityMd(projectName: string): string {
   return `# SECURITY.md — ${projectName}
 
 ## Modelo de ameaça
-Aplicação multiusuário sobre Supabase. O risco principal é vazamento entre
-contas: usuário A alcançar dado do usuário B.
+O modelo depende da feature (ver decisão de arquitetura no AGENTS.md).
+Envio público deve impedir leitura e alteração dos envios. Dados privados exigem
+isolamento entre pessoas, com identidade anônima ou conta conforme o requisito.
+RLS é obrigatório em todos os casos; user_id só é necessário com ownership.
 
-## Template obrigatório de tabela
+## Template de envio público / write-only
+Sem login e sem identidade anônima. Exemplo de permissões mínimas:
+
+\`\`\`sql
+CREATE TABLE public.submissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
+  message TEXT NOT NULL CHECK (char_length(message) BETWEEN 1 AND 1000),
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.submissions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.submissions FROM anon, authenticated;
+GRANT INSERT (name, message) ON public.submissions TO anon, authenticated;
+CREATE POLICY submissions_insert ON public.submissions
+  FOR INSERT TO anon, authenticated WITH CHECK (true);
+\`\`\`
+
+Nenhuma policy de SELECT, UPDATE ou DELETE público. Teste INSERT sem sessão,
+persistência e bloqueio dessas três operações; não crie ownership para satisfazer
+um teste cross-user. Validação e proteção antiabuso continuam necessárias.
+
+## Template de tabela privada com ownership
 
 \`\`\`sql
 CREATE TABLE minha_tabela (
@@ -3222,7 +3275,8 @@ CREATE POLICY "minha_tabela_delete_own" ON minha_tabela
 E o teste correspondente em \`supabase/rls.rls.test.ts\`.
 
 ## Proibido
-- \`USING (true)\` ou \`WITH CHECK (true)\` em qualquer policy
+- Policies irrestritas em dados privados. A exceção é \`FOR INSERT ... WITH CHECK (true)\`
+  em tabela de envio público sem ownership, com leitura/update/delete públicos negados.
 - \`service_role\` fora do servidor
 - Decidir autorização a partir de JWT decodificado no cliente
 - \`dangerouslySetInnerHTML\` sem sanitização
@@ -3268,8 +3322,10 @@ Supremo para funcionar, compilar ou ser publicado.
 
 ## Mapa do app
 - UI: app/ e components/; regras de negócio em módulos de lib/.
-- Entradas do servidor: validar com Zod, autenticar e autorizar antes do I/O.
-- Banco: migrations versionadas; dono/tenant conferido no banco por RLS.
+- Entradas do servidor: validar com Zod e conferir permissões antes do I/O;
+  autenticar apenas operações que dependem de identidade.
+- Banco: migrations versionadas e RLS; envio público permite só INSERT sem identidade;
+  dados privados verificam dono/tenant por RLS (anônimo persistente ou conta).
 - Arquivos privados: policies próprias no Storage; URLs assinadas curtas.
 - Integrações: credenciais exclusivamente no servidor, com privilégio mínimo.
 
@@ -3281,11 +3337,12 @@ Supremo para funcionar, compilar ou ser publicado.
   não desfaz migrations nem recupera dados apagados.
 
 ## Contratos de segurança
-- Cada usuário só acessa seus dados ou os de organizações autorizadas.
+- Quando houver ownership, cada usuário só acessa seus dados ou os de organizações autorizadas.
 - Ninguém entra numa organização criando seu próprio membership; convite e
   permissões são conferidos num fluxo confiável no servidor.
 - Papéis privilegiados não podem ser alterados por um campo controlado pelo client.
-- Os testes incluem acesso cruzado, adesão indevida e alterações de permissão.
+- Testes de envio público provam INSERT e negação de leitura/update/delete;
+  com ownership, incluem acesso cruzado; com organizações, adesão indevida e permissões.
 - Checks automáticos detectam classes de falhas; não certificam toda a arquitetura.
 
 ## Crescimento

@@ -437,3 +437,35 @@ describe('tokenizador — string vs comentário (bug real do editor de dados)', 
     ).toThrow(UnsafeSqlError)
   })
 })
+
+describe('envio público write-only e modelos privados', () => {
+  const submission = `CREATE TABLE public.submissions (id uuid, name text, message text);
+    ALTER TABLE public.submissions ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY submit ON public.submissions FOR INSERT TO anon, authenticated WITH CHECK (true);
+    GRANT INSERT (name, message) ON public.submissions TO anon, authenticated;`
+  it('aceita tabela pública nova completa, com INSERT restrito às colunas do formulário', () => {
+    expect(() => assertSafeSql(submission, migration)).not.toThrow()
+  })
+  it.each(['SELECT', 'UPDATE', 'DELETE', 'ALL'])('recusa GRANT %s mesmo em tabela de envio', (command) => {
+    expect(() => assertSafeSql(submission + ` GRANT ${command} ON public.submissions TO anon;`, migration)).toThrow()
+  })
+  it.each(['SELECT USING', 'UPDATE USING', 'DELETE USING', 'ALL USING'])('recusa policy pública %s', (command) => {
+    expect(() => assertSafeSql(submission + ` CREATE POLICY extra ON public.submissions FOR ${command} (true);`, migration)).toThrow()
+  })
+  it.each(['anônimo persistente', 'conta'])('não permite abrir INSERT de tabela privada: %s', () => {
+    expect(() => assertSafeSql(submission.replace('id uuid,', 'id uuid, user_id uuid REFERENCES auth.users(id),'), migration)).toThrow()
+    expect(() => assertSafeSql(`CREATE TABLE notes (id uuid, user_id uuid REFERENCES auth.users(id));
+      ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
+      CREATE POLICY own ON notes FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);`, migration)).not.toThrow()
+  })
+  it('nomes aspados e ordem dos roles não burlam o contrato write-only', () => {
+    expect(() => assertSafeSql(submission + ' ALTER TABLE "public"."submissions" ADD COLUMN owner_id uuid;', migration)).toThrow()
+    expect(() => assertSafeSql(submission + ' GRANT SELECT ON public.submissions TO authenticated, anon;', migration)).toThrow()
+    expect(() => assertSafeSql(submission + ' CREATE POLICY leak ON private.submissions FOR INSERT WITH CHECK (true);', migration)).toThrow()
+  })
+  it('não infere tabela pública de policy avulsa, comentário ou ALTER de ownership', () => {
+    expect(() => assertSafeSql('CREATE POLICY submit ON submissions FOR INSERT WITH CHECK (true);', migration)).toThrow()
+    expect(() => assertSafeSql('-- ' + submission.replaceAll('\n', ' '), migration)).toThrow()
+    expect(() => assertSafeSql(submission + ' ALTER TABLE public.submissions ADD COLUMN owner_id uuid;', migration)).toThrow()
+  })
+})

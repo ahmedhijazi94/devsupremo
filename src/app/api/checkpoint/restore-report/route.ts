@@ -1,6 +1,6 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import { authorizeRestoreReport } from '@/lib/checkpoint/restore'
 import {
@@ -16,7 +16,7 @@ import {
  * estado atual — nada a restaurar). O checkpoint E em si segue o fluxo NORMAL de
  * publish (mesma fila, mesmos gates) — esta rota só fecha o pedido de restore.
  *
- * `mcpDataClient()` é service_role (ignora RLS) — autenticar o DEVICE não
+ * `createServiceClient()` é service_role (ignora RLS) — autenticar o DEVICE não
  * basta; confirmamos que o restoreRequestId pertence a um projeto do MESMO
  * dono do device antes de qualquer escrita (authorizeRestoreReport, fail-
  * closed). Sem isto, um device autenticado de QUALQUER projeto conseguiria
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return Response.json({ error: 'payload inválido.' }, { status: 400 })
   const body = parsed.data
-  const client = mcpDataClient()
+  const client = createServiceClient()
 
   const auth = await authenticateDeviceSecret(
     supabaseCheckpointDeviceStore(client),

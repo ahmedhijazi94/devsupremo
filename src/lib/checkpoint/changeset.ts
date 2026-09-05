@@ -111,7 +111,7 @@ export function validateChangeset(input: {
       continue
     }
     if (f.op !== 'add' && f.op !== 'modify') return { ok: false, reason: 'bad_op' }
-    if (!f.contentBase64 || !f.sha256) return { ok: false, reason: 'bad_op' }
+    if (f.contentBase64 === undefined || !f.sha256) return { ok: false, reason: 'bad_op' }
     const decoded = Buffer.from(f.contentBase64, 'base64')
     if (sha256Hex(decoded) !== f.sha256) return { ok: false, reason: 'file_hash_mismatch' }
   }

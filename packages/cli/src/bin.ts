@@ -1,8 +1,5 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
-import fs from 'node:fs'
-import path from 'node:path'
-import os from 'node:os'
 // Fonte ÚNICA da versão: o próprio package.json (o esbuild inlina no bundle, e o
 // prepublishOnly reconstrói antes de publicar). Assim `--version` nunca diverge da
 // versão publicada.
@@ -13,87 +10,16 @@ const program = new Command()
 
 program
   .name('supremo')
-  .description('CLI do Supremo (bootstrap + ponte MCP)')
+  .description('CLI do Supremo (bootstrap, checkpoints e desenvolvimento local)')
   .version(pkg.version)
 
-/**
- * Roda ANTES de `program.parse()`: um comando não-registrado nunca cai
- * silenciosamente na ponte MCP (ver `command-guard.ts`) — sai com um erro claro
- * e acionável em vez disso.
- */
+/** Rejeita comandos desconhecidos antes de executar qualquer operação. */
 function guardUnknownCommand(argv: string[]): void {
   const first = argv[0]
   if (isKnownOrGlobal(first)) return
   console.error(unknownCommandMessage(first!))
   process.exit(1)
 }
-
-const DEFAULT_URL = 'https://supremo.app/api/mcp'
-
-interface ClaudeConfig {
-  mcpServers?: Record<string, unknown>
-  [key: string]: unknown
-}
-
-function claudeDesktopConfigPath(): string {
-  if (process.platform === 'darwin') {
-    return path.join(
-      os.homedir(),
-      'Library',
-      'Application Support',
-      'Claude',
-      'claude_desktop_config.json'
-    )
-  }
-  if (process.platform === 'win32') {
-    return path.join(
-      process.env.APPDATA ?? os.homedir(),
-      'Claude',
-      'claude_desktop_config.json'
-    )
-  }
-  return path.join(os.homedir(), '.config', 'Claude', 'claude_desktop_config.json')
-}
-
-program
-  .command('connect')
-  .description('Configura o Claude Desktop para usar o Supremo remoto')
-  .requiredOption('-t, --token <token>', 'Token gerado em /mcps')
-  .option('-u, --url <url>', 'Endpoint MCP do Supremo', DEFAULT_URL)
-  .action((options: { token: string; url: string }) => {
-    if (!options.token.startsWith('sup_')) {
-      console.error('Token inválido: deve começar com "sup_". Gere um em /mcps.')
-      process.exit(1)
-    }
-
-    const configPath = claudeDesktopConfigPath()
-    let config: ClaudeConfig = {}
-
-    if (fs.existsSync(configPath)) {
-      try {
-        config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as ClaudeConfig
-      } catch {
-        console.error(
-          `${configPath} existe mas não é JSON válido. Corrija ou remova o arquivo antes de continuar.`
-        )
-        process.exit(1)
-      }
-    }
-
-    config.mcpServers = config.mcpServers ?? {}
-    config.mcpServers.supremo = {
-      command: 'npx',
-      args: ['-y', 'supremo-cli', 'mcp'],
-      env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token },
-    }
-
-    fs.mkdirSync(path.dirname(configPath), { recursive: true })
-    fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`)
-
-    console.log(`Configurado em ${configPath}`)
-    console.log(`Endpoint: ${options.url}`)
-    console.log('Reinicie o Claude Desktop para carregar a conexão.')
-  })
 
 program
   .command('bootstrap <project-id>')
@@ -288,12 +214,6 @@ program
     console.log(JSON.stringify({ action: outcome.action.kind, message: outcome.message }))
   })
 
-program
-  .command('mcp', { isDefault: true })
-  .description('Roda a ponte MCP (o cliente chama isto automaticamente)')
-  .action(async () => {
-    await import('./index')
-  })
-
 guardUnknownCommand(process.argv.slice(2))
-program.parse()
+if (process.argv.length === 2) program.outputHelp()
+else program.parse()

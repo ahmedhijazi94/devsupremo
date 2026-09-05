@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest'
  * Regressão (limpeza de UI — v3.4): a aba "MCP" do header saiu da navegação
  * principal — arquitetura antiga, o fluxo hoje é bootstrap/checkpoint local.
  * `TopNav` e `MobileNav` compartilham o MESMO array `NAV`, então um teste só
- * cobre os dois. O backend (`/api/mcp`) e a tabela `mcp_tokens` continuam
- * intactos — só a navegação pra tela de configuração saiu.
+ * cobre os dois. O transporte legado foi removido; migrations históricas
+ * permanecem para compatibilidade de bancos existentes.
  */
 describe('TopNav/MobileNav — a aba MCP não faz mais parte da navegação principal (v3.4)', () => {
   const file = join(dirname(fileURLToPath(import.meta.url)), 'top-nav.tsx')

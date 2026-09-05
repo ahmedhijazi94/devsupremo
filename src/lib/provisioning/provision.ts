@@ -12,7 +12,7 @@ import {
 import { capabilitiesForKind, inferSecurityProfile } from '@/lib/capabilities'
 import { chooseMergeMode, protectionLevelFor } from '@/lib/github/capabilities'
 import { appInstallationToken, findInstallationForAccount } from '@/lib/github/app'
-import { writeIntegrationMeta } from '@/lib/mcp/repository'
+import { writeIntegrationMeta } from '@/lib/projects/repository'
 import {
   runProvisioning,
   type ProvisioningSteps,
@@ -295,9 +295,7 @@ export async function provisionProject(params: {
       state: 'provisioning',
       run: async (ctx, persist) => {
         if (!supabaseAccountId) {
-          warnings.push(
-            'Nenhuma conta Supabase vinculada — o projeto foi criado sem banco.',
-          )
+          if (kind !== 'public') throw new Error('Conecte uma conta Supabase para criar um app com login e banco.')
           return { supabaseSkipped: true }
         }
         const provisioned = await provisionSupabase(
@@ -538,7 +536,7 @@ interface SupabaseProvisionResult {
   warnings: string[]
 }
 
-async function provisionSupabase(
+export async function provisionSupabase(
   supabase: SupabaseClient,
   userId: string,
   supabaseAccountId: string,
@@ -564,13 +562,7 @@ async function provisionSupabase(
     .eq('user_id', userId)
     .maybeSingle()
 
-  if (!account) {
-    return {
-      projectRef: opts.existingRef ?? null,
-      dbPasswordEncrypted: opts.existingPasswordEncrypted ?? null,
-      warnings: ['Conta Supabase não encontrada.'],
-    }
-  }
+  if (!account) throw new Error('Conta Supabase não encontrada para este usuário.')
 
   const token = decryptToken(account.access_token_encrypted as string)
 
@@ -583,13 +575,7 @@ async function provisionSupabase(
       headers: { Authorization: `Bearer ${token}` },
     })
 
-    if (!orgsResponse.ok) {
-      return {
-        projectRef: null,
-        dbPasswordEncrypted: null,
-        warnings: ['Não foi possível listar as organizações do Supabase.'],
-      }
-    }
+    if (!orgsResponse.ok) throw new Error('Não foi possível listar as organizações do Supabase.')
 
     const orgs = (await orgsResponse.json()) as Array<{
       id: string
@@ -598,13 +584,7 @@ async function provisionSupabase(
     const org =
       orgs.find((candidate) => candidate.slug === account.org_slug) ?? orgs[0]
 
-    if (!org) {
-      return {
-        projectRef: null,
-        dbPasswordEncrypted: null,
-        warnings: ['Nenhuma organização disponível no Supabase.'],
-      }
-    }
+    if (!org) throw new Error('Nenhuma organização disponível no Supabase.')
 
     // A senha do banco é do usuário. A versão anterior gerava e descartava,
     // deixando o dono sem acesso direto ao próprio Postgres.
@@ -640,49 +620,21 @@ async function provisionSupabase(
 
   const ready = await waitForSupabaseProject(ref, token)
 
-  if (!ready) {
-    warnings.push(
-      'O banco Supabase ainda estava provisionando. Aplique a migration inicial ' +
-        'pelo painel ou rode a ferramenta apply_migration quando ele ficar pronto.',
-    )
-    return { projectRef: ref, dbPasswordEncrypted, warnings }
+  if (!ready) throw new Error('Banco ainda em preparação. Retome o provisionamento; o banco criado será reutilizado.')
+
+  const migrations = files.filter((file) => /^supabase\/migrations\/[^/]+\.sql$/.test(file.path))
+    .sort((a, b) => a.path.localeCompare(b.path))
+  for (const migration of migrations) {
+    const response = await fetch(`${SUPABASE_API}/v1/projects/${ref}/database/query`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: buildInitialMigrationQuery(migration.path, migration.content) }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!response.ok) throw new Error(`Banco não preparado: falha na migration ${migration.path} (HTTP ${response.status}). Retome após corrigir a causa.`)
   }
-
-  // A mesma migration versionada no repositório é a que roda aqui — repositório
-  // e banco não divergem.
-  const migration = files.find((file) =>
-    file.path.startsWith('supabase/migrations/'),
-  )
-
-  if (migration) {
-    // Aplica a migration E a registra no histórico do Supabase, atomicamente:
-    // sem isso o remoto fica com o schema mas sem a linha em schema_migrations,
-    // e o checkout linkado vê "Local 00000000000000 / Remote vazio" e tenta
-    // reaplicar o initial_schema (exigia `migration repair` manual).
-    const migrationResponse = await fetch(
-      `${SUPABASE_API}/v1/projects/${ref}/database/query`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: buildInitialMigrationQuery(migration.path, migration.content),
-        }),
-      },
-    )
-
-    if (!migrationResponse.ok) {
-      const detail = await migrationResponse.text()
-      warnings.push(
-        `A migration inicial está versionada em ${migration.path} mas o banco ` +
-          `a recusou: ${detail.slice(0, 160)}`,
-      )
-    }
-  }
-
   return { projectRef: ref, dbPasswordEncrypted, warnings }
+
 }
 
 /**
@@ -706,16 +658,23 @@ export function buildInitialMigrationQuery(
   const version = sep === -1 ? base : base.slice(0, sep)
   const name = sep === -1 ? '' : base.slice(sep + 1)
   // Dollar-quoting evita qualquer escape do conteúdo (que tem aspas/‘$’ simples).
-  const tag = '$supremo_migration$'
+  let tag = '$supremo_migration$'
+  while (migrationContent.includes(tag)) tag = tag.replace(/\$$/, '_x$')
+  let blockTag = '$supremo_apply$'
+  while (migrationContent.includes(blockTag)) blockTag = blockTag.replace(/\$$/, '_x$')
   return [
     'begin;',
     'create schema if not exists supabase_migrations;',
     'create table if not exists supabase_migrations.schema_migrations (',
     '  version text not null primary key, statements text[], name text);',
-    migrationContent.trim(),
+    "select pg_advisory_xact_lock(hashtext('supremo:provision:migrations'));",
+    `do ${blockTag} begin`,
+    `if not exists (select 1 from supabase_migrations.schema_migrations where version = ${quoteSqlLiteral(version)}) then`,
+    `execute ${tag}${migrationContent.trim()}${tag};`,
     'insert into supabase_migrations.schema_migrations (version, name, statements)',
     `values (${quoteSqlLiteral(version)}, ${quoteSqlLiteral(name)}, array[${tag}${migrationContent}${tag}]::text[])`,
     'on conflict (version) do nothing;',
+    `end if; end ${blockTag};`,
     'commit;',
   ].join('\n')
 }

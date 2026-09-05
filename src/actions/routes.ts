@@ -3,8 +3,8 @@
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { decryptToken } from '@/lib/crypto'
-import { listTree } from '@/lib/mcp/github'
-import type { GithubCredentials } from '@/lib/mcp/repository'
+import { listTree } from '@/lib/github/client'
+import type { GithubCredentials } from '@/lib/projects/repository'
 
 /**
  * As páginas do app, lidas do repositório — para o seletor de rotas do preview.

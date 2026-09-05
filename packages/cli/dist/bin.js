@@ -973,8 +973,8 @@ var require_command = __commonJS({
   "node_modules/commander/lib/command.js"(exports2) {
     var EventEmitter = require("node:events").EventEmitter;
     var childProcess = require("node:child_process");
-    var path8 = require("node:path");
-    var fs8 = require("node:fs");
+    var path7 = require("node:path");
+    var fs7 = require("node:fs");
     var process2 = require("node:process");
     var { Argument: Argument2, humanReadableArgName } = require_argument();
     var { CommanderError: CommanderError2 } = require_error();
@@ -1025,7 +1025,7 @@ var require_command = __commonJS({
           writeErr: (str) => process2.stderr.write(str),
           getOutHelpWidth: () => process2.stdout.isTTY ? process2.stdout.columns : void 0,
           getErrHelpWidth: () => process2.stderr.isTTY ? process2.stderr.columns : void 0,
-          outputError: (str, write2) => write2(str)
+          outputError: (str, write) => write(str)
         };
         this._hidden = false;
         this._helpOption = void 0;
@@ -1916,13 +1916,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
         let launchWithNode = false;
         const sourceExt = [".js", ".ts", ".tsx", ".mjs", ".cjs"];
         function findFile(baseDir, baseName) {
-          const localBin = path8.resolve(baseDir, baseName);
-          if (fs8.existsSync(localBin))
+          const localBin = path7.resolve(baseDir, baseName);
+          if (fs7.existsSync(localBin))
             return localBin;
-          if (sourceExt.includes(path8.extname(baseName)))
+          if (sourceExt.includes(path7.extname(baseName)))
             return void 0;
           const foundExt = sourceExt.find(
-            (ext) => fs8.existsSync(`${localBin}${ext}`)
+            (ext) => fs7.existsSync(`${localBin}${ext}`)
           );
           if (foundExt)
             return `${localBin}${foundExt}`;
@@ -1935,21 +1935,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
         if (this._scriptPath) {
           let resolvedScriptPath;
           try {
-            resolvedScriptPath = fs8.realpathSync(this._scriptPath);
+            resolvedScriptPath = fs7.realpathSync(this._scriptPath);
           } catch (err) {
             resolvedScriptPath = this._scriptPath;
           }
-          executableDir = path8.resolve(
-            path8.dirname(resolvedScriptPath),
+          executableDir = path7.resolve(
+            path7.dirname(resolvedScriptPath),
             executableDir
           );
         }
         if (executableDir) {
           let localFile = findFile(executableDir, executableFile);
           if (!localFile && !subcommand._executableFile && this._scriptPath) {
-            const legacyName = path8.basename(
+            const legacyName = path7.basename(
               this._scriptPath,
-              path8.extname(this._scriptPath)
+              path7.extname(this._scriptPath)
             );
             if (legacyName !== this._name) {
               localFile = findFile(
@@ -1960,7 +1960,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
           }
           executableFile = localFile || executableFile;
         }
-        launchWithNode = sourceExt.includes(path8.extname(executableFile));
+        launchWithNode = sourceExt.includes(path7.extname(executableFile));
         let proc;
         if (process2.platform !== "win32") {
           if (launchWithNode) {
@@ -2817,7 +2817,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @return {Command}
        */
       nameFromFilename(filename) {
-        this._name = path8.basename(filename, path8.extname(filename));
+        this._name = path7.basename(filename, path7.extname(filename));
         return this;
       }
       /**
@@ -2831,10 +2831,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @param {string} [path]
        * @return {(string|null|Command)}
        */
-      executableDir(path9) {
-        if (path9 === void 0)
+      executableDir(path8) {
+        if (path8 === void 0)
           return this._executableDir;
-        this._executableDir = path9;
+        this._executableDir = path8;
         return this;
       }
       /**
@@ -2856,13 +2856,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
       _getHelpContext(contextOptions) {
         contextOptions = contextOptions || {};
         const context = { error: !!contextOptions.error };
-        let write2;
+        let write;
         if (context.error) {
-          write2 = (arg) => this._outputConfiguration.writeErr(arg);
+          write = (arg) => this._outputConfiguration.writeErr(arg);
         } else {
-          write2 = (arg) => this._outputConfiguration.writeOut(arg);
+          write = (arg) => this._outputConfiguration.writeOut(arg);
         }
-        context.write = contextOptions.write || write2;
+        context.write = contextOptions.write || write;
         context.command = this;
         return context;
       }
@@ -3436,17 +3436,18 @@ function serializeQueue(queue) {
   return queue.map((r) => JSON.stringify(r)).join("\n") + (queue.length ? "\n" : "");
 }
 function parseQueue(jsonl) {
-  const out = [];
+  const records = /* @__PURE__ */ new Map();
   for (const line of jsonl.split("\n")) {
     const t = line.trim();
     if (!t)
       continue;
     try {
-      out.push(JSON.parse(t));
+      const record = JSON.parse(t);
+      records.set(record.checkpointId, record);
     } catch {
     }
   }
-  return out;
+  return [...records.values()];
 }
 function runCheckpoint(summary, projectId, deps, origin = {}) {
   const porcelain = deps.git(["status", "--porcelain"]);
@@ -3622,18 +3623,18 @@ function defaultCommitReader(cwd) {
         const status = parts[i++] ?? "";
         if (status.startsWith("R") || status.startsWith("C")) {
           const oldPath = parts[i++] ?? "";
-          const path8 = parts[i++] ?? "";
-          changes.push({ status, path: path8, oldPath });
+          const path7 = parts[i++] ?? "";
+          changes.push({ status, path: path7, oldPath });
         } else {
-          const path8 = parts[i++] ?? "";
-          changes.push({ status, path: path8 });
+          const path7 = parts[i++] ?? "";
+          changes.push({ status, path: path7 });
         }
       }
       return changes;
     },
-    content: (sha, path8) => {
+    content: (sha, path7) => {
       try {
-        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path8}`], {
+        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path7}`], {
           cwd,
           stdio: ["ignore", "pipe", "ignore"],
           maxBuffer: 64 * 1024 * 1024
@@ -3648,9 +3649,9 @@ function defaultCommitReader(cwd) {
       const authorEmail = text(["show", "-s", "--format=%ae", sha]).trim();
       return { message: message || "checkpoint", authorName, authorEmail };
     },
-    executable: (sha, path8) => {
+    executable: (sha, path7) => {
       try {
-        const line = text(["ls-tree", sha, path8]);
+        const line = text(["ls-tree", sha, path7]);
         return line.slice(0, 6) === "100755";
       } catch {
         return false;
@@ -3673,6 +3674,8 @@ var init_managed_paths = __esm({
   "../../src/lib/templates/managed-paths.ts"() {
     "use strict";
     PLATFORM_MANAGED_PATHS = [
+      "tools/supremo-cli/package.json",
+      "tools/supremo-cli/dist/bin.js",
       // Ferramentas e configuração
       "tsconfig.json",
       "next.config.ts",
@@ -3777,8 +3780,8 @@ function parseNameStatus(output) {
     const status = parts[0];
     if (!/^[AMDRCT]\d*$/.test(status))
       continue;
-    const path8 = parts[parts.length - 1];
-    entries.push({ status, path: path8 });
+    const path7 = parts[parts.length - 1];
+    entries.push({ status, path: path7 });
   }
   return entries;
 }
@@ -4122,7 +4125,8 @@ function ensureDaemon(cwd) {
   import_node_fs4.default.mkdirSync(import_node_path4.default.join(cwd, CHECKPOINT_DIR), { recursive: true });
   const logPath = import_node_path4.default.join(cwd, DAEMON_LOG_FILE);
   const out = import_node_fs4.default.openSync(logPath, "a");
-  const binPath = process.argv[1] ?? "";
+  const localBin = import_node_path4.default.join(cwd, "node_modules/.bin/supremo");
+  const binPath = import_node_fs4.default.existsSync(localBin) ? localBin : process.argv[1] ?? "";
   const child = (0, import_node_child_process6.spawn)(process.execPath, [binPath, "daemon"], {
     cwd,
     detached: true,
@@ -4230,7 +4234,7 @@ async function drainOnce(config) {
       break;
     const outcome = await processCheckpoint(next, ctx);
     queue = upsertQueue(queue, outcome.record);
-    import_node_fs4.default.writeFileSync(queuePath, serializeQueue(queue));
+    import_node_fs4.default.appendFileSync(queuePath, serializeQueue([outcome.record]));
     processed++;
     if (outcome.result !== "done")
       break;
@@ -4439,7 +4443,7 @@ function validateLocalReadiness(input) {
 }
 function checkNpmScriptsCompatible(dest) {
   return daemonCliOutputLooksValid(
-    tryExecOutIn("npx", ["--yes", "supremo-cli", "daemon", "--status"], dest)
+    tryExecOutIn(process.execPath, [import_node_path5.default.join(dest, "node_modules/supremo-cli/dist/bin.js"), "daemon", "--status"], dest)
   );
 }
 function checkNodeVersion(nodeVersion) {
@@ -4862,122 +4866,6 @@ var init_sync = __esm({
   }
 });
 
-// src/index.ts
-var src_exports = {};
-function logStderr(message) {
-  process.stderr.write(`[supremo] ${message}
-`);
-}
-function protocolError(id, code, message) {
-  return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
-}
-function write(payload) {
-  process.stdout.write(`${JSON.stringify(payload)}
-`);
-}
-async function forward(message) {
-  const id = message.id;
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify(message)
-    });
-    if (id === void 0)
-      return;
-    if (response.status === 401) {
-      write(
-        protocolError(
-          id,
-          -32001,
-          "Token do Supremo inv\xE1lido, revogado ou expirado. Gere outro em /mcps."
-        )
-      );
-      return;
-    }
-    const body = await response.text();
-    if (!response.ok) {
-      write(
-        protocolError(
-          id,
-          -32603,
-          `Supremo respondeu ${response.status}: ${body.slice(0, 400)}`
-        )
-      );
-      return;
-    }
-    if (!body.trim())
-      return;
-    const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("text/event-stream")) {
-      for (const line of body.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith("data:")) {
-          const data = trimmed.slice(5).trim();
-          if (data)
-            process.stdout.write(`${data}
-`);
-        }
-      }
-      return;
-    }
-    process.stdout.write(`${body.trim()}
-`);
-  } catch (error) {
-    if (id === void 0)
-      return;
-    const detail = error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
-    write(protocolError(id, -32603, `Falha ao falar com o Supremo em ${endpoint}: ${detail}`));
-  }
-}
-function main() {
-  const rl = (0, import_node_readline2.createInterface)({ input: process.stdin, terminal: false });
-  let queue = Promise.resolve();
-  rl.on("line", (line) => {
-    const trimmed = line.trim();
-    if (!trimmed)
-      return;
-    let message;
-    try {
-      message = JSON.parse(trimmed);
-    } catch {
-      write(protocolError(null, -32700, "JSON inv\xE1lido recebido via stdin."));
-      return;
-    }
-    queue = queue.then(() => forward(message));
-  });
-  rl.on("close", () => {
-    void queue.then(() => process.exit(0));
-  });
-  logStderr(`ponte ativa \u2192 ${endpoint}`);
-}
-var import_node_readline2, endpoint, token;
-var init_src = __esm({
-  "src/index.ts"() {
-    "use strict";
-    import_node_readline2 = require("node:readline");
-    endpoint = process.env.SUPREMO_URL;
-    token = process.env.SUPREMO_TOKEN;
-    if (!endpoint) {
-      logStderr(
-        "SUPREMO_URL n\xE3o definido. Copie a URL do MCP em /mcps (ex.: https://SEU-APP.vercel.app/api/mcp) e exporte antes de rodar a ponte."
-      );
-      process.exit(1);
-    }
-    if (!token) {
-      logStderr(
-        "SUPREMO_TOKEN n\xE3o definido. Gere um token em /mcps e exporte-o antes de rodar a ponte."
-      );
-      process.exit(1);
-    }
-    main();
-  }
-});
-
 // node_modules/commander/esm.mjs
 var import_index = __toESM(require_commander(), 1);
 var {
@@ -4995,16 +4883,11 @@ var {
   Help
 } = import_index.default;
 
-// src/bin.ts
-var import_node_fs7 = __toESM(require("node:fs"));
-var import_node_path7 = __toESM(require("node:path"));
-var import_node_os2 = __toESM(require("node:os"));
-
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.2.7",
-  description: "CLI do Supremo \u2014 prepara o workspace local de um projeto (device flow: clona, configura .env.local, instala e roda o baseline) e serve a ponte MCP.",
+  version: "1.3.0",
+  description: "CLI do Supremo: bootstrap, preview persistente e checkpoints em background.",
   license: "MIT",
   author: "Supremo",
   homepage: "https://supremo-three.vercel.app",
@@ -5013,11 +4896,20 @@ var package_default = {
     url: "git+https://github.com/ahmedhijazi94/devsupremo.git",
     directory: "packages/cli"
   },
-  keywords: ["supremo", "bootstrap", "scaffold", "cli", "mcp", "device-flow"],
+  keywords: [
+    "supremo",
+    "bootstrap",
+    "scaffold",
+    "cli",
+    "device-flow"
+  ],
   bin: {
     supremo: "./dist/bin.js"
   },
-  files: ["dist", "README.md"],
+  files: [
+    "dist",
+    "README.md"
+  ],
   engines: {
     node: ">=18"
   },
@@ -5032,7 +4924,6 @@ var package_default = {
   },
   "//": "Sem dependencies de runtime: o esbuild empacota tudo em dist/bin.js (self-contained), ent\xE3o o npx s\xF3 baixa o bundle. Estas ficam em devDependencies porque o build precisa empacot\xE1-las.",
   devDependencies: {
-    "@modelcontextprotocol/sdk": "^1.0.1",
     commander: "^12.1.0",
     dotenv: "^16.4.5",
     "@types/node": "^20.12.7",
@@ -5042,7 +4933,7 @@ var package_default = {
 };
 
 // src/command-guard.ts
-var KNOWN_COMMANDS = ["connect", "bootstrap", "checkpoint", "daemon", "sync", "mcp"];
+var KNOWN_COMMANDS = ["bootstrap", "checkpoint", "daemon", "sync"];
 function isKnownOrGlobal(firstArg) {
   if (!firstArg)
     return true;
@@ -5051,7 +4942,7 @@ function isKnownOrGlobal(firstArg) {
   return KNOWN_COMMANDS.includes(firstArg);
 }
 function unknownCommandMessage(attempted) {
-  const listed = KNOWN_COMMANDS.filter((c) => c !== "mcp").join(", ");
+  const listed = KNOWN_COMMANDS.join(", ");
   return `\u2717 Comando desconhecido: "${attempted}".
   Comandos dispon\xEDveis: ${listed}
   Se voc\xEA atualizou o Supremo recentemente, sua CLI local pode estar
@@ -5061,7 +4952,7 @@ function unknownCommandMessage(attempted) {
 
 // src/bin.ts
 var program2 = new Command();
-program2.name("supremo").description("CLI do Supremo (bootstrap + ponte MCP)").version(package_default.version);
+program2.name("supremo").description("CLI do Supremo (bootstrap, checkpoints e desenvolvimento local)").version(package_default.version);
 function guardUnknownCommand(argv) {
   const first = argv[0];
   if (isKnownOrGlobal(first))
@@ -5069,56 +4960,6 @@ function guardUnknownCommand(argv) {
   console.error(unknownCommandMessage(first));
   process.exit(1);
 }
-var DEFAULT_URL = "https://supremo.app/api/mcp";
-function claudeDesktopConfigPath() {
-  if (process.platform === "darwin") {
-    return import_node_path7.default.join(
-      import_node_os2.default.homedir(),
-      "Library",
-      "Application Support",
-      "Claude",
-      "claude_desktop_config.json"
-    );
-  }
-  if (process.platform === "win32") {
-    return import_node_path7.default.join(
-      process.env.APPDATA ?? import_node_os2.default.homedir(),
-      "Claude",
-      "claude_desktop_config.json"
-    );
-  }
-  return import_node_path7.default.join(import_node_os2.default.homedir(), ".config", "Claude", "claude_desktop_config.json");
-}
-program2.command("connect").description("Configura o Claude Desktop para usar o Supremo remoto").requiredOption("-t, --token <token>", "Token gerado em /mcps").option("-u, --url <url>", "Endpoint MCP do Supremo", DEFAULT_URL).action((options) => {
-  if (!options.token.startsWith("sup_")) {
-    console.error('Token inv\xE1lido: deve come\xE7ar com "sup_". Gere um em /mcps.');
-    process.exit(1);
-  }
-  const configPath = claudeDesktopConfigPath();
-  let config = {};
-  if (import_node_fs7.default.existsSync(configPath)) {
-    try {
-      config = JSON.parse(import_node_fs7.default.readFileSync(configPath, "utf8"));
-    } catch {
-      console.error(
-        `${configPath} existe mas n\xE3o \xE9 JSON v\xE1lido. Corrija ou remova o arquivo antes de continuar.`
-      );
-      process.exit(1);
-    }
-  }
-  config.mcpServers = config.mcpServers ?? {};
-  config.mcpServers.supremo = {
-    command: "npx",
-    args: ["-y", "supremo-cli", "mcp"],
-    env: { SUPREMO_URL: options.url, SUPREMO_TOKEN: options.token }
-  };
-  import_node_fs7.default.mkdirSync(import_node_path7.default.dirname(configPath), { recursive: true });
-  import_node_fs7.default.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
-`);
-  console.log(`Configurado em ${configPath}`);
-  console.log(`Endpoint: ${options.url}`);
-  console.log("Reinicie o Claude Desktop para carregar a conex\xE3o.");
-});
 program2.command("bootstrap <project-id>").description("Prepara o workspace local do projeto (autoriza no navegador)").requiredOption("-u, --url <url>", "URL do Supremo, ex.: https://supremo.app").option("-d, --dir <dir>", "Pasta-base onde criar o projeto (padr\xE3o: pasta atual)").option("--start", "(sem efeito \u2014 preview e daemon j\xE1 sobem sempre; aceito por compatibilidade)").action(
   async (projectId, options) => {
     const { runBootstrap: runBootstrap2 } = await Promise.resolve().then(() => (init_bootstrap(), bootstrap_exports));
@@ -5258,8 +5099,8 @@ program2.command("sync").description(
   );
   console.log(JSON.stringify({ action: outcome.action.kind, message: outcome.message }));
 });
-program2.command("mcp", { isDefault: true }).description("Roda a ponte MCP (o cliente chama isto automaticamente)").action(async () => {
-  await Promise.resolve().then(() => (init_src(), src_exports));
-});
 guardUnknownCommand(process.argv.slice(2));
-program2.parse();
+if (process.argv.length === 2)
+  program2.outputHelp();
+else
+  program2.parse();

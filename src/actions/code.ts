@@ -9,8 +9,8 @@ import {
   listTree,
   openOrUpdatePullRequest,
   readFile,
-} from '@/lib/mcp/github'
-import type { GithubCredentials } from '@/lib/mcp/repository'
+} from '@/lib/github/client'
+import type { GithubCredentials } from '@/lib/projects/repository'
 
 /**
  * O código do projeto, dentro do Supremo — para não precisar pular ao GitHub só

@@ -5,7 +5,7 @@ import { decryptToken, encryptToken } from './crypto'
  *
  * O OAuth do Supabase emite access token de vida curta (cerca de 1 hora) e
  * devolve um refresh token. Sem renovar, a aba Banco e toda operação de banco
- * do MCP (migration, ajuste de dado, introspecção) morrem depois do prazo. Aqui
+ * do banco (migration, ajuste de dado, introspecção) morrem depois do prazo. Aqui
  * está a lógica; os resolvers chamam e gravam o token novo.
  */
 

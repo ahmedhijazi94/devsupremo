@@ -88,7 +88,7 @@ describe('endpoint de publish — base desatualizada (cross-machine) é recusada
     const baseCheckIdx = publishRoute.indexOf('baseCheckpointIsFresh(')
     const applyIdx = publishRoute.indexOf('applyChangeset(')
     expect(publishRoute).toContain("'stale_base'")
-    expect(publishRoute).toMatch(/setCheckpointPushStatus\(client, changeset\.checkpointId, 'failed'/)
+    expect(publishRoute).toMatch(/setCheckpointPushStatus\(client, changeset\.checkpointId, body\.projectId, 'failed'/)
     expect(baseCheckIdx).toBeLessThan(applyIdx)
   })
 

@@ -104,6 +104,14 @@ describe('inferTablesFromMigration — parsing robusto', () => {
 describe('generateRlsTest — teste multi-tenant gerado', () => {
   const code = generateRlsTest(inferTablesFromMigration(MULTI_TENANT))
 
+  it('tenta adesão com o próprio usuário e exige erro de autorização, não erro de fixture', () => {
+    expect(code).toContain('não pode se associar ao tenant alheio usando o próprio usuário')
+    expect(code).toContain('user_id: bobId')
+    expect(code).toContain("expect(error?.code).toBe('42501')")
+    expect(code).toContain('org_id: parentId')
+    expect(code).toContain("if (parentError) throw new Error(parentError.message)")
+  })
+
   it('cobre as três tabelas', () => {
     expect(code).toContain("describe('RLS · memberships'")
     expect(code).toContain('RLS · projects (multi-tenant via memberships)')

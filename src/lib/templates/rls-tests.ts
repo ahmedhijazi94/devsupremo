@@ -42,6 +42,8 @@ export interface TableSpec {
   requiredColumns: Column[]
   /** Presente quando a posse é por dono direto (user_id/owner_id). */
   ownerColumn?: string
+  /** FK da própria tabela de membros: precisa de um tenant real no fixture. */
+  membershipParent?: { column: string; table: string; requiredColumns: Column[] }
   /** Presente quando a posse é por organização (multi-tenant). */
   tenant?: {
     /** Coluna desta tabela que aponta para o tenant, ou 'id' se ela é o tenant. */
@@ -122,8 +124,8 @@ if (!ANON_KEY || !SERVICE_KEY) {
   )
 }
 
-const ALICE = { email: \`alice-\${Date.now()}@rls.test\`, password: 'test-password-123!' }
-const BOB = { email: \`bob-\${Date.now()}@rls.test\`, password: 'test-password-123!' }
+const ALICE = { email: \`alice-\${crypto.randomUUID()}@rls.test\`, password: 'test-password-123!' }
+const BOB = { email: \`bob-\${crypto.randomUUID()}@rls.test\`, password: 'test-password-123!' }
 
 let admin: SupabaseClient
 let aliceClient: SupabaseClient
@@ -180,20 +182,30 @@ ${cases}`
 
 function renderDirectSuite(table: TableSpec): string {
   const owner = table.ownerColumn ?? 'user_id'
+  const parent = table.membershipParent
   const extraFields = (table.requiredColumns ?? [])
     .map((column) => `    ${column.name}: ${column.sampleValue},`)
     .join('\n')
 
   const rowLiteral = `{
     ${owner}: aliceId,
+${parent ? `    ${parent.column}: parentId,` : ''}
 ${extraFields}
   }`
 
   return `
 describe('RLS · ${table.name}', () => {
   let rowId: string
+${parent ? '  let parentId: string' : ''}
 
   beforeAll(async () => {
+${parent ? `    const { data: parent, error: parentError } = await admin.from('${parent.table}')
+      .insert({
+${fields(parent.requiredColumns, '        ')}
+      }).select('id').single()
+    if (parentError) throw new Error(parentError.message)
+    parentId = parent.id
+` : ''}
     const { data, error } = await admin
       .from('${table.name}')
       .insert(${rowLiteral})
@@ -212,6 +224,7 @@ describe('RLS · ${table.name}', () => {
 
   afterAll(async () => {
     await admin.from('${table.name}').delete().eq('id', rowId)
+${parent ? `    await admin.from('${parent.table}').delete().eq('id', parentId)` : ''}
   })
 
   it('o dono lê a própria linha', async () => {
@@ -408,6 +421,18 @@ ${cleanup}
     expect(data ?? []).toHaveLength(0)
   })
 
+  it('não pode se associar ao tenant alheio usando o próprio usuário', async () => {
+    const { error } = await bobClient.from('${m.table}').insert({
+      ${m.tenantColumn}: orgA,
+      ${m.userColumn}: bobId,
+${fields(m.requiredColumns, '      ')}
+    })
+    // Limpa até num baseline vulnerável para não contaminar os outros testes.
+    await admin.from('${m.table}').delete()
+      .eq('${m.tenantColumn}', orgA).eq('${m.userColumn}', bobId)
+    expect(error?.code).toBe('42501')
+  })
+
   it('a anon key NÃO lê a linha', async () => {
     const { data } = await anonClient
       .from('${table.name}')
@@ -418,10 +443,12 @@ ${cleanup}
   })
 
   it('membro de outro tenant NÃO atualiza a linha', async () => {
-    await bobClient
+    const { data: changed } = await bobClient
       .from('${table.name}')
       .update({ id: rowId })
       .eq('id', rowId)
+      .select('id')
+    expect(changed ?? []).toHaveLength(0)
 
     const { data: stillThere } = await admin
       .from('${table.name}')
@@ -589,6 +616,7 @@ export function inferTablesFromMigration(sql: string): TableSpec[] {
     // A própria tabela de sócios: cada linha é do usuário dela. Dono direto
     // prova que um usuário não lê o vínculo de outro.
     if (membership && name === membership.table) {
+      const parent = parsed.find((t) => t.name === tenantTable)
       specs.push({
         name,
         ownerColumn: 'user_id',
@@ -596,6 +624,11 @@ export function inferTablesFromMigration(sql: string): TableSpec[] {
           'user_id',
           membership.tenantColumn,
         ]),
+        ...(parent ? { membershipParent: {
+          column: membership.tenantColumn,
+          table: parent.name,
+          requiredColumns: requiredTextColumns(parent.body, ['id']),
+        } } : {}),
       })
       continue
     }

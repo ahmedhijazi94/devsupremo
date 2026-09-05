@@ -1,10 +1,11 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import {
   supabaseCheckpointDeviceStore,
   upsertCheckpoint,
+  CheckpointProjectConflictError,
   setCheckpointPushStatus,
   getCheckpointState,
   getLatestKnownCheckpoint,
@@ -29,7 +30,7 @@ import {
   getOpenPullRequestNumber,
   getPullRequest,
   openOrUpdatePullRequest,
-} from '@/lib/mcp/github'
+} from '@/lib/github/client'
 
 /**
  * PUBLISH do checkpoint — TUDO server-side. O daemon manda o CHANGESET (nunca
@@ -85,7 +86,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
   const body = parsed.data
   const changeset = body.changeset as Changeset
-  const client = mcpDataClient()
+  const client = createServiceClient()
 
   // 1. Autentica o device (fail-closed).
   const auth = await authenticateDeviceSecret(
@@ -101,6 +102,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       'id, user_id, github_repo_full_name, github_owner_login, github_owner_type, default_branch, github_repo_id',
     )
     .eq('id', body.projectId)
+    .eq('user_id', auth.device.ownerUserId)
     .maybeSingle()
   if (!proj) return Response.json({ error: 'projeto não encontrado.' }, { status: 404 })
 
@@ -137,13 +139,19 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   // 5. Idempotência: se este checkpoint já foi publicado, devolve a PR existente.
-  const existing = await getCheckpointState(client, changeset.checkpointId)
+  const existing = await getCheckpointState(client, changeset.checkpointId, body.projectId)
   if (
     existing &&
     (existing.pushStatus === 'published' || existing.pushStatus === 'integrated') &&
     existing.prNumber != null
   ) {
     return Response.json({ prNumber: existing.prNumber, published: true, idempotent: true })
+  }
+
+  for (const relatedId of [changeset.parentCheckpointId, body.restoredFromCheckpointId]) {
+    if (relatedId && !(await getCheckpointState(client, relatedId, body.projectId))) {
+      return Response.json({ error: 'Checkpoint relacionado não pertence ao projeto.' }, { status: 403 })
+    }
   }
 
   // 5b. Proteção CROSS-MACHINE (v3.3, antes de qualquer chamada ao GitHub/token —
@@ -157,20 +165,27 @@ export async function POST(request: NextRequest): Promise<Response> {
   // Marca (upsert) ANTES de checar: a linha precisa existir pro
   // setCheckpointPushStatus abaixo (update por id) surtir efeito na primeira
   // tentativa — e isto não depende de nada que os passos 6/7 calculam.
-  await upsertCheckpoint(client, {
-    id: changeset.checkpointId,
-    projectId: body.projectId,
-    deviceId: auth.device.id,
-    commitSha: changeset.commitSha,
-    parentCheckpointId: changeset.parentCheckpointId,
-    summary: body.summary,
-    riskLevel: body.riskLevel,
-    migrations: body.migrations,
-    conversationId: body.conversationId,
-    messageId: body.messageId,
-    originAgent: body.originAgent,
-    restoredFromCheckpointId: body.restoredFromCheckpointId,
-  })
+  try {
+    await upsertCheckpoint(client, {
+      id: changeset.checkpointId,
+      projectId: body.projectId,
+      deviceId: auth.device.id,
+      commitSha: changeset.commitSha,
+      parentCheckpointId: changeset.parentCheckpointId,
+      summary: body.summary,
+      riskLevel: body.riskLevel,
+      migrations: body.migrations,
+      conversationId: body.conversationId,
+      messageId: body.messageId,
+      originAgent: body.originAgent,
+      restoredFromCheckpointId: body.restoredFromCheckpointId,
+    })
+  } catch (error) {
+    if (error instanceof CheckpointProjectConflictError) {
+      return Response.json({ error: 'ID de checkpoint indisponível para este projeto.' }, { status: 409 })
+    }
+    throw error
+  }
 
   const latestKnown = await getLatestKnownCheckpoint(client, body.projectId, changeset.checkpointId)
   if (
@@ -179,7 +194,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       latestKnownCheckpointId: latestKnown?.id ?? null,
     })
   ) {
-    await setCheckpointPushStatus(client, changeset.checkpointId, 'failed', {
+    await setCheckpointPushStatus(client, changeset.checkpointId, body.projectId, 'failed', {
       integrationStatus: 'stale_base',
     })
     return Response.json(
@@ -268,7 +283,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       defaultBranch,
     )
 
-    await setCheckpointPushStatus(client, changeset.checkpointId, 'published', {
+    await setCheckpointPushStatus(client, changeset.checkpointId, body.projectId, 'published', {
       prNumber: pr.number,
       integrationBranch: plan.branch,
       integrationStatus: 'ci_running',
@@ -280,7 +295,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   } catch (err) {
     // Non-ff / corrida / falha de rede: retriável (o daemon re-tenta; server
     // re-planeja). Marca a falha sem vazar detalhe sensível.
-    await setCheckpointPushStatus(client, changeset.checkpointId, 'failed').catch(() => {})
+    await setCheckpointPushStatus(client, changeset.checkpointId, body.projectId, 'failed').catch(() => {})
     const msg = err instanceof Error ? err.message : 'falha ao publicar'
     return Response.json({ error: msg }, { status: 409 })
   } finally {

@@ -1,5 +1,5 @@
 import { appAuthConfigured, buildAppJwt } from '@/lib/bootstrap/git-clone-token'
-import type { GithubCredentials } from '@/lib/mcp/repository'
+import type { GithubCredentials } from '@/lib/projects/repository'
 
 /**
  * Credencial server-side da GitHub App para o worker de background (webhook +

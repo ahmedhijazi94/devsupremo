@@ -20,8 +20,8 @@ const getRestoreRequestProjectOwner = vi.fn()
 const reportRestoreApplied = vi.fn()
 const reportRestoreFailed = vi.fn()
 
-vi.mock('@/lib/mcp/tokens', () => ({
-  mcpDataClient: () => ({}) as never,
+vi.mock('@/lib/supabase/admin', () => ({
+  createServiceClient: () => ({}) as never,
 }))
 
 vi.mock('@/lib/checkpoint/devices', async () => {

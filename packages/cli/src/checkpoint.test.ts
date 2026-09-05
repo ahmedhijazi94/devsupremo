@@ -9,6 +9,8 @@ import {
   nextParentId,
   NothingToCheckpointError,
   parseChangedPaths,
+  parseQueue,
+  serializeQueue,
   runCheckpoint,
   type CheckpointDeps,
   type CheckpointRecord,
@@ -41,6 +43,14 @@ function makeDeps(porcelain: string, shas: string[]) {
 }
 
 describe('checkpoint puro', () => {
+  it('journal mantém B quando o resultado de A chega depois, sem mudar o parent', () => {
+    const a = buildCheckpointRecord({ checkpointId: 'a', projectId: 'p', commitSha: 'a', parentCheckpointId: null, createdAt: '1', summary: 'a', changedPaths: ['a.ts'] })
+    const b = { ...a, checkpointId: 'b', parentCheckpointId: 'a' }
+    const result = { ...a, pushStatus: 'published' as const }
+    const queue = parseQueue(serializeQueue([a, b, result]))
+    expect(queue).toEqual([result, b])
+    expect(nextParentId(queue)).toBe('b')
+  })
   it('hasChanges', () => {
     expect(hasChanges('')).toBe(false)
     expect(hasChanges('   \n')).toBe(false)

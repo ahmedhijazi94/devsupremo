@@ -147,7 +147,7 @@ export function isManagedIntegrationBranch(branch: string, defaultBranch: string
  *   - NUNCA lança: falha aqui (rede, rate limit, permissão) não pode desfazer
  *     o merge nem marcar o checkpoint como falho — quem chama já persistiu
  *     merge/checkpoint ANTES disto rodar, e este cleanup é sempre best-effort;
- *   - idempotente: `deleteBranch` (mcp/github.ts) já é silencioso se a branch
+ *   - idempotente: `deleteBranch` (github/client.ts) já é silencioso se a branch
  *     não existe mais — chamar de novo (o próximo webhook ou o fallback
  *     periódico) é sempre seguro, sem estado especial de "já tentei".
  */

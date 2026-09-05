@@ -4,7 +4,7 @@ import {
   getSupabaseDbPassword,
   resolveProject,
   type ProjectRecord,
-} from '@/lib/mcp/repository'
+} from '@/lib/projects/repository'
 import { getSupabaseAnonKey } from '@/lib/preview'
 import type { BootstrapScope } from './codes'
 import {
@@ -12,7 +12,7 @@ import {
   buildAppJwt,
   type CloneToken,
 } from './git-clone-token'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { registerDevice } from '@/lib/checkpoint/devices'
 import { supabaseCheckpointDeviceStore } from '@/lib/checkpoint/store'
 
@@ -192,7 +192,7 @@ export async function resolveBootstrapConfig(
   let daemon: { deviceId: string; deviceSecret: string } | undefined
   try {
     const reg = await registerDevice(
-      supabaseCheckpointDeviceStore(mcpDataClient()),
+      supabaseCheckpointDeviceStore(createServiceClient()),
       { ownerUserId: scope.userId, label: `bootstrap ${project.name}` },
     )
     daemon = { deviceId: reg.deviceId, deviceSecret: reg.deviceSecret }

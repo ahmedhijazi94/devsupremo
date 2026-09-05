@@ -1,0 +1,7 @@
+import { cn } from '@/lib/utils'
+const tones = { info: 'bg-elevated text-foreground', success: 'bg-success text-success-foreground', warning: 'bg-warning text-warning-foreground', danger: 'bg-danger text-danger-foreground' }
+export function Alert({ title, children, tone = 'info', className }: { title: string; children?: React.ReactNode; tone?: keyof typeof tones; className?: string }) {
+  return <div role={tone === 'danger' ? 'alert' : 'status'} className={cn('rounded-[var(--radius-lg)] border border-current/15 p-4 text-sm', tones[tone], className)}>
+    <p className="font-semibold">{title}</p>{children && <div className="mt-1 leading-relaxed">{children}</div>}
+  </div>
+}

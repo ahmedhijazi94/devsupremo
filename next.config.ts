@@ -20,6 +20,8 @@ const nextConfig: NextConfig = {
     '/**': [
       './scripts/security-audit.js',
       './src/lib/templates/assets/**',
+      './packages/cli/dist/bin.js',
+      './packages/cli/package.json',
     ],
   },
   async headers() {

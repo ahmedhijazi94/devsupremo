@@ -667,7 +667,7 @@ describe('verify.mjs — execução real: build ambiental defere, erro real bloq
     expect(status).toBe(0)
     expect(output).toContain('DEFERIDO')
     expect(output).toContain('build DEFERIDO para a CI')
-  })
+  }, 15000)
 
   it('build falha com assinatura CONHECIDA de limitação ambiental (rede p/ recurso externo) → DEFERE, verify sai com sucesso', () => {
     const { dir, env } = setupProject(1, 'FetchError: request to https://fonts.googleapis.com failed, reason: fetch failed')

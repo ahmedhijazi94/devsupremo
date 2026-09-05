@@ -8,14 +8,14 @@ import {
   resolveRequiredChecks,
   type ReconcileLogger,
 } from '@/lib/github/reconcile'
-import { getOpenPullRequestNumber } from '@/lib/mcp/github'
+import { getOpenPullRequestNumber } from '@/lib/github/client'
 import {
   getProjectById,
   listProjectsForReconcile,
   readIntegrationMeta,
   writeIntegrationMeta,
-} from '@/lib/mcp/repository'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+} from '@/lib/projects/repository'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { listPendingIntegrationBranchCleanups, reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
 
 /**
@@ -75,7 +75,7 @@ export async function GET(req: Request): Promise<Response> {
       // real: só o projeto era atualizado (integration_state), o card do
       // checkpoint ficava preso em "Testando" mesmo após um merge válido.
       await reconcileCheckpointsForPr(
-        mcpDataClient(),
+        createServiceClient(),
         { projectId: project.id, prNumber },
         checkpointStatusFromReconcile(result),
       )
@@ -111,7 +111,7 @@ export async function GET(req: Request): Promise<Response> {
   // Chama `cleanupIntegrationBranchIfMerged` DIRETO (sem reconcileProjectPr —
   // já sabemos que mergeou pelo checkpoint; a função em si já confirma de
   // novo no GitHub antes de apagar) — mesmo caminho único, nunca lança.
-  const pendingCleanups = await listPendingIntegrationBranchCleanups(mcpDataClient())
+  const pendingCleanups = await listPendingIntegrationBranchCleanups(createServiceClient())
   logger.event('cleanup_retry_sweep', { candidates: pendingCleanups.length })
   let cleanedUp = 0
   for (const pending of pendingCleanups) {

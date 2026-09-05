@@ -1,6 +1,6 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { startDeviceGrant } from '@/lib/bootstrap/codes'
 import { supabaseBootstrapStore } from '@/lib/bootstrap/supabase-store'
 
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const ip =
     request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null
 
-  const store = supabaseBootstrapStore(mcpDataClient())
+  const store = supabaseBootstrapStore(createServiceClient())
   const grant = await startDeviceGrant(store, parsed.data.projectId, {
     createdIp: ip,
   })

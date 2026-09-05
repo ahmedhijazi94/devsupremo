@@ -142,7 +142,6 @@ export async function createProject(
       kind: parsed.data.kind,
       github_account_id: parsed.data.githubAccountId ?? null,
       supabase_account_id: parsed.data.supabaseAccountId ?? null,
-      active_mcp: 'antigravity',
       active_branch: 'main',
       status: 'creating',
       is_active: false,

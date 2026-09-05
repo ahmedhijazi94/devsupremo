@@ -93,12 +93,15 @@ export interface CheckpointStateRow {
 export async function getCheckpointState(
   client: SupabaseClient,
   id: string,
+  projectId: string,
 ): Promise<CheckpointStateRow | null> {
-  const { data } = await client
+  const { data, error } = await client
     .from('checkpoints')
     .select('id, push_status, pr_number, integration_branch, published_sha')
     .eq('id', id)
+    .eq('project_id', projectId)
     .maybeSingle()
+  if (error) throw new Error(`Falha ao ler checkpoint: ${error.message}`)
   if (!data) return null
   return {
     id: data.id as string,
@@ -176,13 +179,14 @@ export async function getLatestKnownCheckpoint(
   }
 }
 
+export class CheckpointProjectConflictError extends Error {}
+
 /** Cria/atualiza a metadata do checkpoint em estado 'publishing' (idempotente). */
 export async function upsertCheckpoint(
   client: SupabaseClient,
   input: CheckpointUpsert,
 ): Promise<void> {
-  const { error } = await client.from('checkpoints').upsert(
-    {
+  const payload = {
       id: input.id,
       project_id: input.projectId,
       device_id: input.deviceId,
@@ -198,15 +202,27 @@ export async function upsertCheckpoint(
       ...(input.restoredFromCheckpointId
         ? { restored_from_checkpoint_id: input.restoredFromCheckpointId }
         : {}),
-    },
-    { onConflict: 'id' },
+    }
+  // Um ID recebido do dispositivo nunca pode reassociar uma linha existente.
+  // INSERT ON CONFLICT DO NOTHING fecha inclusive a corrida entre dois donos.
+  const { error: insertError } = await client.from('checkpoints').upsert(
+    payload, { onConflict: 'id', ignoreDuplicates: true },
   )
+  if (insertError) throw new Error(`Falha ao gravar checkpoint: ${insertError.message}`)
+  const { data, error } = await client.from('checkpoints')
+    .update(payload)
+    .eq('id', input.id)
+    .eq('project_id', input.projectId)
+    .select('id')
+    .maybeSingle()
   if (error) throw new Error(`Falha ao gravar checkpoint: ${error.message}`)
+  if (!data) throw new CheckpointProjectConflictError('Checkpoint não pertence ao projeto autorizado.')
 }
 
 export async function setCheckpointPushStatus(
   client: SupabaseClient,
   id: string,
+  projectId: string,
   status: 'publishing' | 'published' | 'integrated' | 'failed',
   extra?: {
     prNumber?: number
@@ -225,6 +241,7 @@ export async function setCheckpointPushStatus(
       ...(extra?.publishedSha ? { published_sha: extra.publishedSha } : {}),
     })
     .eq('id', id)
+    .eq('project_id', projectId)
 }
 
 /**

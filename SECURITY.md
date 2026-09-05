@@ -85,9 +85,9 @@ const securityHeaders = [
 
 ## Rate Limiting
 
-- Auth endpoints: 10 req/min por IP
-- API endpoints: 100 req/min por usuário
-- MCP endpoints: 60 req/min por usuário
+Os limites efetivos são definidos no código das rotas e do middleware.
+O limitador em memória vale por instância; não equivale a uma quota global
+compartilhada entre servidores. Revise esse controle antes de escalar horizontalmente.
 
 ## Vulnerabilidades — Checklist de Review
 

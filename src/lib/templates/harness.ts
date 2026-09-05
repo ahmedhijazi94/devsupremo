@@ -36,11 +36,11 @@ export function harnessPackageScripts(): Record<string, string> {
     'preview:stop': 'node scripts/preview.mjs stop',
     // v3.1 item 4 — checkpoint LOCAL (o agente só faz isto ao concluir um pedido)
     // e o checkpoint daemon (push/PR assíncronos; o agente NUNCA faz git push).
-    // A CLI vem por npx (mesma entrega do bootstrap), sem tocar o lockfile.
-    checkpoint: 'npx --yes supremo-cli checkpoint',
-    'daemon:ensure': 'npx --yes supremo-cli daemon --ensure',
-    'daemon:status': 'npx --yes supremo-cli daemon --status',
-    'daemon:stop': 'npx --yes supremo-cli daemon --stop',
+    // A CLI acompanha o projeto e é resolvida localmente pelo PATH do npm.
+    checkpoint: 'supremo checkpoint',
+    'daemon:ensure': 'supremo daemon --ensure',
+    'daemon:status': 'supremo daemon --status',
+    'daemon:stop': 'supremo daemon --stop',
     // Diagnóstico agregado (v3.1 finalização) — não é para o dev rodar no dia a
     // dia; a UI do Supremo (Histórico) é o lugar humano. JSON machine-readable.
     'supremo:status': 'node scripts/supremo-status.mjs',
@@ -55,8 +55,8 @@ export function harnessPackageScripts(): Record<string, string> {
     // agora roda todo pedido). Checagem leve (um SELECT, nunca GitHub),
     // timeout curto embutido; fast-forward automático só quando seguro. A
     // CLI vem por npx, como checkpoint/daemon acima.
-    sync: 'npx --yes supremo-cli sync',
-    'security:audit': 'node scripts/security-audit.js --deep',
+    sync: 'supremo sync',
+    'security:audit': 'node scripts/security-audit.js --deep --strict',
     'security:report': 'node scripts/security-audit.js --report',
   }
 }
@@ -796,21 +796,21 @@ const STEPS = {
     ['typecheck', 'tsc --noEmit'],
     ['lint', 'eslint'],
     ['testes afetados', 'vitest run --changed HEAD --passWithNoTests --exclude "**/*.rls.test.ts"'],
-    ['secret scan', 'node scripts/security-audit.js --staged'],
+    ['secret scan', 'node scripts/security-audit.js --staged --strict'],
   ],
   security: [
     ['typecheck', 'tsc --noEmit'],
     ['lint', 'eslint'],
     ['unit + integração', UNIT],
     ...rlsStep,
-    ['secret scan', 'node scripts/security-audit.js'],
+    ['secret scan', 'node scripts/security-audit.js --strict'],
   ],
   full: [
     ['typecheck', 'tsc --noEmit'],
     ['lint', 'eslint'],
     ['unit + integração', UNIT],
     ...rlsStep,
-    ['secret scan', 'node scripts/security-audit.js'],
+    ['secret scan', 'node scripts/security-audit.js --strict'],
     ['build', 'next build'],
   ],
 }

@@ -403,7 +403,8 @@ export function ensureDaemon(cwd: string): 'reuse' | 'start' {
   fs.mkdirSync(path.join(cwd, CHECKPOINT_DIR), { recursive: true })
   const logPath = path.join(cwd, DAEMON_LOG_FILE)
   const out = fs.openSync(logPath, 'a')
-  const binPath = process.argv[1] ?? ''
+  const localBin = path.join(cwd, 'node_modules/.bin/supremo')
+  const binPath = fs.existsSync(localBin) ? localBin : process.argv[1] ?? ''
   const child = spawn(process.execPath, [binPath, 'daemon'], {
     cwd,
     detached: true,
@@ -537,7 +538,7 @@ export async function processRestores(
   return pending.length
 }
 
-/** Lê a fila, processa os pendentes (em ordem) uma vez, persiste a fila. */
+/** Processa o snapshot atual; resultados são anexados sem apagar novos pedidos. */
 export async function drainOnce(config: DaemonConfig): Promise<number> {
   // Restores primeiro: um checkpoint "E" resultante já entra na fila a tempo.
   await processRestores(config)
@@ -561,7 +562,9 @@ export async function drainOnce(config: DaemonConfig): Promise<number> {
     if (!next) break
     const outcome = await processCheckpoint(next, ctx)
     queue = upsertQueue(queue, outcome.record)
-    fs.writeFileSync(queuePath, serializeQueue(queue))
+    // Nunca regravar o snapshot lido antes da rede: o agente pode ter anexado
+    // novos checkpoints enquanto este envio estava em andamento.
+    fs.appendFileSync(queuePath, serializeQueue([outcome.record]))
     processed++
     if (outcome.result !== 'done') break
   }

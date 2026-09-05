@@ -270,7 +270,9 @@ describe('supremo-cli — devDependency pinada não diverge da versão publicada
   ).version
 
   it('a versão pinada no scaffold bate com packages/cli/package.json', () => {
-    expect(packageJson.devDependencies['supremo-cli']).toBe(publishedVersion)
+    expect(packageJson.devDependencies['supremo-cli']).toBe('file:tools/supremo-cli')
+    expect(JSON.parse(file('tools/supremo-cli/package.json')).version).toBe(publishedVersion)
+    expect(file('tools/supremo-cli/dist/bin.js')).toBe(fs.readFileSync('packages/cli/dist/bin.js', 'utf8'))
   })
 
   it('o lock do scaffold declara e resolve exatamente a mesma versão da CLI', () => {
@@ -281,8 +283,8 @@ describe('supremo-cli — devDependency pinada não diverge da versão publicada
       >
     }
 
-    expect(lock.packages['']?.devDependencies?.['supremo-cli']).toBe(publishedVersion)
-    expect(lock.packages['node_modules/supremo-cli']?.version).toBe(publishedVersion)
+    expect(lock.packages['']?.devDependencies?.['supremo-cli']).toBe('file:tools/supremo-cli')
+    expect(lock.packages['tools/supremo-cli']?.version).toBe(publishedVersion)
   })
 
   it('o bin declarado em packages/cli/package.json é "supremo" — o mesmo nome que o preflight resolve', () => {
@@ -523,7 +525,7 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
 describe('banco online — regras do agente para o Supabase via CLI', () => {
   it('AGENTS.md ensina o fluxo de migration como fonte da verdade', () => {
     const agents = file('AGENTS.md')
-    expect(agents).toContain('Banco de dados online')
+    expect(agents).toContain('Banco de dados: desenvolvimento e produção')
     expect(agents).toContain('supabase migration new')
     expect(agents).toContain('supabase db push')
     expect(agents).toContain('supabase/.temp/project-ref')
@@ -628,7 +630,7 @@ describe('workflow v3.1 item 4 — checkpoint/push silencioso (daemon)', () => {
   })
 
   it('package.json expõe checkpoint + daemon:ensure/status/stop (via CLI)', () => {
-    expect(pkg.scripts.checkpoint).toMatch(/supremo-cli checkpoint/)
+    expect(pkg.scripts.checkpoint).toMatch(/supremo checkpoint/)
     expect(pkg.scripts['daemon:ensure']).toMatch(/daemon --ensure/)
     expect(pkg.scripts['daemon:status']).toMatch(/daemon --status/)
     expect(pkg.scripts['daemon:stop']).toMatch(/daemon --stop/)
@@ -887,7 +889,7 @@ describe('sincronização entre máquinas (v3.3) — sem git pull manual, sem po
   const pkg = JSON.parse(file('package.json')) as { scripts: Record<string, string> }
 
   it('package.json expõe sync (mesma rota de npx do checkpoint/daemon)', () => {
-    expect(pkg.scripts.sync).toBe('npx --yes supremo-cli sync')
+    expect(pkg.scripts.sync).toBe('supremo sync')
   })
 
   it('AGENTS.md: sync mantém regra PRÓPRIA de só primeiro pedido — independente do supremo:resume, que agora roda todo pedido (v3.4)', () => {

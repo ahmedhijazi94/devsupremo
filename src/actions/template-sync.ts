@@ -8,8 +8,8 @@ import {
   listOpenPullRequests,
   openOrUpdatePullRequest,
   resetBranchToBase,
-} from '@/lib/mcp/github'
-import type { GithubCredentials } from '@/lib/mcp/repository'
+} from '@/lib/github/client'
+import type { GithubCredentials } from '@/lib/projects/repository'
 import {
   TEMPLATE_VERSION,
   type ProjectKind,

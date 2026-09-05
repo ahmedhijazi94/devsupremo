@@ -16,7 +16,10 @@ if (!out) {
   process.exit(1)
 }
 
+const kind = process.argv[3] ?? 'solo'
+if (!['public', 'solo', 'team'].includes(kind)) throw new Error('Tipo inválido: public, solo ou team.')
 const files = buildProjectFiles({
+  kind: kind as 'public' | 'solo' | 'team',
   projectName: 'app-de-teste',
   description: 'Prova de que o template compila e passa nos próprios gates',
 })

@@ -340,7 +340,7 @@ export function validateLocalReadiness(input: {
 /** Roda o mesmo comando que `npm run daemon:status` rodaria, no projeto gerado. */
 function checkNpmScriptsCompatible(dest: string): boolean {
   return daemonCliOutputLooksValid(
-    tryExecOutIn('npx', ['--yes', 'supremo-cli', 'daemon', '--status'], dest),
+    tryExecOutIn(process.execPath, [path.join(dest, 'node_modules/supremo-cli/dist/bin.js'), 'daemon', '--status'], dest),
   )
 }
 

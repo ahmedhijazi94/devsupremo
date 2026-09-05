@@ -1,6 +1,6 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { pollDeviceGrant } from '@/lib/bootstrap/codes'
 import { supabaseBootstrapStore } from '@/lib/bootstrap/supabase-store'
 import { resolveBootstrapConfig } from '@/lib/bootstrap/config'
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return Response.json({ error: 'deviceCode inválido.' }, { status: 400 })
   }
 
-  const store = supabaseBootstrapStore(mcpDataClient())
+  const store = supabaseBootstrapStore(createServiceClient())
   const result = await pollDeviceGrant(store, parsed.data.deviceCode)
 
   switch (result.status) {

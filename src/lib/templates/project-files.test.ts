@@ -680,6 +680,18 @@ describe('finalização v3.1 — browser integrado × QA visual, checkpoint 100%
     expect(claude).toMatch(/QA visual manual/i)
   })
 
+  it('não autoriza QA manual implicitamente por bug ou layout e explica recuperação no host', () => {
+    expect(agents).toContain('Interação com o browser SÓ quando o usuário pedir explicitamente essa interação')
+    expect(agents).not.toContain('uma validação funcional crítica não tiver alternativa')
+    expect(agents).not.toContain('faça uma verificação visual')
+    expect(claude).not.toContain('para reproduzir um bug, na primeira tela')
+    for (const rules of [agents, claude]) {
+      expect(rules).toContain('host_permissions')
+      expect(rules).toContain('mecanismo oficial')
+    }
+    expect(file('DESIGN.md')).toContain('A conferência manual de celular, desktop, teclado e claro/escuro pertence ao usuário')
+  })
+
   it('disponibilizar o preview (browser integrado) continua desejável', () => {
     expect(agents).toMatch(/disponibilize automaticamente o preview|disponibilize-o automaticamente/i)
     expect(claude).toMatch(/disponibilizar automaticamente o\s*\n?\s*preview/i)
@@ -868,7 +880,7 @@ describe('retomada automática de sessão (v3.2) — nunca precisa de bootstrap 
 
   it('CLAUDE.md: mesma regra de retry único + hard-stop do preflight (v3.4.1, teste-v3-13)', () => {
     expect(claude).toMatch(/UMA nova tentativa antes de checar de novo/)
-    expect(claude).toMatch(/o comando sai com código de erro: PARE, não edite nem faça checkpoint/)
+    expect(claude).toMatch(/Se a recuperação permitida falhar ou for recusada, não edite nem faça checkpoint/)
   })
 })
 
@@ -1262,9 +1274,9 @@ describe('test:rls — o filtro casa com o arquivo gerado', () => {
   })
 
   it('o filtro do script encontra os arquivos gerados', () => {
-    const script = packageJson.scripts['test:rls'] ?? ''
-    const filter = script.replace(/^vitest run\s*/, '').trim()
-
+    expect(packageJson.scripts['test:rls']).toBe('node scripts/rls-isolation-gate.mjs')
+    const runner = file('scripts/rls-isolation-gate.mjs')
+    const filter = runner.match(/'run', '([^']+)'/)?.[1] ?? ''
     expect(filter).not.toBe('')
 
     for (const rls of rlsFiles) {

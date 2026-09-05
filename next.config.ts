@@ -19,6 +19,7 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     '/**': [
       './scripts/security-audit.js',
+      './scripts/rls-isolation-*.mjs',
       './src/lib/templates/assets/**',
       './packages/cli/dist/bin.js',
       './packages/cli/package.json',

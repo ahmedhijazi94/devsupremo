@@ -1,3 +1,4 @@
+import { isolationGateFiles } from './isolation-gate'
 import { anonymousSessionHelper } from './anonymous-session'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -75,7 +76,7 @@ export {
 // padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
 // nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
 // próprio Supremo (migration 017, NÃO aplicada).
-export const TEMPLATE_VERSION = '3.6.1'
+export const TEMPLATE_VERSION = '3.6.3'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '2.1.0'
@@ -181,7 +182,7 @@ const SCRIPTS = {
   test: 'vitest run --exclude "**/*.rls.test.ts"',
   'test:watch': 'vitest',
   'test:coverage': 'vitest run --coverage --exclude "**/*.rls.test.ts"',
-  'test:rls': 'vitest run rls.test',
+  'test:rls': 'node scripts/rls-isolation-gate.mjs',
   'test:e2e': 'playwright test',
   'audit:security': 'node scripts/security-audit.js',
 } as const
@@ -316,6 +317,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     },
 
     // ── Testes ────────────────────────────────────────────────
+    ...isolationGateFiles(),
     { path: 'lib/utils.test.ts', content: utilsTest() },
     { path: 'app/page.test.tsx', content: pageTest(projectName) },
     {
@@ -734,6 +736,9 @@ supabase/.branches/
 .supremo/preview.pid
 .supremo/preview.port
 .supremo/preview.log
+.supremo/preview.health.json
+.supremo/preview.health.json.*.tmp
+.supremo/preview.instance
 
 # Supremo v3.1: estado por-máquina do checkpoint daemon — fila de checkpoints,
 # pid/log do daemon e worktree efêmera de integração. NUNCA guarda secret (o
@@ -2290,6 +2295,13 @@ jobs:
           filters: |
             db:
               - 'supabase/**'
+              - '**/*.rls.test.ts'
+              - 'scripts/rls-isolation-*'
+              - 'vitest.config.*'
+              - 'vitest.setup.*'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/ci.yml'
             app:
               - 'app/**'
               - 'components/**'
@@ -2302,8 +2314,15 @@ jobs:
 
   quality:
     name: Tipos, lint e auditoria
+    # Required even in fast/warn mode. A skipped dependent job is not a failure:
+    # run explicitly and reject any RLS result other than success.
+    needs: rls
+    if: \${{ always() }}
     runs-on: ubuntu-latest
     steps:
+      - name: Exigir prova de isolamento aprovada
+        if: needs.rls.result != 'success'
+        run: exit 1
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
@@ -2654,7 +2673,7 @@ ${description}
 - Foreign key com \`ON DELETE\` explícito.
 - Índice em toda foreign key.
 - \`created_at\` e \`updated_at\` em toda tabela.
-- **Toda tabela nova exige um teste de RLS.** Sem ele o PR não passa.
+- **Toda tabela com ownership/isolamento exige prova executável de isolamento cruzado.**\n  Registre \`isolationTest('public.nome_da_tabela', fixture)\` de \`supabase/isolation.ts\`\n  na suíte \`*.rls.test.ts\`. A fixture fornece uma linha do dono e tokens de dois usuários\n  distintos; o helper executa leitura legítima, leitura/UPDATE/DELETE cruzados e confirma\n  preservação da linha. Mantenha também testes específicos de INSERT e permissões da feature.\n  \`npm run test:rls\` cruza TODAS as migrations com provas aprovadas na execução atual;\n  comentário, teste vazio, skip/todo ou arquivo não executado não contam. A integração\n  bloqueia quando falta prova por tabela, inclusive em modo rápido. Isto roda no job RLS\n  em background; não acrescente banco nem suíte RLS ao hot path de edição.
 
 ### Testes
 Escreva o teste junto com o código, não depois. Cobertura mínima de 70%,
@@ -2701,6 +2720,15 @@ supervisor/daemon do bootstrap (nunca uma lógica nova sua):
 - **daemon**: mesma lógica — vivo reutiliza, morto religa pelo mecanismo já existente,
   **nunca** pede autorização nova nem reconfigura nada.
 
+Se o JSON reportar \`preview.recovery: "host_permissions"\` ou erro de bind
+\`EPERM\`/\`EACCES\`, não conclua que as portas estão ocupadas e não troque a porta.
+Repita \`npm run supremo:resume\` pelo mecanismo oficial de execução/permissões do host
+que permite iniciar o servidor local. A retomada já está autorizada; respeite qualquer
+aprovação que o host exigir. Não altere o sandbox nem contorne suas restrições.
+Só informe bloqueio se essa recuperação não estiver disponível ou for recusada;
+informe o erro real e a ação necessária. Não pare antes de tentar a recuperação
+permitida. Com os dois saudáveis, continue o pedido original na mesma resposta.
+
 Depois, se o host tiver browser/preview integrado, abra/disponibilize automaticamente a
 URL real do JSON ao usuário (ver "Browser integrado × QA visual" abaixo — isto não é
 "navegar").
@@ -2710,7 +2738,7 @@ um deles ainda morto.** Se a primeira tentativa de religar o preview falhar (ex.
 corrida de porta), \`supremo:resume\` já faz sozinho UMA única nova tentativa pelo
 MESMO supervisor (nunca um loop) e confere a saúde de novo antes de imprimir o
 status final. **Se, mesmo assim, \`preview.healthy\` ou \`daemon.healthy\` continuar
-\`false\`, o comando sai com código de erro (exit != 0)** — nesse caso PARE: não
+\`false\`, o comando sai com código de erro (exit != 0)** — após tentar a recuperação de permissões do host acima, PARE: não
 implemente a mudança, não faça checkpoint, e informe a falha ao usuário no seu
 resumo (com o que o JSON reportou). E2E real (teste-v3-13): a primeira tentativa do
 supervisor falhou, o agente seguiu editando e fazendo checkpoint mesmo assim, e o
@@ -2818,15 +2846,13 @@ Você DEVE: manter o preview no ar; deixar o HMR atualizar; validar por CÓDIGO 
 typecheck, lint, testes afetados, RLS, auth, migration, segurança; rodar build quando o
 risco pedir.
 
-Na primeira tela e em mudanças estruturais de layout, faça uma verificação visual\ndirecionada conforme DESIGN.md, sem reiniciar o preview. Para ajustes pequenos:\n\nVocê NÃO DEVE, por padrão: mover o mouse, clicar em botão, preencher formulário, fazer
+A validação manual de aparência e interação é do usuário, inclusive na primeira tela,\nem mudanças estruturais e em correções de bugs. Execute apenas os testes automatizados\ndo projeto; não use ferramentas de controle do navegador para QA.\n\nVocê NÃO DEVE, por padrão: mover o mouse, clicar em botão, preencher formulário, fazer
 login manual, navegar pelas telas, testar estética/responsividade clicando, ou fazer um
 "tour" pelo app depois que o código/testes/RLS já passaram. Isso é QA visual redundante,
 gasta tempo e tokens, e não é sua responsabilidade — quem aceita a aparência é o usuário,
 olhando o preview que você deixou no ar.
 
-Interação com o browser SÓ quando: (1) o usuário pedir explicitamente; (2) reproduzir um
-bug relatado realmente exigir; (3) uma validação funcional crítica não tiver alternativa
-automatizada. Mesmo nesses casos, interação MÍNIMA — não um tour.
+Interação com o browser SÓ quando o usuário pedir explicitamente essa interação.\nUm pedido para implementar uma funcionalidade ou corrigir um bug não autoriza testes\nmanuais. Sem esse pedido, não use mouse, teclado, screenshots ou inspeção do navegador\npara validar. Os testes E2E automatizados do projeto continuam permitidos.
 
 ### Hot path × integração — por RISCO (v3.1)
 Separe o que BLOQUEIA a resposta (hot path, proporcional ao risco) do que roda em
@@ -2938,7 +2964,7 @@ espera nada disso; nem o daemon toca no GitHub diretamente.**
   mesma conversa sem avisar), e o custo no caminho saudável é próximo de zero. E
   **NUNCA** edite código nem faça checkpoint quando \`supremo:resume\` sair com
   código de erro (preview ou daemon continuam \`healthy: false\` mesmo depois da
-  nova tentativa automática) — pare e informe a falha, nunca assuma que vai se
+  nova tentativa automática e da recuperação de permissões do host descrita acima) — informe a falha, nunca assuma que vai se
   resolver sozinho no próximo pedido.
 - **NUNCA** rode \`npm run sync\` fora do primeiro pedido da sessão — política PRÓPRIA
   de sincronização entre máquinas, independente do \`supremo:resume\` (que agora roda
@@ -3067,8 +3093,11 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
   build, testes, install, relink ou reautenticação; no caminho saudável o custo é
   próximo de zero. Se a primeira tentativa de religar falhar, ele já faz sozinho UMA
   nova tentativa antes de checar de novo — **se mesmo assim preview ou daemon
-  continuarem não-saudáveis, o comando sai com código de erro: PARE, não edite nem
-  faça checkpoint, informe a falha.** Ver "Retomada automática de sessão". **Nunca**
+  continuarem não-saudáveis, leia o diagnóstico. Para \`host_permissions\` ou bind
+  \`EPERM\`/\`EACCES\`, repita \`npm run supremo:resume\` pelo mecanismo oficial de
+  permissões do host antes de parar; não troque portas nem contorne restrições.
+  Se a recuperação permitida falhar ou for recusada, não edite nem faça checkpoint;
+  informe a falha real.** Ver "Retomada automática de sessão". **Nunca**
   confie só na existência de \`.supremo/preview.port\` (pode ter sobrevivido a um
   reboot que matou o processo) — é exatamente o que o \`supremo:resume\` reconfirma a
   cada vez. **Nunca** \`npm run dev\` à mão, **nunca** suba outro servidor no sandbox.
@@ -3116,7 +3145,7 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - **Rodar \`npm run dev\` à mão** (mata o preview persistente) — use \`preview:ensure\`
 - **Fazer QA visual manual por padrão** (clicar, navegar telas, testar responsividade,
   "tour" pelo app) — o preview pertence ao usuário; você valida por código. Só interaja
-  se o usuário pedir, para reproduzir um bug, na primeira tela ou mudança estrutural de layout
+  se o usuário pedir explicitamente essa interação; implementar/corrigir não autoriza QA manual
 - **"Melhorar" infra numa microfeature LOW** (AGENTS.md/CLAUDE.md/tsconfig/CI/package.json/
   migrations/config) sem necessidade técnica concreta — evite churn de infraestrutura
 - **Esperar ou pollar a CI depois de um checkpoint** — é assíncrona; continue

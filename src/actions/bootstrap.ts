@@ -2,8 +2,8 @@
 
 import { headers } from 'next/headers'
 import { requireUser } from '@/lib/auth'
-import { resolveProject } from '@/lib/mcp/repository'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+import { resolveProject } from '@/lib/projects/repository'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { approveDeviceGrant, lookupGrant } from '@/lib/bootstrap/codes'
 import { supabaseBootstrapStore } from '@/lib/bootstrap/supabase-store'
 import { bootstrapCommand } from '@/lib/bootstrap/command'
@@ -51,7 +51,7 @@ export async function getBootstrapGrantInfo(userCode: string): Promise<
 > {
   try {
     const { user } = await requireUser()
-    const store = supabaseBootstrapStore(mcpDataClient())
+    const store = supabaseBootstrapStore(createServiceClient())
     const grant = await lookupGrant(store, userCode)
     if (!grant) return { error: 'Código não encontrado ou expirado.' }
     // Confirma que o usuário logado é dono do projeto do grant.
@@ -68,7 +68,7 @@ export async function approveBootstrapDevice(userCode: string): Promise<
 > {
   try {
     const { user } = await requireUser()
-    const store = supabaseBootstrapStore(mcpDataClient())
+    const store = supabaseBootstrapStore(createServiceClient())
     const grant = await lookupGrant(store, userCode)
     if (!grant) return { error: 'Código não encontrado ou expirado.' }
     // Checagem de dono ANTES de aprovar — resolveProject lança se não for dono.

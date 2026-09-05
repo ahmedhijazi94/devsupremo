@@ -37,7 +37,7 @@ export interface MergeGateway {
   enableNativeAutoMerge(nodeId: string): Promise<boolean>
   merge(prNumber: number, expectedSha: string): Promise<{ sha: string }>
   /** Apaga uma branch. Silencioso se ela já não existe (idempotente) — ver
-   * `mcp/github.ts#deleteBranch`. Só chamado pelo cleanup pós-merge (v3-13),
+   * `github/client.ts#deleteBranch`. Só chamado pelo cleanup pós-merge (v3-13),
    * nunca pela decisão de merge em si. */
   deleteBranch(branch: string): Promise<void>
 }

@@ -60,6 +60,10 @@ describe('computeChangesetSha256', () => {
 })
 
 describe('validateChangeset — integridade e tamanho (testes 7, 8)', () => {
+  it('aceita arquivo vazio com hash válido', () => {
+    const cs = validCs({ files: [{ path: 'empty.txt', op: 'add', contentBase64: '', sha256: sha256Hex('') }] })
+    expect(validateChangeset({ changeset: cs, declaredSha256: computeChangesetSha256(cs) })).toEqual({ ok: true })
+  })
   it('changeset válido passa', () => {
     const cs = validCs()
     expect(validateChangeset({ changeset: cs, declaredSha256: computeChangesetSha256(cs) })).toEqual({

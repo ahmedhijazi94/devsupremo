@@ -203,8 +203,73 @@ for (const file of sqlFiles) {
   }
 }
 
+// Estado final das policies: uma correção forward-only deve poder remover uma
+// policy antiga. Esta regra reconhece condições simples; não substitui testes RLS.
+const finalPolicies = new Map()
+for (const file of sqlFiles.filter((f) => f.includes(`${path.sep}migrations${path.sep}`)).sort()) {
+  const source = fs.readFileSync(file, 'utf8').replace(/--[^\n]*|\/\*[\s\S]*?\*\//g,
+    (match) => match.replace(/[^\n]/g, ' '))
+  const statements = source.matchAll(/\b(CREATE|ALTER|DROP)\s+POLICY\s+(?:IF\s+EXISTS\s+)?("[^"]+"|\w+)\s+ON\s+((?:"?\w+"?\.)?"?\w+"?)([^;]*);/gi)
+  for (const match of statements) {
+    const table = match[3].replace(/"/g, '').replace(/^public\./i, '').toLowerCase()
+    const key = `${table}:${match[2].replace(/"/g, '')}`
+    if (match[1].toUpperCase() === 'DROP') { finalPolicies.delete(key); continue }
+    const prior = finalPolicies.get(key)
+    const body = match[4]
+    const check = body.match(/WITH\s+CHECK\s*\(([\s\S]*)\)\s*$/i)?.[1]
+    const using = body.match(/USING\s*\(([\s\S]*?)\)\s*(?:WITH\s+CHECK|$)/i)?.[1]
+    finalPolicies.set(key, {
+      table, file, line: source.slice(0, match.index).split('\n').length,
+      command: body.match(/FOR\s+(ALL|INSERT|SELECT|UPDATE|DELETE)\b/i)?.[1]?.toUpperCase() ?? prior?.command ?? 'ALL',
+      check: check ?? prior?.check, using: using ?? prior?.using,
+      code: match[0],
+    })
+  }
+}
+for (const policy of finalPolicies.values()) {
+  if (!['ALL', 'INSERT'].includes(policy.command)) continue
+  if (!/^(memberships|org_members|organization_members|team_members)$/.test(policy.table)) continue
+  const condition = (policy.check ?? policy.using ?? '').replace(/\bSELECT\s+/gi, '').replace(/[\s()";]/g, '').toLowerCase()
+  if (!['user_id=auth.uid', 'auth.uid=user_id', 'auth.uidisnotnull', 'true'].includes(condition)) continue
+  finding('HIGH', 'RLS_MEMBERSHIP', rel(policy.file), policy.line, policy.code,
+    'A policy permite autoassociação sem autorizar acesso à organização. Valide convite/permissão no servidor e teste adesão a um tenant alheio.')
+}
+
 if (tablesTotal > 0 && tablesProtected === tablesTotal) {
   strength(`RLS ativo nas ${tablesTotal} tabelas das migrations`)
+}
+
+// Importações estáticas de Client Components não podem alcançar credenciais
+// privilegiadas. Server Actions explícitas são fronteiras RPC válidas.
+const sourceByFile = new Map(tsFiles.map((file) => [file, fs.readFileSync(file, 'utf8')]))
+function localImport(from, specifier) {
+  const base = specifier.startsWith('.') ? path.resolve(path.dirname(from), specifier)
+    : specifier.startsWith('@/') ? path.join(ROOT, fs.existsSync(path.join(ROOT, 'src')) ? 'src' : '', specifier.slice(2)) : null
+  if (!base) return null
+  return [base, `${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), path.join(base, 'index.tsx')]
+    .find((candidate) => sourceByFile.has(candidate))
+}
+for (const [entry, content] of sourceByFile) {
+  if (!/^\s*['"]use client['"]/m.test(content)) continue
+  const pending = [entry], seen = new Set()
+  while (pending.length) {
+    const file = pending.pop()
+    if (seen.has(file)) continue
+    seen.add(file)
+    const source = sourceByFile.get(file)
+    if (file !== entry && /^\s*['"]use server['"]/m.test(source)) continue
+    const privileged = /process\.env\.(SUPABASE_SERVICE_ROLE_KEY|GITHUB_APP_PRIVATE_KEY|ENCRYPTION_KEY)\b|import\s*['"]server-only['"]/.test(source)
+    if (privileged) {
+      finding('CRITICAL', 'CLIENT_SERVER_BOUNDARY', rel(entry), 1, `Importação alcança ${rel(file)}`,
+        'Um componente cliente alcança código privilegiado. Separe a operação em Server Action ou Route Handler com autorização no servidor.')
+      break
+    }
+    const imports = source.matchAll(/^\s*(?:import|export)\s+(?!type\b)(?:[^;\n]*?\s+from\s*)?['"]([^'"]+)['"]/gm)
+    for (const match of imports) {
+      const resolved = localImport(file, match[1])
+      if (resolved) pending.push(resolved)
+    }
+  }
 }
 
 // Service role nunca pode alcançar o bundle do cliente.

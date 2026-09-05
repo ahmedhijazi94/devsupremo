@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { listPendingIntegrationBranchCleanups, reconcileCheckpointsForPr } from './store'
+import { listPendingIntegrationBranchCleanups, reconcileCheckpointsForPr, getCheckpointState, upsertCheckpoint, setCheckpointPushStatus } from './store'
 
 /**
  * E2E real: o Histórico ficou preso em "Testando" mesmo depois de um merge
@@ -189,5 +189,61 @@ describe('listPendingIntegrationBranchCleanups — reabre a porta que RECONCILAB
   it('erro na query → [] fail-safe, nunca lança (é um sweep best-effort, não deve derrubar o fallback)', async () => {
     const { client } = fakeReadClient([], { message: 'connection reset' })
     await expect(listPendingIntegrationBranchCleanups(client)).resolves.toEqual([])
+  })
+})
+
+
+// Modelo de linhas com semântica de conflito e filtros do PostgREST: verifica
+// o resultado observável da tentativa de reutilizar o ID de outro projeto.
+function checkpointDatabase() {
+  const rows = new Map<string, Record<string, unknown>>([
+    ['shared-id', { id: 'shared-id', project_id: 'victim', push_status: 'published', summary: 'original' }],
+  ])
+  const client = {
+    from: () => {
+      const filters: Array<[string, unknown]> = []
+      let update: Record<string, unknown> | undefined
+      const execute = () => {
+        const row = [...rows.values()].find((r) => filters.every(([key, value]) => r[key] === value))
+        if (row && update) Object.assign(row, update)
+        return { data: row ?? null, error: null }
+      }
+      const chain = {
+        select: () => chain,
+        eq: (key: string, value: unknown) => { filters.push([key, value]); return chain },
+        update: (payload: Record<string, unknown>) => { update = payload; return chain },
+        maybeSingle: async () => execute(),
+        upsert: async (payload: Record<string, unknown>, options?: { ignoreDuplicates?: boolean }) => {
+          const id = String(payload.id)
+          if (!rows.has(id) || !options?.ignoreDuplicates) rows.set(id, { ...payload })
+          return { error: null }
+        },
+        then: (resolve: (value: ReturnType<typeof execute>) => void) => resolve(execute()),
+      }
+      return chain
+    },
+  } as unknown as SupabaseClient
+  return { client, rows }
+}
+
+describe('checkpoints — isolamento entre projetos com cliente privilegiado', () => {
+  const input = { id: 'shared-id', projectId: 'attacker', deviceId: 'device', commitSha: 'sha',
+    parentCheckpointId: null, summary: 'attack', riskLevel: 'low' as const, migrations: [] }
+  it('não lê nem altera status de checkpoint pertencente a outro projeto', async () => {
+    const { client, rows } = checkpointDatabase()
+    expect(await getCheckpointState(client, input.id, input.projectId)).toBeNull()
+    await setCheckpointPushStatus(client, input.id, input.projectId, 'failed')
+    expect(rows.get(input.id)?.push_status).toBe('published')
+  })
+  it('colisão de ID não reassocia nem sobrescreve o checkpoint da vítima', async () => {
+    const { client, rows } = checkpointDatabase()
+    await expect(upsertCheckpoint(client, input)).rejects.toThrow(/não pertence/)
+    expect(rows.get(input.id)).toMatchObject({ project_id: 'victim', summary: 'original', push_status: 'published' })
+  })
+  it('continua criando e atualizando checkpoints do próprio projeto', async () => {
+    const { client, rows } = checkpointDatabase()
+    await upsertCheckpoint(client, { ...input, id: 'new-id' })
+    await upsertCheckpoint(client, { ...input, id: 'new-id', summary: 'retry' })
+    expect(rows.get('new-id')).toMatchObject({ project_id: 'attacker', summary: 'retry', push_status: 'publishing' })
   })
 })

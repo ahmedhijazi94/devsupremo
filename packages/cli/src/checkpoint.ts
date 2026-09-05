@@ -140,17 +140,21 @@ export function serializeQueue(queue: readonly CheckpointRecord[]): string {
 }
 
 export function parseQueue(jsonl: string): CheckpointRecord[] {
-  const out: CheckpointRecord[] = []
+  // Journal append-only: criação e resultados do daemon usam o mesmo formato.
+  // Atualizar um ID preserva sua posição original (a ordem dos checkpoints),
+  // mesmo quando o resultado de A chega depois da criação de B.
+  const records = new Map<string, CheckpointRecord>()
   for (const line of jsonl.split('\n')) {
     const t = line.trim()
     if (!t) continue
     try {
-      out.push(JSON.parse(t) as CheckpointRecord)
+      const record = JSON.parse(t) as CheckpointRecord
+      records.set(record.checkpointId, record)
     } catch {
       // linha corrompida: ignora (não derruba o daemon)
     }
   }
-  return out
+  return [...records.values()]
 }
 
 // ── Orquestração (I/O injetável) ─────────────────────────────────────────────

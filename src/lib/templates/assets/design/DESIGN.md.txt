@@ -1,0 +1,37 @@
+# Design do produto
+
+Antes de criar telas, escolha uma direção visual coerente com o pedido: público,
+conteúdo e tarefa principal. Registre aqui marca, densidade e hierarquia. Não
+transforme todos os apps numa cópia do mesmo dashboard. A base é personalizável.
+
+## Contrato dos componentes
+- Use tokens de globals.css para cores e superfícies. Centralize mudanças de tema.
+- Tipografia: títulos com hierarquia real; corpo legível, medidas limitadas e espaço
+  entre grupos. Uma ação principal por seção. Ícones acompanham rótulos claros.
+- Use Button para ações e Link com buttonClass para navegação. Nunca aninhe botão em link.
+- Button tem estado loading e variante danger. Confirme ações destrutivas específicas.
+- Field associa label ao id informado. Passe required, aria-invalid e aria-describedby
+  no input/select/textarea: `${id}-error` para erro e `${id}-hint` para ajuda.
+- Validação de formulário melhora a interação; a autorização e validação decisivas
+  continuam no servidor. Nunca coloque credenciais ou cliente administrativo na UI.
+- Dialog usa o elemento nativo com foco modal e Escape. Controle open/onClose no
+  componente cliente; mantenha consultas e decisões de negócio no servidor.
+- Table requer caption e cabeçalhos com scope. Em telas pequenas, priorize colunas
+  essenciais e mantenha rolagem apenas na tabela, não na página inteira.
+- EmptyState explica o próximo passo. Alert comunica sucesso/erro. Skeleton ocupa
+  o espaço esperado enquanto carrega; a região dona anuncia aria-busy.
+- AppShell oferece navegação responsiva e atalho de teclado para o conteúdo.
+
+## Estados que toda funcionalidade precisa considerar
+Carregando, vazio, preenchido, erro recuperável, sem permissão e envio em andamento.
+Preserve o que a pessoa digitou quando houver erro. Evite envios duplicados.
+
+## Verificação visual direcionada
+Use /design-system apenas no desenvolvimento ou com SUPREMO_PREVIEW=1 para conferir
+os componentes. Essa rota responde 404 em produção normal. Na primeira tela real e
+em mudanças de layout, confira celular, desktop, teclado e claro/escuro. Preserve
+um preview saudável. Não faça uma inspeção completa repetida por alterações de texto.
+
+## Personalização e independência
+Os componentes pertencem a este repositório e podem ser adaptados pelo agente.
+Não dependem do Supremo em runtime. Evite bibliotecas novas sem necessidade concreta.

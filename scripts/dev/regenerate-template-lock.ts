@@ -24,7 +24,11 @@ try {
   const pkg = files.find((f) => f.path === 'package.json')
   if (!pkg) throw new Error('package.json não está no manifesto.')
 
-  fs.writeFileSync(path.join(workdir, 'package.json'), pkg.content)
+  for (const file of files.filter((f) => f.path === 'package.json' || f.path.startsWith('tools/supremo-cli/'))) {
+    const target = path.join(workdir, file.path)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, file.content)
+  }
 
   console.log('resolvendo dependências…')
   execFileSync('npm', ['install', '--package-lock-only', '--no-audit', '--no-fund'], {

@@ -5,13 +5,13 @@ import {
   getChecks,
   getPullRequest,
   mergePullRequest,
-} from '@/lib/mcp/github'
-import type { GithubCredentials } from '@/lib/mcp/repository'
+} from '@/lib/github/client'
+import type { GithubCredentials } from '@/lib/projects/repository'
 import type { MergeGateway } from './merge-controller'
 
 /**
  * Liga o `MergeGateway` (consumido por reconcileMerge) às operações REAIS do
- * GitHub em `mcp/github.ts`, usando credenciais da GitHub App (server-side). É só
+ * GitHub em `github/client.ts`, usando credenciais da GitHub App (server-side). É só
  * fiação de I/O — toda a decisão vive nos módulos puros já testados.
  */
 export function githubMergeGateway(creds: GithubCredentials): MergeGateway {

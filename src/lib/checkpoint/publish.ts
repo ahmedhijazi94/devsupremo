@@ -1,5 +1,5 @@
-import { octokitFor } from '@/lib/mcp/github'
-import type { GithubCredentials } from '@/lib/mcp/repository'
+import { octokitFor } from '@/lib/github/client'
+import type { GithubCredentials } from '@/lib/projects/repository'
 import { assertPublishableTarget, type FileOp } from './changeset'
 
 /**

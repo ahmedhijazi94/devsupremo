@@ -11,9 +11,8 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// v3.4 — a aba "MCP" saiu daqui (arquitetura antiga; o fluxo principal hoje
-// é o bootstrap/checkpoint local). O endpoint MCP (/api/mcp) continua
-// existindo no backend; só a navegação pra tela de configuração dele saiu.
+// Navegação do fluxo local: bootstrap, checkpoints e acompanhamento.
+
 const NAV = [
   { href: '/dashboard', label: 'Painel', icon: LayoutDashboard },
   { href: '/projects', label: 'Projetos', icon: FolderOpen },

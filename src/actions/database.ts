@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { freshSupabaseToken } from '@/lib/supabase-token'
-import { assertSafeDataChange } from '@/lib/mcp/sql-guard'
+import { assertSafeDataChange } from '@/lib/database/sql-guard'
 import {
   listTables,
   tableColumns,

@@ -1,0 +1,41 @@
+/** QA direcionado do template em um preview local descartável já iniciado. */
+import { chromium } from '@playwright/test'
+import assert from 'node:assert/strict'
+const base = process.argv[2]
+if (!base || !['localhost', '127.0.0.1'].includes(new URL(base).hostname)) throw new Error('Informe URL de preview local descartável.')
+const browser = await chromium.launch({ headless: true })
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto(`${base}/design-system`, { waitUntil: 'networkidle' })
+  await page.getByRole('heading', { name: 'Visão geral', exact: true }).waitFor()
+  const create = page.getByRole('button', { name: 'Novo projeto', exact: true })
+  await create.click()
+  const dialog = page.getByRole('dialog')
+  await dialog.waitFor({ state: 'visible' })
+  assert.equal(await dialog.evaluate((element) => element.contains(document.activeElement)), true)
+  for (let i = 0; i < 5; i++) await page.keyboard.press('Tab')
+  assert.equal(await dialog.evaluate((element) => element.contains(document.activeElement)), true)
+  await page.keyboard.press('Escape')
+  await dialog.waitFor({ state: 'hidden' })
+  assert.equal(await create.evaluate((element) => element === document.activeElement), true)
+  await page.getByRole('button', { name: 'Salvar detalhes' }).click()
+  assert.equal(await page.getByLabel('Nome', { exact: false }).evaluate((element) => (element as HTMLInputElement).validity.valueMissing), true)
+  await page.getByLabel('Nome', { exact: false }).fill('Meu projeto')
+  await page.getByRole('button', { name: 'Salvar detalhes' }).click()
+  await dialog.waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: 'Entendi' }).click()
+  assert.equal(await page.getByRole('button', { name: 'Salvando' }).isDisabled(), true)
+  const lightBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+  await page.screenshot({ path: '/tmp/supremo-design-desktop.png', fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true)
+  await page.screenshot({ path: '/tmp/supremo-design-mobile.png', fullPage: true })
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
+  assert.notEqual(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), lightBackground)
+  await page.screenshot({ path: '/tmp/supremo-design-dark.png', fullPage: true })
+  assert.deepEqual(errors, [])
+  console.log('✓ Desktop/celular, formulário, loading, modal, Escape, foco e ausência de erros de runtime.')
+} finally { await browser.close() }

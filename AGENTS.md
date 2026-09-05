@@ -1,7 +1,7 @@
 # Supremo — Agents Context
 
 ## O que é este projeto
-**Supremo** é uma plataforma web para gerenciar e criar apps via IA. É o "Lovable profissional" — cada prompt gera código, testes rodam automaticamente e um commit é criado após aprovação.
+**Supremo** estrutura e acompanha apps desenvolvidos diretamente no agente escolhido pelo usuário. Prioridade: uso pessoal, código e banco próprios, preview local rápido e validações em background. Não oferece chat próprio.
 
 ## Stack
 - **Framework:** Next.js 16 (App Router) + React 19 + TypeScript strict
@@ -9,9 +9,8 @@
 - **Auth:** Supabase Auth (GitHub OAuth + Google OAuth)
 - **Database:** Supabase (PostgreSQL + RLS em todas as tabelas)
 - **Deploy:** Vercel
-- **Preview:** WebContainer no navegador, com sync incremental por commit
-- **MCP Server:** endpoint Streamable HTTP em `/api/mcp`, autenticado por
-  token pessoal — roda no próprio app, não em worker separado
+- **Preview:** servidor local persistente supervisionado pelo harness do projeto
+- **Integração:** CLI bootstrap/checkpoint/daemon com autenticação por dispositivo
 - **Testes:** Vitest + Playwright + React Testing Library
 
 ## Arquitetura — Regras Absolutas
@@ -77,35 +76,18 @@ supabase/
 └── seed.sql
 ```
 
-## Funcionalidades Implementadas
-- [x] Auth (GitHub + Google OAuth)
-- [x] Dashboard multi-projeto
-- [x] MCP remoto com token por usuário — conecta de qualquer máquina
-- [x] Regras do projeto servidas pelo MCP (agents.md, CLAUDE.md, SECURITY.md)
-- [x] Loop branch → PR → gates → merge, com espera real do CI
-- [x] Gerenciamento de contas GitHub/Supabase
-- [x] Scaffold com testes de RLS gerados por tabela
-- [x] Preview via WebContainer com sync incremental
-- [x] Histórico de mudanças com status de pipeline
-- [ ] Preview deploy compartilhável por PR (Vercel)
-- [ ] Erros de runtime do preview realimentando o agente
-- [ ] Workspace de três painéis (conversa · preview · diff)
-
-## Estrutura do MCP
-
-```
-src/lib/mcp/
-├── tokens.ts      # geração, hash e resolução de token → usuário
-├── repository.ts  # acesso a dados; TODA função exige userId explícito
-├── github.ts      # branch, commit, PR, checks, logs, proteção de branch
-├── sql-guard.ts   # recusa DDL em leitura e tabela sem RLS em migration
-└── server.ts      # ferramentas e as regras declaradas no handshake
-```
-
-Regra que não se quebra: o `userId` vem sempre do token resolvido, nunca do
-cliente. O cliente de dados usa service role porque não há cookie numa chamada
-de MCP — por isso o filtro por dono no repositório é a única fronteira entre
-contas, e precisa estar em toda query.
+## Fluxo atual
+- O usuário abre o projeto no seu agente; as regras ficam em arquivos locais.
+- Bootstrap prepara o projeto; checkpoints locais são publicados pelo daemon.
+- CI e integração seguem em background: nunca aguardar CI para continuar desenvolvendo.
+- Preservar preview saudável, porta, processo e ambiente. Não reiniciar por rotina.
+- `src/lib/github/` integra GitHub; `src/lib/projects/` resolve projetos autorizados.
+- `src/lib/checkpoint/` valida dispositivos, grants e checkpoints.
+- `src/lib/templates/` gera estrutura, regras, testes e supervisor local.
+- `src/lib/supabase/admin.ts` cria o cliente privilegiado apenas no servidor.
+- Toda operação privilegiada deve validar dono e escopo; IDs do cliente não autorizam acesso.
+- Desenvolvimento e produção precisam de bancos distintos; link existente não comprova ambiente seguro.
+- Histórico de migrations antigas é preservado; o transporte MCP v1 foi removido.
 
 ## Decisões de Arquitetura Tomadas
 - Supabase Auth ao invés de NextAuth (integração nativa com RLS)

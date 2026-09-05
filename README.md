@@ -1,79 +1,28 @@
 # Supremo
 
-Plataforma para criar e evoluir aplicações com agentes de IA — de qualquer
-máquina, com o repositório e o banco na sua própria conta.
-
-A diferença para as ferramentas de "app por prompt": aqui **nenhuma mudança
-entra na branch principal sem passar pelos gates**. O agente propõe em branch,
-abre pull request, espera o CI de verdade, lê o log quando falha, e só faz
-merge com tudo verde.
+Supremo estrutura apps para desenvolver diretamente no agente que você já usa,
+com código no seu GitHub e banco na sua conta Supabase.
 
 ## Como funciona
 
-```
-agente (qualquer máquina)  →  MCP remoto  →  seu GitHub + seu Supabase
-       ↑                                              ↓
-       └────────── log da falha ← gates do CI ────────┘
-```
+1. Crie um projeto no Supremo e execute o comando de bootstrap exibido.
+2. Abra a pasta no seu agente e descreva o que quer construir.
+3. O projeto fornece regras, scripts e preview local persistente.
+4. Checkpoints são salvos localmente e enviados pelo daemon em background.
+5. CI verifica a integração sem bloquear a próxima alteração no desenvolvimento.
 
-O agente nunca recebe as suas credenciais. Ele fala com o Supremo por HTTP
-autenticado com um token pessoal; o Supremo é o único que toca os provedores,
-e toda consulta é filtrada pelo dono do token.
+O transporte MCP v1 e seu companion foram removidos. A CLI atual usa
+bootstrap, checkpoint, daemon e sync. O supervisor do preview local permanece.
 
-## Conectando um agente
+## O que o projeto recebe
 
-Gere um token em `/mcps` e rode, em qualquer computador:
+Next.js, TypeScript, Supabase, migrations, regras de arquitetura e segurança,
+testes de isolamento RLS e verificações automatizadas. Essas verificações
+cobrem riscos conhecidos; segurança e capacidade de escala também dependem
+da implementação de cada app e de testes com sua carga real.
 
-```bash
-claude mcp add --transport http supremo https://SEU_APP/api/mcp --header "Authorization: Bearer sup_..."
-```
-
-Clientes sem suporte a MCP remoto usam a ponte:
-
-```bash
-npx -y supremo-cli connect --token sup_...
-```
-
-Nada é instalado de forma permanente e nenhum segredo fica na máquina além do
-próprio token, que é revogável a qualquer momento.
-
-## As regras viajam com o projeto
-
-`get_project_context` lê `agents.md`, `CLAUDE.md` e `SECURITY.md` do seu
-repositório e devolve ao agente, junto com o estado do branch. O servidor
-também declara as regras invioláveis no handshake do MCP. O agente segue o
-projeto sem precisar de clone local.
-
-## Ferramentas expostas
-
-| Ferramenta | O que faz |
-| --- | --- |
-| `get_project_context` | Projeto ativo, regras do repositório e estado do branch |
-| `list_projects` · `switch_project` | Navegação entre projetos |
-| `read_file` · `list_files` | Leitura do repositório |
-| `propose_changes` | Branch + commit + pull request. Único caminho de escrita |
-| `get_checks` · `wait_for_checks` | Estado dos gates; a espera é real |
-| `get_failed_logs` | Saída dos jobs que falharam |
-| `merge_when_green` | Squash merge, recusado se algum gate estiver vermelho |
-| `execute_sql` | Consulta de leitura no banco do projeto |
-| `apply_migration` | Versiona a migration e aplica; recusa tabela sem RLS |
-
-## O que um projeto gerado recebe
-
-Next.js 16, React 19, TypeScript strict, Tailwind v4, Supabase com RLS. Além
-do código:
-
-- **Testes de política RLS por tabela** — provam que outro usuário não lê,
-  atualiza nem apaga a linha. É a falha número um de app Supabase, coberta
-  automaticamente.
-- CI com tipos, lint, cobertura com threshold que reprova, auditoria de
-  segurança, CodeQL, gitleaks, `npm audit` e E2E.
-- CSP e cabeçalhos de segurança verificados por teste E2E.
-- Migrations versionadas no repositório.
-- Proteção de branch aplicada no provisionamento.
-
-O template é validado no CI do próprio Supremo: um projeto é gerado a cada
-build e os gates dele rodam de verdade.
+Use banco local ou exclusivo de desenvolvimento. A promoção de migrations
+para produção é separada do ciclo rápido de edição e preview.
 
 ## Desenvolvimento
 
@@ -100,10 +49,9 @@ npx tsx scripts/dev/generate-sample-project.ts /tmp/exemplo
 
 ## Migrations
 
-Aplique em ordem no seu Supabase:
-
-- `supabase/migrations/001_initial_schema.sql`
-- `supabase/migrations/002_mcp_tokens_and_loop.sql`
+Aplique as migrations versionadas em `supabase/migrations/` na ordem.
+Arquivos históricos permanecem para compatibilidade com bancos existentes.
+A limpeza do código legado não apaga tabelas nem dados remotos.
 
 ## Variáveis de ambiente
 

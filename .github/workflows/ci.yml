@@ -59,7 +59,39 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
+      - name: Testar a CLI local
+        working-directory: packages/cli
+        run: npm test
+      - name: Validar distribuição da CLI sem registry
+        run: npx tsx scripts/test-cli-distribution.mts
       - run: npm run test:coverage
+
+  template-rls:
+    name: Isolamento real do template team
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: |
+          npx tsx scripts/test-template-rls.mts
+          npx tsx scripts/test-provisioning-migrations.mts
+        env:
+          SUPREMO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 
   template:
     name: O template gerado compila

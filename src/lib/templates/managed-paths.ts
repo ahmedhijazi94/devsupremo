@@ -14,6 +14,8 @@
  * Restore, independentemente da propriedade do scaffold.
  */
 export const PLATFORM_MANAGED_PATHS = [
+  'tools/supremo-cli/package.json',
+  'tools/supremo-cli/dist/bin.js',
   // Ferramentas e configuração
   'tsconfig.json',
   'next.config.ts',

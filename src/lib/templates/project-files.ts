@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
+import { designSystemFiles } from './design-system'
 import { harnessFiles, harnessPackageScripts } from './harness'
 import {
   capabilitiesForKind,
@@ -73,10 +74,10 @@ export {
 // padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
 // nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
 // próprio Supremo (migration 017, NÃO aplicada).
-export const TEMPLATE_VERSION = '3.3.0'
+export const TEMPLATE_VERSION = '3.5.0'
 
 /** Versão do baseline de segurança embutido no scaffold. */
-export const SECURITY_BASELINE_VERSION = '2.0.0'
+export const SECURITY_BASELINE_VERSION = '2.1.0'
 
 export interface FileEntry {
   path: string
@@ -140,7 +141,7 @@ const DEPENDENCIES = {
 // continuam na versão que já tinham até rodar `npm install` de novo — o
 // backend do Supremo aceita checkpoints de qualquer versão publicada da CLI
 // (não há acoplamento de protocolo a esta versão específica).
-const SUPREMO_CLI_DEV_DEPENDENCY_VERSION = '1.2.7'
+const SUPREMO_CLI_DEV_DEPENDENCY_VERSION = 'file:tools/supremo-cli'
 
 const DEV_DEPENDENCIES = {
   '@playwright/test': '^1.62.1',
@@ -281,11 +282,16 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: '.env.example', content: envExample() },
     { path: '.nvmrc', content: '22\n' },
 
+    { path: 'tools/supremo-cli/package.json', content: bundledCliManifest() },
+    { path: 'tools/supremo-cli/dist/bin.js', content: fs.readFileSync(path.join(process.cwd(), 'packages/cli/dist/bin.js'), 'utf8'), mode: '100755' },
+
     // ── Aplicação ─────────────────────────────────────────────
     { path: 'app/layout.tsx', content: appLayout(projectName, summary) },
     { path: 'app/page.tsx', content: appPage(projectName, summary, auth) },
     { path: 'app/globals.css', content: globalsCss() },
     { path: 'lib/utils.ts', content: libUtils() },
+
+    ...designSystemFiles(),
 
     // ── Design system ─────────────────────────────────────────
     // Primitivos prontos para o agente construir telas coerentes. Ficam em
@@ -339,6 +345,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     { path: 'AGENTS.md', content: agentsMd(projectName, summary) },
     { path: 'CLAUDE.md', content: claudeMd(projectName) },
     { path: 'SECURITY.md', content: securityMd(projectName) },
+    { path: 'ARCHITECTURE.md', content: architectureMd(projectName, kind) },
 
     // ── Identidade do projeto (metadata NÃO sensível) ─────────
     {
@@ -374,6 +381,18 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     )
   }
 
+  if (kind === 'team') {
+    // Correção forward-only: sync adiciona a migration sem reescrever histórico.
+    files.push({
+      path: 'supabase/migrations/20260905000000_membership_authorization.sql',
+      content: '-- Adesão a organizações exige convite/administração autorizada no servidor.\n' +
+        'DROP POLICY IF EXISTS "memberships_insert_own" ON public.memberships;\n',
+    })
+    files.push({
+      path: 'supabase/membership-authorization.rls.test.ts',
+      content: generateRlsTest(inferTablesFromMigration(migration).filter((table) => table.tenant?.isSelf)),
+    })
+  }
   return files
 }
 
@@ -541,6 +560,8 @@ export default defineConfig([
   ...nextVitals,
   ...nextTs,
   globalIgnores([
+    // Bundle da CLI, verificado no repositório de origem.
+    'tools/supremo-cli/dist/**',
     '.next/**',
     'out/**',
     'build/**',
@@ -601,6 +622,8 @@ export default defineConfig({
         'app/login/**',
         'app/app/**',
         'app/auth/**',
+        // Galeria de desenvolvimento, exercitada pelo E2E visual.
+        'app/design-system/**',
       ],
       // Threshold que FALHA o build. Cobertura reportada e não exigida
       // não é gate — é decoração. Se este número incomodar, escreva o
@@ -807,18 +830,15 @@ function appPage(
   const cta = auth
     ? `
           <div className="flex flex-wrap gap-3 pt-2">
-            <Link href="/login">
-              <Button size="lg">
+            <Link href="/login" className={buttonClass('primary', 'lg')}>
                 Entrar
                 <ArrowRight className="h-4 w-4" />
-              </Button>
             </Link>
           </div>
 `
     : ''
 
-  return `${linkImport}import { ArrowRight, ShieldCheck, GitPullRequest } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+  return `${linkImport}${auth ? "import { buttonClass } from '@/components/ui/button'\n" : ''}import { ${auth ? 'ArrowRight, ' : ''}ShieldCheck, GitPullRequest } from 'lucide-react'
 import { Card, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 
@@ -884,6 +904,11 @@ function globalsCss(): string {
  * em vez de cores cruas, e a interface inteira se mantém coerente.
  */
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+
 @theme {
   /* Superfícies */
   --color-background: oklch(98.5% 0.003 265);
@@ -923,7 +948,7 @@ function globalsCss(): string {
 }
 
 @media (prefers-color-scheme: dark) {
-  @theme {
+  :root {
     --color-background: oklch(17% 0.015 265);
     --color-surface: oklch(21% 0.015 265);
     --color-elevated: oklch(25% 0.016 265);
@@ -1001,17 +1026,18 @@ function globalsCss(): string {
 function uiButton(): string {
   return `import { cn } from '@/lib/utils'
 
-type Variant = 'primary' | 'secondary' | 'ghost'
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type Size = 'sm' | 'md' | 'lg'
 
 const base =
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-md)] font-medium transition-colors disabled:pointer-events-none disabled:opacity-50'
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-md)] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50'
 
 const variants: Record<Variant, string> = {
   primary: 'bg-accent text-accent-foreground hover:bg-accent-hover',
   secondary:
     'bg-elevated text-foreground border border-border hover:border-border-strong',
   ghost: 'text-muted hover:bg-elevated hover:text-foreground',
+  danger: 'bg-danger text-danger-foreground hover:brightness-95',
 }
 
 const sizes: Record<Size, string> = {
@@ -1028,10 +1054,17 @@ export function Button({
   variant = 'primary',
   size = 'md',
   className,
+  loading = false,
+  disabled,
+  children,
+  type = 'button',
   ...props
-}: React.ComponentProps<'button'> & { variant?: Variant; size?: Size }) {
+}: React.ComponentProps<'button'> & { variant?: Variant; size?: Size; loading?: boolean }) {
   return (
-    <button className={cn(buttonClass(variant, size), className)} {...props} />
+    <button type={type} className={cn(buttonClass(variant, size), className)} disabled={disabled || loading} aria-busy={loading || undefined} {...props}>
+      {loading && <span aria-hidden="true" className="size-4 motion-safe:animate-spin rounded-full border-2 border-current border-r-transparent" />}
+      {children}
+    </button>
   )
 }
 `
@@ -1077,7 +1110,7 @@ export function Input({ className, ...props }: React.ComponentProps<'input'>) {
   return (
     <input
       className={cn(
-        'bg-surface border-border placeholder:text-muted h-10 w-full rounded-[var(--radius-md)] border px-3 text-sm transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-accent',
+        'bg-surface border-border placeholder:text-muted h-10 w-full rounded-[var(--radius-md)] border px-3 text-sm transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50 disabled:cursor-not-allowed aria-invalid:border-danger-foreground',
         className,
       )}
       {...props}
@@ -1552,8 +1585,10 @@ ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "memberships_select_own" ON memberships
   FOR SELECT USING (user_id = auth.uid());
 
-CREATE POLICY "memberships_insert_own" ON memberships
-  FOR INSERT WITH CHECK (user_id = auth.uid());
+-- Vínculos são criados apenas por um fluxo confiável de criação/convite no
+-- servidor, que valida quem pode administrar a organização. Nunca autorizar
+-- adesão só por user_id = auth.uid(): isso deixaria entrar em QUALQUER org.
+-- Sem policy de INSERT/UPDATE/DELETE para o client (default deny).
 
 -- Organização: um membro vê a própria org.
 CREATE POLICY "orgs_select_member" ON orgs
@@ -2779,7 +2814,7 @@ Você DEVE: manter o preview no ar; deixar o HMR atualizar; validar por CÓDIGO 
 typecheck, lint, testes afetados, RLS, auth, migration, segurança; rodar build quando o
 risco pedir.
 
-Você NÃO DEVE, por padrão: mover o mouse, clicar em botão, preencher formulário, fazer
+Na primeira tela e em mudanças estruturais de layout, faça uma verificação visual\ndirecionada conforme DESIGN.md, sem reiniciar o preview. Para ajustes pequenos:\n\nVocê NÃO DEVE, por padrão: mover o mouse, clicar em botão, preencher formulário, fazer
 login manual, navegar pelas telas, testar estética/responsividade clicando, ou fazer um
 "tour" pelo app depois que o código/testes/RLS já passaram. Isso é QA visual redundante,
 gasta tempo e tokens, e não é sua responsabilidade — quem aceita a aparência é o usuário,
@@ -2849,7 +2884,7 @@ deixe um pedido sem checkpoint. É a base do "voltar para antes desta mensagem".
 **O checkpoint LOCAL nunca depende de rede, do Supremo ou do GitHub — funciona até em
 modo avião.** Se o comando falhar mencionando \`SUPREMO_URL\` ou "não configurado", **não**
 tente configurar nada nem exportar variável — isso indica CLI desatualizada; rode de
-novo com \`npx --yes supremo-cli@latest\` (o \`npm run checkpoint\` já faz isso) e, se
+novo com a CLI local do projeto (\`npm ci\` restaura a dependência incluída no repositório) e, se
 persistir, avise no seu resumo em vez de inventar configuração manual. O checkpoint em
 si nunca precisa de \`.env\`, token ou configuração além do que o bootstrap já deixou em
 \`.supremo/project.json\`.
@@ -2929,28 +2964,26 @@ Hooks de git, os required checks e a proteção da \`main\` são o enforcement i
 se você ignorar estas instruções, eles reprovam. Você NÃO tem caminho para desativar
 ruleset, remover checks, reduzir proteção, dar bypass ou force push.
 
-## Banco de dados online (Supabase CLI)
+## Banco de dados: desenvolvimento e produção
 
-Este checkout está **linkado ao Supabase remoto DESTE projeto** — o \`project-ref\`
-fica em \`supabase/.temp/project-ref\`. Você opera o banco online direto pela CLI,
-sem depender do MCP.
+O link em \`supabase/.temp/project-ref\` identifica um banco remoto, mas NÃO prova
+que ele é de desenvolvimento. Preserve a configuração do preview existente.
+Não recrie banco, troque env ou religue preview saudável por rotina.
 
-**Use SEMPRE a CLI local pinada do projeto: \`npx supabase …\`** (é uma
-devDependency versionada, instalada pelo \`npm ci\`). Nunca use uma instalação
-global — ela pode ter outra versão e dar comportamento diferente entre máquinas.
+Use a CLI local pinada do projeto (\`npx supabase …\`, nunca a global).
+- Crie migrations versionadas com \`npx supabase migration new <nome>\`.
+- Experimente em Supabase local ou em um projeto remoto dedicado ao desenvolvimento.
+- Registre os ambientes e os refs NÃO secretos em \`ARCHITECTURE.md\`.
+- Antes do primeiro uso de um remoto para escrita, confirme seu papel com o dono.
+  Se o app já tem usuários/dados reais, trate esse banco como PRODUÇÃO.
+- \`npx supabase db push\` só aplica ao ambiente de desenvolvimento confirmado.
+  Produção tem promoção separada da versão validada e backup/recuperação definidos.
+  Nunca aplique SQL experimental em produção para desbloquear o preview.
+- Leituras: \`npx supabase db pull\` / \`npx supabase db diff\` conforme o alvo.
+- Edge Functions também precisam de alvo e ambiente confirmados antes do deploy.
 
-- **Sincronizar do remoto:** \`npx supabase db pull\` / \`npx supabase db diff\`
-- **Mudar schema (tabela, coluna, RLS, policy, função SQL, trigger):**
-  1. \`npx supabase migration new <nome>\` — cria a migration versionada
-  2. escreva o SQL (toda tabela nova com RLS ativa + teste de isolamento)
-  3. \`npx supabase db push\` — aplica no remoto
-- **Edge Functions:** \`npx supabase functions new|deploy|list\`
-
-**Migration é a fonte da verdade.** Nunca altere o schema "invisível" só no banco
-(SQL solto no dashboard): mudança de schema/RLS vira migration versionada, validada
-e aplicada por \`npx supabase db push\` no remoto linkado. Repositório e banco nunca
-divergem. **Antes de QUALQUER mutação remota, confirme o alvo:**
-\`cat supabase/.temp/project-ref\`.
+O agente continua criando enquanto CI e integração trabalham em background.
+Nenhum ciclo de CI deve bloquear o próximo pedido de desenvolvimento.
 
 ### Operações destrutivas no remoto — PARE e confirme
 \`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\` de estrutura existente,
@@ -2964,8 +2997,8 @@ Credenciais (o token do \`supabase login\` e a senha do banco) vivem no **keycha
 do sistema**, gravadas pela própria CLI. Nunca as imprima, escreva em arquivo nem
 faça commit. O \`supabase/.temp/\` é gitignored — não versione o estado do link.
 
-Este projeto é gerenciado pelo Supremo. O MCP remoto expõe estas regras via
-\`get_project_context\` — elas valem de qualquer máquina.
+Este projeto é gerenciado pelo Supremo. Abra a pasta no agente escolhido e
+siga estes arquivos locais; eles acompanham o código entre máquinas.
 `
 }
 
@@ -2976,14 +3009,14 @@ Leia \`AGENTS.md\` primeiro — o **ciclo de desenvolvimento v3** está lá (reg
 canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 
 ## Sempre
-- Ler \`AGENTS.md\` e \`SECURITY.md\` antes de escrever código
+- Ler \`AGENTS.md\`, \`SECURITY.md\`, \`ARCHITECTURE.md\` e \`DESIGN.md\` antes de escrever código
 - Seguir o **ciclo de desenvolvimento v3** do \`AGENTS.md\`
 - Implementar do servidor para fora
 - Ativar RLS em toda tabela nova **e escrever o teste de isolamento**
 - Validar entrada com Zod no servidor
-- Mudar o schema do banco online só por **migration versionada + \`npx supabase db
-  push\`** (CLI local pinada, nunca a global; nunca SQL solto no dashboard). Ver
-  "Banco de dados online" no \`AGENTS.md\`.
+- Mudanças de banco: migration versionada, validada primeiro no desenvolvimento.
+  Nunca aplicar SQL experimental no remoto de produção. Ver a separação de
+  ambientes em \`AGENTS.md\` e \`ARCHITECTURE.md\`.
 - **Antes de todo pedido que muda código** (nunca só "no primeiro" — o host pode
   restaurar a mesma conversa sem avisar, então não dá pra confiar em detectar "sessão
   nova"), rodar \`npm run supremo:resume\` — checagem 100% LOCAL (healthcheck do preview,
@@ -3041,7 +3074,7 @@ canônica). Este arquivo complementa e segue exatamente o mesmo contrato.
 - **Rodar \`npm run dev\` à mão** (mata o preview persistente) — use \`preview:ensure\`
 - **Fazer QA visual manual por padrão** (clicar, navegar telas, testar responsividade,
   "tour" pelo app) — o preview pertence ao usuário; você valida por código. Só interaja
-  se o usuário pedir, para reproduzir um bug, ou sem alternativa automatizada
+  se o usuário pedir, para reproduzir um bug, na primeira tela ou mudança estrutural de layout
 - **"Melhorar" infra numa microfeature LOW** (AGENTS.md/CLAUDE.md/tsconfig/CI/package.json/
   migrations/config) sem necessidade técnica concreta — evite churn de infraestrutura
 - **Esperar ou pollar a CI depois de um checkpoint** — é assíncrona; continue
@@ -3153,4 +3186,52 @@ function escapeJs(value: string): string {
 
 function escapeJsx(value: string): string {
   return value.replace(/[{}]/g, '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** Documento editável do app: sync cria se faltar, nunca sobrescreve decisões. */
+function architectureMd(projectName: string, kind: ProjectKind): string {
+  return `# Arquitetura — ${projectName}
+
+Modelo inicial: ${kind}. Código e dados pertencem ao dono. O app não depende do
+Supremo para funcionar, compilar ou ser publicado.
+
+## Mapa do app
+- UI: app/ e components/; regras de negócio em módulos de lib/.
+- Entradas do servidor: validar com Zod, autenticar e autorizar antes do I/O.
+- Banco: migrations versionadas; dono/tenant conferido no banco por RLS.
+- Arquivos privados: policies próprias no Storage; URLs assinadas curtas.
+- Integrações: credenciais exclusivamente no servidor, com privilégio mínimo.
+
+## Ambientes
+- Desenvolvimento: a definir no primeiro trabalho com banco; local ou remoto dedicado.
+- Produção: a definir pelo dono. Um ref linkado não é autorização para experimentar.
+- Registre aqui apenas nomes e refs públicos, nunca senha, token ou chave.
+- Mudanças de schema em produção são promovidas separadamente; restaurar código
+  não desfaz migrations nem recupera dados apagados.
+
+## Contratos de segurança
+- Cada usuário só acessa seus dados ou os de organizações autorizadas.
+- Ninguém entra numa organização criando seu próprio membership; convite e
+  permissões são conferidos num fluxo confiável no servidor.
+- Papéis privilegiados não podem ser alterados por um campo controlado pelo client.
+- Os testes incluem acesso cruzado, adesão indevida e alterações de permissão.
+- Checks automáticos detectam classes de falhas; não certificam toda a arquitetura.
+
+## Crescimento
+- Paginar listas, indexar foreign keys/filtros e evitar consultas dentro de loops.
+- Operações longas: jobs retomáveis, idempotência e limite de tentativas.
+- Definir cotas, observabilidade e metas de carga conforme o uso real; nenhuma
+  promessa de escala baseada só em build ou cobertura de testes.
+
+## Decisões do projeto
+Atualize ao mudar entidades, permissões, integrações ou ambientes: decisão,
+motivo, módulos afetados e teste que demonstra o comportamento. Não reescreva
+este documento por mudanças cosméticas; preserve decisões ao trocar de agente.
+`
+}
+
+function bundledCliManifest(): string {
+  const source = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'packages/cli/package.json'), 'utf8')) as { version: string }
+  return JSON.stringify({ name: 'supremo-cli', version: source.version, private: true,
+    bin: { supremo: './dist/bin.js' }, engines: { node: '>=18' } }, null, 2) + '\n'
 }

@@ -38,7 +38,7 @@ export type RestoreReportAuthDecision =
 /**
  * Autoriza `/api/checkpoint/restore-report`: o device autenticado só pode
  * fechar (applied/failed) um pedido de restore que pertence a um PROJETO DO
- * PRÓPRIO DONO do device — nunca o de outro usuário. `mcpDataClient()` (a
+ * PRÓPRIO DONO do device — nunca o de outro usuário. `createServiceClient()` (a
  * rota) usa service_role (ignora RLS), então esta checagem é a ÚNICA barreira
  * de dono aqui; sem ela, qualquer device autenticado (de qualquer projeto)
  * conseguiria reportar applied/failed num restoreRequestId arbitrário — um

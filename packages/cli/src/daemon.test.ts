@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { CheckpointRecord } from './checkpoint'
+import { parseQueue, serializeQueue, QUEUE_FILE } from './checkpoint'
+import * as changesetModule from './changeset'
 import type { CommitReader } from './changeset'
 import type { RestoreDeps } from './restore'
 import {
@@ -15,6 +17,7 @@ import {
   classifyPidSignalError,
   daemonStatus,
   defaultDaemonHttp,
+  drainOnce,
   DAEMON_PID_FILE,
   ensureDaemon,
   processCheckpoint,
@@ -57,6 +60,34 @@ const reader: CommitReader = {
   meta: () => ({ message: 'checkpoint: home', authorName: 'Dev', authorEmail: 'd@e.co' }),
   executable: () => false,
 }
+
+describe('envio em paralelo com novo pedido', () => {
+  it('drainOnce preserva B anexado enquanto o envio de A espera a rede', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'supremo-queue-race-'))
+    const queuePath = join(cwd, QUEUE_FILE)
+    const a = record({ checkpointId: 'a' })
+    const b = record({ checkpointId: 'b', parentCheckpointId: 'a' })
+    mkdirSync(dirname(queuePath), { recursive: true })
+    writeFileSync(queuePath, serializeQueue([a]))
+    const readerSpy = vi.spyOn(changesetModule, 'defaultCommitReader').mockReturnValue(reader)
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/restore-poll')) return Response.json({ requests: [] })
+      appendFileSync(queuePath, serializeQueue([b]))
+      return Response.json({ prNumber: 42 })
+    }))
+    try {
+      expect(await drainOnce({ cwd, projectId: 'proj-1', apiBaseUrl: 'https://supremo.test', getSecret: () => 'device-test' })).toBe(1)
+      const queue = parseQueue(readFileSync(queuePath, 'utf8'))
+      expect(queue.map((item) => item.checkpointId)).toEqual(['a', 'b'])
+      expect(queue[0]?.pushStatus).toBe('published')
+      expect(queue[1]).toEqual(b)
+    } finally {
+      readerSpy.mockRestore()
+      vi.unstubAllGlobals()
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+})
 
 function fakes(opts: { secret?: string | null; publishThrows?: unknown }) {
   const sent: PublishInput[] = []

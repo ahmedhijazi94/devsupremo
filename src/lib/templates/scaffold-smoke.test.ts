@@ -40,7 +40,7 @@ function helpOutput(args: string[]): string {
  * ["daemon", "--status"] — o que a CLI REAL precisa reconhecer. */
 function commandFromScript(script: string): string[] {
   const parts = script.trim().split(/\s+/)
-  const idx = parts.findIndex((p) => p === 'supremo-cli')
+  const idx = parts.findIndex((p) => p === 'supremo')
   if (idx === -1) return []
   return parts.slice(idx + 1)
 }
@@ -60,7 +60,7 @@ describe('scaffold smoke — scripts gerados batem com a CLI REAL (não só com 
   ) as { scripts: Record<string, string> }
 
   const cliScripts = Object.entries(pkg.scripts).filter(([, cmd]) =>
-    cmd.includes('supremo-cli'),
+    cmd.startsWith('supremo '),
   )
 
   it('o template referencia pelo menos os scripts críticos via supremo-cli', () => {

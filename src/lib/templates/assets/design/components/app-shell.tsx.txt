@@ -1,0 +1,14 @@
+import Link from 'next/link'
+import { cn } from '@/lib/utils'
+export function AppShell({ name, navigation, children, actions }: { name: string; navigation: Array<{ href: string; label: string; active?: boolean }>; children: React.ReactNode; actions?: React.ReactNode }) {
+  return <div className="min-h-dvh">
+    <a href="#main-content" className="bg-surface sr-only z-50 rounded p-3 focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Pular para conteúdo</a>
+    <header className="bg-surface border-border border-b"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8"><span className="text-lg font-semibold tracking-tight">{name}</span>{actions}</div></header>
+    <div className="mx-auto grid max-w-7xl lg:grid-cols-[14rem_minmax(0,1fr)]">
+      <nav aria-label="Principal" className="border-border flex gap-1 overflow-x-auto border-b p-3 lg:min-h-[calc(100dvh-5rem)] lg:flex-col lg:border-r lg:border-b-0 lg:p-4">
+        {navigation.map((item) => <Link key={item.href} href={item.href} aria-current={item.active ? 'page' : undefined} className={cn('whitespace-nowrap rounded-[var(--radius-md)] px-3 py-2.5 text-sm font-medium transition-colors', item.active ? 'bg-accent/10 text-accent' : 'text-muted hover:bg-elevated hover:text-foreground')}>{item.label}</Link>)}
+      </nav>
+      <main id="main-content" tabIndex={-1} className="min-w-0 px-4 py-6 outline-none sm:px-6 lg:p-8">{children}</main>
+    </div>
+  </div>
+}

@@ -3,8 +3,8 @@
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { freshGithubToken } from '@/lib/github-token'
-import { enableBranchProtection } from '@/lib/mcp/github'
-import type { GithubCredentials } from '@/lib/mcp/repository'
+import { enableBranchProtection } from '@/lib/github/client'
+import type { GithubCredentials } from '@/lib/projects/repository'
 import { requiredGates } from '@/lib/templates/project-files'
 
 /**

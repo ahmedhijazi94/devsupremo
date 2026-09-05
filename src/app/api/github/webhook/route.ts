@@ -12,8 +12,8 @@ import {
   getProjectByRepoFullName,
   readIntegrationMeta,
   writeIntegrationMeta,
-} from '@/lib/mcp/repository'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+} from '@/lib/projects/repository'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
 
 /**
@@ -78,7 +78,7 @@ export async function POST(req: Request): Promise<Response> {
     )
     const requiredChecks = resolveRequiredChecks({}) // fail-safe estrito (conjunto completo)
 
-    const client = mcpDataClient()
+    const client = createServiceClient()
     for (const prNumber of target.prNumbers) {
       const result = await reconcileProjectPr({
         gateway,

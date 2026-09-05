@@ -1,6 +1,6 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { mcpDataClient } from '@/lib/mcp/tokens'
+import { createServiceClient } from '@/lib/supabase/admin'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import {
   supabaseCheckpointDeviceStore,
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return Response.json({ error: 'payload inválido.' }, { status: 400 })
   const body = parsed.data
-  const client = mcpDataClient()
+  const client = createServiceClient()
 
   const auth = await authenticateDeviceSecret(
     supabaseCheckpointDeviceStore(client),

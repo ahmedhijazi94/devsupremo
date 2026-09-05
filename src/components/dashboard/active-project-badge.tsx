@@ -5,7 +5,7 @@ import { CheckCircle, Circle, ChevronDown } from 'lucide-react'
 import type { Project } from '@/types/database'
 
 interface ActiveProjectBadgeProps {
-  project: Pick<Project, 'id' | 'name' | 'active_mcp' | 'status'> | null
+  project: Pick<Project, 'id' | 'name' | 'status'> | null
 }
 
 export function ActiveProjectBadge({ project }: ActiveProjectBadgeProps) {
@@ -29,7 +29,7 @@ export function ActiveProjectBadge({ project }: ActiveProjectBadgeProps) {
       <CheckCircle className="text-up-ink h-3 w-3 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">{project.name}</p>
-        <p className="text-muted text-xs">{project.active_mcp}</p>
+        <p className="text-muted text-xs">Desenvolvimento local</p>
       </div>
       <ChevronDown className="text-muted h-3 w-3 shrink-0" />
     </Link>

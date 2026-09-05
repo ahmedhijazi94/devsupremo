@@ -1,0 +1,6 @@
+import { notFound } from 'next/navigation'
+import { DesignExamples } from './examples'
+export default function DesignSystemPage() {
+  if (process.env.NODE_ENV === 'production' && process.env.SUPREMO_PREVIEW !== '1') notFound()
+  return <DesignExamples />
+}

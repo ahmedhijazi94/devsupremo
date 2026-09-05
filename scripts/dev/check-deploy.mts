@@ -4,16 +4,12 @@
  *   npx tsx scripts/dev/check-deploy.mts https://seu-app.vercel.app
  *
  * Não precisa de credencial: só exercita o que é observável de fora.
- * Para checar o MCP autenticado, passe um token:
- *
- *   npx tsx scripts/dev/check-deploy.mts https://seu-app.vercel.app sup_...
  */
 
 const base = process.argv[2]?.replace(/\/$/, '')
-const token = process.argv[3]
 
 if (!base) {
-  console.error('Uso: tsx scripts/dev/check-deploy.mts <url> [token]')
+  console.error('Uso: tsx scripts/dev/check-deploy.mts <url>')
   process.exit(1)
 }
 
@@ -52,7 +48,7 @@ try {
 }
 
 // ── Rotas protegidas redirecionam ────────────────────────────
-for (const path of ['/dashboard', '/projects', '/mcps', '/settings', '/accounts']) {
+for (const path of ['/dashboard', '/projects', '/settings', '/accounts']) {
   try {
     const response = await fetch(`${base}${path}`, { redirect: 'manual' })
     const redirected = response.status === 307 || response.status === 302
@@ -62,68 +58,8 @@ for (const path of ['/dashboard', '/projects', '/mcps', '/settings', '/accounts'
   }
 }
 
-// ── O MCP está no ar e recusa quem não tem token ─────────────
-try {
-  const anonymous = await fetch(`${base}/api/mcp`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
-  })
-  report(
-    anonymous.status === 401,
-    'MCP recusa requisição sem token',
-    `HTTP ${anonymous.status}`
-  )
-  report(
-    (anonymous.headers.get('www-authenticate') ?? '').includes('Bearer'),
-    'MCP anuncia o esquema Bearer'
-  )
-} catch (error) {
-  report(false, 'o endpoint MCP responde', String(error))
-}
-
-// ── Com token: handshake completo ────────────────────────────
-if (token) {
-  try {
-    const response = await fetch(`${base}/api/mcp`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2025-06-18',
-          capabilities: {},
-          clientInfo: { name: 'check-deploy', version: '1' },
-        },
-      }),
-    })
-
-    const body = (await response.json()) as {
-      result?: { serverInfo?: { name: string }; instructions?: string }
-      error?: { message: string }
-    }
-
-    report(
-      body.result?.serverInfo?.name === 'supremo',
-      'handshake do MCP com token',
-      body.error?.message ?? ''
-    )
-    report(
-      (body.result?.instructions ?? '').includes('get_project_context'),
-      'as regras chegam no handshake'
-    )
-  } catch (error) {
-    report(false, 'handshake do MCP com token', String(error))
-  }
-} else {
-  console.log('  [2m·[0m passe um token para checar o MCP autenticado')
-}
+// O diagnóstico público não envia credenciais nem cria checkpoints.
+// Autenticação por dispositivo e publicação são cobertas pelos testes locais.
 
 console.log()
 if (failures > 0) {

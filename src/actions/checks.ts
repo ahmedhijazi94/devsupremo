@@ -12,8 +12,8 @@ import {
   getPullRequest,
   listOpenPullRequests,
   mergePullRequest,
-} from '@/lib/mcp/github'
-import type { GithubCredentials } from '@/lib/mcp/repository'
+} from '@/lib/github/client'
+import type { GithubCredentials } from '@/lib/projects/repository'
 
 /**
  * Os gates rodando, ao vivo, dentro do Supremo — e as ações do PR aqui mesmo.

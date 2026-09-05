@@ -15,9 +15,9 @@
  * O que ele garante:
  *
  *  - consulta de leitura não faz DDL nem escrita, inclusive escrita escondida em CTE
- *  - nenhuma migration desliga RLS, mexe no schema auth ou dá acesso a anon
- *  - nenhuma policy de escrita existe sem amarrar a linha ao usuário logado
- *  - nenhuma policy é tautologia, escrita de qualquer forma
+ *  - nenhuma migration desliga RLS ou mexe no schema auth; grants públicos só para INSERT write-only
+ *  - escrita privada exige dono; INSERT público só em tabela nova write-only sem ownership
+ *  - tautologias são negadas fora desse INSERT público explícito
  *  - nenhuma função SECURITY DEFINER, que roda por cima do RLS
  *  - o corpo das funções é inspecionado, não ignorado
  *  - toda tabela criada numa migration sai com RLS ligado
@@ -156,7 +156,7 @@ const ALWAYS_FORBIDDEN: Array<{ pattern: RegExp; reason: string }> = [
   },
   {
     pattern:
-      /\b(grant|alter\s+default\s+privileges)\b[^;]*\bto\s+(anon|public)\b/i,
+      /\b(grant|alter\s+default\s+privileges)\b[^;]*\bto\b[^;]*\b(anon|public)\b/i,
     reason:
       'Conceder privilégio direto a anon ou public não é permitido. Use RLS policies.',
   },
@@ -215,8 +215,13 @@ export function assertSafeSql(sql: string, options: SqlGuardOptions): void {
     throw new UnsafeSqlError('Query vazia.')
   }
 
+  const publicSubmissions = options.allowDdl ? publicSubmissionTables(text) : new Set<string>()
+  const guardedText = text.replace(/\bgrant\b[^;]*(?:;|$)/gi, (statement) => {
+    const grant = /^grant\s+insert(?:\s*\([\w,\s]+\))?\s+on\s+(?:table\s+)?((?:public\.)?\w+)\s+to\s+(?:anon|authenticated)(?:\s*,\s*(?:anon|authenticated))*\s*;?$/i.exec(statement)
+    return grant?.[1] && publicSubmissions.has(grant[1].replace(/^public\./i, '').toLowerCase()) ? '' : statement
+  })
   for (const rule of ALWAYS_FORBIDDEN) {
-    if (rule.pattern.test(text)) {
+    if (rule.pattern.test(guardedText)) {
       throw new UnsafeSqlError(rule.reason)
     }
     // O corpo da função é inspecionado com os literais intactos: é dentro de
@@ -260,7 +265,7 @@ export function assertSafeSql(sql: string, options: SqlGuardOptions): void {
     return
   }
 
-  assertPoliciesAreScoped(text)
+  assertPoliciesAreScoped(text, publicSubmissions)
   assertRlsOnNewTables(text)
 }
 
@@ -335,7 +340,29 @@ export function assertSafeDataChange(sql: string): void {
 // Policies
 // ─────────────────────────────────────────────────────────────
 
-/** Comandos de policy que escrevem. Todos precisam amarrar a linha ao dono. */
+/** Reconhece somente criação completa de tabela pública write-only nesta migration.
+ * Uma policy avulsa não prova ausência de ownership num banco já existente.
+ */
+function publicSubmissionTables(text: string): Set<string> {
+  const result = new Set<string>()
+  for (const match of text.matchAll(/\bcreate\s+table\s+(?:public\.)?(\w+)\s*\(([^;]+)\)\s*;/gi)) {
+    const table = match[1]?.toLowerCase()
+    if (!table || !match[2] || /\b(references|user_id|owner_id|org_id|organization_id|team_id|workspace_id|account_id|tenant_id|company_id|group_id|inherits|like)\b/i.test(match[2])) continue
+    const tablePattern = `(?:(?:public|"public")\\s*\\.\\s*)?"?${table}"?`
+    const alters = [...text.matchAll(new RegExp(`\\balter\\s+table\\s+${tablePattern}\\s+([^;]+)(?:;|$)`, 'gi'))]
+    if (!alters.length || alters.some((alter) => !/^enable\s+row\s+level\s+security\s*$/i.test(alter[1] ?? ''))) continue
+    const policies = [...text.matchAll(new RegExp(`\\b(?:create|alter)\\s+policy\\s+(?:"[^"]+"|\\w+)\\s+on\\s+${tablePattern}\\s+([^;]+)(?:;|$)`, 'gi'))]
+    if (!policies.length || policies.some((policy) => {
+      const body = policy[1] ?? ''
+      return !/\bfor\s+insert\b/i.test(body) || /\busing\b|\bauth\s*\./i.test(body)
+        || !/\bwith\s+check\s*\(\s*true\s*\)\s*$/i.test(body)
+    })) continue
+    result.add(table)
+  }
+  return result
+}
+
+/** Escrita privada exige dono; envio público tem contrato separado abaixo. */
 const WRITE_COMMANDS = new Set(['insert', 'update', 'delete', 'all'])
 
 /**
@@ -393,22 +420,22 @@ function mentionsAuthenticatedUser(expression: string): boolean {
 }
 
 /**
- * Toda policy precisa amarrar a linha a alguém.
+ * Policies privadas precisam amarrar a linha a alguém.
  *
- * Escrita (INSERT/UPDATE/DELETE/ALL) exige referência a auth.uid() — sem
+ * Fora de criação pública write-only, escrita exige referência a auth.uid() — sem
  * isso não existe noção de dono e qualquer autenticado escreve na linha de
  * qualquer outro. Leitura pode ser aberta por um predicado de coluna
  * (`published = true` num blog é uma decisão legítima), mas nunca por uma
  * tautologia, que não é decisão nenhuma.
  */
-function assertPoliciesAreScoped(text: string): void {
+function assertPoliciesAreScoped(text: string, publicSubmissions: Set<string>): void {
   const policyRe =
     /\b(create|alter)\s+policy\s+("?[\w\s-]+"?)\s+on\s+([\w."]+)/gi
 
   let match: RegExpExecArray | null
   while ((match = policyRe.exec(text)) !== null) {
     const policyName = (match[2] ?? '').replace(/"/g, '').trim()
-    const table = bareTableName(match[3] ?? '')
+    const table = bareTableName(match[3] ?? '') ?? match[3]
     if (!table) continue
 
     // A cláusula vai do nome da policy até o fim da instrução.
@@ -430,6 +457,9 @@ function assertPoliciesAreScoped(text: string): void {
       const openIndex = found.index + found[0].length - 1
       const expression = readBalanced(rest, openIndex)
       if (expression === null) continue
+
+      if (command === 'insert' && clause === 'with check' && publicSubmissions.has(table.toLowerCase())
+        && [table.toLowerCase(), `public.${table.toLowerCase()}`].includes((match[3] ?? '').replace(/"/g, '').toLowerCase())) continue
 
       const label = `${clause.toUpperCase()} da policy "${policyName}" em ${table}`
 

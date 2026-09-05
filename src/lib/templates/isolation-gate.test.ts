@@ -62,7 +62,7 @@ describe('inventário genérico de provas de isolamento', () => {
   })
 })
 
-type Scenario = 'pass' | 'missing' | 'skip' | 'todo' | 'empty' | 'excluded' | 'same-user' | 'no-row' | 'leak' | 'write-leak' | 'delete-leak' | 'network-error' | 'partial'
+type Scenario = 'public' | 'pass' | 'missing' | 'skip' | 'todo' | 'empty' | 'excluded' | 'same-user' | 'no-row' | 'leak' | 'write-leak' | 'delete-leak' | 'network-error' | 'partial'
 async function executeGate(scenario: Scenario): Promise<{ code: number | null; output: string; requests: number }> {
   const dir = mkdtempSync(join(tmpdir(), 'isolation-gate-test-'))
   let requests = 0
@@ -90,11 +90,14 @@ async function executeGate(scenario: Scenario): Promise<{ code: number | null; o
       writeFileSync(join(dir, file.path), file.content)
     }
     mkdirSync(join(dir, 'supabase/migrations'), { recursive: true })
-    writeFileSync(join(dir, 'supabase/migrations/001.sql'), 'create table feedback(id uuid, user_id uuid); alter table feedback enable row level security;')
+    writeFileSync(join(dir, 'supabase/migrations/001.sql'), scenario === 'public'
+      ? 'create table feedback(id uuid, name text, message text); alter table feedback enable row level security; create policy submit on feedback for insert to anon with check (true);'
+      : 'create table feedback(id uuid, user_id uuid); alter table feedback enable row level security;')
     writeFileSync(join(dir, 'package.json'), '{"private":true}')
     writeFileSync(join(dir, 'vitest.config.mjs'), `export default { test: { environment: 'node', include: ['supabase/*.rls.test.ts'], ${scenario === 'excluded' ? "exclude: ['supabase/proof.rls.test.ts']," : ''} maxWorkers: 1, fileParallelism: false } }`)
     const body = "isolationTest('public.feedback', async () => ({ rowId: 'row-a', ownerAccessToken: 'owner-token', otherAccessToken: 'other-token' }))"
-    const test = scenario === 'skip' ? `describe.skip('disabled',()=>{ ${body} })`
+    const test = scenario === 'public' ? "it('suite pública sem ownership', () => { expect(true).toBe(true) })"
+      : scenario === 'skip' ? `describe.skip('disabled',()=>{ ${body} })`
       : scenario === 'todo' ? "it.todo('isolamento executável · public.feedback')"
       : scenario === 'empty' ? "it('isolamento executável · public.feedback',()=>{ expect(true).toBe(true) })"
       : body
@@ -123,6 +126,12 @@ async function executeGate(scenario: Scenario): Promise<{ code: number | null; o
 }
 
 describe('gate executável — Vitest real e SDK falando HTTP, sem banco remoto', () => {
+  it('tabela pública write-only não exige identidade nem prova cross-user', async () => {
+    const result = await executeGate('public')
+    expect(result.code).toBe(0)
+    expect(result.output).toContain('Isolamento executado para 0 tabela')
+    expect(result.requests).toBe(0)
+  }, 20_000)
   it('aceita somente prova executada com acesso do dono e bloqueio cruzado', async () => {
     const result = await executeGate('pass')
     expect(result.output).toContain('Isolamento executado para 1 tabela')

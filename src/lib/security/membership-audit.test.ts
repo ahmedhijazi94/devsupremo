@@ -78,3 +78,39 @@ describe('verify rápido bloqueia achados graves', () => {
     expect(result.stdout + result.stderr).toContain('falhou em: secret scan')
   })
 })
+
+describe('auditoria de envio público sem identidade', () => {
+  function submission(ownership = '', operation = "insert({ name: 'Ana', message: 'Olá' })", policy = 'FOR INSERT TO anon, authenticated WITH CHECK (true)') {
+    const { dir, audit } = fixture('false')
+    writeFileSync(join(dir, 'supabase/migrations/001.sql'), `
+      CREATE TABLE public.submissions (id uuid, name text, message text ${ownership});
+      ALTER TABLE public.submissions ENABLE ROW LEVEL SECURITY;
+      CREATE POLICY submit ON public.submissions ${policy};
+    `)
+    mkdirSync(join(dir, 'app'))
+    writeFileSync(join(dir, 'app/actions.ts'), `'use server'\nexport async function submit() { return client.from('submissions').${operation}; }`)
+    return { dir, audit }
+  }
+  it('aceita INSERT público persistente sem login, user_id ou Anonymous Auth', () => {
+    const { audit } = submission()
+    expect(audit('AUTHZ')).toEqual({ status: 0, findings: [] })
+    expect(audit('RLS').findings).toEqual([])
+  })
+  it.each(['SELECT', 'UPDATE', 'DELETE', 'ALL'])('não permite policy pública de %s', (command) => {
+    const { audit } = submission('', 'insert({})', `FOR ${command} USING (true)`)
+    expect(audit('RLS').findings).toHaveLength(1)
+  })
+  it.each(['select()', 'update({})', 'delete()', 'upsert({})', 'insert({}).select()'])('não libera endpoint sem sessão com %s', (operation) => {
+    expect(submission('', operation).audit('AUTHZ').findings).toHaveLength(1)
+  })
+  it.each(['anônimo', 'conta'])('não libera INSERT irrestrito em dados privados: %s', () => {
+    const { audit } = submission(', user_id uuid REFERENCES auth.users(id)')
+    expect(audit('RLS').findings).toHaveLength(1)
+    expect(audit('AUTHZ').findings).toHaveLength(1)
+  })
+  it('ALTER posterior de ownership revoga a exceção pública', () => {
+    const { dir, audit } = submission()
+    writeFileSync(join(dir, 'supabase/migrations/002.sql'), 'ALTER TABLE "public"."submissions" ADD COLUMN owner_id uuid;')
+    expect(audit('AUTHZ').findings).toHaveLength(1)
+  })
+})

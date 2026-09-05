@@ -140,7 +140,7 @@ const DEPENDENCIES = {
 // continuam na versão que já tinham até rodar `npm install` de novo — o
 // backend do Supremo aceita checkpoints de qualquer versão publicada da CLI
 // (não há acoplamento de protocolo a esta versão específica).
-const SUPREMO_CLI_DEV_DEPENDENCY_VERSION = '1.2.6'
+const SUPREMO_CLI_DEV_DEPENDENCY_VERSION = '1.2.7'
 
 const DEV_DEPENDENCIES = {
   '@playwright/test': '^1.62.1',

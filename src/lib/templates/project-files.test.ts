@@ -263,14 +263,26 @@ describe('lockfile — sem ele o CI quebra antes de instalar', () => {
  * nascendo com uma CLI desatualizada sem ninguém perceber.
  */
 describe('supremo-cli — devDependency pinada não diverge da versão publicada (v3.4.4, teste-v3-15)', () => {
-  it('a versão pinada no scaffold bate com packages/cli/package.json', () => {
-    const publishedVersion = (
-      JSON.parse(
-        fs.readFileSync(path.join(process.cwd(), 'packages/cli/package.json'), 'utf8'),
-      ) as { version: string }
-    ).version
+  const publishedVersion = (
+    JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'packages/cli/package.json'), 'utf8'),
+    ) as { version: string }
+  ).version
 
+  it('a versão pinada no scaffold bate com packages/cli/package.json', () => {
     expect(packageJson.devDependencies['supremo-cli']).toBe(publishedVersion)
+  })
+
+  it('o lock do scaffold declara e resolve exatamente a mesma versão da CLI', () => {
+    const lock = JSON.parse(file('package-lock.json')) as {
+      packages: Record<
+        string,
+        { version?: string; devDependencies?: Record<string, string> }
+      >
+    }
+
+    expect(lock.packages['']?.devDependencies?.['supremo-cli']).toBe(publishedVersion)
+    expect(lock.packages['node_modules/supremo-cli']?.version).toBe(publishedVersion)
   })
 
   it('o bin declarado em packages/cli/package.json é "supremo" — o mesmo nome que o preflight resolve', () => {

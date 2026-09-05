@@ -97,10 +97,10 @@ describe('preview supervisor (v3.1) — classifyBindProbe (erro indeterminado nu
     expect(classifyBindProbe('EADDRNOTAVAIL')).toBe('skip')
     expect(classifyBindProbe('EAFNOSUPPORT')).toBe('skip')
   })
-  it('erro INDETERMINADO (ex.: EPERM de bind restrito por sandbox) → busy, NUNCA free — bug real do E2E era o oposto', () => {
-    expect(classifyBindProbe('EPERM')).toBe('busy')
-    expect(classifyBindProbe('EACCES')).toBe('busy')
-    expect(classifyBindProbe('ALGUM_CODIGO_NUNCA_VISTO')).toBe('busy')
+  it('erro INDETERMINADO (ex.: EPERM de bind restrito por sandbox) → unknown, NUNCA free — bug real do E2E era o oposto', () => {
+    expect(classifyBindProbe('EPERM')).toBe('unknown')
+    expect(classifyBindProbe('EACCES')).toBe('unknown')
+    expect(classifyBindProbe('ALGUM_CODIGO_NUNCA_VISTO')).toBe('unknown')
   })
 })
 
@@ -205,18 +205,18 @@ describe('preview supervisor (v3.1) — script gerado é determinístico', () =>
     // só EADDRINUSE prova ocupação real.
     expect(src).toContain("code === 'EADDRINUSE'")
   })
-  it('erro de bind INDETERMINADO (ex.: EPERM de um sandbox) NUNCA vira prova de porta livre — tratado como ocupado, nunca "skip" nem "free"', () => {
+  it('erro de bind INDETERMINADO (ex.: EPERM de um sandbox) NUNCA vira prova de porta livre — tratado como indeterminado, nunca "skip" nem "free"', () => {
     // Bug real do E2E: um sandbox restringindo o bind fazia a porta PARECER
     // livre (qualquer erro != EADDRINUSE virava "não ocupado"). Fix: só
     // códigos que provam "família de endereço indisponível NESTA máquina"
     // (IPv6 desligado, por exemplo) são ignorados sem contar como ocupado —
-    // qualquer OUTRO erro (EPERM incluso) conta como ocupado (conservador).
+    // qualquer OUTRO erro permanece indeterminado, sem inventar ocupação.
     expect(src).toContain('function classifyBindError(code)')
     expect(src).toMatch(/ADDRESS_FAMILY_UNAVAILABLE = \[.*EADDRNOTAVAIL.*EAFNOSUPPORT.*\]/)
     expect(src).toMatch(/return 'skip'/)
-    // o fallback final (nem EADDRINUSE nem família indisponível) é 'busy'.
+    // o fallback final preserva a incerteza.
     expect(src.match(/function classifyBindError\(code\) \{[\s\S]*?\n\}/)?.[0]).toMatch(
-      /return 'busy'\s*\n\}$/,
+      /return 'unknown'\s*\n\}$/,
     )
   })
   it('alive()/status()/ensure() usam pidState (ESRCH vs EPERM/desconhecido) — nunca kill(pid,0) cru tratando qualquer erro como morto', () => {

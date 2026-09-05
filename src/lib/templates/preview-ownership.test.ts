@@ -410,7 +410,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
         SUPREMO_PREVIEW_WAIT_TRIES: '3',
         SUPREMO_PREVIEW_WAIT_INTERVAL_MS: '100',
       })
-      expect(second.status).toBe(0)
+      expect(second.status).toBe(1)
       expect(second.stdout).toMatch(/mantendo estado anterior/)
       expect(second.stdout).not.toMatch(/✓ preview no ar/)
 
@@ -1006,4 +1006,63 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
     },
     30_000,
   )
+})
+
+describe('retomada v3-22: restrição de bind não é ocupação', () => {
+  it.each(['EPERM', 'EACCES', 'EIO'])('%s preserva diagnóstico no supervisor e no preflight, sem retry inútil', async (code) => {
+    const { supremoStatusScript } = await import('./harness')
+    const dir = mkdtempSync(join(tmpdir(), 'preview-bind-denied-'))
+    try {
+      writeFixtureProject(dir)
+      writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript())
+      mkdirSync(join(dir, '.supremo/checkpoints'), { recursive: true })
+      // Daemon já vivo: o teste não precisa iniciar nem consultar serviços externos.
+      writeFileSync(join(dir, '.supremo/checkpoints/daemon.pid'), String(process.pid))
+      writeFileSync(join(dir, 'deny-bind.cjs'), `
+const net = require('node:net')
+const fs = require('node:fs')
+net.Server.prototype.listen = function () {
+  fs.appendFileSync('probes.log', 'probe\\n')
+  const error = new Error('bind denied')
+  error.code = '${code}'
+  process.nextTick(() => this.emit('error', error))
+  return this
+}
+`)
+      const env = { ...process.env, NODE_OPTIONS: '--require=' + join(dir, 'deny-bind.cjs') }
+      const result = spawnSync(process.execPath, ['scripts/supremo-status.mjs', '--ensure'], {
+        cwd: dir, env, encoding: 'utf8', timeout: 15_000,
+      })
+      expect(result.status).toBe(1)
+      const state = JSON.parse(result.stdout) as { preview: { healthy: boolean; error: string; recovery: string } }
+      expect(state.preview.healthy).toBe(false)
+      expect(state.preview.recovery).toBe('host_permissions')
+      expect(state.preview.error).toContain(code)
+      expect(state.preview.error).not.toContain('todas ocupadas')
+      expect(readFileSync(join(dir, 'probes.log'), 'utf8')).toBe('probe\n')
+      expect(existsSync(join(dir, '.supremo/preview.pid'))).toBe(false)
+      if (code === 'EPERM') {
+        // Novo comando no contexto permitido, sem o shim: retoma a mesma pasta.
+        const recovery = spawnSync(process.execPath, ['scripts/supremo-status.mjs', '--ensure'], {
+          cwd: dir, env: { ...process.env, PORT: String(randomBasePort()) }, encoding: 'utf8', timeout: 15_000,
+        })
+        expect(recovery.status).toBe(0)
+        const recovered = JSON.parse(recovery.stdout) as { preview: { healthy: boolean; error?: string }; daemon: { healthy: boolean } }
+        expect(recovered.preview.healthy).toBe(true)
+        expect(recovered.preview.error).toBeUndefined()
+        expect(recovered.daemon.healthy).toBe(true)
+      }
+    } finally {
+      const pidPath = join(dir, '.supremo/preview.pid')
+      if (existsSync(pidPath)) {
+        const fixturePid = Number(readFileSync(pidPath, 'utf8'))
+        // Grupo detached criado exclusivamente por esta fixture.
+        try { process.kill(-fixturePid, 'SIGTERM') } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+        }
+        runPreview(dir, ['stop'], {})
+      }
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

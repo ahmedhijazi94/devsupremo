@@ -91,6 +91,7 @@ describe('RLS', () => {
 
   return `import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { isolationTest } from './isolation'
 
 /**
  * Testes de política RLS — gerados pelo Supremo.
@@ -226,6 +227,8 @@ ${fields(parent.requiredColumns, '        ')}
     await admin.from('${table.name}').delete().eq('id', rowId)
 ${parent ? `    await admin.from('${parent.table}').delete().eq('id', parentId)` : ''}
   })
+
+  ${isolationRegistration(table.name)}
 
   it('o dono lê a própria linha', async () => {
     const { data, error } = await aliceClient
@@ -401,6 +404,8 @@ ${seedRow}
   afterAll(async () => {
 ${cleanup}
   })
+
+  ${isolationRegistration(table.name)}
 
   it('membro do tenant lê a linha', async () => {
     const { data, error } = await aliceClient
@@ -681,4 +686,13 @@ export function inferTablesFromMigration(sql: string): TableSpec[] {
   }
 
   return specs
+}
+
+function isolationRegistration(table: string): string {
+  return `isolationTest('public.${table}', async () => {
+    const owner = await aliceClient.auth.getSession()
+    const other = await bobClient.auth.getSession()
+    if (!owner.data.session || !other.data.session) throw new Error('Sessões da fixture ausentes.')
+    return { rowId, ownerAccessToken: owner.data.session.access_token, otherAccessToken: other.data.session.access_token }
+  })`
 }

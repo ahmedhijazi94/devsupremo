@@ -134,10 +134,9 @@ export function classifyPidSignalError(code: string | null | undefined): 'dead' 
  * erro (ex.: `EPERM` — bind restrito por um sandbox, como o do Codex) é
  * INDETERMINADO e NUNCA pode virar prova de porta livre — bug real do E2E:
  * um erro assim era tratado como "bind ok, porta livre". Tratado como
- * `'busy'` (conservador): melhor procurar outra porta do que arriscar subir
- * por cima de algo que não conseguimos verificar.
+ * `'unknown'`: interromper com diagnóstico de permissão, sem inventar ocupação.
  */
-export function classifyBindProbe(errorCode: string | null | undefined): 'free' | 'busy' | 'skip' {
+export function classifyBindProbe(errorCode: string | null | undefined): 'free' | 'busy' | 'skip' | 'unknown' {
   if (!errorCode) return 'free'
   if (errorCode === 'EADDRINUSE') return 'busy'
   const ADDRESS_FAMILY_UNAVAILABLE = [
@@ -149,7 +148,7 @@ export function classifyBindProbe(errorCode: string | null | undefined): 'free' 
     'EINVAL',
   ]
   if (ADDRESS_FAMILY_UNAVAILABLE.includes(errorCode)) return 'skip'
-  return 'busy'
+  return 'unknown'
 }
 
 /**
@@ -361,7 +360,7 @@ function classifyBindError(code) {
   if (code === 'EADDRINUSE') return 'busy'
   const ADDRESS_FAMILY_UNAVAILABLE = ['EADDRNOTAVAIL', 'EAFNOSUPPORT', 'EPROTONOSUPPORT', 'ENOTSUP', 'EOPNOTSUPP', 'EINVAL']
   if (ADDRESS_FAMILY_UNAVAILABLE.includes(code)) return 'skip'
-  return 'busy'
+  return 'unknown'
 }
 function tryBind(port, host) {
   return new Promise((resolve) => {
@@ -372,12 +371,12 @@ function tryBind(port, host) {
       done = true
       resolve(result)
     }
-    tester.once('error', (err) => finish(classifyBindError(err && err.code)))
-    tester.once('listening', () => tester.close(() => finish('free')))
+    tester.once('error', (err) => finish({ state: classifyBindError(err && err.code), code: err && err.code }))
+    tester.once('listening', () => tester.close(() => finish({ state: 'free' })))
     try {
       tester.listen(port, host)
     } catch (err) {
-      finish(classifyBindError(err && err.code))
+      finish({ state: classifyBindError(err && err.code), code: err && err.code })
     }
   })
 }
@@ -386,9 +385,16 @@ function tryBind(port, host) {
 // venha a bindar, seja qual for o framework.
 const PROBE_HOSTS = [HOST, '0.0.0.0', '::', '::1']
 async function isPortFree(port) {
+  let confirmed = false
   for (const host of PROBE_HOSTS) {
-    if ((await tryBind(port, host)) === 'busy') return false
+    const probe = await tryBind(port, host)
+    if (probe.state === 'unknown') {
+      throw new Error('PREVIEW_BIND_UNAVAILABLE: ' + (probe.code || 'UNKNOWN') + ' ao verificar ' + host + ':' + port + '. Não comprova porta ocupada. Execute npm run supremo:resume no contexto do host com permissão para abrir portas, usando o mecanismo de permissões do agente.')
+    }
+    if (probe.state === 'busy') return false
+    if (probe.state === 'free') confirmed = true
   }
+  if (!confirmed) throw new Error('PREVIEW_BIND_UNAVAILABLE: nenhuma interface disponível para verificar a porta.')
   return true
 }
 // Mesmo algoritmo puro de harness.pickFreePreviewPort (mantidos em sincronia).
@@ -620,6 +626,7 @@ async function ensure() {
     // intacto em vez de virar um pid/porta mortos. Mata a tentativa que não
     // decolou, pra não deixar processo órfão.
     try { process.kill(newPid) } catch {}
+    process.exitCode = 1
     console.log(\`• preview não respondeu em http://localhost:\${chosen} (pid \${newPid}) — mantendo estado anterior; veja .supremo/preview.log\`)
     return
   }
@@ -653,7 +660,12 @@ function stop() {
   console.log('✓ preview parado')
 }
 const cmd = process.argv[2] || 'ensure'
-if (cmd === 'ensure') await ensure()
+if (cmd === 'ensure') {
+  try { await ensure() } catch (error) {
+    console.error(error.message)
+    process.exitCode = error.message.startsWith('PREVIEW_BIND_UNAVAILABLE:') ? 2 : 1
+  }
+}
 else if (cmd === 'status') await status()
 else if (cmd === '__heartbeat') await heartbeatLoop(Number(process.argv[3]), Number(process.argv[4]), process.argv[5])
 else if (cmd === 'stop') stop()
@@ -1028,9 +1040,10 @@ function tryJson(cmd, args) {
 // é o primeiro teto onde antes não existia nenhum.
 function run(cmd, args, timeoutMs) {
   try {
-    execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'ignore'], ...(timeoutMs ? { timeout: timeoutMs } : {}) })
-  } catch {
-    /* best-effort — ver comentário acima */
+    execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], ...(timeoutMs ? { timeout: timeoutMs } : {}) })
+    return null
+  } catch (error) {
+    return { code: error.status ?? 1, message: String(error.stderr || error.stdout || error.message).trim().slice(0, 2000) }
   }
 }
 
@@ -1124,6 +1137,7 @@ async function waitForPreviewHealthy(timeoutMs) {
 let preview = readPreview()
 let daemon = readDaemon()
 let daemonEnsureError = null
+let previewEnsureError = null
 
 // E2E real (teste-v3-15) — histórico: no Terminal (rede plena de um
 // humano), \`npx --yes supremo-cli daemon --ensure\` resolvia o pacote e
@@ -1151,7 +1165,8 @@ if (process.argv.includes('--ensure')) {
   // mensagem clara.
   if (!daemon.healthy) {
     if (fs.existsSync(LOCAL_SUPREMO_CLI_BIN)) {
-      run(LOCAL_SUPREMO_CLI_BIN, ['daemon', '--ensure'], DAEMON_ENSURE_TIMEOUT_MS)
+      const failure = run(LOCAL_SUPREMO_CLI_BIN, ['daemon', '--ensure'], DAEMON_ENSURE_TIMEOUT_MS)
+      daemonEnsureError = failure?.message ?? null
       daemon = readDaemon()
     } else {
       daemonEnsureError =
@@ -1159,8 +1174,8 @@ if (process.argv.includes('--ensure')) {
     }
   }
   if (!preview.healthy) {
-    run('node', ['scripts/preview.mjs', 'ensure'])
-    preview = await waitForPreviewHealthy(PREVIEW_POLL_TIMEOUT_MS)
+    previewEnsureError = run('node', ['scripts/preview.mjs', 'ensure'])
+    preview = previewEnsureError?.code === 2 ? readPreview() : await waitForPreviewHealthy(PREVIEW_POLL_TIMEOUT_MS)
 
     // E2E real (teste-v3-13): a primeira tentativa do supervisor pode falhar
     // de verdade (ex.: corrida de porta, processo anterior que ainda não
@@ -1169,8 +1184,8 @@ if (process.argv.includes('--ensure')) {
     // pelo MESMO supervisor (nenhuma lógica nova, nunca um loop): só roda
     // quando a janela de espera acima esgotou e o preview REALMENTE não
     // ficou saudável — não por causa de uma leitura cedo demais.
-    if (!preview.healthy) {
-      run('node', ['scripts/preview.mjs', 'ensure'])
+    if (!preview.healthy && previewEnsureError?.code !== 2) {
+      previewEnsureError = run('node', ['scripts/preview.mjs', 'ensure'])
       preview = await waitForPreviewHealthy(PREVIEW_POLL_TIMEOUT_MS)
     }
   }
@@ -1179,7 +1194,7 @@ if (process.argv.includes('--ensure')) {
 const healthy = preview.healthy && daemon.healthy
 
 console.log(JSON.stringify({
-  preview: { running: !!preview.running, healthy: !!preview.healthy, url: preview.url ?? null },
+  preview: { running: !!preview.running, healthy: !!preview.healthy, url: preview.url ?? null, ...(!preview.healthy && previewEnsureError ? { error: previewEnsureError.message, recovery: previewEnsureError.code === 2 ? 'host_permissions' : 'inspect_preview_log' } : {}) },
   daemon: {
     running: !!daemon.running,
     healthy: !!daemon.healthy,

@@ -1,0 +1,60 @@
+import { it, expect } from 'vitest'
+import { createClient } from '@supabase/supabase-js'
+
+export interface IsolationFixture {
+  ownerAccessToken: string
+  otherAccessToken: string
+  rowId: string | number
+  rowKey?: string
+}
+
+/** Register inside the suite that seeds/cleans the row in beforeAll/afterAll.
+ * The fixture supplies sessions, never assertions or a claimed success flag.
+ * Run only against the disposable database used by the project's RLS suite.
+ */
+export function isolationTest(table: string, fixture: () => Promise<IsolationFixture>): void {
+  it(`isolamento executável · ${table}`, async ({ task }) => {
+    const value = await fixture()
+    const dot = table.indexOf('.')
+    if (dot < 1 || dot === table.length - 1) throw new Error('Use schema.tabela no isolationTest.')
+    const schema = table.slice(0, dot)
+    const name = table.slice(dot + 1)
+    const url = process.env.SUPABASE_URL
+    const key = process.env.SUPABASE_ANON_KEY
+    if (!url || !key) throw new Error('Credenciais do banco de testes ausentes.')
+    const client = (token: string) => createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    })
+    const owner = client(value.ownerAccessToken)
+    const other = client(value.otherAccessToken)
+    const [a, b] = await Promise.all([
+      owner.auth.getUser(value.ownerAccessToken), other.auth.getUser(value.otherAccessToken),
+    ])
+    expect(a.error).toBeNull()
+    expect(b.error).toBeNull()
+    expect(a.data.user?.id).toBeTruthy()
+    expect(b.data.user?.id).toBeTruthy()
+    expect(a.data.user?.id).not.toBe(b.data.user?.id)
+    const rowKey = value.rowKey ?? 'id'
+    const ownRows = () => owner.schema(schema).from(name).select(rowKey).eq(rowKey, value.rowId)
+    const initial = await ownRows()
+    expect(initial.error).toBeNull()
+    expect(initial.data).toHaveLength(1) // Missing/invisible fixtures never count as isolation.
+    const foreign = await other.schema(schema).from(name).select(rowKey).eq(rowKey, value.rowId)
+    expect(foreign.error?.code ?? null).toBeNull()
+    expect(foreign.data).toHaveLength(0)
+    const update = await other.schema(schema).from(name)
+      .update({ [rowKey]: value.rowId }).eq(rowKey, value.rowId).select(rowKey)
+    expect([null, '42501']).toContain(update.error?.code ?? null)
+    expect(update.data ?? []).toHaveLength(0)
+    const deletion = await other.schema(schema).from(name).delete().eq(rowKey, value.rowId).select(rowKey)
+    expect([null, '42501']).toContain(deletion.error?.code ?? null)
+    expect(deletion.data ?? []).toHaveLength(0)
+    const remaining = await ownRows()
+    expect(remaining.error).toBeNull()
+    expect(remaining.data).toHaveLength(1)
+    // Only the completed, passing test supplies runtime evidence to the reporter.
+    Object.assign(task.meta, { supremoIsolation: table })
+  })
+}

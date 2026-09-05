@@ -661,6 +661,31 @@ describe('verify.mjs — execução real: build ambiental defere, erro real bloq
     }
   }
 
+  it('executa checks simultaneamente e só inicia build após todos terminarem', () => {
+    const { dir, env } = setupProject(0, '')
+    const barrier = `#!/usr/bin/env node
+const fs = require('node:fs')
+const path = require('node:path')
+const name = path.basename(process.argv[1])
+fs.writeFileSync(name + '.started', '')
+const start = Date.now()
+const timer = setInterval(() => {
+  if (['tsc', 'eslint', 'vitest'].every(n => fs.existsSync(n + '.started'))) {
+    fs.writeFileSync(name + '.done', '')
+    clearInterval(timer)
+  } else if (Date.now() - start > 2000) process.exit(1)
+}, 10)
+`
+    for (const name of ['tsc', 'eslint', 'vitest']) {
+      writeFileSync(join(dir, 'bin', name), barrier)
+    }
+    writeFileSync(join(dir, 'bin', 'next'), `#!/usr/bin/env node
+const fs = require('node:fs')
+process.exit(['tsc', 'eslint', 'vitest'].every(n => fs.existsSync(n + '.done')) ? 0 : 1)
+`)
+    expect(runVerifyFull(dir, env).status).toBe(0)
+  })
+
   it('build falha com assinatura CONHECIDA de limitação ambiental (porta ocupada) → DEFERE, verify sai com sucesso', () => {
     const { dir, env } = setupProject(1, 'Error: listen EADDRINUSE: address already in use :::3000')
     const { status, output } = runVerifyFull(dir, env)

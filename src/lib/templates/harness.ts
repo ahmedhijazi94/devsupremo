@@ -670,7 +670,9 @@ export function verifyScript(): string {
 //   node scripts/verify.mjs            → auto (git diff working+staged)
 //   node scripts/verify.mjs --staged   → auto, só staged (usado no pre-commit)
 //   node scripts/verify.mjs quick|security|full → força o nível
-import { execSync } from 'node:child_process'
+import { exec, execSync } from 'node:child_process'
+import { promisify } from 'node:util'
+const execAsync = promisify(exec)
 import { readFileSync } from 'node:fs'
 
 const FULL_PATTERNS = ${serializePatterns(FULL_PATTERNS)}
@@ -826,7 +828,25 @@ const { level, reason } = forced
 console.log(\`\\n▸ verify [\${level.toUpperCase()}] — \${reason} (\${paths.length} arquivo(s))\\n\`)
 const t0 = Date.now()
 let buildDeferred = false
-for (const [label, cmd] of STEPS[level]) {
+// Verificações independentes em paralelo; build só começa após todas passarem.
+const checks = STEPS[level].filter(([label]) => label !== 'build')
+const results = await Promise.allSettled(checks.map(async ([label, cmd]) => {
+  const started = Date.now()
+  await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 })
+  return { label, seconds: ((Date.now() - started) / 1000).toFixed(1) }
+}))
+for (let index = 0; index < results.length; index++) {
+  const result = results[index]
+  const [label] = checks[index]
+  if (result.status === 'rejected') {
+    const err = result.reason
+    if (err.stdout) process.stderr.write(err.stdout.toString())
+    if (err.stderr) process.stderr.write(err.stderr.toString())
+    console.error(\`\\n✗ verify \${level} falhou em: \${label}\\n\`)
+  } else console.log(\`  • \${label}… ok (\${result.value.seconds}s)\`)
+}
+if (results.some((result) => result.status === 'rejected')) process.exit(1)
+for (const [label, cmd] of STEPS[level].filter(([label]) => label === 'build')) {
   process.stdout.write(\`  • \${label}… \`)
   try {
     execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] })

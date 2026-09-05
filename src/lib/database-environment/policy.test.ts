@@ -24,6 +24,16 @@ describe('autoridade do ambiente', () => {
   it('permite DDL aditivo com FK e RLS', () => {
     expect(() => validateAutomaticMigration('create table notes (id uuid primary key, user_id uuid references auth.users(id) on delete cascade); alter table notes enable row level security;')).not.toThrow()
   })
+  it('permite o trigger de updated_at usado pela feature real do v3-21', () => {
+    expect(() => validateAutomaticMigration('CREATE TRIGGER suggestions_updated_at BEFORE UPDATE ON public.suggestions FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();')).not.toThrow()
+  })
+  it.each([
+    'CREATE TRIGGER t BEFORE UPDATE ON public.suggestions FOR EACH ROW EXECUTE FUNCTION public.other();',
+    "CREATE TRIGGER t BEFORE UPDATE ON public.suggestions FOR EACH ROW EXECUTE FUNCTION public.set_updated_at('argument');",
+    "EXECUTE 'DELETE FROM suggestions';",
+  ])('continua recusando execução arbitrária: %s', (sql) => {
+    expect(() => validateAutomaticMigration(sql)).toThrow()
+  })
   it.each(['drop table notes;', 'truncate notes;', 'delete from notes;', 'commit;', 'do $$ begin perform 1; end $$;', 'select * from supabase_migrations.schema_migrations;', 'create table notes (id uuid);', 'alter table notes disable row level security;'])('recusa SQL inseguro: %s', (sql) => {
     expect(() => validateAutomaticMigration(sql)).toThrow()
   })

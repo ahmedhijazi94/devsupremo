@@ -973,8 +973,8 @@ var require_command = __commonJS({
   "node_modules/commander/lib/command.js"(exports2) {
     var EventEmitter = require("node:events").EventEmitter;
     var childProcess = require("node:child_process");
-    var path8 = require("node:path");
-    var fs8 = require("node:fs");
+    var path9 = require("node:path");
+    var fs9 = require("node:fs");
     var process2 = require("node:process");
     var { Argument: Argument2, humanReadableArgName } = require_argument();
     var { CommanderError: CommanderError2 } = require_error();
@@ -1916,13 +1916,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
         let launchWithNode = false;
         const sourceExt = [".js", ".ts", ".tsx", ".mjs", ".cjs"];
         function findFile(baseDir, baseName) {
-          const localBin = path8.resolve(baseDir, baseName);
-          if (fs8.existsSync(localBin))
+          const localBin = path9.resolve(baseDir, baseName);
+          if (fs9.existsSync(localBin))
             return localBin;
-          if (sourceExt.includes(path8.extname(baseName)))
+          if (sourceExt.includes(path9.extname(baseName)))
             return void 0;
           const foundExt = sourceExt.find(
-            (ext) => fs8.existsSync(`${localBin}${ext}`)
+            (ext) => fs9.existsSync(`${localBin}${ext}`)
           );
           if (foundExt)
             return `${localBin}${foundExt}`;
@@ -1935,21 +1935,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
         if (this._scriptPath) {
           let resolvedScriptPath;
           try {
-            resolvedScriptPath = fs8.realpathSync(this._scriptPath);
+            resolvedScriptPath = fs9.realpathSync(this._scriptPath);
           } catch (err) {
             resolvedScriptPath = this._scriptPath;
           }
-          executableDir = path8.resolve(
-            path8.dirname(resolvedScriptPath),
+          executableDir = path9.resolve(
+            path9.dirname(resolvedScriptPath),
             executableDir
           );
         }
         if (executableDir) {
           let localFile = findFile(executableDir, executableFile);
           if (!localFile && !subcommand._executableFile && this._scriptPath) {
-            const legacyName = path8.basename(
+            const legacyName = path9.basename(
               this._scriptPath,
-              path8.extname(this._scriptPath)
+              path9.extname(this._scriptPath)
             );
             if (legacyName !== this._name) {
               localFile = findFile(
@@ -1960,7 +1960,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
           }
           executableFile = localFile || executableFile;
         }
-        launchWithNode = sourceExt.includes(path8.extname(executableFile));
+        launchWithNode = sourceExt.includes(path9.extname(executableFile));
         let proc;
         if (process2.platform !== "win32") {
           if (launchWithNode) {
@@ -2817,7 +2817,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @return {Command}
        */
       nameFromFilename(filename) {
-        this._name = path8.basename(filename, path8.extname(filename));
+        this._name = path9.basename(filename, path9.extname(filename));
         return this;
       }
       /**
@@ -2831,10 +2831,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @param {string} [path]
        * @return {(string|null|Command)}
        */
-      executableDir(path9) {
-        if (path9 === void 0)
+      executableDir(path10) {
+        if (path10 === void 0)
           return this._executableDir;
-        this._executableDir = path9;
+        this._executableDir = path10;
         return this;
       }
       /**
@@ -3623,18 +3623,18 @@ function defaultCommitReader(cwd) {
         const status = parts[i++] ?? "";
         if (status.startsWith("R") || status.startsWith("C")) {
           const oldPath = parts[i++] ?? "";
-          const path8 = parts[i++] ?? "";
-          changes.push({ status, path: path8, oldPath });
+          const path9 = parts[i++] ?? "";
+          changes.push({ status, path: path9, oldPath });
         } else {
-          const path8 = parts[i++] ?? "";
-          changes.push({ status, path: path8 });
+          const path9 = parts[i++] ?? "";
+          changes.push({ status, path: path9 });
         }
       }
       return changes;
     },
-    content: (sha, path8) => {
+    content: (sha, path9) => {
       try {
-        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path8}`], {
+        return (0, import_node_child_process4.execFileSync)("git", ["show", `${sha}:${path9}`], {
           cwd,
           stdio: ["ignore", "pipe", "ignore"],
           maxBuffer: 64 * 1024 * 1024
@@ -3649,9 +3649,9 @@ function defaultCommitReader(cwd) {
       const authorEmail = text(["show", "-s", "--format=%ae", sha]).trim();
       return { message: message || "checkpoint", authorName, authorEmail };
     },
-    executable: (sha, path8) => {
+    executable: (sha, path9) => {
       try {
-        const line = text(["ls-tree", sha, path8]);
+        const line = text(["ls-tree", sha, path9]);
         return line.slice(0, 6) === "100755";
       } catch {
         return false;
@@ -3665,6 +3665,187 @@ var init_changeset = __esm({
     "use strict";
     import_node_child_process4 = require("node:child_process");
     import_node_crypto3 = __toESM(require("node:crypto"));
+  }
+});
+
+// src/database-queue.ts
+function writeAtomic(file, value) {
+  const temporary = `${file}.${(0, import_node_crypto4.randomUUID)()}.tmp`;
+  import_node_fs3.default.writeFileSync(temporary, JSON.stringify(value), { mode: 384, flag: "wx" });
+  import_node_fs3.default.renameSync(temporary, file);
+}
+async function requestDatabase(cwd, operation) {
+  const dir = directory(cwd);
+  let heartbeat = 0;
+  try {
+    heartbeat = Number(import_node_fs3.default.readFileSync(import_node_path3.default.join(dir, "heartbeat"), "utf8"));
+  } catch {
+  }
+  if (!Number.isFinite(heartbeat) || heartbeat <= 0 || Date.now() - heartbeat > 5e3 || heartbeat > Date.now() + 5e3) {
+    throw new Error("Canal de banco do daemon indispon\xEDvel. Atualize a CLI e reinicie somente o daemon no terminal autorizado; preserve o preview. N\xE3o \xE9 necess\xE1rio refazer o bootstrap.");
+  }
+  const id = (0, import_node_crypto4.randomUUID)();
+  const request = import_node_path3.default.join(dir, `${id}.request.json`);
+  const response = import_node_path3.default.join(dir, `${id}.response.json`);
+  const expiresAt = Date.now() + timeoutMs;
+  writeAtomic(request, { operation, expiresAt });
+  try {
+    while (Date.now() < expiresAt) {
+      if (import_node_fs3.default.existsSync(response)) {
+        const result = JSON.parse(import_node_fs3.default.readFileSync(response, "utf8"));
+        if (!result.ok)
+          throw new Error(result.error ?? "Opera\xE7\xE3o de banco recusada.");
+        return result.data;
+      }
+      await pause(100);
+    }
+    throw new Error("O daemon n\xE3o confirmou a opera\xE7\xE3o de banco a tempo. Consulte db status e repita migrate para verificar o hist\xF3rico idempotente; n\xE3o presuma sucesso.");
+  } finally {
+    import_node_fs3.default.rmSync(request, { force: true });
+    import_node_fs3.default.rmSync(response, { force: true });
+  }
+}
+async function drainDatabaseRequests(cwd, execute) {
+  const dir = directory(cwd);
+  import_node_fs3.default.mkdirSync(dir, { recursive: true, mode: 448 });
+  for (const name of import_node_fs3.default.readdirSync(dir)) {
+    if (!/^[0-9a-f-]{36}\.request\.json$/.test(name))
+      continue;
+    const request = import_node_path3.default.join(dir, name);
+    const response = request.replace(/\.request\.json$/, ".response.json");
+    if (import_node_fs3.default.existsSync(response))
+      continue;
+    let result;
+    let expiresAt = 0;
+    try {
+      const stat = import_node_fs3.default.lstatSync(request);
+      if (!stat.isFile() || stat.size > 1024)
+        throw new Error("Pedido de banco inv\xE1lido.");
+      const body = JSON.parse(import_node_fs3.default.readFileSync(request, "utf8"));
+      if (!body || typeof body !== "object")
+        throw new Error("Pedido de banco inv\xE1lido.");
+      const input = body;
+      if (Object.keys(input).sort().join(",") !== "expiresAt,operation" || typeof input.operation !== "string" || !operations.includes(input.operation) || typeof input.expiresAt !== "number" || !Number.isFinite(input.expiresAt)) {
+        throw new Error("Pedido de banco inv\xE1lido.");
+      }
+      expiresAt = input.expiresAt;
+      if (expiresAt <= Date.now() || expiresAt > Date.now() + timeoutMs) {
+        import_node_fs3.default.rmSync(request, { force: true });
+        continue;
+      }
+      result = { ok: true, data: await execute(input.operation) };
+    } catch (error) {
+      result = { ok: false, error: error instanceof Error ? error.message : "Falha no canal de banco." };
+    }
+    if (import_node_fs3.default.existsSync(request) && (!expiresAt || expiresAt > Date.now()))
+      writeAtomic(response, result);
+  }
+}
+function startDatabaseWorker(cwd, execute) {
+  const dir = directory(cwd);
+  import_node_fs3.default.mkdirSync(dir, { recursive: true, mode: 448 });
+  let running = false;
+  const tick = () => {
+    writeAtomic(import_node_path3.default.join(dir, "heartbeat"), Date.now());
+    if (running)
+      return;
+    running = true;
+    void drainDatabaseRequests(cwd, execute).catch(() => {
+      process.stderr.write("[daemon] Falha ao processar a fila local de banco.\n");
+    }).finally(() => {
+      running = false;
+    });
+  };
+  tick();
+  const timer = setInterval(tick, 250);
+  return () => {
+    clearInterval(timer);
+    import_node_fs3.default.rmSync(import_node_path3.default.join(dir, "heartbeat"), { force: true });
+  };
+}
+var import_node_fs3, import_node_path3, import_node_crypto4, directory, operations, timeoutMs, pause;
+var init_database_queue = __esm({
+  "src/database-queue.ts"() {
+    "use strict";
+    import_node_fs3 = __toESM(require("node:fs"));
+    import_node_path3 = __toESM(require("node:path"));
+    import_node_crypto4 = require("node:crypto");
+    directory = (cwd) => import_node_path3.default.join(cwd, ".supremo/database-queue");
+    operations = ["status", "migrate", "anonymous-auth"];
+    timeoutMs = 9e4;
+    pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  }
+});
+
+// src/database.ts
+var database_exports = {};
+__export(database_exports, {
+  runDatabase: () => runDatabase,
+  runDatabaseDirect: () => runDatabaseDirect,
+  validateLocalTarget: () => validateLocalTarget
+});
+function validateLocalTarget(cwd, status) {
+  if (status.environment !== "development" || !status.automaticMigrations || !status.projectRef) {
+    throw new Error("Banco n\xE3o reconhecido como development pelo Supremo. Produ\xE7\xE3o e ambiente desconhecido est\xE3o protegidos.");
+  }
+  const linked = import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, "supabase/.temp/project-ref"), "utf8").trim();
+  const env = import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, ".env.local"), "utf8");
+  const url = /^NEXT_PUBLIC_SUPABASE_URL\s*=\s*["']?([^\s"']+)/m.exec(env)?.[1];
+  if (linked !== status.projectRef || url !== `https://${status.projectRef}.supabase.co`) {
+    throw new Error("O banco do preview ou o link local diverge do development registrado. Nenhuma altera\xE7\xE3o foi enviada.");
+  }
+  return status.projectRef;
+}
+async function runDatabase(operation, cwd = process.cwd()) {
+  return requestDatabase(cwd, operation);
+}
+async function runDatabaseDirect(operation, cwd) {
+  const config = readProjectConfig(cwd);
+  if (!config)
+    throw new Error("Execute o bootstrap para identificar o projeto.");
+  const secret = resolveKeychain().get(config.projectId);
+  if (!secret)
+    throw new Error("O daemon n\xE3o conseguiu acessar a autoriza\xE7\xE3o deste dispositivo. Verifique o keychain na m\xE1quina que executou o bootstrap.");
+  const url = new URL("/api/database", config.apiBaseUrl);
+  if (url.protocol !== "https:" && !(["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) && url.protocol === "http:")) {
+    throw new Error("O endpoint do Supremo deve usar HTTPS.");
+  }
+  const request = async (op, extra = {}) => {
+    const res = await fetch(url, {
+      method: "POST",
+      redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, operation: op, ...extra }),
+      signal: AbortSignal.timeout(op === "status" ? 15e3 : 6e4)
+    });
+    const data = await res.json();
+    if (!res.ok)
+      throw new Error(data.error ?? `Banco indispon\xEDvel (HTTP ${res.status}).`);
+    return data;
+  };
+  const status = await request("status");
+  import_node_fs4.default.writeFileSync(import_node_path4.default.join(cwd, ".supremo/database.json"), JSON.stringify(status, null, 2) + "\n");
+  if (operation === "status")
+    return status;
+  const expectedRef = validateLocalTarget(cwd, status);
+  if (operation === "anonymous-auth")
+    return request(operation, { expectedRef });
+  const directory2 = import_node_path4.default.join(cwd, "supabase/migrations");
+  const migrations = import_node_fs4.default.readdirSync(directory2).filter((name) => name.endsWith(".sql")).sort().map((name) => ({
+    path: `supabase/migrations/${name}`,
+    content: import_node_fs4.default.readFileSync(import_node_path4.default.join(directory2, name), "utf8")
+  }));
+  return request(operation, { expectedRef, migrations });
+}
+var import_node_fs4, import_node_path4;
+var init_database = __esm({
+  "src/database.ts"() {
+    "use strict";
+    import_node_fs4 = __toESM(require("node:fs"));
+    import_node_path4 = __toESM(require("node:path"));
+    init_daemon();
+    init_keychain();
+    init_database_queue();
   }
 });
 
@@ -3780,8 +3961,8 @@ function parseNameStatus(output) {
     const status = parts[0];
     if (!/^[AMDRCT]\d*$/.test(status))
       continue;
-    const path8 = parts[parts.length - 1];
-    entries.push({ status, path: path8 });
+    const path9 = parts[parts.length - 1];
+    entries.push({ status, path: path9 });
   }
   return entries;
 }
@@ -3896,20 +4077,20 @@ function defaultRestoreDeps(base, cwd) {
     },
     readWorktreeFile: (relPath) => {
       try {
-        return import_node_fs3.default.readFileSync(import_node_path3.default.join(cwd, relPath), "utf8");
+        return import_node_fs5.default.readFileSync(import_node_path5.default.join(cwd, relPath), "utf8");
       } catch {
         return null;
       }
     }
   };
 }
-var import_node_child_process5, import_node_fs3, import_node_path3, RestoreTargetNotFoundLocallyError, NEXT_TYPES_GLOB_RE, MIGRATIONS_PATHSPEC, RESTORE_PRESERVED_PATHS;
+var import_node_child_process5, import_node_fs5, import_node_path5, RestoreTargetNotFoundLocallyError, NEXT_TYPES_GLOB_RE, MIGRATIONS_PATHSPEC, RESTORE_PRESERVED_PATHS;
 var init_restore = __esm({
   "src/restore.ts"() {
     "use strict";
     import_node_child_process5 = require("node:child_process");
-    import_node_fs3 = __toESM(require("node:fs"));
-    import_node_path3 = __toESM(require("node:path"));
+    import_node_fs5 = __toESM(require("node:fs"));
+    import_node_path5 = __toESM(require("node:path"));
     init_managed_paths();
     init_checkpoint();
     RestoreTargetNotFoundLocallyError = class extends Error {
@@ -4023,10 +4204,10 @@ async function processCheckpoint(record, ctx) {
 }
 function defaultDaemonHttp(apiBaseUrl) {
   const base = apiBaseUrl.replace(/\/$/, "");
-  const postJson = async (route, body, timeoutMs) => {
+  const postJson = async (route, body, timeoutMs2) => {
     let res;
-    const controller = timeoutMs != null ? new AbortController() : void 0;
-    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : void 0;
+    const controller = timeoutMs2 != null ? new AbortController() : void 0;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs2) : void 0;
     try {
       res = await fetch(`${base}${route}`, {
         method: "POST",
@@ -4087,7 +4268,7 @@ function defaultDaemonHttp(apiBaseUrl) {
 function readProjectConfig(cwd) {
   try {
     const raw = JSON.parse(
-      import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, ".supremo/project.json"), "utf8")
+      import_node_fs6.default.readFileSync(import_node_path6.default.join(cwd, ".supremo/project.json"), "utf8")
     );
     if (!raw.projectId || !raw.supremoUrl)
       return null;
@@ -4112,7 +4293,7 @@ function pidAlive(pid) {
 }
 function readPid(cwd) {
   try {
-    const pid = Number(import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE), "utf8").trim());
+    const pid = Number(import_node_fs6.default.readFileSync(import_node_path6.default.join(cwd, DAEMON_PID_FILE), "utf8").trim());
     return Number.isFinite(pid) && pid > 0 ? pid : null;
   } catch {
     return null;
@@ -4122,11 +4303,11 @@ function ensureDaemon(cwd) {
   const existing = readPid(cwd);
   if (existing && pidAlive(existing))
     return "reuse";
-  import_node_fs4.default.mkdirSync(import_node_path4.default.join(cwd, CHECKPOINT_DIR), { recursive: true });
-  const logPath = import_node_path4.default.join(cwd, DAEMON_LOG_FILE);
-  const out = import_node_fs4.default.openSync(logPath, "a");
-  const localBin = import_node_path4.default.join(cwd, "node_modules/.bin/supremo");
-  const binPath = import_node_fs4.default.existsSync(localBin) ? localBin : process.argv[1] ?? "";
+  import_node_fs6.default.mkdirSync(import_node_path6.default.join(cwd, CHECKPOINT_DIR), { recursive: true });
+  const logPath = import_node_path6.default.join(cwd, DAEMON_LOG_FILE);
+  const out = import_node_fs6.default.openSync(logPath, "a");
+  const localBin = import_node_path6.default.join(cwd, "node_modules/.bin/supremo");
+  const binPath = import_node_fs6.default.existsSync(localBin) ? localBin : process.argv[1] ?? "";
   const child = (0, import_node_child_process6.spawn)(process.execPath, [binPath, "daemon"], {
     cwd,
     detached: true,
@@ -4134,7 +4315,7 @@ function ensureDaemon(cwd) {
   });
   child.unref();
   if (child.pid) {
-    import_node_fs4.default.writeFileSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE), String(child.pid));
+    import_node_fs6.default.writeFileSync(import_node_path6.default.join(cwd, DAEMON_PID_FILE), String(child.pid));
   }
   return "start";
 }
@@ -4143,7 +4324,7 @@ function daemonStatus(cwd) {
   const running = pid != null && pidAlive(pid);
   let pendingCheckpoints = 0;
   try {
-    const queue = parseQueue(import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, QUEUE_FILE), "utf8"));
+    const queue = parseQueue(import_node_fs6.default.readFileSync(import_node_path6.default.join(cwd, QUEUE_FILE), "utf8"));
     pendingCheckpoints = queue.filter((r) => RETRIABLE.has(r.pushStatus)).length;
   } catch {
   }
@@ -4158,7 +4339,7 @@ function stopDaemon(cwd) {
     }
   }
   try {
-    import_node_fs4.default.rmSync(import_node_path4.default.join(cwd, DAEMON_PID_FILE));
+    import_node_fs6.default.rmSync(import_node_path6.default.join(cwd, DAEMON_PID_FILE));
   } catch {
   }
   return true;
@@ -4214,10 +4395,10 @@ async function processRestores(config, overrides = {}) {
 }
 async function drainOnce(config) {
   await processRestores(config);
-  const queuePath = import_node_path4.default.join(config.cwd, QUEUE_FILE);
+  const queuePath = import_node_path6.default.join(config.cwd, QUEUE_FILE);
   let queue;
   try {
-    queue = parseQueue(import_node_fs4.default.readFileSync(queuePath, "utf8"));
+    queue = parseQueue(import_node_fs6.default.readFileSync(queuePath, "utf8"));
   } catch {
     return 0;
   }
@@ -4234,7 +4415,7 @@ async function drainOnce(config) {
       break;
     const outcome = await processCheckpoint(next, ctx);
     queue = upsertQueue(queue, outcome.record);
-    import_node_fs4.default.appendFileSync(queuePath, serializeQueue([outcome.record]));
+    import_node_fs6.default.appendFileSync(queuePath, serializeQueue([outcome.record]));
     processed++;
     if (outcome.result !== "done")
       break;
@@ -4256,34 +4437,38 @@ async function runDaemonLoop(cwd, opts = {}) {
   };
   const idleMs = opts.idleMs ?? 3e3;
   let stopped = false;
+  const stopDatabaseWorker = startDatabaseWorker(cwd, (operation) => runDatabaseDirect(operation, cwd));
   process.on("SIGTERM", () => {
     stopped = true;
+    stopDatabaseWorker();
   });
   while (!stopped) {
     let queue = [];
     try {
-      queue = parseQueue(import_node_fs4.default.readFileSync(import_node_path4.default.join(cwd, QUEUE_FILE), "utf8"));
+      queue = parseQueue(import_node_fs6.default.readFileSync(import_node_path6.default.join(cwd, QUEUE_FILE), "utf8"));
     } catch {
     }
     await drainOnce(daemonConfig);
     try {
-      import_node_fs4.default.rmSync(import_node_path4.default.join(cwd, NOTIFY_FILE));
+      import_node_fs6.default.rmSync(import_node_path6.default.join(cwd, NOTIFY_FILE));
     } catch {
     }
     const attempts = minPendingAttempts(queue);
     await sleep(attempts != null ? backoffDelayMs(attempts) : idleMs);
   }
 }
-var import_node_child_process6, import_node_fs4, import_node_path4, RETRIABLE, NetworkError, AuthError, ConflictError, SYNC_STATUS_TIMEOUT_MS, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
+var import_node_child_process6, import_node_fs6, import_node_path6, RETRIABLE, NetworkError, AuthError, ConflictError, SYNC_STATUS_TIMEOUT_MS, DAEMON_PID_FILE, DAEMON_LOG_FILE, sleep;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
     import_node_child_process6 = require("node:child_process");
-    import_node_fs4 = __toESM(require("node:fs"));
-    import_node_path4 = __toESM(require("node:path"));
+    import_node_fs6 = __toESM(require("node:fs"));
+    import_node_path6 = __toESM(require("node:path"));
     init_checkpoint();
     init_changeset();
     init_keychain();
+    init_database_queue();
+    init_database();
     init_restore();
     RETRIABLE = /* @__PURE__ */ new Set([
       "local",
@@ -4328,7 +4513,7 @@ function buildEnvFile(env) {
 }
 function targetDir(repoFullName, baseDir) {
   const name = repoFullName.split("/").pop() || "projeto";
-  return import_node_path5.default.join(baseDir ?? process.cwd(), name);
+  return import_node_path7.default.join(baseDir ?? process.cwd(), name);
 }
 function cleanRemoteUrl(repoFullName) {
   return `https://github.com/${repoFullName}.git`;
@@ -4443,7 +4628,7 @@ function validateLocalReadiness(input) {
 }
 function checkNpmScriptsCompatible(dest) {
   return daemonCliOutputLooksValid(
-    tryExecOutIn(process.execPath, [import_node_path5.default.join(dest, "node_modules/supremo-cli/dist/bin.js"), "daemon", "--status"], dest)
+    tryExecOutIn(process.execPath, [import_node_path7.default.join(dest, "node_modules/supremo-cli/dist/bin.js"), "daemon", "--status"], dest)
   );
 }
 function checkNodeVersion(nodeVersion) {
@@ -4518,11 +4703,11 @@ async function linkSupabaseRemote(dest, supabase) {
   ok("Conta correta");
   if (majorVersion) {
     try {
-      const cfgPath = import_node_path5.default.join(dest, "supabase", "config.toml");
-      const cfg = import_node_fs5.default.readFileSync(cfgPath, "utf8");
+      const cfgPath = import_node_path7.default.join(dest, "supabase", "config.toml");
+      const cfg = import_node_fs7.default.readFileSync(cfgPath, "utf8");
       const patched = patchConfigMajorVersion(cfg, majorVersion);
       if (patched !== cfg)
-        import_node_fs5.default.writeFileSync(cfgPath, patched);
+        import_node_fs7.default.writeFileSync(cfgPath, patched);
       ok("PostgreSQL/config alinhados");
     } catch {
     }
@@ -4556,12 +4741,12 @@ async function linkSupabaseRemote(dest, supabase) {
   return true;
 }
 function resolveSupabaseBin(dest) {
-  const localBin = import_node_path5.default.join(dest, "node_modules", ".bin", "supabase");
-  return import_node_fs5.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
+  const localBin = import_node_path7.default.join(dest, "node_modules", ".bin", "supabase");
+  return import_node_fs7.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
 }
 function readLinkedRef(dest) {
   try {
-    return import_node_fs5.default.readFileSync(import_node_path5.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
+    return import_node_fs7.default.readFileSync(import_node_path7.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
   } catch {
     return null;
   }
@@ -4602,21 +4787,21 @@ async function runBootstrap(opts) {
   }
   console.log(`  Projeto: ${config.project.name}`);
   const dest = targetDir(config.repo.fullName, opts.dir);
-  if (import_node_fs5.default.existsSync(dest)) {
+  if (import_node_fs7.default.existsSync(dest)) {
     throw new Error(`J\xE1 existe ${dest} \u2014 remova ou use --dir para outro caminho.`);
   }
-  import_node_fs5.default.mkdirSync(import_node_path5.default.dirname(dest), { recursive: true });
+  import_node_fs7.default.mkdirSync(import_node_path7.default.dirname(dest), { recursive: true });
   run("git", gitCloneArgs(config.repo.fullName, config.repo.branch, dest), void 0, {
     ...process.env,
     SUPREMO_GIT_TOKEN: config.gitToken
   });
   ok("Repository clonado");
-  import_node_fs5.default.writeFileSync(import_node_path5.default.join(dest, ".env.local"), buildEnvFile(config.env), {
+  import_node_fs7.default.writeFileSync(import_node_path7.default.join(dest, ".env.local"), buildEnvFile(config.env), {
     mode: 384
   });
   ok("Environment p\xFAblico configurado");
-  import_node_fs5.default.mkdirSync(import_node_path5.default.join(dest, ".supremo"), { recursive: true });
-  import_node_fs5.default.writeFileSync(import_node_path5.default.join(dest, ".supremo/database.json"), JSON.stringify(config.database ?? {
+  import_node_fs7.default.mkdirSync(import_node_path7.default.join(dest, ".supremo"), { recursive: true });
+  import_node_fs7.default.writeFileSync(import_node_path7.default.join(dest, ".supremo/database.json"), JSON.stringify(config.database ?? {
     environment: "unknown",
     projectRef: config.supabase?.projectRef ?? null,
     automaticMigrations: false
@@ -4671,7 +4856,7 @@ async function runBootstrap(opts) {
     );
   }
   const readiness = validateLocalReadiness({
-    projectJsonOk: import_node_fs5.default.existsSync(import_node_path5.default.join(dest, ".supremo", "project.json")),
+    projectJsonOk: import_node_fs7.default.existsSync(import_node_path7.default.join(dest, ".supremo", "project.json")),
     hasDaemonIdentity: Boolean(config.daemon),
     daemonRunning,
     npmScriptsCompatible,
@@ -4703,13 +4888,13 @@ Projeto pronto para Codex/Claude:
     );
   }
 }
-var import_node_child_process7, import_node_fs5, import_node_path5, sleep2, run, ok, tryExec, tryExecOut, tryExecOutIn, RECOMMENDED_NODE_MAJORS;
+var import_node_child_process7, import_node_fs7, import_node_path7, sleep2, run, ok, tryExec, tryExecOut, tryExecOutIn, RECOMMENDED_NODE_MAJORS;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
     import_node_child_process7 = require("node:child_process");
-    import_node_fs5 = __toESM(require("node:fs"));
-    import_node_path5 = __toESM(require("node:path"));
+    import_node_fs7 = __toESM(require("node:fs"));
+    import_node_path7 = __toESM(require("node:path"));
     init_auth();
     sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
     run = (cmd, args, cwd, env) => (0, import_node_child_process7.execFileSync)(cmd, args, { cwd, env, stdio: "inherit" });
@@ -4844,98 +5029,31 @@ async function runSync(deps) {
 }
 function readSyncedRemoteState(cwd) {
   try {
-    return JSON.parse(import_node_fs6.default.readFileSync(import_node_path6.default.join(cwd, SYNC_STATE_FILE), "utf8"));
+    return JSON.parse(import_node_fs8.default.readFileSync(import_node_path8.default.join(cwd, SYNC_STATE_FILE), "utf8"));
   } catch {
     return null;
   }
 }
 function defaultSyncDeps(base, cwd, fetchRemote) {
-  const statePath = import_node_path6.default.join(cwd, SYNC_STATE_FILE);
+  const statePath = import_node_path8.default.join(cwd, SYNC_STATE_FILE);
   return {
     ...base,
     fetchRemote,
     readSyncedRemote: () => readSyncedRemoteState(cwd),
     writeSyncedRemote: (state) => {
-      import_node_fs6.default.mkdirSync(import_node_path6.default.dirname(statePath), { recursive: true });
-      import_node_fs6.default.writeFileSync(statePath, JSON.stringify(state));
+      import_node_fs8.default.mkdirSync(import_node_path8.default.dirname(statePath), { recursive: true });
+      import_node_fs8.default.writeFileSync(statePath, JSON.stringify(state));
     }
   };
 }
-var import_node_fs6, import_node_path6, SYNC_STATE_FILE;
+var import_node_fs8, import_node_path8, SYNC_STATE_FILE;
 var init_sync = __esm({
   "src/sync.ts"() {
     "use strict";
-    import_node_fs6 = __toESM(require("node:fs"));
-    import_node_path6 = __toESM(require("node:path"));
+    import_node_fs8 = __toESM(require("node:fs"));
+    import_node_path8 = __toESM(require("node:path"));
     init_checkpoint();
     SYNC_STATE_FILE = `${CHECKPOINT_DIR}/synced-remote.json`;
-  }
-});
-
-// src/database.ts
-var database_exports = {};
-__export(database_exports, {
-  runDatabase: () => runDatabase,
-  validateLocalTarget: () => validateLocalTarget
-});
-function validateLocalTarget(cwd, status) {
-  if (status.environment !== "development" || !status.automaticMigrations || !status.projectRef) {
-    throw new Error("Banco n\xE3o reconhecido como development pelo Supremo. Produ\xE7\xE3o e ambiente desconhecido est\xE3o protegidos.");
-  }
-  const linked = import_node_fs7.default.readFileSync(import_node_path7.default.join(cwd, "supabase/.temp/project-ref"), "utf8").trim();
-  const env = import_node_fs7.default.readFileSync(import_node_path7.default.join(cwd, ".env.local"), "utf8");
-  const url = /^NEXT_PUBLIC_SUPABASE_URL\s*=\s*["']?([^\s"']+)/m.exec(env)?.[1];
-  if (linked !== status.projectRef || url !== `https://${status.projectRef}.supabase.co`) {
-    throw new Error("O banco do preview ou o link local diverge do development registrado. Nenhuma altera\xE7\xE3o foi enviada.");
-  }
-  return status.projectRef;
-}
-async function runDatabase(operation, cwd = process.cwd()) {
-  const config = readProjectConfig(cwd);
-  if (!config)
-    throw new Error("Execute o bootstrap para identificar o projeto.");
-  const secret = resolveKeychain().get(config.projectId);
-  if (!secret)
-    throw new Error("Dispositivo sem autoriza\xE7\xE3o. Execute o bootstrap.");
-  const url = new URL("/api/database", config.apiBaseUrl);
-  if (url.protocol !== "https:" && !(["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) && url.protocol === "http:")) {
-    throw new Error("O endpoint do Supremo deve usar HTTPS.");
-  }
-  const request = async (op, extra = {}) => {
-    const res = await fetch(url, {
-      method: "POST",
-      redirect: "error",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, operation: op, ...extra }),
-      signal: AbortSignal.timeout(6e4)
-    });
-    const data = await res.json();
-    if (!res.ok)
-      throw new Error(data.error ?? `Banco indispon\xEDvel (HTTP ${res.status}).`);
-    return data;
-  };
-  const status = await request("status");
-  import_node_fs7.default.writeFileSync(import_node_path7.default.join(cwd, ".supremo/database.json"), JSON.stringify(status, null, 2) + "\n");
-  if (operation === "status")
-    return status;
-  const expectedRef = validateLocalTarget(cwd, status);
-  if (operation === "anonymous-auth")
-    return request(operation, { expectedRef });
-  const directory = import_node_path7.default.join(cwd, "supabase/migrations");
-  const migrations = import_node_fs7.default.readdirSync(directory).filter((name) => name.endsWith(".sql")).sort().map((name) => ({
-    path: `supabase/migrations/${name}`,
-    content: import_node_fs7.default.readFileSync(import_node_path7.default.join(directory, name), "utf8")
-  }));
-  return request(operation, { expectedRef, migrations });
-}
-var import_node_fs7, import_node_path7;
-var init_database = __esm({
-  "src/database.ts"() {
-    "use strict";
-    import_node_fs7 = __toESM(require("node:fs"));
-    import_node_path7 = __toESM(require("node:path"));
-    init_daemon();
-    init_keychain();
   }
 });
 
@@ -4959,7 +5077,7 @@ var {
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.3.0",
+  version: "1.3.1",
   description: "CLI do Supremo: bootstrap, preview persistente e checkpoints em background.",
   license: "MIT",
   author: "Supremo",

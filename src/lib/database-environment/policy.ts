@@ -42,7 +42,13 @@ export function validateAutomaticMigration(sql: string): void {
   assertSafeSql(sql, { allowDdl: true })
   // Conservador: operações destrutivas/dinâmicas seguem fora do caminho automático.
   // Examina também strings e comentários: falsos positivos falham explicitamente.
-  if (/\b(drop|truncate|execute|do|commit|rollback|begin|call|copy|dblink|pg_read_file|pg_write_file)\b|\bdelete\s+from\b|\bupdate\s+[\w."]+\s+set\b/i.test(sql.replace(/\bon\s+delete\s+(cascade|restrict|set\s+null|no\s+action)\b/gi, '').replace(/\bfor\s+delete\b/gi, '')) || /\bsupabase_migrations\b/i.test(sql)) {
+  // EXECUTE FUNCTION do trigger de timestamp do scaffold não é SQL dinâmico.
+  // A exceção é só esta chamada sem argumentos; EXECUTE arbitrário segue recusado.
+  const checked = sql
+    .replace(/\bon\s+delete\s+(cascade|restrict|set\s+null|no\s+action)\b/gi, '')
+    .replace(/\bfor\s+delete\b/gi, '')
+    .replace(/\bexecute\s+function\s+public\.set_updated_at\s*\(\s*\)/gi, '')
+  if (/\b(drop|truncate|execute|do|commit|rollback|begin|call|copy|dblink|pg_read_file|pg_write_file)\b|\bdelete\s+from\b|\bupdate\s+[\w."]+\s+set\b/i.test(checked) || /\bsupabase_migrations\b/i.test(sql)) {
     throw new Error('Migration exige revisão: operação destrutiva, dinâmica ou controle de transação não permitido no fluxo automático.')
   }
 }

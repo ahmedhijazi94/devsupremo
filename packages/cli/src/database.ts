@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { readProjectConfig } from './daemon'
 import { resolveKeychain } from './keychain'
+import { requestDatabase } from './database-queue'
 
 export interface DatabaseStatus {
   environment: string
@@ -22,11 +23,18 @@ export function validateLocalTarget(cwd: string, status: DatabaseStatus): string
   return status.projectRef
 }
 
-export async function runDatabase(operation: 'status' | 'migrate' | 'anonymous-auth', cwd = process.cwd()): Promise<unknown> {
+export type DatabaseOperation = 'status' | 'migrate' | 'anonymous-auth'
+
+export async function runDatabase(operation: DatabaseOperation, cwd = process.cwd()): Promise<unknown> {
+  return requestDatabase(cwd, operation)
+}
+
+// Executado somente pelo daemon autorizado, nunca pelo processo do agente.
+export async function runDatabaseDirect(operation: DatabaseOperation, cwd: string): Promise<unknown> {
   const config = readProjectConfig(cwd)
   if (!config) throw new Error('Execute o bootstrap para identificar o projeto.')
   const secret = resolveKeychain().get(config.projectId)
-  if (!secret) throw new Error('Dispositivo sem autorização. Execute o bootstrap.')
+  if (!secret) throw new Error('O daemon não conseguiu acessar a autorização deste dispositivo. Verifique o keychain na máquina que executou o bootstrap.')
   const url = new URL('/api/database', config.apiBaseUrl)
   if (url.protocol !== 'https:' && !(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:')) {
     throw new Error('O endpoint do Supremo deve usar HTTPS.')
@@ -35,7 +43,7 @@ export async function runDatabase(operation: 'status' | 'migrate' | 'anonymous-a
     const res = await fetch(url, {
       method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, operation: op, ...extra }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(op === 'status' ? 15_000 : 60_000),
     })
     const data = await res.json() as { error?: string }
     if (!res.ok) throw new Error(data.error ?? `Banco indisponível (HTTP ${res.status}).`)

@@ -26,7 +26,7 @@ no seu agente e siga o `AGENTS.md` gerado. Para retomar uma sessão, use
 - `--dir <dir>` — pasta-base onde criar o projeto (padrão: a pasta atual).
 - Consulte `supremo bootstrap --help` para as opções da versão instalada.
 
-Comandos atuais: `bootstrap`, `checkpoint`, `daemon` e `sync`. Sem argumentos,
+Comandos atuais: `bootstrap`, `checkpoint`, `daemon`, `sync` e `db`. Sem argumentos,
 a CLI mostra ajuda. A antiga ponte MCP (`connect`/`mcp`) foi removida.
 Checkpoints são locais; envio e integração rodam em background, sem esperar
 CI para a próxima edição.
@@ -45,3 +45,15 @@ stdout ou log. `service_role` nunca é entregue.
 `.supremo/database.json` é um snapshot informativo. A autorização vem do servidor
 em cada escrita. Produção e bancos sem classificação são recusados; não há fallback
 para armazenamento local. O fluxo não espera CI nem reinicia o preview.
+
+A partir da CLI 1.3.1, o agente envia esses pedidos pela fila local
+`.supremo/database-queue/`. O daemon autorizado acessa o keychain e o servidor;
+a fila contém apenas a operação e o prazo, nunca credenciais. O worker de banco
+é independente do upload de checkpoints e de seu backoff. Uma resposta local
+não substitui a validação de autorização no servidor.
+
+Ao atualizar um projeto que já tem o daemon 1.3.0 em execução, atualize a CLI
+incluída em `tools/supremo-cli` e reinicie somente o daemon no terminal autorizado
+(`npm run daemon:stop`, depois `npm run daemon:ensure`). Não é necessário refazer
+bootstrap, trocar banco ou reiniciar o preview. Um daemon antigo é diagnosticado
+imediatamente, sem tentar obter credenciais pelo processo do agente.

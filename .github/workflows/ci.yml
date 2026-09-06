@@ -61,7 +61,9 @@ jobs:
           npm run build
       - name: Testar a CLI local
         working-directory: packages/cli
-        run: npm test
+        run: |
+          npm run typecheck
+          npm test
       - name: Validar distribuição da CLI sem registry
         run: npx tsx scripts/test-cli-distribution.mts
       - run: npm run test:coverage
@@ -111,6 +113,10 @@ jobs:
       # que roda aqui não divergir do que se verifica na máquina.
       - name: Gerar projeto e rodar os gates dele
         run: ./scripts/dev/verify-template.sh /tmp/generated
+      - name: Instalar navegador para a validação isolada
+        run: npx playwright install --with-deps chromium webkit
+      - name: Verificar worker real com o app gerado
+        run: node --import tsx scripts/test-generated-worker.mts /tmp/generated
 
   dependencies:
     name: Vulnerabilidades

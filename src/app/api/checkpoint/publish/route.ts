@@ -55,7 +55,7 @@ const fileOpSchema = z.object({
 
 const changesetSchema = z.object({
   checkpointId: z.string().uuid(),
-  commitSha: z.string().min(7),
+  commitSha: z.string().regex(/^[a-f0-9]{40}$/),
   parentCheckpointId: z.string().uuid().nullable(),
   message: z.string().min(1).max(2000),
   authorName: z.string().min(1).max(200),
@@ -64,7 +64,7 @@ const changesetSchema = z.object({
 })
 
 const bodySchema = z.object({
-  deviceSecret: z.string().min(10),
+  deviceSecret: z.string().min(10).max(256),
   projectId: z.string().uuid(),
   changeset: changesetSchema,
   changesetSha256: z.string().length(64),
@@ -140,6 +140,11 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   // 5. Idempotência: se este checkpoint já foi publicado, devolve a PR existente.
   const existing = await getCheckpointState(client, changeset.checkpointId, body.projectId)
+  // An ID represents one immutable local revision, including failed retries.
+  // Returning a previous PR for a different SHA would invent publication proof.
+  if (existing && existing.commitSha !== changeset.commitSha) {
+    return Response.json({ error: 'Checkpoint já associado a outro SHA.', reason: 'checkpoint_sha_mismatch' }, { status: 409 })
+  }
   if (
     existing &&
     (existing.pushStatus === 'published' || existing.pushStatus === 'integrated') &&

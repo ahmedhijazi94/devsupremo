@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { acceptsFeedback, buildValidationFeedback, sanitizeDiagnostic, withFeedbackEvidence } from './feedback'
+import { acceptsFeedback, buildValidationFeedback, sanitizeDiagnostic, validationFeedbackSchema, withFeedbackEvidence } from './feedback'
 
 const base = {
   projectId: '11111111-1111-4111-8111-111111111111', checkpointId: '22222222-2222-4222-8222-222222222222',
@@ -22,6 +22,29 @@ describe('validation feedback', () => {
     expect(result).toMatchObject({ state: 'failed', publishedSha: base.publishedSha, evidence: base.evidence,
       failures: [{ name: 'Testes e cobertura', category: 'code' }] })
   })
+  it('reports completed checks while other required gates are still pending or failing', () => {
+    const result = buildValidationFeedback({ ...base, required: ['types', 'unit', 'e2e', 'security'], checks: [
+      { name: 'types', status: 'completed', conclusion: 'success' },
+      { name: 'unit', status: 'completed', conclusion: 'failure' },
+      { name: 'e2e', status: 'in_progress', conclusion: null },
+    ] })
+    expect(result.checks).toEqual([
+      { name: 'types', status: 'passed' }, { name: 'unit', status: 'failed' },
+      { name: 'e2e', status: 'pending' }, { name: 'security', status: 'pending' },
+    ])
+    expect(buildValidationFeedback({ ...base, checksSha: 'c'.repeat(40), checks: [
+      { name: base.required[0]!, status: 'completed', conclusion: 'success' },
+    ] }).checks?.[0]?.status).toBe('pending')
+  })
+  it('uses the latest rerun for failure classification and keeps sanitized check names consistent', () => {
+    const name = 'Políticas RLS token=private-value'
+    const result = buildValidationFeedback({ ...base, required: [name], checks: [
+      { name, status: 'completed', conclusion: 'cancelled' },
+      { name, status: 'completed', conclusion: 'failure' },
+    ] })
+    expect(result.failures).toEqual([{ name: 'Políticas RLS token=[REDACTED]', category: 'security' }])
+    expect(result.checks).toEqual([{ name: 'Políticas RLS token=[REDACTED]', status: 'failed' }])
+  })
   it('requires all checks of the matching SHA; no checks or older green never approve', () => {
     expect(buildValidationFeedback({ ...base, checks: [] }).state).toBe('pending')
     expect(buildValidationFeedback({ ...base, checksSha: 'c'.repeat(40), checks: [{ name: base.required[0]!, status: 'completed', conclusion: 'success' }] }).state).toBe('pending')
@@ -30,6 +53,16 @@ describe('validation feedback', () => {
     const checks = [{ name: base.required[0]!, status: 'completed' as const, conclusion: 'success' }]
     expect(buildValidationFeedback({ ...base, checks })).toMatchObject({ state: 'passed', evidence: '', failures: [] })
     expect(buildValidationFeedback({ ...base, checks, integrated: true }).state).toBe('integrated')
+  })
+  it.each(['passed', 'integrated'])('refuses contradictory %s evidence while preserving legacy validated records', (state) => {
+    const passed = buildValidationFeedback({ ...base, checks: [{ name: base.required[0]!, status: 'completed', conclusion: 'success' }] })
+    for (const patch of [
+      { failures: [{ name: 'RLS', category: 'security' }] },
+      { checks: [{ name: 'RLS', status: 'failed' }] },
+      { checks: [{ name: 'RLS', status: 'pending' }] },
+      { checks: [] },
+    ]) expect(validationFeedbackSchema.safeParse({ ...passed, state, ...patch }).success).toBe(false)
+    expect(validationFeedbackSchema.safeParse({ ...passed, state, checks: undefined }).success).toBe(true)
   })
   it('distinguishes security and interrupted infrastructure gates', () => {
     expect(buildValidationFeedback({ ...base, required: ['Políticas RLS'], checks: [{ name: 'Políticas RLS', status: 'completed', conclusion: 'failure' }] }).failures[0]?.category).toBe('security')
@@ -51,5 +84,12 @@ describe('validation feedback', () => {
     expect(clean).toContain('https://example.com/log')
     expect(clean.length).toBe(8000)
     expect(sanitizeDiagnostic('https://%invalid')).toBe('[URL removida]')
+  })
+  it('redacts cookies, quoted credentials and connection strings from diagnostic logs', () => {
+    const raw = `'password': 'private-one'\n"api_key": "private-two"\nSet-Cookie: session=private-three\npostgresql://user:private-four@localhost:5432/app?sslmode=require\nredis://user:private-five@localhost/0#private-six`
+    const clean = sanitizeDiagnostic(raw)
+    expect(clean).not.toMatch(/private-/)
+    expect(clean).toContain('postgresql://localhost:5432/app')
+    expect(clean).toContain('redis://localhost/0')
   })
 })

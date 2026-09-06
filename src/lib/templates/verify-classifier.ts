@@ -89,12 +89,25 @@ export const ENV_BUILD_FAILURE_PATTERNS: RegExp[] = [
   /unable to get local issuer certificate/i,
 ]
 
+/** An environmental warning cannot hide an actual compiler/runtime failure. */
+export const CODE_BUILD_FAILURE_PATTERNS: RegExp[] = [
+  /type error:/i,
+  /error TS\d+:/,
+  /module not found:/i,
+  /cannot find module/i,
+  /syntaxerror:/i,
+  /referenceerror:/i,
+  /invalid next\.config\.[cm]?[jt]s options/i,
+  /parsing ecmascript source code failed/i,
+]
+
 /**
  * Só o passo `build` (nível FULL) pode consultar isto — ver
  * `ENV_BUILD_FAILURE_PATTERNS`. Casa contra a saída (stdout+stderr) da falha.
  */
 export function isKnownEnvironmentalBuildFailure(output: string): boolean {
-  return ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
+  return !CODE_BUILD_FAILURE_PATTERNS.some((re) => re.test(output)) &&
+    ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
 }
 
 /**

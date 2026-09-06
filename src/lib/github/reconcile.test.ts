@@ -20,6 +20,8 @@ describe('seleção do fallback periódico', () => {
     expect(isReconcilable('ci_running')).toBe(true)
     expect(isReconcilable('merge_pending')).toBe(true)
     expect(isReconcilable('validated')).toBe(true)
+    expect(isReconcilable('ci_failed')).toBe(true)
+    expect(isReconcilable('security_blocked')).toBe(true)
     expect(isReconcilable('merged')).toBe(false)
     expect(isReconcilable('development')).toBe(false)
     expect(isReconcilable(null)).toBe(false)
@@ -32,8 +34,10 @@ describe('seleção do fallback periódico', () => {
       { id: 'c', integration_state: 'merge_pending', pr_number: null }, // ✗ sem PR
       { id: 'd', integration_state: null, pr_number: 4 }, // ✗ estado nulo
       { id: 'e', integration_state: 'validated', pr_number: 5 }, // ✓
+      { id: 'f', integration_state: 'ci_failed', pr_number: 6 }, // retry diagnostic capture
+      { id: 'g', integration_state: 'security_blocked', pr_number: 7 }, // rerun while offline
     ]
-    expect(selectReconcilable(projects).map((p) => p.id)).toEqual(['a', 'e'])
+    expect(selectReconcilable(projects).map((p) => p.id)).toEqual(['a', 'e', 'f', 'g'])
   })
 })
 
@@ -492,6 +496,31 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
     ]
   }
 
+  it.each(['G', 'Políticas RLS'])('failure from %s at SHA A never overwrites checkpoint B published while checks were loading', async (gate) => {
+    const [older, newer] = seedRows()
+    if (!older?.published_sha || !newer) throw new Error('Expected two published checkpoint fixtures')
+    const observedSha = older.published_sha
+    const rows = [older!]
+    const client = fakeCheckpointsClient(rows)
+    const gateway: MergeGateway = {
+      getPullRequest: async () => ({ headSha: observedSha, headRef: 'supremo/cp-x', nodeId: 'n', merged: false, state: 'open' }),
+      getChecks: async () => {
+        // The user's next turn publishes while the old GitHub read is in flight.
+        rows.push(newer!)
+        return { headSha: observedSha, checks: [{ name: gate, status: 'completed', conclusion: 'failure' }] }
+      },
+      allowAutoMerge: vi.fn(async () => true), enableNativeAutoMerge: vi.fn(async () => true),
+      merge: vi.fn(async () => ({ sha: 'must-not-merge' })), deleteBranch: vi.fn(async () => {}),
+    }
+    const result = await reconcileProjectPr({ gateway, prNumber: PR_NUMBER, requiredChecks: [gate], mode: 'supremo_managed' })
+    expect(result.headSha).toBe(older!.published_sha)
+    await reconcileCheckpointsForPr(client, { projectId: PROJECT_ID, prNumber: PR_NUMBER, publishedSha: result.headSha },
+      checkpointStatusFromReconcile(result))
+    expect(older!.integration_status).toBe(gate === 'Políticas RLS' ? 'security_blocked' : 'ci_failed')
+    expect(newer!).toMatchObject({ integration_status: 'ci_running', push_status: 'published', published_sha: FINAL_HEAD_SHA })
+    expect(gateway.merge).not.toHaveBeenCalled()
+  })
+
   it('fail-closed: enquanto a PR não mergeou de verdade, NENHUM checkpoint vira integrated — mesmo com synchronize disparando reconciliação', async () => {
     const rows = seedRows()
     const client = fakeCheckpointsClient(rows)
@@ -532,7 +561,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
     expect(pendingResult.merged).toBe(false)
     await reconcileCheckpointsForPr(
       client,
-      { projectId: PROJECT_ID, prNumber: PR_NUMBER },
+      { projectId: PROJECT_ID, prNumber: PR_NUMBER, publishedSha: pendingResult.headSha },
       checkpointStatusFromReconcile(pendingResult),
     )
     expect(stillRunningGateway.merge).not.toHaveBeenCalled()

@@ -16,20 +16,47 @@ O comando:
    escreve o `.env.local` (só variáveis públicas), instala as dependências,
    configura os git hooks e roda o baseline (`npm run verify`).
 
-O bootstrap prepara o daemon e o preview persistente. Abra a pasta criada
-no seu agente e siga o `AGENTS.md` gerado. Para retomar uma sessão, use
-`npm run supremo:resume`; ele preserva um preview saudável.
+O bootstrap prepara o daemon, o preview persistente e os hooks de turno.
+Abra a pasta criada no agente e descreva a funcionalidade. Os adapters de
+Claude Code e Codex executam preflight/postflight e mantêm recibos locais.
+No Codex, os hooks precisam ser revisados e confiados no próprio host.
+`npm run supremo:resume` continua disponível para diagnóstico manual.
 
 ### Opções
 
 - `--url <url>` — URL do seu Supremo (obrigatório).
 - `--dir <dir>` — pasta-base onde criar o projeto (padrão: a pasta atual).
+- `--host <name>` — `claude-code` (padrão) ou `codex`, para verificar o agente escolhido.
 - Consulte `supremo bootstrap --help` para as opções da versão instalada.
 
-Comandos atuais: `bootstrap`, `checkpoint`, `daemon`, `sync` e `db`. Sem argumentos,
+Comandos atuais: `bootstrap`, `turn`, `host`, `checkpoint`, `daemon`, `sync` e `db`. Sem argumentos,
 a CLI mostra ajuda. A antiga ponte MCP (`connect`/`mcp`) foi removida.
 Checkpoints são locais; envio e integração rodam em background, sem esperar
 CI para a próxima edição.
+
+### Turnos e evidências (1.5.0)
+
+`supremo host install` instala os adapters preservando hooks e permissões
+existentes. `supremo host status` diferencia instalação válida de execução
+comprovada; sem recibos, a integração é `assisted`, não `enforced`.
+
+Os hooks chamam `supremo turn preflight`, `before-mutation`, `mutation` e
+`complete`. O preflight reconcilia backend/cache/fila; o postflight captura o
+estado sem alterar o HEAD ou o staging do usuário. Saves têm debounce; testes
+e builds usam uma cópia Git isolada, preservando o preview.
+
+`supremo turn status` mostra estado persistido. `repair-start` e
+`repair-complete` são comandos internos do agente para tentativas de reparo.
+O próximo pedido recebe a pendência automaticamente em um host ativo e com
+hooks confiados. A correção só é resolvida com evidência da mesma revisão;
+produção, provas ausentes, concorrência e diagnósticos antigos bloqueiam o
+reparo. O daemon enfileira e valida; não inicia outro modelo por conta própria.
+
+Configure `.supremo/lifecycle.json` com
+`{"max_auto_repair_attempts":3}` (1–10). Esgotamento exige atenção humana.
+O contrato opcional `.supremo/acceptance.json` liga critérios a testes unitários,
+E2E ou RLS nomeados; critérios sem prova não são aprovados. Testes RLS que
+dependem de banco isolado continuam pendentes para os gates remotos.
 
 O token de git usado no clone é efêmero e nunca aparece em URL, argv, `.git/config`,
 stdout ou log. `service_role` nunca é entregue.

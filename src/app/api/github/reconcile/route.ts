@@ -77,7 +77,7 @@ export async function GET(req: Request): Promise<Response> {
       // checkpoint ficava preso em "Testando" mesmo após um merge válido.
       await reconcileCheckpointsForPr(
         createServiceClient(),
-        { projectId: project.id, prNumber },
+        { projectId: project.id, prNumber, publishedSha: result.headSha },
         checkpointStatusFromReconcile(result),
       )
       try {

@@ -102,7 +102,7 @@ describe('scaffold smoke — scripts gerados batem com a CLI REAL (não só com 
     // comandos de workflow que o template pode referenciar.
     const commands = new Set(cliScripts.map(([, cmd]) => commandFromScript(cmd)[0]))
     for (const c of commands) {
-      expect(['checkpoint', 'daemon', 'sync']).toContain(c)
+      expect(['checkpoint', 'daemon', 'sync', 'turn', 'host']).toContain(c)
     }
   })
 })

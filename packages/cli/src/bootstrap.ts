@@ -2,6 +2,9 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { defaultAuthIO, ensureAuthorized, openBrowser } from './auth'
+import { validationWorkerHealthy } from './turn-validation'
+import { preCommitHook, prePushHook } from './git-hooks'
+import { inspectHostAdapters, type IntegrationMode } from './host-adapters'
 
 /**
  * `supremo bootstrap <project-id>` — device flow + workspace local pronto.
@@ -291,6 +294,8 @@ export function daemonCliOutputLooksValid(output: string | null): boolean {
 
 export interface LocalReadiness {
   ok: boolean
+  state: 'ready' | 'degraded' | 'not_ready'
+  integrationMode: IntegrationMode
   issues: string[]
 }
 
@@ -309,6 +314,17 @@ export function previewStatusHealthy(output: string | null): boolean {
   }
 }
 
+export function previewStatusUrl(output: string | null): string | null {
+  if (!previewStatusHealthy(output) || output === null) return null
+  try {
+    const parsed: unknown = JSON.parse(output)
+    if (typeof parsed !== 'object' || parsed === null || !('url' in parsed) || typeof parsed.url !== 'string') return null
+    const url = new URL(parsed.url)
+    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+      ? url.href.replace(/\/$/, '') : null
+  } catch { return null }
+}
+
 /**
  * PURA: decide se o workflow local prometido está de fato operacional.
  * "Ready" só é verdade quando device identity, daemon E preview estão de pé —
@@ -321,21 +337,60 @@ export function validateLocalReadiness(input: {
   daemonRunning: boolean
   npmScriptsCompatible: boolean | null // null = não aplicável (sem identidade de daemon)
   previewHealthy: boolean
+  setupSucceeded: boolean
+  gitHooksVerified: boolean
+  lifecycleVerified: boolean
+  validationWorkerAvailable: boolean
+  databaseEnvironmentReady: boolean
+  integrationMode: IntegrationMode
 }): LocalReadiness {
   const issues: string[] = []
   if (!input.projectJsonOk) issues.push('.supremo/project.json ausente/incompleto')
+  if (!input.hasDaemonIdentity) issues.push('identidade do checkpoint daemon ausente')
   if (input.hasDaemonIdentity) {
     if (!input.daemonRunning) issues.push('checkpoint daemon não subiu')
-    if (input.npmScriptsCompatible === false) {
+    if (input.npmScriptsCompatible !== true) {
       issues.push(
         'os scripts npm gerados (checkpoint/daemon) não batem com a CLI resolvida ' +
-          'por npx — pode estar desatualizada (aguarde a publicação mais recente e ' +
-          'rode "npm run daemon:ensure" de novo)',
+        'localmente — CLI desatualizada/incompatível',
       )
     }
   }
   if (!input.previewHealthy) issues.push('preview não subiu saudável')
-  return { ok: issues.length === 0, issues }
+  if (!input.setupSucceeded) issues.push('setup:local falhou; baseline/instalação incompleto')
+  if (!input.gitHooksVerified) issues.push('git hooks ausentes ou não ativados')
+  if (!input.lifecycleVerified) issues.push('turn lifecycle adapter ausente/incompatível')
+  if (!input.validationWorkerAvailable) issues.push('worker local de validação indisponível')
+  if (!input.databaseEnvironmentReady) issues.push('ambiente de banco não autorizado para development')
+  if (input.integrationMode === 'unsupported') issues.push('host sem integração utilizável')
+  const critical = issues.length > 0
+  if (input.integrationMode === 'assisted') issues.push('host assisted: início/fim de turno dependem do agente; sem garantia de hooks')
+  const state = critical ? 'not_ready' : input.integrationMode === 'enforced' ? 'ready' : 'degraded'
+  return { ok: state === 'ready', state, integrationMode: input.integrationMode, issues }
+}
+
+export function projectIdentityValid(source: string | null, expectedId: string): boolean {
+  if (!source) return false
+  try {
+    const value: unknown = JSON.parse(source)
+    if (typeof value !== 'object' || value === null) return false
+    const item = value as { projectId?: unknown; supremoUrl?: unknown }
+    return item.projectId === expectedId && typeof item.supremoUrl === 'string' &&
+      (new URL(item.supremoUrl).protocol === 'https:' ||
+        (new URL(item.supremoUrl).protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(item.supremoUrl).hostname)))
+  } catch { return false }
+}
+
+export function gitHooksVerified(root: string): boolean {
+  if (tryExecOutIn('git', ['config', '--get', 'core.hooksPath'], root)?.trim() !== '.githooks') return false
+  try {
+    for (const [name, expected] of [['pre-commit', preCommitHook], ['pre-push', prePushHook]] as const) {
+      const file = path.join(root, '.githooks', name)
+      fs.accessSync(file, fs.constants.R_OK | fs.constants.X_OK)
+      if (fs.readFileSync(file, 'utf8') !== expected) return false
+    }
+    return true
+  } catch { return false }
 }
 
 /** Roda o mesmo comando que `npm run daemon:status` rodaria, no projeto gerado. */
@@ -540,6 +595,7 @@ export async function runBootstrap(opts: {
   projectId: string
   url: string
   dir?: string
+  host?: 'claude-code' | 'codex'
   /**
    * APOSENTADO (v3.1 finalização): preview e daemon agora sobem SEMPRE, sem
    * flag — zero-config significa não ter uma opção pra "ligar" o básico.
@@ -621,11 +677,13 @@ export async function runBootstrap(opts: {
     ? await linkSupabaseRemote(dest, config.supabase)
     : false
 
+  let setupSucceeded = false
   try {
     run('npm', ['run', 'setup:local'], dest)
+    setupSucceeded = true
     ok('Verify passou')
   } catch {
-    console.log('• setup:local pulado (rode "npm run setup:local" manualmente)')
+    console.error('• setup:local falhou. Instalação incompleta será marcada not_ready.')
   }
 
   if (linked) ok('Claude/Codex prontos para trabalhar no Supabase online')
@@ -685,25 +743,41 @@ export async function runBootstrap(opts: {
   // Só declara "pronto" se o workflow LOCAL prometido está de fato operacional
   // (não só "os passos rodaram sem lançar exceção") — device identity, daemon
   // E preview saudáveis, nesta ordem.
+  const adapters = inspectHostAdapters(dest)
+  const selectedHost = opts.host ?? (process.env.CLAUDECODE ? 'claude-code' : 'codex')
+  const selectedAdapter = adapters.adapters[selectedHost]
   const readiness = validateLocalReadiness({
-    projectJsonOk: fs.existsSync(path.join(dest, '.supremo', 'project.json')),
+    projectJsonOk: projectIdentityValid(fs.existsSync(path.join(dest, '.supremo/project.json'))
+      ? fs.readFileSync(path.join(dest, '.supremo/project.json'), 'utf8') : null, config.project.id),
     hasDaemonIdentity: Boolean(config.daemon),
     daemonRunning,
     npmScriptsCompatible,
     previewHealthy,
+    setupSucceeded,
+    gitHooksVerified: gitHooksVerified(dest),
+    lifecycleVerified: selectedAdapter.verified,
+    validationWorkerAvailable: validationWorkerHealthy(dest),
+    databaseEnvironmentReady: config.database?.environment === 'development' &&
+      (!config.supabase || (linked && config.database.projectRef === config.supabase.projectRef)),
+    integrationMode: selectedAdapter.integrationMode,
   })
+  readiness.issues.push(...selectedAdapter.issues)
+  fs.writeFileSync(path.join(dest, '.supremo/bootstrap-readiness.json'), JSON.stringify({
+    ...readiness, projectId: config.project.id, checkedAt: new Date().toISOString(),
+  }, null, 2) + '\n')
 
   if (readiness.ok) {
-    const url = 'http://localhost:3000'
+    const url = previewStatusUrl(tryExecOutIn(process.execPath, ['scripts/preview.mjs', 'status'], dest)) ?? 'consulte preview:status'
     console.log(
-      `\nProjeto pronto para Codex/Claude:\n\n  ${dest}\n  Preview: ${url}\n`,
+      `\nInfraestrutura pronta para ${selectedHost} com ciclo comprovado:\n\n  ${dest}\n  Preview: ${url}\n`,
     )
   } else {
-    console.log(`\n⚠ Projeto criado, mas o workflow local não está 100% operacional:\n`)
+    console.log(`\nProjeto criado; estado ${readiness.state}, integração ${readiness.integrationMode}:\n`)
     for (const issue of readiness.issues) console.log(`  • ${issue}`)
     console.log(
       `\n  O código funciona normalmente; resolva o(s) ponto(s) acima antes de\n` +
         `  contar com checkpoint/publicação/preview automáticos.\n\n  Pasta: ${dest}\n`,
     )
+    if (readiness.state === 'not_ready') throw new Error('Bootstrap incompleto: consulte .supremo/bootstrap-readiness.json.')
   }
 }

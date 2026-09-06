@@ -60,7 +60,7 @@ export interface CommitChange {
 
 export interface CommitReader {
   /** Mudanças do commit (sha^..sha). */
-  changes(sha: string): CommitChange[]
+  changes(sha: string, baseSha?: string): CommitChange[]
   /** Conteúdo do arquivo NESSE commit (Buffer bruto; binário-safe). null se ausente. */
   content(sha: string, path: string): Buffer | null
   /** Metadata do commit. */
@@ -78,7 +78,7 @@ export function buildChangeset(
   const meta = reader.meta(sha)
   const files: FileOp[] = []
 
-  for (const ch of reader.changes(sha)) {
+  for (const ch of reader.changes(sha, record.changesetBaseSha)) {
     const st = ch.status[0] ?? ''
     if (st === 'D') {
       files.push({ path: ch.path, op: 'delete' })
@@ -132,8 +132,8 @@ export function defaultCommitReader(cwd: string): CommitReader {
   }
   const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904' // git empty tree
   return {
-    changes: (sha) => {
-      const base = hasParent(sha) ? `${sha}^` : EMPTY_TREE
+    changes: (sha, baseSha) => {
+      const base = baseSha ?? (hasParent(sha) ? `${sha}^` : EMPTY_TREE)
       const out = text(['diff', '--name-status', '-z', base, sha])
       // Formato -z: registros separados por NUL; rename ocupa 3 campos.
       const parts = out.split('\0').filter((p) => p.length > 0)

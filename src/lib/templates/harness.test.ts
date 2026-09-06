@@ -517,18 +517,27 @@ describe('isKnownEnvironmentalBuildFailure — assinaturas estritas (nunca heur�
   it('NÃO bate: saída vazia (sem evidência nenhuma) — na dúvida, fail-closed', () => {
     expect(isKnownEnvironmentalBuildFailure('')).toBe(false)
   })
+
+  it('erro de código prevalece quando a mesma saída também contém falha ambiental', () => {
+    expect(isKnownEnvironmentalBuildFailure('ENOTFOUND fonts.googleapis.com\nType error: invalid feature input')).toBe(false)
+    expect(isKnownEnvironmentalBuildFailure('fetch failed\nModule not found: missing import')).toBe(false)
+  })
 })
 
 describe('harness generator', () => {
   it('emite os arquivos do harness e da recuperação (preview + status agregado)', () => {
     const files = harnessFiles()
     expect(Object.keys(files).sort()).toEqual([
+      '.claude/settings.json',
+      '.codex/hooks.json',
       '.githooks/pre-commit',
       '.githooks/pre-push',
       'scripts/preview.mjs',
       'scripts/recovery-context.mjs',
       'scripts/setup-local.mjs',
+      'scripts/supremo-codex-hook.mjs',
       'scripts/supremo-status.mjs',
+      'scripts/supremo-turn-hook.mjs',
       'scripts/verify.mjs',
     ])
   })
@@ -548,7 +557,7 @@ describe('harness generator', () => {
     expect(script).toContain('vitest run --coverage --exclude "**/*.rls.test.ts"')
     // RLS só entra quando há service_role (Supabase local); senão, fica pro CI
     expect(script).toContain('SUPABASE_SERVICE_ROLE_KEY')
-    expect(script).toContain("vitest run rls.test")
+    expect(script).toContain("npm run test:rls")
   })
 
   it('o verify.mjs gerado é JavaScript VÁLIDO (node --check)', () => {
@@ -636,6 +645,7 @@ describe('verify.mjs — execução real: build ambiental defere, erro real bloq
     // do changedFiles() cair no modo --no-index (fora de repo) — irrelevante
     // pro teste (nível é forçado via CLI arg 'full'), só deixa a saída limpa.
     execFileSync('git', ['init', '-q'], { cwd: dir })
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'validation base'], { cwd: dir })
     const binDir = join(dir, 'bin')
     mkdirSync(binDir, { recursive: true })
     mkdirSync(join(dir, 'scripts'), { recursive: true })
@@ -736,9 +746,17 @@ process.exit(['tsc', 'eslint', 'vitest'].every(n => fs.existsSync(n + '.done')) 
     expect(output).not.toContain('DEFERIDO')
   })
 
+  it('build com erro de código e aviso ambiental juntos bloqueia em vez de deferir', () => {
+    const { dir, env } = setupProject(1, 'ENOTFOUND fonts.googleapis.com; Type error: invalid feature input')
+    const { status, output } = runVerifyFull(dir, env)
+    expect(status).not.toBe(0)
+    expect(output).not.toContain('DEFERIDO')
+  })
+
   it('a mesma assinatura "ambiental" em OUTRO passo (typecheck) nunca é deferida — só build é elegível', () => {
     const dir = mkdtempSync(join(tmpdir(), 'supremo-verify-e2e-'))
     execFileSync('git', ['init', '-q'], { cwd: dir })
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'validation base'], { cwd: dir })
     const binDir = join(dir, 'bin')
     mkdirSync(binDir, { recursive: true })
     mkdirSync(join(dir, 'scripts'), { recursive: true })
@@ -790,6 +808,7 @@ describe('verify.mjs — execução real: ruído CONHECIDO do Next em tsconfig.j
   function setupCommittedProject(nextExitCode: number): { dir: string; env: NodeJS.ProcessEnv } {
     const dir = mkdtempSync(join(tmpdir(), 'supremo-verify-tsconfig-e2e-'))
     execFileSync('git', ['init', '-q'], { cwd: dir })
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'validation base'], { cwd: dir })
     execFileSync('git', ['config', 'user.email', 'e2e@supremo.test'], { cwd: dir })
     execFileSync('git', ['config', 'user.name', 'Supremo Harness E2E'], { cwd: dir })
     const binDir = join(dir, 'bin')

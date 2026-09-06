@@ -83,6 +83,7 @@ export interface CheckpointUpsert {
 /** Estado do checkpoint (para idempotência do publish). */
 export interface CheckpointStateRow {
   id: string
+  commitSha: string
   pushStatus: string
   prNumber: number | null
   integrationBranch: string | null
@@ -97,7 +98,7 @@ export async function getCheckpointState(
 ): Promise<CheckpointStateRow | null> {
   const { data, error } = await client
     .from('checkpoints')
-    .select('id, push_status, pr_number, integration_branch, published_sha')
+    .select('id, commit_sha, push_status, pr_number, integration_branch, published_sha')
     .eq('id', id)
     .eq('project_id', projectId)
     .maybeSingle()
@@ -105,6 +106,7 @@ export async function getCheckpointState(
   if (!data) return null
   return {
     id: data.id as string,
+    commitSha: data.commit_sha as string,
     pushStatus: data.push_status as string,
     prNumber: (data.pr_number as number | null) ?? null,
     integrationBranch: (data.integration_branch as string | null) ?? null,
@@ -164,7 +166,8 @@ export async function getLatestKnownCheckpoint(
     .eq('project_id', projectId)
     .in('push_status', ['publishing', 'published', 'integrated'])
   if (excludeCheckpointId) query = query.neq('id', excludeCheckpointId)
-  const { data } = await query.order('created_at', { ascending: false }).limit(1).maybeSingle()
+  const { data, error } = await query.order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (error) throw new Error('Não foi possível verificar o checkpoint mais recente.')
   if (!data) return null
   return {
     id: data.id as string,
@@ -213,10 +216,11 @@ export async function upsertCheckpoint(
     .update(payload)
     .eq('id', input.id)
     .eq('project_id', input.projectId)
+    .eq('commit_sha', input.commitSha)
     .select('id')
     .maybeSingle()
   if (error) throw new Error(`Falha ao gravar checkpoint: ${error.message}`)
-  if (!data) throw new CheckpointProjectConflictError('Checkpoint não pertence ao projeto autorizado.')
+  if (!data) throw new CheckpointProjectConflictError('Checkpoint não pertence ao projeto autorizado ou identifica outro SHA.')
 }
 
 export async function setCheckpointPushStatus(
@@ -245,36 +249,22 @@ export async function setCheckpointPushStatus(
 }
 
 /**
- * Reconcilia o status de TODOS os checkpoints publicados sob esta PR com o
- * resultado mais recente da reconciliação (ver `checkpointStatusFromReconcile`
- * em `@/lib/github/reconcile` — decide O QUE gravar; esta função só grava).
- * Join por `pr_number` — estável, nunca reciclado pelo GitHub dentro de um
- * repositório — junto de `project_id` (o mesmo número de PR nunca se repete
- * entre projetos/repos diferentes de qualquer forma, mas o filtro deixa a
- * query explícita). Um UPDATE só, sem `.single()`/`.limit()`: afeta TODOS os
- * checkpoints que casam o filtro numa chamada — 2+ checkpoints publicados na
- * MESMA PR (reuse + synchronize) reconciliam juntos, cada um com seu próprio
- * commit_sha/published_sha/created_at preservados intactos (só integration_
- * status/push_status mudam). Só avança checkpoints ainda `push_status =
- * 'published'` — nunca reabre um `'integrated'`/`'failed'` já resolvido, e
- * nunca toca um `'publishing'` (ainda não tem PR de verdade) ou um checkpoint
- * de OUTRA PR que coincidentemente reusa a mesma integration_branch mais
- * tarde. Idempotente.
- *
- * BUG REAL corrigido aqui: a versão anterior não checava `error` — uma falha
- * da query (rede, permissão, o que for) resolvia como sucesso silencioso,
- * sem lançar nada. Se isto rodasse DEPOIS de `writeIntegrationMeta` já ter
- * gravado o projeto como 'merged' (a ordem real no webhook), o projeto virava
- * READY enquanto os checkpoints ficavam presos sem QUALQUER sinal de erro nos
- * logs. Agora lança — o catch do webhook route pelo menos REGISTRA a falha
- * em vez de escondê-la.
+ * Resultados sem merge só atualizam o published_sha observado: um resultado
+ * atrasado de A não marca B, ainda que ambos compartilhem projeto e PR.
+ * Merge confirmado integra todos os checkpoints publicados daquela PR, pois
+ * o HEAD mesclado inclui os ancestrais. SHAs e ordem permanecem imutáveis.
+ * Checkpoints integrated/failed/publishing e outras PRs nunca são alterados.
+ * Erros de persistência propagam para o worker registrar e retentar.
  */
 export async function reconcileCheckpointsForPr(
   client: SupabaseClient,
-  input: { projectId: string; prNumber: number },
+  input: { projectId: string; prNumber: number; publishedSha?: string },
   status: { pushStatus: 'integrated' | null; integrationStatus: string },
 ): Promise<void> {
-  const { error } = await client
+  if (!status.pushStatus && !input.publishedSha) {
+    throw new Error('Reconciliação sem merge exige o SHA observado para associar a validação.')
+  }
+  let query = client
     .from('checkpoints')
     .update({
       integration_status: status.integrationStatus,
@@ -283,6 +273,8 @@ export async function reconcileCheckpointsForPr(
     .eq('project_id', input.projectId)
     .eq('pr_number', input.prNumber)
     .eq('push_status', 'published')
+  if (!status.pushStatus) query = query.eq('published_sha', input.publishedSha!)
+  const { error } = await query
   if (error) {
     throw new Error(`Falha ao reconciliar checkpoints da PR #${input.prNumber}: ${error.message}`)
   }

@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { acceptanceFixture } from '@/test/fixtures/acceptance'
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(), project: vi.fn(), latest: vi.fn(), credentials: vi.fn(),
   cached: vi.fn(), save: vi.fn(), envelope: vi.fn(), checks: vi.fn(), logs: vi.fn(),
+  acceptance: vi.fn(),
 }))
 vi.mock('@/lib/supabase/admin', () => ({ createServiceClient: () => ({}) }))
 vi.mock('@/lib/checkpoint/devices', () => ({ authenticateDeviceSecret: mocks.auth }))
@@ -10,6 +12,7 @@ vi.mock('@/lib/checkpoint/feedback-store', () => ({ readCheckpointFeedback: mock
 vi.mock('@/lib/projects/repository', () => ({ getProject: mocks.project, getGithubCredentials: mocks.credentials, NotFoundError: class NotFoundError extends Error {} }))
 vi.mock('@/lib/github/client', () => ({ getChecks: mocks.checks, getFailedJobLogs: mocks.logs }))
 vi.mock('@/lib/github/reconcile', () => ({ resolveRequiredChecks: () => ['coverage'] }))
+vi.mock('@/lib/github/acceptance', () => ({ getAcceptanceEvidence: mocks.acceptance }))
 import { POST } from './route'
 import { NotFoundError } from '@/lib/projects/repository'
 
@@ -61,6 +64,20 @@ describe('device feedback endpoint', () => {
     mocks.logs.mockRejectedValue(new Error('token=private-credential'))
     expect((await POST(request())).status).toBe(200)
     expect(mocks.save.mock.calls[0]?.[1]).toMatchObject({ state: 'failed', evidence: expect.stringContaining('indisponível') })
+    expect(JSON.stringify(mocks.save.mock.calls)).not.toContain('private-credential')
+  })
+  it('attaches only named artifact evidence returned for the server project and SHA', async () => {
+    mocks.acceptance.mockResolvedValue(acceptanceFixture)
+    expect((await POST(request())).status).toBe(200)
+    expect(mocks.acceptance).toHaveBeenCalledWith({ token: 'private-credential' }, projectId, latest.publishedSha)
+    expect(mocks.save.mock.calls[0]?.[1]).toMatchObject({ acceptance: acceptanceFixture })
+  })
+  it.each(['missing', 'corrupt'])('preserves the CI failure without approving custom criteria when artifact is %s', async (kind) => {
+    if (kind === 'corrupt') mocks.acceptance.mockRejectedValue(new Error('token=private-credential'))
+    else mocks.acceptance.mockResolvedValue(null)
+    expect((await POST(request())).status).toBe(200)
+    expect(mocks.save.mock.calls[0]?.[1]).toMatchObject({ state: 'failed' })
+    expect(mocks.save.mock.calls[0]?.[1].acceptance).toBeUndefined()
     expect(JSON.stringify(mocks.save.mock.calls)).not.toContain('private-credential')
   })
   it('returns unknown/unavailable instead of manufacturing success or leaking upstream secrets', async () => {

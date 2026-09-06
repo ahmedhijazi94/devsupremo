@@ -39,11 +39,14 @@ export const PLATFORM_MANAGED_PATHS = [
   '.github/workflows/ci.yml',
   'e2e/smoke.spec.ts',
   'scripts/security-audit.js',
+  'scripts/acceptance-rls.mjs',
   // Local dev harness (base infra do Supremo)
   'scripts/verify.mjs',
   'scripts/supremo-status.mjs',
   'scripts/recovery-context.mjs',
   'scripts/setup-local.mjs',
+  'scripts/supremo-turn-hook.mjs',
+  'scripts/supremo-codex-hook.mjs',
   '.githooks/pre-commit',
   '.githooks/pre-push',
 ] as const

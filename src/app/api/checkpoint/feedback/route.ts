@@ -7,6 +7,7 @@ import { buildValidationFeedback, withFeedbackEvidence } from '@/lib/checkpoint/
 import { getProject, getGithubCredentials, NotFoundError } from '@/lib/projects/repository'
 import { getChecks, getFailedJobLogs } from '@/lib/github/client'
 import { resolveRequiredChecks } from '@/lib/github/reconcile'
+import { getAcceptanceEvidence } from '@/lib/github/acceptance'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,6 +44,12 @@ export async function POST(request: Request): Promise<Response> {
           } catch {
             base.evidence = 'Log detalhado indisponível. Os gates identificados falharam; nova consulta automática em background.'
           }
+        }
+        try {
+          const acceptance = await getAcceptanceEvidence(creds, project.id, latest.publishedSha)
+          if (acceptance) base.acceptance = acceptance
+        } catch {
+          base.acceptance = undefined
         }
         await saveCheckpointFeedback(client, base)
       }

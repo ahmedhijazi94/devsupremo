@@ -43,6 +43,8 @@ export interface MergeGateway {
 }
 
 export interface ReconcileResult {
+  /** Exact PR revision observed by this reconciliation, never a webhook hint. */
+  headSha: string
   state: IntegrationState
   decision: MergeDecision | 'noop'
   merged: boolean
@@ -57,7 +59,7 @@ export async function reconcileMerge(
 
   const pr = await gw.getPullRequest(prNumber)
   if (pr.merged) {
-    return { state: 'merged', decision: 'noop', merged: true, reasons: ['PR já mesclada.'] }
+    return { headSha: pr.headSha, state: 'merged', decision: 'noop', merged: true, reasons: ['PR já mesclada.'] }
   }
 
   const checks = await gw.getChecks(pr.headSha)
@@ -77,6 +79,7 @@ export async function reconcileMerge(
       await gw.enableNativeAutoMerge(pr.nodeId)
     }
     return {
+      headSha: pr.headSha,
       state: evaluation.decision === 'blocked' ? evaluation.state : 'merge_pending',
       decision: evaluation.decision,
       merged: false,
@@ -90,6 +93,7 @@ export async function reconcileMerge(
   // ── SUPREMO_MANAGED: nós validamos e mesclamos ───────────────────────────────
   if (evaluation.decision !== 'merge') {
     return {
+      headSha: pr.headSha,
       state: evaluation.state,
       decision: evaluation.decision,
       merged: false,
@@ -102,10 +106,11 @@ export async function reconcileMerge(
   // ciclo sobre o novo HEAD.
   const fresh = await gw.getPullRequest(prNumber)
   if (fresh.merged) {
-    return { state: 'merged', decision: 'noop', merged: true, reasons: ['PR já mesclada.'] }
+    return { headSha: fresh.headSha, state: 'merged', decision: 'noop', merged: true, reasons: ['PR já mesclada.'] }
   }
   if (fresh.headSha !== pr.headSha) {
     return {
+      headSha: fresh.headSha,
       state: 'ci_running',
       decision: 'wait',
       merged: false,
@@ -117,6 +122,7 @@ export async function reconcileMerge(
   // próprio GitHub recusa (409). Dupla trava.
   await gw.merge(prNumber, pr.headSha)
   return {
+    headSha: pr.headSha,
     state: 'merged',
     decision: 'merge',
     merged: true,

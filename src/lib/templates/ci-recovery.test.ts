@@ -26,12 +26,16 @@ if [ '${scenario}' = migration ]; then echo 'invalid migration'; else echo 'toom
 exit 1
 `, { mode: 0o755 })
         fs.writeFileSync(path.join(dir, 'node_modules/.bin/sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-        const result = spawnSync('bash', ['-c', script], { cwd: dir, env: { ...process.env, PATH: `${dir}/node_modules/.bin:${process.env.PATH}` }, encoding: 'utf8' })
+        // Exercise the generated retry logic without starting npm on each
+        // simulated attempt or letting the fixture consult a package registry.
+        fs.writeFileSync(path.join(dir, 'node_modules/.bin/npx'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 })
+        const result = spawnSync('bash', ['-c', script], { cwd: dir, env: { ...process.env, PATH: `${dir}/node_modules/.bin:${process.env.PATH}` }, encoding: 'utf8', timeout: 10_000 })
+        expect(result.error).toBeUndefined()
         expect(result.status).toBe(scenario === 'transient' ? 0 : 1)
         expect(fs.readFileSync(path.join(dir, 'count'), 'utf8').trim()).toBe(scenario === 'transient' ? '2' : scenario === 'persistent' ? '3' : '1')
         // Syntax checked independently of the stub's success path.
         execFileSync('bash', ['-n'], { input: script })
       } finally { fs.rmSync(dir, { recursive: true, force: true }) }
-    })
+    }, 15_000)
   }
 })

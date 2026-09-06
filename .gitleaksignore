@@ -23,3 +23,9 @@
 # que a redação funciona (nunca foram credenciais reais).
 706a0ce8df052c9704f32c74fe41c91003b0e6d2:packages/companion/src/redact.test.ts:generic-api-key:6
 706a0ce8df052c9704f32c74fe41c91003b0e6d2:packages/companion/src/redact.test.ts:github-pat:9
+
+# src/lib/checkpoint/feedback.test.ts — fixture do teste de sanitização.
+# O corpo entre os marcadores PEM é literalmente "private": não é uma chave
+# válida, não foi gerado por criptografia e nunca autenticou serviço algum.
+# Exceção restrita ao commit/arquivo/regra/linha revisados, sem excluir testes.
+53bb9ca8c1732c3b717b7253af1d0580775f65d5:src/lib/checkpoint/feedback.test.ts:private-key:48

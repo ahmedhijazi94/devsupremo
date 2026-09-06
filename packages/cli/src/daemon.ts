@@ -21,6 +21,7 @@ import {
 import { resolveKeychain } from './keychain'
 import { startDatabaseWorker } from './database-queue'
 import { runDatabaseDirect } from './database'
+import { startFeedbackWorker } from './feedback'
 import {
   applyRestore,
   defaultRestoreDeps,
@@ -597,9 +598,11 @@ export async function runDaemonLoop(
   let stopped = false
   // Independente do upload/CI/backoff: o banco responde mesmo com checkpoint pendente.
   const stopDatabaseWorker = startDatabaseWorker(cwd, (operation) => runDatabaseDirect(operation, cwd))
+  const stopFeedbackWorker = startFeedbackWorker(daemonConfig)
   process.on('SIGTERM', () => {
     stopped = true
     stopDatabaseWorker()
+    stopFeedbackWorker()
   })
   while (!stopped) {
     let queue: CheckpointRecord[] = []

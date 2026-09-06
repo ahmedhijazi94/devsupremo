@@ -1,3 +1,4 @@
+import { recoveryContextScript } from './recovery-context'
 import {
   BROAD_FILE_COUNT,
   ENV_BUILD_FAILURE_PATTERNS,
@@ -685,7 +686,8 @@ export function verifyScript(): string {
 import { exec, execSync } from 'node:child_process'
 import { promisify } from 'node:util'
 const execAsync = promisify(exec)
-import { readFileSync } from 'node:fs'
+import fs, { readFileSync } from 'node:fs'
+${recoveryContextScript().replace("import fs from 'node:fs'\n", "").replace("export function", "function")}
 
 const FULL_PATTERNS = ${serializePatterns(FULL_PATTERNS)}
 const SECURITY_PATTERNS = ${serializePatterns(SECURITY_PATTERNS)}
@@ -802,7 +804,7 @@ function classify(paths, noisePaths) {
 // pública chega). Então excluímos RLS do vitest padrão e só rodamos os testes
 // de RLS quando há Supabase local; senão, o gate "Políticas RLS" do CI cobre.
 const hasLocalDb = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)
-const UNIT = 'vitest run --exclude "**/*.rls.test.ts"'
+const UNIT = 'vitest run --coverage --exclude "**/*.rls.test.ts"'
 const rlsStep = hasLocalDb ? [['rls / isolamento', 'vitest run rls.test']] : []
 
 const STEPS = {
@@ -825,7 +827,7 @@ const STEPS = {
     ['unit + integração', UNIT],
     ...rlsStep,
     ['secret scan', 'node scripts/security-audit.js --strict'],
-    ['build', 'next build'],
+    ['build', 'next build --webpack'],
   ],
 }
 
@@ -838,6 +840,12 @@ const { level, reason } = forced
   : classify(paths, knownNoisePaths(paths))
 
 console.log(\`\\n▸ verify [\${level.toUpperCase()}] — \${reason} (\${paths.length} arquivo(s))\\n\`)
+const sourceChanged = paths.some((p) => /\\.[cm]?[jt]sx?$/.test(p) && !/\\.d\\.ts$/.test(p))
+const recovery = readRecoveryContext()
+const knownCoverageFailure = recovery.failure?.failures?.some((failure) => /cobertura|coverage/i.test(failure?.name ?? '')) ?? false
+if (level === 'quick' && (sourceChanged || knownCoverageFailure)) {
+  STEPS.quick[2] = ['testes e cobertura', UNIT]
+}
 const t0 = Date.now()
 let buildDeferred = false
 // Verificações independentes em paralelo; build só começa após todas passarem.
@@ -1024,6 +1032,7 @@ export function supremoStatusScript(): string {
 // teste-v3-15; ver comentário acima).
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+${recoveryContextScript().replace("import fs from 'node:fs'\n", "").replace("export function", "function")}
 
 function tryJson(cmd, args) {
   try {
@@ -1077,13 +1086,14 @@ function readDaemonLocal() {
   }
   const running = pid !== null && daemonPidAlive(pid)
   let pendingCheckpoints = 0
+  const checkpointStates = new Map()
   try {
     for (const line of fs.readFileSync(QUEUE_FILE, 'utf8').split('\\n')) {
       const t = line.trim()
       if (!t) continue
       try {
         const rec = JSON.parse(t)
-        if (RETRIABLE.has(rec.pushStatus)) pendingCheckpoints += 1
+        if (typeof rec.checkpointId === 'string') checkpointStates.set(rec.checkpointId, rec.pushStatus)
       } catch {
         /* linha corrompida — ignora, mesma tolerância de parseQueue */
       }
@@ -1091,6 +1101,7 @@ function readDaemonLocal() {
   } catch {
     /* sem fila ainda: 0 pendências */
   }
+  pendingCheckpoints = [...checkpointStates.values()].filter((status) => RETRIABLE.has(status)).length
   return { running, healthy: running, pendingCheckpoints }
 }
 
@@ -1201,6 +1212,7 @@ console.log(JSON.stringify({
     ...(daemonEnsureError ? { error: daemonEnsureError } : {}),
   },
   checkpoints: { pending: daemon.pendingCheckpoints ?? 0 },
+  recovery: readRecoveryContext(),
 }))
 
 // O preflight (--ensure) só "termina" de verdade com os dois saudáveis — sai
@@ -1217,6 +1229,7 @@ if (process.argv.includes('--ensure') && !healthy) {
 
 export function harnessFiles(): Record<string, string> {
   return {
+    'scripts/recovery-context.mjs': recoveryContextScript(),
     'scripts/verify.mjs': verifyScript(),
     'scripts/setup-local.mjs': setupLocalScript(),
     'scripts/preview.mjs': previewSupervisorScript(),

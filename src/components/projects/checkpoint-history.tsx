@@ -89,7 +89,7 @@ export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) 
 
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Pill tone={STATUS_TONE[item.status]} dot pulse={inProgress}>
-                    {item.status}
+                    {item.validationLabel || item.status}
                   </Pill>
                   <span className="text-muted text-xs">{formatRelativeTime(item.createdAt)}</span>
                   <span className="text-line-strong">·</span>
@@ -110,6 +110,12 @@ export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) 
                   )}
                 </div>
 
+                {item.validationSummary && (
+                  <p className="text-muted mt-2 text-xs">{item.validationSummary}</p>
+                )}
+                {item.validationLabel && (
+                  <p className="text-muted mt-1 text-xs">Código salvo. O diagnóstico fica disponível ao agente no próximo pedido; a integração aguarda validação.</p>
+                )}
                 {item.migrations.length > 0 && item.status !== 'Integrado' && (
                   <p className="text-wait-ink mt-2 flex items-center gap-1 text-[11px]">
                     <Sparkles className="size-3 shrink-0" />

@@ -15,6 +15,7 @@ import {
 } from '@/lib/projects/repository'
 import { createServiceClient } from '@/lib/supabase/admin'
 import { reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
+import { capturePrFeedback } from '@/lib/checkpoint/feedback-capture'
 
 /**
  * Webhook da GitHub App — o GATILHO event-driven do Merge Controller v3.
@@ -96,6 +97,12 @@ export async function POST(req: Request): Promise<Response> {
         { projectId: project.id, prNumber },
         checkpointStatusFromReconcile(result),
       )
+      try {
+        await capturePrFeedback(client, project.id,
+          installationCreds(token, target.repoFullName, project.defaultBranch), prNumber)
+      } catch {
+        logger.event('feedback_capture_deferred', { projectId: project.id, prNumber })
+      }
       // Cleanup da integration_branch (v3-13) — SÓ depois de merge/checkpoint
       // já persistidos acima, e só quando a reconciliação confirmou merged.
       // Nunca lança (best-effort): uma falha aqui não pode desfazer nada do

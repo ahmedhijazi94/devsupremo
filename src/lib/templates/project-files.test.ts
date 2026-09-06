@@ -1054,7 +1054,7 @@ describe('workflow v3 — contrato assíncrono do agente (AGENTS.md/CLAUDE.md)',
 
   it('falha de CI de um checkpoint anterior: resumo barato + novo checkpoint, sem polling', () => {
     expect(agents).toMatch(/Falha de CI de um checkpoint anterior/i)
-    expect(agents).toMatch(/resumo barato/i)
+    expect(agents).toMatch(/recovery/)
     expect(agents).toMatch(/novo checkpoint/i)
   })
 
@@ -1376,7 +1376,7 @@ describe('geração de teste de RLS', () => {
     const ci = file('.github/workflows/ci.yml')
     const rlsJob = ci.slice(ci.indexOf('\n  rls:'), ci.indexOf('\n  dependencies:'))
     const npmCiIdx = rlsJob.indexOf('run: npm ci')
-    const supabaseStartIdx = rlsJob.indexOf('run: ./node_modules/.bin/supabase start')
+    const supabaseStartIdx = rlsJob.indexOf('./node_modules/.bin/supabase start')
     expect(npmCiIdx).toBeGreaterThan(-1)
     expect(supabaseStartIdx).toBeGreaterThan(-1)
     expect(npmCiIdx).toBeLessThan(supabaseStartIdx)

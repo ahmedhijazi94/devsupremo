@@ -17,6 +17,7 @@ import {
 } from '@/lib/projects/repository'
 import { createServiceClient } from '@/lib/supabase/admin'
 import { listPendingIntegrationBranchCleanups, reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
+import { capturePrFeedback } from '@/lib/checkpoint/feedback-capture'
 
 /**
  * Fallback periódico de reconciliation (Vercel Cron) — a REDE DE SEGURANÇA do
@@ -79,6 +80,11 @@ export async function GET(req: Request): Promise<Response> {
         { projectId: project.id, prNumber },
         checkpointStatusFromReconcile(result),
       )
+      try {
+        await capturePrFeedback(createServiceClient(), project.id, creds, prNumber)
+      } catch {
+        logger.event('feedback_capture_deferred', { projectId: project.id, prNumber })
+      }
       // Cleanup da integration_branch (v3-13) — MESMO caminho do webhook, pra
       // isto ser repetível aqui também (rede de segurança) se o webhook tiver
       // perdido/falhado o cleanup dele. Nunca lança: best-effort, não afeta

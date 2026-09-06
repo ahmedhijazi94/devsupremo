@@ -44,6 +44,8 @@ export default defineConfig({
         'src/lib/provisioning/provision.ts', // provisioning: GitHub+Supabase+DB (E2E)
         'src/lib/bootstrap/config.ts', // resolve credenciais/env + App token
         'src/lib/bootstrap/supabase-store.ts', // store do device flow sobre Postgres
+        'src/lib/checkpoint/feedback-store.ts', // persistence adapter for sanitized diagnostics
+        'src/lib/checkpoint/feedback-capture.ts', // GitHub/Postgres capture adapter
         'src/lib/checkpoint/store.ts', // store Supabase do checkpoint daemon (I/O)
         'src/lib/checkpoint/publish.ts', // aplica changeset via Git Data API (I/O)
         // Contexto de requisição / factories finas / tipos

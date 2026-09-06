@@ -3,6 +3,7 @@
 import { z } from 'zod'
 import { requireUser, toActionError } from '@/lib/auth'
 import { humanCheckpointStatus, humanRestoreStatus } from '@/lib/checkpoint/restore'
+import { validationFeedbackSchema } from '@/lib/checkpoint/feedback'
 
 /**
  * Histórico + Restore (v3.1 finalização) — o usuário nunca precisa abrir o
@@ -21,6 +22,8 @@ export interface CheckpointHistoryItem {
   prNumber: number | null
   createdAt: string
   restoredFromCheckpointId: string | null
+  validationLabel?: string
+  validationSummary?: string
 }
 
 export async function listProjectCheckpoints(
@@ -34,13 +37,13 @@ export async function listProjectCheckpoints(
     const { data, error } = await supabase
       .from('checkpoints')
       .select(
-        'id, parent_checkpoint_id, summary, risk_level, push_status, integration_status, migrations, pr_number, created_at, restored_from_checkpoint_id, project_id',
+        'id, parent_checkpoint_id, summary, risk_level, push_status, integration_status, migrations, pr_number, created_at, restored_from_checkpoint_id, project_id, validation_feedback',
       )
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
     if (error) return { error: error.message }
     return {
-      items: (data ?? []).map((r) => ({
+      items: (data ?? []).map((r, index, rows) => ({
         id: r.id as string,
         parentCheckpointId: (r.parent_checkpoint_id as string | null) ?? null,
         summary: r.summary as string,
@@ -53,6 +56,12 @@ export async function listProjectCheckpoints(
         prNumber: (r.pr_number as number | null) ?? null,
         createdAt: r.created_at as string,
         restoredFromCheckpointId: (r.restored_from_checkpoint_id as string | null) ?? null,
+        validationLabel: r.push_status === 'published' && (r.integration_status === 'ci_failed' || r.integration_status === 'security_blocked')
+          ? rows.slice(0, index).some((newer) => newer.pr_number === r.pr_number)
+            ? 'Aguarda correção do conjunto' : 'Validação bloqueada'
+          : '',
+        validationSummary: validationFeedbackSchema.safeParse(r.validation_feedback).success
+          ? validationFeedbackSchema.parse(r.validation_feedback).summary : '',
       })),
     }
   } catch (error) {

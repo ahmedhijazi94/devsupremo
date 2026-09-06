@@ -41,6 +41,8 @@ export const PLATFORM_MANAGED_PATHS = [
   'scripts/security-audit.js',
   // Local dev harness (base infra do Supremo)
   'scripts/verify.mjs',
+  'scripts/supremo-status.mjs',
+  'scripts/recovery-context.mjs',
   'scripts/setup-local.mjs',
   '.githooks/pre-commit',
   '.githooks/pre-push',

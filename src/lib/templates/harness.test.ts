@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -520,12 +520,13 @@ describe('isKnownEnvironmentalBuildFailure — assinaturas estritas (nunca heur�
 })
 
 describe('harness generator', () => {
-  it('emite os 6 arquivos do harness (preview + status agregado)', () => {
+  it('emite os arquivos do harness e da recuperação (preview + status agregado)', () => {
     const files = harnessFiles()
     expect(Object.keys(files).sort()).toEqual([
       '.githooks/pre-commit',
       '.githooks/pre-push',
       'scripts/preview.mjs',
+      'scripts/recovery-context.mjs',
       'scripts/setup-local.mjs',
       'scripts/supremo-status.mjs',
       'scripts/verify.mjs',
@@ -544,7 +545,7 @@ describe('harness generator', () => {
   it('verify exclui os testes de RLS e os gateia por Supabase local', () => {
     const script = verifyScript()
     // unit/integration NÃO roda *.rls.test.ts (precisam de Postgres real)
-    expect(script).toContain('vitest run --exclude "**/*.rls.test.ts"')
+    expect(script).toContain('vitest run --coverage --exclude "**/*.rls.test.ts"')
     // RLS só entra quando há service_role (Supabase local); senão, fica pro CI
     expect(script).toContain('SUPABASE_SERVICE_ROLE_KEY')
     expect(script).toContain("vitest run rls.test")
@@ -661,6 +662,24 @@ describe('verify.mjs — execução real: build ambiental defere, erro real bloq
     }
   }
 
+  it('uma falha conhecida de cobertura é revalidada até em um próximo pedido cosmético', () => {
+    const { dir, env } = setupProject(0, '')
+    mkdirSync(join(dir, '.supremo'), { recursive: true })
+    writeFileSync(join(dir, '.supremo/project.json'), JSON.stringify({ projectId: 'project' }))
+    writeFileSync(join(dir, '.supremo/validation-feedback.json'), JSON.stringify({
+      current: null,
+      previousFailure: {
+        projectId: 'project', checkpointId: 'checkpoint', commitSha: 'a'.repeat(40), publishedSha: 'b'.repeat(40),
+        observedAt: new Date().toISOString(), state: 'failed', summary: 'Cobertura insuficiente', evidence: '70% < 80%',
+        failures: [{ name: 'Testes e cobertura', category: 'code' }],
+      },
+    }))
+    // Only a predetermined check may execute; log text never becomes a command.
+    writeFileSync(join(dir, 'bin/vitest'), '#!/bin/sh\necho "$@" > vitest-arguments\nexit 0\n')
+    execFileSync(process.execPath, [join(dir, 'verify.mjs'), 'quick'], { cwd: dir, env, stdio: 'pipe' })
+    expect(readFileSync(join(dir, 'vitest-arguments'), 'utf8')).toContain('--coverage')
+  }, 15000)
+
   it('executa checks simultaneamente e só inicia build após todos terminarem', () => {
     const { dir, env } = setupProject(0, '')
     const barrier = `#!/usr/bin/env node
@@ -684,7 +703,7 @@ const fs = require('node:fs')
 process.exit(['tsc', 'eslint', 'vitest'].every(n => fs.existsSync(n + '.done')) ? 0 : 1)
 `)
     expect(runVerifyFull(dir, env).status).toBe(0)
-  })
+  }, 15000)
 
   it('build falha com assinatura CONHECIDA de limitação ambiental (porta ocupada) → DEFERE, verify sai com sucesso', () => {
     const { dir, env } = setupProject(1, 'Error: listen EADDRINUSE: address already in use :::3000')

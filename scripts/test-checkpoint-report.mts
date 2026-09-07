@@ -22,6 +22,7 @@ create function public.update_updated_at() returns trigger language plpgsql as $
 ${migration('016_checkpoint_daemon.sql')}
 ${migration('017_checkpoint_history_restore.sql')}
 ${migration('020_checkpoint_local_reports.sql')}
+${migration('021_checkpoint_publication_order.sql')}
 grant usage on schema public, auth to authenticated, anon, service_role;
 grant select, insert, update, delete on all tables in schema public to authenticated, anon, service_role;
 insert into auth.users values('${id(1)}'),('${id(2)}');

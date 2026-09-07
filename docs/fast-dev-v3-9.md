@@ -48,9 +48,11 @@ de branch que os exija; proteção antiga insuficiente impede habilitar o autome
 
 ## Entrega a projetos existentes
 
-1. Aplicar `supabase/migrations/020_checkpoint_local_reports.sql` no banco do
+1. Aplicar `supabase/migrations/020_checkpoint_local_reports.sql` e depois
+   `supabase/migrations/021_checkpoint_publication_order.sql` no banco do
    **control plane Supremo**, mantendo as migrations anteriores. Não é migration
-   do banco do app gerado. É necessário antes do deploy que consulta as colunas.
+   do banco do app gerado. A 020 é necessária antes do deploy que consulta as
+   colunas; a 021 mantém a ordem de publicação independente do relógio local.
 2. Publicar a versão do Supremo com o bundle CLI 1.6.0 e template 3.9.0.
 3. Usar a atualização de base do projeto. AGENTS/CLAUDE recebem apenas um bloco
    de política gerenciado; preferências e texto do usuário são preservados.

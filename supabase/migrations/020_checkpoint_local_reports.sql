@@ -11,24 +11,6 @@ ALTER TABLE public.checkpoints
   ADD COLUMN IF NOT EXISTS local_report_revision BIGINT NOT NULL DEFAULT 0 CHECK (local_report_revision >= 0),
   ADD COLUMN IF NOT EXISTS local_reported_at TIMESTAMPTZ;
 
--- Local clocks may be skewed. Once a local checkpoint enters publication its
--- created_at becomes server authority, as for checkpoints originally inserted
--- by publish. getLatestKnownCheckpoint must never sort a newly published change
--- behind its own parent. A retry does not restamp an already publishing row.
-CREATE OR REPLACE FUNCTION public.stamp_checkpoint_publication_order()
-RETURNS TRIGGER LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
-BEGIN
-  NEW.created_at = clock_timestamp();
-  RETURN NEW;
-END;
-$$;
-REVOKE ALL ON FUNCTION public.stamp_checkpoint_publication_order() FROM PUBLIC, anon, authenticated;
-DROP TRIGGER IF EXISTS trg_checkpoint_publication_order ON public.checkpoints;
-CREATE TRIGGER trg_checkpoint_publication_order
-  BEFORE UPDATE ON public.checkpoints
-  FOR EACH ROW WHEN (OLD.push_status = 'local' AND NEW.push_status = 'publishing')
-  EXECUTE FUNCTION public.stamp_checkpoint_publication_order();
-
 -- No caller-authored prompt, file, log, repository, branch or approval is accepted.
 -- The service route checks ownership, repeated here so a future caller cannot omit it.
 CREATE OR REPLACE FUNCTION public.report_local_checkpoint(

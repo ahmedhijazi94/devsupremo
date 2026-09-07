@@ -92,6 +92,7 @@ jobs:
       - run: |
           npx tsx scripts/test-template-rls.mts
           npx tsx scripts/test-provisioning-migrations.mts
+          npx tsx scripts/test-checkpoint-report.mts
         env:
           SUPREMO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 
@@ -117,6 +118,15 @@ jobs:
         run: npx playwright install --with-deps chromium webkit
       - name: Verificar worker real com o app gerado
         run: node --import tsx scripts/test-generated-worker.mts /tmp/generated
+      - name: Verificar edição rápida, continuidade e rascunho no preview real
+        run: |
+          node --import tsx scripts/dev/generate-sample-project.ts /tmp/supremo-fast-dev
+          npm ci --prefix /tmp/supremo-fast-dev --no-audit --no-fund
+          cd /tmp/supremo-fast-dev
+          trap 'npm --prefix /tmp/supremo-fast-dev run preview:stop' EXIT
+          node scripts/preview.mjs ensure
+          cd "$GITHUB_WORKSPACE"
+          node --import tsx scripts/test-fast-dev.mts /tmp/supremo-fast-dev
 
   dependencies:
     name: Vulnerabilidades

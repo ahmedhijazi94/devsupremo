@@ -1,9 +1,13 @@
+'use client'
+
+import { useEffect, useState } from 'react'
 import { Database, GitPullRequest, History, Sparkles, RotateCcw, CircleDot } from 'lucide-react'
 import { formatRelativeTime, cn } from '@/lib/utils'
 import { computeActiveCheckpointId } from '@/lib/checkpoint/restore'
 import { RestoreCheckpointButton } from './restore-checkpoint-button'
 import { Pill, type PillTone } from '@/components/ui/pill'
 import type { CheckpointHistoryItem } from '@/actions/checkpoints'
+import { listProjectCheckpoints } from '@/actions/checkpoints'
 
 /**
  * Histórico — cada pedido concluído é um item, com identidade própria (nunca
@@ -19,6 +23,7 @@ import type { CheckpointHistoryItem } from '@/actions/checkpoints'
  */
 
 const STATUS_TONE: Record<CheckpointHistoryItem['status'], PillTone> = {
+  'Salvo localmente': 'wait',
   Salvando: 'neutral',
   Publicando: 'info',
   Testando: 'wait',
@@ -37,13 +42,32 @@ interface CheckpointHistoryProps {
   items: CheckpointHistoryItem[]
 }
 
-export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) {
+export function CheckpointHistory({ projectId, items: initialItems }: CheckpointHistoryProps) {
+  const [items, setItems] = useState(initialItems)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const refresh = async () => {
+      try {
+        const result = await listProjectCheckpoints(projectId)
+        if (!active) return
+        if (result.items) setItems(result.items)
+        setError(result.error ?? null)
+      } catch {
+        if (active) setError('Não foi possível atualizar o histórico. Tentando novamente.')
+      }
+      if (active) timer = setTimeout(() => { void refresh() }, 6000)
+    }
+    void refresh()
+    return () => { active = false; if (timer) clearTimeout(timer) }
+  }, [projectId])
   if (items.length === 0) {
     return (
       <div className="border-line bg-surface rounded-[var(--radius-inner)] border border-dashed p-8 text-center">
         <History className="text-muted mx-auto mb-2.5 size-5" />
         <p className="text-muted text-sm">
-          Nenhum checkpoint ainda. Cada pedido concluído no seu editor aparece aqui.
+          {error ?? 'Nenhum checkpoint recebido ainda. O daemon registra aqui as alterações salvas no seu computador.'}
         </p>
       </div>
     )
@@ -52,6 +76,8 @@ export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) 
   const activeId = computeActiveCheckpointId(items)
 
   return (
+    <div>
+      {error && <p role="status" className="text-wait-ink mb-2 text-sm">{error}</p>}
     <ul className="flex flex-col gap-2.5">
       {items.map((item) => {
         const isActive = item.id === activeId
@@ -88,14 +114,14 @@ export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) 
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <Pill tone={STATUS_TONE[item.status]} dot pulse={inProgress}>
+                  <Pill tone={item.localState === 'failed' ? 'down' : STATUS_TONE[item.status]} dot pulse={inProgress}>
                     {item.validationLabel || item.status}
                   </Pill>
                   <span className="text-muted text-xs">{formatRelativeTime(item.createdAt)}</span>
-                  <span className="text-line-strong">·</span>
-                  <span className="text-muted font-mono text-[11px]">
+                  {!item.localState && <span className="text-line-strong">·</span>}
+                  {!item.localState && <span className="text-muted font-mono text-[11px]">
                     {RISK_LABEL[item.riskLevel]}
-                  </span>
+                  </span>}
                   {item.migrations.length > 0 && (
                     <span className="text-muted inline-flex items-center gap-1 text-xs">
                       <Database className="size-3" />
@@ -113,7 +139,7 @@ export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) 
                 {item.validationSummary && (
                   <p className="text-muted mt-2 text-xs">{item.validationSummary}</p>
                 )}
-                {item.validationLabel && (
+                {item.validationLabel && !item.localState && (
                   <p className="text-muted mt-1 text-xs">Código salvo. O diagnóstico fica disponível ao agente no próximo pedido; a integração aguarda validação.</p>
                 )}
                 {item.migrations.length > 0 && item.status !== 'Integrado' && (
@@ -124,17 +150,18 @@ export function CheckpointHistory({ projectId, items }: CheckpointHistoryProps) 
                   </p>
                 )}
               </div>
-              <div className="pt-0.5">
+              {item.canRestore && <div className="pt-0.5">
                 <RestoreCheckpointButton
                   projectId={projectId}
                   checkpointId={item.id}
                   summary={item.summary}
                 />
-              </div>
+              </div>}
             </div>
           </li>
         )
       })}
     </ul>
+    </div>
   )
 }

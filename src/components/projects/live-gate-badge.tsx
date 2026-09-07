@@ -17,21 +17,26 @@ export function LiveGateBadge({ projectId }: { projectId: string }) {
     'idle',
   )
   const [label, setLabel] = useState('')
+  const [badgeLabel, setBadgeLabel] = useState('')
 
   useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout>
 
     async function tick() {
-      const result = await getProjectChecks(projectId)
+      let result: Awaited<ReturnType<typeof getProjectChecks>>
+      try { result = await getProjectChecks(projectId) }
+      catch { result = { error: 'Estado indisponível.' } }
       if (!active) return
 
       if (result.error || !result.data) {
         setState('idle')
         setLabel('')
+        setBadgeLabel('')
       } else {
         setState(result.data.state === undefined ? 'idle' : result.data.state)
         setLabel(result.data.summary)
+        setBadgeLabel(result.data.badgeLabel ?? '')
       }
 
       // Rodando: volta rápido. Assentado: volta devagar, só para pegar um PR
@@ -60,7 +65,7 @@ export function LiveGateBadge({ projectId }: { projectId: string }) {
   return (
     <span title={label}>
       <Pill tone={tone[state]} dot pulse={state === 'pending'}>
-        {text}
+        {badgeLabel || text}
       </Pill>
     </span>
   )

@@ -30,9 +30,13 @@ export interface MergeGateway {
     nodeId: string
     merged: boolean
     state: string
+    autoMergeEnabled?: boolean
   }>
   /** Checks do ref dado + o SHA a que pertencem (headSha). */
   getChecks(ref: string): Promise<{ checks: CheckRun[]; headSha: string }>
+  /** Native execution is safe only while GitHub itself requires every gate. */
+  hasRequiredChecks?(required: readonly string[]): Promise<boolean>
+  disableNativeAutoMerge?(nodeId: string): Promise<boolean>
   allowAutoMerge(): Promise<boolean>
   enableNativeAutoMerge(nodeId: string): Promise<boolean>
   merge(prNumber: number, expectedSha: string): Promise<{ sha: string }>
@@ -72,21 +76,35 @@ export async function reconcileMerge(
 
   // ── NATIVE_GITHUB: o GitHub é a barreira e o executor do merge ───────────────
   if (mode === 'native') {
-    // Não mexemos se um gate já falhou — o auto-merge nativo simplesmente não
-    // dispara enquanto vermelho; habilitar é idempotente e seguro em qualquer caso.
-    if (evaluation.decision !== 'blocked') {
-      await gw.allowAutoMerge()
-      await gw.enableNativeAutoMerge(pr.nodeId)
+    const protectedByGithub = await gw.hasRequiredChecks?.(requiredChecks) ?? false
+    if (!protectedByGithub) {
+      const withdrawn = !pr.autoMergeEnabled || await gw.disableNativeAutoMerge?.(pr.nodeId) === true
+      return {
+        headSha: pr.headSha, state: 'security_blocked', decision: 'blocked', merged: false,
+        reasons: [withdrawn
+          ? 'A proteção nativa não comprova todos os gates obrigatórios; auto-merge desativado ou não habilitado.'
+          : 'A proteção nativa não comprova todos os gates e o GitHub não confirmou a desativação do auto-merge. É necessária atenção.'],
+      }
     }
+    // Never arm a merge while required checks are absent. Stored native mode
+    // alone does not prove that today's GitHub protections include every gate.
+    if (evaluation.decision !== 'merge') return {
+      headSha: pr.headSha, state: evaluation.state, decision: evaluation.decision,
+      merged: false, reasons: evaluation.reasons,
+    }
+    const fresh = await gw.getPullRequest(prNumber)
+    if (fresh.merged) return { headSha: fresh.headSha, state: 'merged', decision: 'noop', merged: true, reasons: ['PR já mesclada.'] }
+    if (fresh.headSha !== pr.headSha) return {
+      headSha: fresh.headSha, state: 'ci_running', decision: 'wait', merged: false,
+      reasons: ['HEAD mudou antes de habilitar auto-merge — reavaliar no novo HEAD.'],
+    }
+    const enabled = await gw.allowAutoMerge() && await gw.enableNativeAutoMerge(pr.nodeId)
     return {
-      headSha: pr.headSha,
-      state: evaluation.decision === 'blocked' ? evaluation.state : 'merge_pending',
-      decision: evaluation.decision,
-      merged: false,
-      reasons: [
-        'Modo nativo: auto-merge do GitHub cuida do merge quando o HEAD ficar verde.',
-        ...evaluation.reasons,
-      ],
+      headSha: pr.headSha, state: enabled ? 'merge_pending' : 'validated',
+      decision: enabled ? 'merge' : 'wait', merged: false,
+      reasons: enabled
+        ? ['Todos os gates do HEAD atual aprovados; auto-merge nativo habilitado.']
+        : ['Gates aprovados; GitHub ainda não permitiu habilitar auto-merge.'],
     }
   }
 

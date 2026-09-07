@@ -7,7 +7,7 @@ import { defaultCheckpointDeps } from './checkpoint'
 import { drainOnce } from './daemon'
 import { runTurnEvent, type RuntimeDeps } from './turn-runtime'
 import { drainLocalValidation, evidenceFor, validateCheckpoint } from './turn-validation'
-import { captureTurnCheckpoint, gitText, readJson, TURN_DIR, writeJson } from './turn-workspace'
+import { captureTree, captureTurnCheckpoint, gitText, readJson, TURN_DIR, writeJson } from './turn-workspace'
 
 const PROJECT = '11111111-1111-4111-8111-111111111111'
 const TURN = '22222222-2222-4222-8222-222222222222'
@@ -132,6 +132,7 @@ describe('validation evidence is bound to the executed isolated snapshot', () =>
 describe('host mutations and recovery share an executable workspace lease', () => {
   it('does not consume a repair attempt while preview or worker readiness blocks mutation', async () => {
     await runTurnEvent('preflight', cwd, hook, 'codex', deps); change(); await runTurnEvent('complete', cwd); failRemote()
+    remote.feedback.current!.failures = [{ name: 'security', category: 'security' }]
     const unavailable = { ...deps, ensureServices: () => { throw new Error('Worker starting') } }
     const blocked = await runTurnEvent('preflight', cwd, hook, 'codex', unavailable)
     expect(blocked.allowed).toBe(false); expect(blocked.state?.turn.recovery).toMatchObject({ status: 'pending', attempts: 0 })
@@ -196,6 +197,7 @@ describe('host mutations and recovery share an executable workspace lease', () =
   it('allows Codex implementation patches during recovery and denies renames into gates or symlink aliases', async () => {
     fs.symlinkSync('../tests', path.join(cwd, 'src/alias'))
     await runTurnEvent('preflight', cwd, hook, 'codex', deps); change(); await runTurnEvent('complete', cwd); failRemote()
+    remote.feedback.current!.failures = [{ name: 'security', category: 'security' }]
     const preflight = await runTurnEvent('preflight', cwd, hook, 'codex', deps)
     expect(preflight.state?.turn.integrationMode).toBe('enforced')
     expect(preflight.state?.turn.recovery?.status).toBe('repairing')
@@ -213,5 +215,97 @@ describe('host mutations and recovery share an executable workspace lease', () =
     gitText(cwd, ['remote', 'set-url', 'origin', 'https://untrusted.example/fixture/app.git'])
     const preflight = await runTurnEvent('preflight', cwd, hook, 'codex', deps)
     expect(preflight.allowed).toBe(false); expect(preflight.state?.context.reconciliation.status).toBe('invalid')
+  })
+})
+
+describe('fast development from the real E2E regressions', () => {
+  it('waits for fresh verified authority before upgrading and scanning a legacy checkpoint', async () => {
+    change()
+    const record = capture()
+    const legacy = { ...record }
+    delete legacy.environment
+    delete legacy.validationStatus
+    defaultCheckpointDeps(cwd).appendQueue(legacy)
+    expect(await drainLocalValidation(cwd)).toBe(0)
+    const offline = { ...deps, reconcile: async (): Promise<BackendTurnContext> => { throw new Error('offline') } }
+    expect((await runTurnEvent('preflight', cwd, hook, 'codex', offline)).allowed).toBe(false)
+    expect(defaultCheckpointDeps(cwd).readQueue()[0]?.environment).toBeUndefined()
+    expect((await runTurnEvent('preflight', cwd, hook, 'codex', deps)).allowed).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue()[0]).toMatchObject({ environment: 'development', validationStatus: 'pending' })
+    expect(await drainLocalValidation(cwd)).toBe(1)
+    expect(defaultCheckpointDeps(cwd).readQueue()[0]?.validationStatus).toBe('deferred')
+  })
+
+  it('never rewrites a production checkpoint environment during development preflight', async () => {
+    change()
+    const record = capture()
+    defaultCheckpointDeps(cwd).appendQueue({ ...record, environment: 'production' })
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    expect(defaultCheckpointDeps(cwd).readQueue()[0]?.environment).toBe('production')
+    await drainLocalValidation(cwd)
+    expect(defaultCheckpointDeps(cwd).readQueue()[0]?.validationStatus).toBe('failed')
+  })
+
+  it('captures the tracked bundled CLI under an ignored dist directory, excluding ignored secrets and preserving staging', () => {
+    fs.mkdirSync(path.join(cwd, 'tools/supremo-cli/dist'), { recursive: true })
+    fs.writeFileSync(path.join(cwd, 'tools/supremo-cli/dist/bin.js'), 'export const version = 1;')
+    gitText(cwd, ['add', 'tools/supremo-cli/dist/bin.js']); gitText(cwd, ['commit', '-m', 'bundle'])
+    fs.appendFileSync(path.join(cwd, '.gitignore'), 'dist/\n.env*\n')
+    fs.writeFileSync(path.join(cwd, 'tools/supremo-cli/dist/bin.js'), 'export const version = 2;')
+    fs.writeFileSync(path.join(cwd, 'tools/supremo-cli/dist/private.json'), '{"password":"local-only"}')
+    fs.writeFileSync(path.join(cwd, '.env.local'), 'password=local-only')
+    const index = fs.readFileSync(path.join(cwd, '.git/index'))
+    const tree = captureTree(cwd)
+    expect(gitText(cwd, ['show', `${tree.treeSha}:tools/supremo-cli/dist/bin.js`])).toContain('version = 2')
+    const paths = gitText(cwd, ['ls-tree', '-r', '--name-only', tree.treeSha])
+    expect(paths).not.toContain('private.json'); expect(paths).not.toContain('.env.local')
+    expect(fs.readFileSync(path.join(cwd, '.git/index'))).toEqual(index)
+  })
+
+  it('delivers and checkpoints date changes across a fresh conversation despite old typecheck and E2E failures', async () => {
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    change(); await runTurnEvent('complete', cwd); failRemote()
+    remote.feedback.current!.failures = [{ name: 'typecheck', category: 'code' }, { name: 'browser E2E', category: 'code' }]
+    const cold = await runTurnEvent('preflight', cwd, { ...hook, session_id: 'new-conversation', prompt: 'Mostre a data e hora.' }, 'codex', deps)
+    expect(cold.allowed).toBe(true)
+    expect(cold.state?.context.developmentPolicy).toEqual({ validation: 'on_request', previousFailures: 'advisory' })
+    expect(cold.state?.turn.recovery).toMatchObject({ required: true, attempts: 0 })
+    expect((await runTurnEvent('before-mutation', cwd, { tool_name: 'Write', tool_input: { file_path: 'src/card.ts' } })).allowed).toBe(true)
+    fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const createdAt = "2026-09-07T00:00:00Z";')
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(2)
+    expect((await runTurnEvent('status', cwd)).projectHealth).toBe('needs_attention')
+  })
+
+  it('does not launch QA or parse obsolete acceptance contracts during normal saves/completion; explicit validate runs QA', async () => {
+    verifier("fs.writeFileSync('qa-was-run','yes');")
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    change(); writeJson(path.join(cwd, '.supremo/acceptance.json'), { oldInvalidContract: true })
+    await runTurnEvent('mutation', cwd)
+    expect(readJson(path.join(cwd, TURN_DIR, 'validation-request.json'))).toBeNull()
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
+    await drainLocalValidation(cwd)
+    const record = defaultCheckpointDeps(cwd).readQueue().at(-1)!
+    expect(record.validationStatus).toBe('deferred')
+    expect(evidenceFor(cwd, record)?.checks).toEqual([{ name: 'secret scan', type: 'security', status: 'passed' }])
+    expect(fs.existsSync(path.join(cwd, 'qa-was-run'))).toBe(false)
+    fs.rmSync(path.join(cwd, '.supremo/acceptance.json'))
+    expect((await runTurnEvent('validate', cwd)).allowed).toBe(true)
+    await drainLocalValidation(cwd)
+    const checked = defaultCheckpointDeps(cwd).readQueue().at(-1)!
+    expect(evidenceFor(cwd, checked)?.checks).toContainEqual({ name: 'unit', type: 'unit', status: 'passed' })
+  })
+
+  it('blocks upload of a secret in a source snapshot without running project verification or leaking the value in diagnostics', async () => {
+    const secret = ['gh', 'p_', 'Z'.repeat(36)].join('')
+    fs.writeFileSync(path.join(cwd, 'src/card.ts'), `export const leaked = '${secret}';`)
+    const record = capture()
+    await drainLocalValidation(cwd)
+    const blocked = defaultCheckpointDeps(cwd).readQueue().find((item) => item.checkpointId === record.checkpointId)!
+    const proof = evidenceFor(cwd, blocked)!
+    expect(proof.status).toBe('failed')
+    expect(proof.checks).toEqual([{ name: 'secret scan', type: 'security', status: 'failed' }])
+    expect(JSON.stringify(proof)).not.toContain(secret)
+    expect(blocked.pushStatus).toBe('local')
   })
 })

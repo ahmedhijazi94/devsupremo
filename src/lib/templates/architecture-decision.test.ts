@@ -19,10 +19,16 @@ describe('decisão de identidade por requisito, não por persistência', () => {
     expect(agents).toContain('Identidade anônima persistente + ownership + RLS')
     expect(agents).toContain('Autenticação normal + ownership + RLS')
     expect(agents).toContain('Não encadeie SELECT/returning')
-    expect(agents).toContain('Cobertura mínima de 80%')
-    expect(agents).toContain('passar `npm test` não comprova o threshold')
+    expect(agents).toContain('O CI mantém cobertura mínima de 80%')
+    expect(agents).toContain('quando o usuário pedir explicitamente')
+    const thresholds = content('vitest.config.ts').match(/thresholds:\s*{([^}]+)}/)?.[1]
+    expect(thresholds).toBeDefined()
+    for (const metric of ['lines', 'functions', 'branches', 'statements']) {
+      expect(thresholds).toMatch(new RegExp(metric + ': 80'))
+    }
+    expect(content('.github/workflows/ci.yml')).toContain('run: npm run test:coverage')
     expect(agents).not.toContain('Toda Server Action começa verificando a sessão')
-    expect(content('CLAUDE.md')).toMatch(/teste cross-user somente com ownership/i)
+    expect(content('CLAUDE.md').replace(/\s+/g, ' ')).toContain('Provas cross-user são exigidas pelo CI somente com ownership')
     expect(content('ARCHITECTURE.md')).toContain('autenticar apenas operações que dependem de identidade')
     expect(content('SECURITY.md')).not.toContain('em qualquer policy')
   })

@@ -11,9 +11,13 @@ import {
   getFailedJobLogs,
   getPullRequest,
   listOpenPullRequests,
-  mergePullRequest,
 } from '@/lib/github/client'
 import type { GithubCredentials } from '@/lib/projects/repository'
+import { listProjectCheckpoints } from '@/actions/checkpoints'
+import { githubMergeGateway } from '@/lib/github/gateway'
+import { reconcileMerge } from '@/lib/github/merge-controller'
+import { resolveRequiredChecks } from '@/lib/github/reconcile'
+import { evaluateMergeEligibility } from '@/lib/github/merge-policy'
 
 /**
  * Os gates rodando, ao vivo, dentro do Supremo — e as ações do PR aqui mesmo.
@@ -95,6 +99,7 @@ export interface ProjectChecks {
   state: 'pending' | 'passed' | 'failed'
   summary: string
   checks: CheckView[]
+  badgeLabel?: string
 }
 
 export async function getProjectChecks(
@@ -105,6 +110,16 @@ export async function getProjectChecks(
   }
 
   try {
+    // The last local snapshot takes precedence over green checks for an older
+    // scaffold/PR. This read is session/RLS-scoped and never approves a merge.
+    const history = await listProjectCheckpoints(projectId)
+    if (history.error) return { error: 'Não foi possível verificar o estado das alterações locais.' }
+    const latest = history.items?.[0]
+    if (latest?.localState) return { data: {
+      source: 'Computador de desenvolvimento', prNumber: null, ref: '',
+      state: latest.localState, summary: latest.validationSummary ?? 'Envio pendente.',
+      checks: [], badgeLabel: latest.validationLabel ?? 'Salvo no computador',
+    } }
     const resolved = await resolveGithub(projectId)
     if (!resolved.ok) return { error: resolved.error }
     const { creds } = resolved
@@ -118,14 +133,20 @@ export async function getProjectChecks(
       agentPr?.headSha ?? (await getHeadSha(creds, creds.defaultBranch))
     const checks = await getChecks(creds, ref)
 
-    const summary =
-      checks.total === 0
-        ? 'Nenhum check ainda — o CI pode não ter começado.'
-        : checks.state === 'passed'
-          ? `Todos os ${checks.total} gates verdes.`
-          : checks.state === 'failed'
-            ? `${checks.failed} vermelho(s), ${checks.passed} verde(s).`
-            : `${checks.passed}/${checks.total} verdes, ${checks.pending} rodando.`
+    const currentHead = agentPr
+      ? (await getPullRequest(creds, agentPr.number)).headSha
+      : await getHeadSha(creds, creds.defaultBranch)
+    const required = resolveRequiredChecks({})
+    const evaluation = evaluateMergeEligibility({
+      requiredChecks: required, checkRuns: checks.checks,
+      prHeadSha: currentHead, validatedSha: checks.headSha,
+    })
+    const state = evaluation.decision === 'merge' ? 'passed' : evaluation.decision === 'blocked' ? 'failed' : 'pending'
+    const summary = state === 'passed'
+      ? `Todos os ${required.length} gates obrigatórios aprovados para esta versão.`
+      : currentHead !== checks.headSha ? 'A versão mudou; aguardando os checks da alteração atual.'
+        : state === 'failed' ? `Validação bloqueada: ${evaluation.failing.join(', ') || 'gates obrigatórios não definidos'}.`
+          : `Aguardando validação: ${evaluation.missing.length} gate(s) ainda não recebido(s), ${evaluation.pending.length} em andamento.`
 
     return {
       data: {
@@ -134,7 +155,7 @@ export async function getProjectChecks(
           : `branch ${creds.defaultBranch}`,
         prNumber: agentPr?.number ?? null,
         ref,
-        state: checks.state,
+        state,
         summary,
         checks: checks.checks.map((check) => ({
           name: check.name,
@@ -192,18 +213,12 @@ export async function mergeProjectPr(
     if (!resolved.ok) return { error: resolved.error }
     const { creds } = resolved
 
-    const pr = await getPullRequest(creds, prNumber)
-    const checks = await getChecks(creds, pr.headSha)
-    if (checks.state !== 'passed') {
-      return {
-        error:
-          checks.state === 'failed'
-            ? 'Tem gate vermelho. Só dá para mesclar com tudo verde.'
-            : 'Os gates ainda estão rodando. Espere ficarem verdes.',
-      }
-    }
-
-    await mergePullRequest(creds, prNumber)
+    // The manual button uses the same complete gate set and exact-SHA merge
+    // controller as background integration. A generic green summary is not proof.
+    const result = await reconcileMerge(githubMergeGateway(creds), {
+      prNumber, requiredChecks: resolveRequiredChecks({}), mode: 'supremo_managed',
+    })
+    if (!result.merged) return { error: result.reasons.join(' ') }
     return { ok: true }
   } catch (error) {
     return { error: toActionError(error) }

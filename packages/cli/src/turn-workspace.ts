@@ -57,11 +57,16 @@ export function captureTree(cwd: string): { headSha: string; treeSha: string; di
   const env = { GIT_INDEX_FILE: index }
   try {
     gitText(cwd, ['read-tree', headSha], env)
-    const paths = gitText(cwd, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean)
+    const paths = [...new Set([
+      ...gitText(cwd, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0'),
+      ...gitText(cwd, ['ls-files', '--cached', '-z'], env).split('\0'),
+    ].filter(Boolean))]
     const runtimePath = (file: string): boolean => /^\.supremo\/(?:turns|validation|checkpoints|host-receipts)(?:\/|$)/.test(file)
       || /^\.supremo\/(?:host-adapters|bootstrap-readiness|validation-feedback|turn-context|verify-result)\.json/.test(file)
+    // Only HEAD/index-tracked paths and nonignored untracked paths reach this list.
+    // -f honors already tracked bundled files under dist/; it never broadens discovery.
     const captured = paths.filter((file) => !runtimePath(file))
-    if (captured.length) execFileSync('git', ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], {
+    if (captured.length) execFileSync('git', ['add', '-A', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'], {
       cwd, env: { ...process.env, ...env, GIT_LITERAL_PATHSPECS: '1' }, input: captured.join('\0') + '\0', stdio: ['pipe', 'pipe', 'pipe'],
     })
     const excluded = paths.filter(runtimePath)

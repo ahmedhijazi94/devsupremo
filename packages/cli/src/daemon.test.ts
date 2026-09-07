@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CheckpointRecord } from './checkpoint'
 import { parseQueue, serializeQueue, QUEUE_FILE } from './checkpoint'
 import * as changesetModule from './changeset'
+import * as validationModule from './turn-validation'
+import type { LocalEvidence } from './turn-validation'
 import type { CommitReader } from './changeset'
 import type { RestoreDeps } from './restore'
 import {
@@ -22,6 +24,8 @@ import {
   ensureDaemon,
   processCheckpoint,
   processRestores,
+  localReportFor,
+  reportLocalCheckpoints,
   selectNextPending,
   SYNC_STATUS_TIMEOUT_MS,
   type DaemonContext,
@@ -42,6 +46,47 @@ const record = (over: Partial<CheckpointRecord> = {}): CheckpointRecord => ({
   pushStatus: 'local',
   attempts: 0,
   ...over,
+})
+
+const verifiedRecord = (over: Partial<CheckpointRecord> = {}): CheckpointRecord => ({
+  ...record(over), validationStatus: 'passed', validatedSha: over.commitSha ?? 'sha-B',
+})
+
+describe('metadata independente da publicação', () => {
+  it('descreve o status sem transportar prompt, código, paths, logs ou aprovação', () => {
+    const input = localReportFor(record({ summary: 'private prompt', changedPaths: ['private-file'], validationStatus: 'failed' }), 2)
+    expect(input).toMatchObject({ revision: 2, validationStatus: 'failed', validatedSha: null, uploadStatus: 'local' })
+    expect(JSON.stringify(input)).not.toMatch(/private prompt|private-file|summary|changedPaths/)
+    expect(localReportFor(record({ pushStatus: 'published' }), 1)).toBeNull()
+    expect(localReportFor(record({ validationStatus: 'passed', validatedSha: 'other-sha' }), 1)?.validationStatus).toBe('pending')
+  })
+  it('publica metadata de falha, deduplica, retenta offline e preserva a fila de código', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'supremo-local-report-'))
+    const queuePath = join(cwd, QUEUE_FILE)
+    mkdirSync(dirname(queuePath), { recursive: true })
+    const checkpoint = record({ validationStatus: 'pending' })
+    writeFileSync(queuePath, serializeQueue([checkpoint]))
+    const sent: unknown[] = []
+    const report = vi.fn(async (input: unknown) => { sent.push(input) })
+    const http = { ...fakes({}).ctx.http, reportLocalCheckpoint: report }
+    const config = { cwd, projectId: 'proj-1', apiBaseUrl: 'https://supremo.test', getSecret: () => 'device-example' }
+    try {
+      expect(await reportLocalCheckpoints(config, http)).toBe(1)
+      expect(await reportLocalCheckpoints(config, http)).toBe(0)
+      appendFileSync(queuePath, serializeQueue([{ ...checkpoint, validationStatus: 'failed', validatedSha: checkpoint.commitSha }]))
+      report.mockRejectedValueOnce(new NetworkError('offline'))
+      expect(await reportLocalCheckpoints(config, http)).toBe(0)
+      expect(await reportLocalCheckpoints(config, http)).toBe(1)
+      expect(sent.at(-1)).toMatchObject({ validationStatus: 'failed', revision: 2, validatedSha: checkpoint.commitSha })
+      expect(parseQueue(readFileSync(queuePath, 'utf8'))[0]?.pushStatus).toBe('local')
+      // A lost receipt file only causes a harmless retry of the same revision.
+      rmSync(join(cwd, '.supremo/checkpoints/reported.json'))
+      expect(await reportLocalCheckpoints(config, http)).toBe(1)
+      expect(sent.at(-1)).toMatchObject({ revision: 2 })
+      expect(await reportLocalCheckpoints({ ...config, getSecret: () => null }, http)).toBe(0)
+      expect(await reportLocalCheckpoints({ ...config, projectId: 'other' }, http)).toBe(0)
+    } finally { rmSync(cwd, { recursive: true, force: true }) }
+  })
 })
 
 // Leitor fake com um binário, uma modificação, uma deleção e um rename.
@@ -65,11 +110,12 @@ describe('envio em paralelo com novo pedido', () => {
   it('drainOnce preserva B anexado enquanto o envio de A espera a rede', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'supremo-queue-race-'))
     const queuePath = join(cwd, QUEUE_FILE)
-    const a = record({ checkpointId: 'a' })
+    const a = verifiedRecord({ checkpointId: 'a' })
     const b = record({ checkpointId: 'b', parentCheckpointId: 'a' })
     mkdirSync(dirname(queuePath), { recursive: true })
     writeFileSync(queuePath, serializeQueue([a]))
     const readerSpy = vi.spyOn(changesetModule, 'defaultCommitReader').mockReturnValue(reader)
+    const evidenceSpy = vi.spyOn(validationModule, 'evidenceFor').mockReturnValue({ status: 'passed' } as LocalEvidence)
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.endsWith('/restore-poll')) return Response.json({ requests: [] })
       appendFileSync(queuePath, serializeQueue([b]))
@@ -83,6 +129,7 @@ describe('envio em paralelo com novo pedido', () => {
       expect(queue[1]).toEqual(b)
     } finally {
       readerSpy.mockRestore()
+      evidenceSpy.mockRestore()
       vi.unstubAllGlobals()
       rmSync(cwd, { recursive: true, force: true })
     }
@@ -132,16 +179,23 @@ describe('backoffDelayMs — retry (teste 10)', () => {
 })
 
 describe('processCheckpoint — publica via changeset, SEM token nem git push', () => {
+  it('sem evidência, falha ou SHA divergente não envia código, inclusive filas antigas', async () => {
+    const { ctx, sent } = fakes({})
+    for (const pending of [record(), record({ validationStatus: 'failed' }), record({ validationStatus: 'passed', validatedSha: 'another-sha' })]) {
+      expect(await processCheckpoint(pending, ctx)).toMatchObject({ result: 'deferred', reason: 'local_validation_required' })
+    }
+    expect(sent).toHaveLength(0)
+  })
   it('device não provisionado → falha (não envia)', async () => {
     const { ctx, sent } = fakes({ secret: null })
-    const out = await processCheckpoint(record(), ctx)
+    const out = await processCheckpoint(verifiedRecord(), ctx)
     expect(out.result).toBe('failed')
     expect(sent).toHaveLength(0)
   })
 
   it('sucesso → published + prNumber; envia changeset content-addressed', async () => {
     const { ctx, sent } = fakes({})
-    const out = await processCheckpoint(record(), ctx)
+    const out = await processCheckpoint(verifiedRecord(), ctx)
     expect(out.result).toBe('done')
     expect(out.record.pushStatus).toBe('published')
     expect(out.record.prNumber).toBe(42)
@@ -167,7 +221,7 @@ describe('processCheckpoint — publica via changeset, SEM token nem git push', 
 
   it('offline → upload_pending, attempts++ (teste offline/seção 6)', async () => {
     const { ctx } = fakes({ publishThrows: new NetworkError('x') })
-    const out = await processCheckpoint(record({ attempts: 1 }), ctx)
+    const out = await processCheckpoint(verifiedRecord({ attempts: 1 }), ctx)
     expect(out.result).toBe('deferred')
     expect(out.record.pushStatus).toBe('upload_pending')
     expect(out.record.attempts).toBe(2)
@@ -175,14 +229,14 @@ describe('processCheckpoint — publica via changeset, SEM token nem git push', 
 
   it('409 conflito (corrida/non-ff) → upload_pending para re-tentar', async () => {
     const { ctx } = fakes({ publishThrows: new ConflictError('x') })
-    const out = await processCheckpoint(record(), ctx)
+    const out = await processCheckpoint(verifiedRecord(), ctx)
     expect(out.result).toBe('deferred')
     expect(out.record.pushStatus).toBe('upload_pending')
   })
 
   it('device revogado (401/403) → push_failed', async () => {
     const { ctx } = fakes({ publishThrows: new AuthError('401') })
-    const out = await processCheckpoint(record(), ctx)
+    const out = await processCheckpoint(verifiedRecord(), ctx)
     expect(out.result).toBe('failed')
     expect(out.record.pushStatus).toBe('push_failed')
   })
@@ -542,7 +596,7 @@ describe('defaultDaemonHttp.syncStatus — timeout curto real (item 7: nunca tra
         // de propósito: nunca chama res.end() nem res.write() — a conexão
         // fica pendurada até o cliente desistir sozinho.
       })
-      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
       const address = server.address()
       if (address === null || typeof address === 'string') throw new Error('sem porta')
       const apiBaseUrl = `http://127.0.0.1:${address.port}`
@@ -565,14 +619,23 @@ describe('defaultDaemonHttp.syncStatus — timeout curto real (item 7: nunca tra
     SYNC_STATUS_TIMEOUT_MS + 5000,
   )
 
-  it('publish/pollRestores continuam SEM timeout embutido (retry do daemon é quem decide, não a chamada)', () => {
-    // Checagem estrutural: só syncStatus recebe SYNC_STATUS_TIMEOUT_MS — as
-    // demais chamadas do daemon (background, já com backoff próprio) não
-    // devem herdar um timeout curto por acidente numa refatoração futura.
-    const fnSource = defaultDaemonHttp.toString()
-    const syncStatusBlock = fnSource.slice(fnSource.indexOf('syncStatus:'))
-    expect(syncStatusBlock).toContain('SYNC_STATUS_TIMEOUT_MS')
-    const beforeSyncStatus = fnSource.slice(0, fnSource.indexOf('syncStatus:'))
-    expect(beforeSyncStatus).not.toContain('SYNC_STATUS_TIMEOUT_MS')
+  it('publish/pollRestores não recebem o timeout curto de sync e metadata', async () => {
+    const requests: Array<{ url: string; signal: AbortSignal | null | undefined }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, options: RequestInit) => {
+      requests.push({ url, signal: options.signal })
+      return Response.json({ requests: [], latest: null, reported: true, prNumber: 1 })
+    }))
+    try {
+      const client = defaultDaemonHttp('https://supremo.test')
+      const input = { deviceSecret: 'device-example', projectId: 'proj-1' }
+      await client.pollRestores(input)
+      await client.syncStatus(input)
+      await client.reportLocalCheckpoint!({ ...localReportFor(record(), 1)!, deviceSecret: input.deviceSecret })
+      const outcome = await processCheckpoint(verifiedRecord(), { ...fakes({}).ctx, http: client })
+      expect(outcome.result).toBe('done')
+      expect(requests.map((request) => [request.url.split('/').at(-1), Boolean(request.signal)])).toEqual([
+        ['restore-poll', false], ['sync-status', true], ['local-report', true], ['publish', false],
+      ])
+    } finally { vi.unstubAllGlobals() }
   })
 })

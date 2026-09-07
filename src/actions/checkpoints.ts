@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { requireUser, toActionError } from '@/lib/auth'
 import { humanCheckpointStatus, humanRestoreStatus } from '@/lib/checkpoint/restore'
 import { validationFeedbackSchema } from '@/lib/checkpoint/feedback'
+import { localCheckpointPresentation } from '@/lib/checkpoint/local-report'
 
 /**
  * Histórico + Restore (v3.1 finalização) — o usuário nunca precisa abrir o
@@ -24,6 +25,8 @@ export interface CheckpointHistoryItem {
   restoredFromCheckpointId: string | null
   validationLabel?: string
   validationSummary?: string
+  canRestore?: boolean
+  localState?: 'pending' | 'failed'
 }
 
 export async function listProjectCheckpoints(
@@ -37,10 +40,11 @@ export async function listProjectCheckpoints(
     const { data, error } = await supabase
       .from('checkpoints')
       .select(
-        'id, parent_checkpoint_id, summary, risk_level, push_status, integration_status, migrations, pr_number, created_at, restored_from_checkpoint_id, project_id, validation_feedback',
+        'id, parent_checkpoint_id, summary, risk_level, push_status, integration_status, migrations, pr_number, created_at, restored_from_checkpoint_id, project_id, validation_feedback, published_sha, local_validation_status, local_upload_status',
       )
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
+      .limit(50)
     if (error) return { error: error.message }
     return {
       items: (data ?? []).map((r, index, rows) => ({
@@ -56,11 +60,17 @@ export async function listProjectCheckpoints(
         prNumber: (r.pr_number as number | null) ?? null,
         createdAt: r.created_at as string,
         restoredFromCheckpointId: (r.restored_from_checkpoint_id as string | null) ?? null,
-        validationLabel: r.push_status === 'published' && (r.integration_status === 'ci_failed' || r.integration_status === 'security_blocked')
+        canRestore: ['published', 'integrated'].includes(r.push_status as string) && typeof r.published_sha === 'string',
+        ...(r.push_status === 'local' ? { localState: localCheckpointPresentation(r.local_validation_status, r.local_upload_status).state } : {}),
+        validationLabel: r.push_status === 'local'
+          ? localCheckpointPresentation(r.local_validation_status, r.local_upload_status).label
+          : r.push_status === 'published' && (r.integration_status === 'ci_failed' || r.integration_status === 'security_blocked')
           ? rows.slice(0, index).some((newer) => newer.pr_number === r.pr_number)
             ? 'Aguarda correção do conjunto' : 'Validação bloqueada'
           : '',
-        validationSummary: validationFeedbackSchema.safeParse(r.validation_feedback).success
+        validationSummary: r.push_status === 'local'
+          ? localCheckpointPresentation(r.local_validation_status, r.local_upload_status).summary
+          : validationFeedbackSchema.safeParse(r.validation_feedback).success
           ? validationFeedbackSchema.parse(r.validation_feedback).summary : '',
       })),
     }
@@ -123,6 +133,11 @@ export async function requestCheckpointRestore(
   }
   try {
     const { user, supabase } = await requireUser()
+    const { data: target, error: targetError } = await supabase.from('checkpoints')
+      .select('id, published_sha, push_status').eq('id', targetCheckpointId).eq('project_id', projectId).maybeSingle()
+    if (targetError || !target || !['published', 'integrated'].includes(target.push_status as string) || !target.published_sha) {
+      return { error: 'Este checkpoint ainda não está disponível para restauração.' }
+    }
     const { error } = await supabase.from('checkpoint_restore_requests').insert({
       project_id: projectId,
       target_checkpoint_id: targetCheckpointId,

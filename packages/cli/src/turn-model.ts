@@ -101,6 +101,7 @@ export interface TurnContext {
   securityState: 'safe' | 'unsafe' | 'unknown'
   integrationMode: IntegrationMode
   reconciliation: { status: 'fresh' | 'offline' | 'invalid'; observedAt: string }
+  developmentPolicy?: { validation: 'on_request' | 'background'; previousFailures: 'none' | 'advisory' | 'blocking' }
 }
 
 export const turnStateSchema = z.object({
@@ -206,6 +207,13 @@ export function reconcileRecovery(input: ReconcileRecoveryInput): RecoveryState 
       record.projectId === workspace.projectId && record.environment === workspace.environment && record.commitSha === prior.localSha) ?? null
     return currentRecovery(prior, workspace, link)
   }
+  // A later cosmetic/unit failure cannot replace an unresolved safety finding.
+  if (blocksDevelopment(prior) && prior && failure.failures.length > 0 && failure.failures.every((item) =>
+    !['security', 'rls', 'migration', 'environment', 'external_dependency', 'unknown'].includes(classifyFailure(item.name, item.category)))) {
+    const priorLink = input.queue.find((record) => record.checkpointId === prior.checkpointId && record.projectId === workspace.projectId &&
+      record.environment === workspace.environment && record.commitSha === prior.localSha) ?? null
+    return currentRecovery(prior, workspace, priorLink)
+  }
   const sameFailure = prior?.checkpointId === failure.checkpointId && prior.localSha === failure.commitSha && prior.remoteSha === failure.publishedSha
   // A replay of evidence preceding an already verified repair cannot reopen it.
   if (sameFailure && prior.status === 'resolved' && failure.observedAt <= prior.observedAt) return prior
@@ -236,6 +244,13 @@ export function reconcileRecovery(input: ReconcileRecoveryInput): RecoveryState 
     return { ...linked, status: 'needs_human_attention', reason: 'repair_limit_reached' }
   }
   return linked
+}
+
+/** Unresolved QA is visible without turning ordinary editing into mandatory recovery.
+ * Safety/authority findings still require a verified repair before unrelated work. */
+export function blocksDevelopment(recovery: RecoveryState | null): boolean {
+  return recovery?.required === true && recovery.failures.some((failure) =>
+    ['security', 'rls', 'migration', 'environment', 'external_dependency', 'unknown'].includes(failure.type))
 }
 
 const PROTECTED_REPAIR_PATHS = [
@@ -402,14 +417,23 @@ export function deriveProjectHealth(input: {
   activeTurn: boolean
 }): ProjectHealth {
   if (input.securityState === 'unsafe' || input.remoteStatus === 'invalid') return 'blocked'
+  const matching = input.validations.filter((evidence) => validationEvidenceMatches(evidence, input.workspace))
   if (input.recovery?.required) {
     if (input.recovery.status === 'repairing') return 'repairing'
+    if (!blocksDevelopment(input.recovery)) {
+      if (input.activeTurn) return 'developing'
+      // Historical QA failure remains in recovery/history. A newer exact workspace
+      // can independently be healthy only with fresh remote approval, never a local scan.
+      if (input.securityState === 'safe' && input.remoteStatus === 'fresh' &&
+        matching.some((evidence) => evidence.source === 'remote' && evidence.remoteSha !== null && evidence.status === 'passed') &&
+        matching.every((evidence) => evidence.status === 'passed')) return 'healthy'
+      return 'needs_attention'
+    }
     return input.recovery.status === 'needs_human_attention' || input.recovery.status === 'stale' ? 'needs_attention' : 'blocked'
   }
   if (input.activeTurn) return 'developing'
   if (input.remoteStatus !== 'fresh') return 'validating'
-  const matching = input.validations.filter((evidence) => validationEvidenceMatches(evidence, input.workspace))
-  if (matching.some((evidence) => evidence.status === 'failed')) return 'blocked'
+  if (matching.some((evidence) => evidence.status === 'failed')) return 'needs_attention'
   if (input.workspace.dirty && !matching.length) return 'developing'
   if (input.securityState !== 'safe') return 'validating'
   if (!matching.length || matching.some((evidence) => evidence.status !== 'passed')) return 'validating'
@@ -424,6 +448,6 @@ export function transitionTurn(state: TurnState, phase: TurnPhase, now: string):
     postflight: ['background_validation', 'recovery'], recovery: ['work', 'background_validation'],
   }
   if (!allowed[state.phase].includes(phase)) throw new Error(`Transição de turno inválida: ${state.phase} → ${phase}.`)
-  if (phase === 'work' && state.recovery?.required) throw new Error('Recovery pendente deve ser comprovadamente resolvido antes do pedido novo.')
+  if (phase === 'work' && blocksDevelopment(state.recovery)) throw new Error('Recovery pendente deve ser comprovadamente resolvido antes do pedido novo.')
   return { ...state, phase, updatedAt: now }
 }

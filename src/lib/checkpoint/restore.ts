@@ -58,7 +58,7 @@ export function authorizeRestoreReport(input: {
 
 // ── Status humano (a UI nunca mostra jargão de Git) ─────────────────────────
 
-export type PushStatusRow = 'publishing' | 'published' | 'integrated' | 'failed'
+export type PushStatusRow = 'local' | 'publishing' | 'published' | 'integrated' | 'failed'
 /**
  * Mesmo domínio de `IntegrationState` (`@/lib/github/merge-policy`) — desde
  * que a reconciliação passou a gravar `result.state` (o valor REAL da
@@ -83,7 +83,7 @@ export type IntegrationStatusRow =
   | null
   | undefined
 
-export type HumanCheckpointStatus = 'Salvando' | 'Publicando' | 'Testando' | 'Integrado' | 'Falhou'
+export type HumanCheckpointStatus = 'Salvo localmente' | 'Salvando' | 'Publicando' | 'Testando' | 'Integrado' | 'Falhou'
 
 /**
  * Mapeia o estado técnico (push_status + integration_status) para o rótulo
@@ -103,6 +103,7 @@ export function humanCheckpointStatus(
   pushStatus: PushStatusRow,
   integrationStatus: IntegrationStatusRow,
 ): HumanCheckpointStatus {
+  if (pushStatus === 'local') return 'Salvo localmente'
   if (pushStatus === 'failed') return 'Falhou'
   if (pushStatus === 'publishing') return 'Salvando'
   if (integrationStatus === 'security_blocked' || integrationStatus === 'ci_failed') {

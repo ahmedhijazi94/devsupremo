@@ -1,10 +1,12 @@
 import {
   allowAutoMerge,
   deleteBranch,
+  disableNativeAutoMerge,
   enableNativeAutoMerge,
   getChecks,
   getPullRequest,
   mergePullRequest,
+  octokitFor,
 } from '@/lib/github/client'
 import type { GithubCredentials } from '@/lib/projects/repository'
 import type { MergeGateway } from './merge-controller'
@@ -24,12 +26,26 @@ export function githubMergeGateway(creds: GithubCredentials): MergeGateway {
         nodeId: pr.nodeId,
         merged: pr.merged,
         state: pr.state,
+        autoMergeEnabled: pr.autoMergeEnabled ?? false,
       }
     },
     getChecks: async (ref) => {
       const r = await getChecks(creds, ref)
       return { checks: r.checks, headSha: r.headSha }
     },
+    hasRequiredChecks: async (required) => {
+      try {
+        const { data } = await octokitFor(creds).repos.getBranchProtection({
+          owner: creds.owner, repo: creds.repo, branch: creds.defaultBranch,
+        })
+        const configured = new Set([
+          ...(data.required_status_checks?.contexts ?? []),
+          ...(data.required_status_checks?.checks ?? []).map((check) => check.context),
+        ])
+        return required.length > 0 && required.every((name) => configured.has(name))
+      } catch { return false }
+    },
+    disableNativeAutoMerge: (nodeId) => disableNativeAutoMerge(creds, nodeId),
     allowAutoMerge: () => allowAutoMerge(creds),
     enableNativeAutoMerge: (nodeId) => enableNativeAutoMerge(creds, nodeId),
     merge: (prNumber, expectedSha) =>

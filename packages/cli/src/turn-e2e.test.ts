@@ -84,9 +84,10 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
     writeJson(path.join(root, '.supremo/validation-feedback.json'), { current: null, previousFailure: null })
     const third = await runTurnEvent('preflight', root, input(PROMPTS[2], 'new-conversation'), 'claude-code', deps)
     expect(third.allowed).toBe(true)
-    expect(third.state?.turn.phase).toBe('recovery')
-    expect(third.state?.turn.recovery?.attempts).toBe(1)
-    expect((await runTurnEvent('complete', root, { session_id: 'new-conversation' })).allowed).toBe(false)
+    expect(third.state?.turn.phase).toBe('work')
+    expect(third.state?.turn.recovery?.attempts).toBe(0)
+    // The caller explicitly requests a repair; old unit failures never consume the turn.
+    expect((await runTurnEvent('repair-start', root)).allowed).toBe(true)
     source("export const tickets = ['fixed'];\n")
     const repair = await runTurnEvent('repair-complete', root)
     expect(repair.state?.repairCheckpointId).toBeTruthy()
@@ -124,7 +125,8 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
     source('export const ticket = 1;'); await runTurnEvent('complete', root); remoteFailure()
     source('export const ticket = 2;')
     const stale = await runTurnEvent('preflight', root, input(), 'claude-code', deps)
-    expect(stale.allowed).toBe(false)
+    expect(stale.allowed).toBe(true)
+    expect(stale.state?.turn.recovery?.attempts).toBe(0)
     expect(stale.state?.turn.recovery?.status).toBe('stale')
   })
 
@@ -142,6 +144,7 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
   it('falha local real conserva evidência e não aprova o snapshot', async () => {
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
     source('BROKEN'); await runTurnEvent('complete', root)
+    await runTurnEvent('validate', root)
     await drainLocalValidation(root)
     const record = queue()[0]!
     expect(record.validationStatus).toBe('failed')
@@ -152,13 +155,14 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
   it('sucesso sem report estruturado falha fechado', async () => {
     fs.writeFileSync(path.join(root, 'scripts/verify.mjs'), 'process.exit(0)')
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
-    await runTurnEvent('complete', root); await drainLocalValidation(root)
+    await runTurnEvent('complete', root); await runTurnEvent('validate', root); await drainLocalValidation(root)
     expect(queue()[0]?.validationStatus).toBe('failed')
   })
 
   it('recovery bloqueia edições nos testes, shell e saída via symlink', async () => {
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
     source('export const ticket = 1;'); await runTurnEvent('complete', root); remoteFailure()
+    backend.feedback.current!.failures = [{ name: 'security', category: 'security' }]
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
     for (const file of ['tests/ownership.test.ts', '.github/workflows/ci.yml', 'supabase/migrations/001.sql']) {
       expect((await runTurnEvent('before-mutation', root, { tool_name: 'Write', tool_input: { file_path: file } })).allowed).toBe(false)
@@ -178,6 +182,7 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
   it('tentativas fracassadas persistem o orçamento através de novos processos/turnos', async () => {
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
     source('export const ticket = 1;'); await runTurnEvent('complete', root); remoteFailure()
+    backend.feedback.current!.failures = [{ name: 'security', category: 'security' }]
     for (let attempt = 1; attempt <= 3; attempt++) {
       const start = await runTurnEvent('preflight', root, input(), 'claude-code', deps)
       expect(start.state?.turn.recovery?.attempts).toBe(attempt)
@@ -192,7 +197,8 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
     expect(final.state?.turn.recovery?.attempts).toBe(3)
   }, 30_000)
 
-  it('valida saves com debounce sem publicar checkpoint nem alterar HEAD', async () => {
+  it('valida saves com debounce somente após opt-in explícito, sem alterar HEAD', async () => {
+    writeJson(path.join(root, '.supremo/lifecycle.json'), { validation_mode: 'background' })
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
     source('export const ticket = 42;')
     await runTurnEvent('mutation', root)

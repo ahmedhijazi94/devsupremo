@@ -1,5 +1,9 @@
 # Supremo Turn Lifecycle — template 3.8.0 / CLI 1.5.0
 
+Registro histórico da versão3.8. O fluxo atual de testes sob demanda, checkpoints
+visíveis e continuidade está descrito em [fast-dev-v3-9.md](./fast-dev-v3-9.md).
+As regras de testes/recovery automático abaixo não são o padrão atual.
+
 Implementação e verificação em 6 de setembro de 2026. Este documento descreve
 o código local; não declara deploy do Supremo nem atualização de projetos remotos.
 

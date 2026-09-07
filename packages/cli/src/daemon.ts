@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -114,6 +115,8 @@ export interface PendingRestore {
 }
 
 export interface DaemonHttp {
+  /** Status-only notification, including failed checkpoints that cannot upload code. */
+  reportLocalCheckpoint?(input: LocalCheckpointReportInput): Promise<void>
   /**
    * POST /api/checkpoint/publish. Envia o CHANGESET; recebe só {prNumber}. NUNCA
    * recebe token. Lança NetworkError/AuthError/ConflictError.
@@ -139,6 +142,31 @@ export interface DaemonHttp {
    * TIMEOUT CURTO embutido no adapter: nunca deixa a sessão esperando.
    */
   syncStatus(input: { deviceSecret: string; projectId: string }): Promise<SyncStatusResult>
+}
+
+export interface LocalCheckpointReportInput {
+  deviceSecret: string
+  projectId: string
+  checkpointId: string
+  commitSha: string
+  createdAt: string
+  revision: number
+  validationStatus: NonNullable<CheckpointRecord['validationStatus']>
+  validatedSha: string | null
+  uploadStatus: 'local' | 'upload_pending' | 'push_failed'
+}
+
+/** No arbitrary text leaves the computer before the source safety check passes. */
+export function localReportFor(record: CheckpointRecord, revision: number): Omit<LocalCheckpointReportInput, 'deviceSecret'> | null {
+  if (!['local', 'upload_pending', 'push_failed'].includes(record.pushStatus)) return null
+  const validatedSha = record.validatedSha === record.commitSha ? record.validatedSha : null
+  let validationStatus = record.validationStatus ?? 'pending'
+  if (['passed', 'deferred'].includes(validationStatus) && !validatedSha) validationStatus = 'pending'
+  return {
+    projectId: record.projectId, checkpointId: record.checkpointId, commitSha: record.commitSha,
+    createdAt: record.createdAt, revision, validationStatus, validatedSha,
+    uploadStatus: record.pushStatus as LocalCheckpointReportInput['uploadStatus'],
+  }
 }
 
 export interface SyncStatusResult {
@@ -182,7 +210,7 @@ export async function processCheckpoint(
   ctx: DaemonContext,
 ): Promise<ProcessOutcome> {
   if (record.projectId !== ctx.projectId) return { record, result: 'failed', reason: 'project_mismatch' }
-  if (record.validationStatus && (record.validationStatus !== 'passed' && record.validationStatus !== 'deferred' || record.validatedSha !== record.commitSha)) {
+  if (!record.validationStatus || (record.validationStatus !== 'passed' && record.validationStatus !== 'deferred' || record.validatedSha !== record.commitSha)) {
     return { record, result: 'deferred', reason: 'local_validation_required' }
   }
   const secret = ctx.getSecret()
@@ -271,6 +299,7 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
       // codeql[js/file-access-to-http] changeset do usuário → backend que ele configurou (ver nota acima)
       res = await fetch(`${base}${route}`, {
         method: 'POST',
+        redirect: 'error',
         headers: { 'Content-Type': 'application/json' },
         // codeql[js/file-access-to-http] mesmo fluxo intencional (ver nota acima)
         body: JSON.stringify(body),
@@ -279,16 +308,24 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
     } catch {
       // Aborto por timeout cai aqui também (AbortError) — mesmo tratamento:
       // "não deu pra falar com o backend agora", nunca trava o chamador.
+      if (timer) clearTimeout(timer)
       throw new NetworkError('offline')
+    }
+    try {
+      if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`)
+      if (res.status === 409) throw new ConflictError('conflict')
+      if (!res.ok) throw new NetworkError(`${res.status}`)
+      // Keep the deadline active while reading the body too, not only headers.
+      return await res.json().catch(() => { throw new NetworkError('invalid_response') })
     } finally {
       if (timer) clearTimeout(timer)
     }
-    if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`)
-    if (res.status === 409) throw new ConflictError('conflict')
-    if (!res.ok) throw new NetworkError(`${res.status}`)
-    return res.json().catch(() => ({}))
   }
   return {
+    reportLocalCheckpoint: async (input) => {
+      const data = await postJson('/api/checkpoint/local-report', input, SYNC_STATUS_TIMEOUT_MS) as { reported?: boolean }
+      if (data.reported !== true) throw new NetworkError('report_not_acknowledged')
+    },
     publish: async (input) => {
       const data = (await postJson('/api/checkpoint/publish', input)) as { prNumber?: number }
       return { prNumber: data.prNumber ?? 0 }
@@ -485,6 +522,60 @@ export interface DaemonConfig {
   getSecret: () => string | null
 }
 
+const LOCAL_REPORT_RECEIPTS = `${CHECKPOINT_DIR}/reported.json`
+
+/** Runs independently of publication/restore network calls and their backoff. */
+export async function reportLocalCheckpoints(config: DaemonConfig, http = defaultDaemonHttp(config.apiBaseUrl)): Promise<number> {
+  const secret = config.getSecret()
+  if (!secret || !http.reportLocalCheckpoint) return 0
+  let raw: string
+  try { raw = fs.readFileSync(path.join(config.cwd, QUEUE_FILE), 'utf8') } catch { return 0 }
+  const queue = parseQueue(raw)
+  const revisions = new Map<string, number>()
+  for (const line of raw.split('\n').filter(Boolean)) {
+    try {
+      const event = JSON.parse(line) as { checkpointId?: string }
+      if (typeof event.checkpointId === 'string') revisions.set(event.checkpointId, (revisions.get(event.checkpointId) ?? 0) + 1)
+    } catch { /* A partial append will be read at the next tick. */ }
+  }
+  const receiptsPath = path.join(config.cwd, LOCAL_REPORT_RECEIPTS)
+  const previous = readJson(receiptsPath)
+  const receipts: Record<string, unknown> = previous && typeof previous === 'object' && !Array.isArray(previous)
+    ? previous as Record<string, unknown> : {}
+  let reported = 0
+  for (const record of queue) {
+    if (record.projectId !== config.projectId) continue
+    const input = localReportFor(record, revisions.get(record.checkpointId) ?? 1)
+    if (!input) continue
+    const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex')
+    if (receipts[record.checkpointId] === fingerprint) continue
+    try {
+      await http.reportLocalCheckpoint({ ...input, deviceSecret: secret })
+    } catch {
+      // Never acknowledge a failed report or prevent source publication from progressing.
+      break
+    }
+    receipts[record.checkpointId] = fingerprint
+    fs.writeFileSync(`${receiptsPath}.tmp`, JSON.stringify(receipts), { mode: 0o600 })
+    fs.renameSync(`${receiptsPath}.tmp`, receiptsPath)
+    reported += 1
+    if (reported >= 20) break
+  }
+  return reported
+}
+
+function startLocalReportWorker(config: DaemonConfig): () => void {
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const tick = async (): Promise<void> => {
+    try { await reportLocalCheckpoints(config) }
+    catch { process.stderr.write('[daemon] Registro local pendente; será reenviado.\n') }
+    if (!stopped) timer = setTimeout(() => { void tick() }, 1500)
+  }
+  void tick()
+  return () => { stopped = true; if (timer) clearTimeout(timer) }
+}
+
 /**
  * Consulta e aplica pedidos de "Restaurar" (v3.1 finalização). Roda ANTES da
  * fila de checkpoints normais: se um restore criar o checkpoint "E", ele já
@@ -575,6 +666,12 @@ export async function drainOnce(config: DaemonConfig): Promise<number> {
   for (;;) {
     let next = selectNextPending(queue)
     if (!next) break
+    if (!next.validationStatus) {
+      // Upgrade legacy records into the safety worker; no environment authority
+      // is invented here and no source is sent before exact-SHA evidence exists.
+      fs.appendFileSync(queuePath, serializeQueue([{ ...next, validationStatus: 'pending' }]))
+      break
+    }
     if (next.validationStatus) {
       const evidence = evidenceFor(config.cwd, next)
       if (!evidence || !['passed', 'deferred'].includes(evidence.status)) break
@@ -632,6 +729,7 @@ export async function runDaemonLoop(
   let stopped = false
   // Independente do upload/CI/backoff: o banco responde mesmo com checkpoint pendente.
   const stopLocalValidationWorker = startLocalValidationWorker(cwd)
+  const stopLocalReportWorker = startLocalReportWorker(daemonConfig)
   const stopDatabaseWorker = startDatabaseWorker(cwd, (operation) => runDatabaseDirect(operation, cwd))
   const stopFeedbackWorker = startFeedbackWorker(daemonConfig)
   process.on('SIGTERM', () => {
@@ -639,6 +737,7 @@ export async function runDaemonLoop(
     stopDatabaseWorker()
     stopFeedbackWorker()
     stopLocalValidationWorker()
+    stopLocalReportWorker()
   })
   while (!stopped) {
     let queue: CheckpointRecord[] = []

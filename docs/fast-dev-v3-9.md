@@ -34,6 +34,9 @@ Offline, a fila e o registro permanecem locais e serão reenviados após reconex
 A migration 020 aplica revisões monotônicas atomicamente. Um relatório atrasado
 não rebaixa um checkpoint publicado/integrado e metadata local não passa a ser a
 base de sincronização de código. Restore exige uma versão efetivamente publicada.
+Ao entrar em publicação, a ordem do checkpoint recebe a hora do servidor uma
+única vez; relógio local atrasado e retries não podem fazer a sincronização
+ignorar a nova versão ou aceitar sua antecessora como base atual.
 Registros legados sem ambiente/prova aguardam confirmação atual do projeto e
 repositório, depois passam pela varredura antes do envio.
 
@@ -45,9 +48,11 @@ de branch que os exija; proteção antiga insuficiente impede habilitar o autome
 
 ## Entrega a projetos existentes
 
-1. Aplicar `supabase/migrations/020_checkpoint_local_reports.sql` no banco do
+1. Aplicar `supabase/migrations/020_checkpoint_local_reports.sql` e depois
+   `supabase/migrations/021_checkpoint_publication_order.sql` no banco do
    **control plane Supremo**, mantendo as migrations anteriores. Não é migration
-   do banco do app gerado. É necessário antes do deploy que consulta as colunas.
+   do banco do app gerado. A 020 é necessária antes do deploy que consulta as
+   colunas; a 021 mantém a ordem de publicação independente do relógio local.
 2. Publicar a versão do Supremo com o bundle CLI 1.6.0 e template 3.9.0.
 3. Usar a atualização de base do projeto. AGENTS/CLAUDE recebem apenas um bloco
    de política gerenciado; preferências e texto do usuário são preservados.

@@ -5161,7 +5161,7 @@ var init_versions = __esm({
     version = {
       major: 4,
       minor: 5,
-      patch: 4
+      patch: 2
     };
   }
 });
@@ -7460,96 +7460,22 @@ function isRecursive(inst, stack) {
       result2 = true;
   };
   const def = inst._zod.def;
-  const kind = def.type;
-  switch (kind) {
-    case "object": {
-      for (const key of Reflect.ownKeys(def.shape))
-        check3(def.shape[key]);
-      check3(def.catchall);
-      break;
-    }
-    case "array":
-      check3(def.element);
-      break;
-    case "tuple":
-      for (const el of def.items)
-        check3(el);
-      check3(def.rest);
-      break;
-    case "record":
-    case "map":
-      check3(def.keyType);
-      check3(def.valueType);
-      break;
-    case "set":
-      check3(def.valueType);
-      break;
-    case "union":
-      for (const el of def.options)
-        check3(el);
-      break;
-    case "intersection":
-      check3(def.left);
-      check3(def.right);
-      break;
-    case "optional":
-    case "nullable":
-    case "default":
-    case "prefault":
-    case "catch":
-    case "readonly":
-    case "nonoptional":
-    case "promise":
-    case "success":
-      check3(def.innerType);
-      break;
-    case "pipe":
-      check3(def.in);
-      check3(def.out);
-      break;
-    case "function":
-      check3(def.input);
-      check3(def.output);
-      break;
-    case "lazy":
-      check3(inst._zod.innerType);
-      break;
-    case "template_literal":
-    case "string":
-    case "number":
-    case "int":
-    case "boolean":
-    case "bigint":
-    case "symbol":
-    case "undefined":
-    case "null":
-    case "void":
-    case "never":
-    case "any":
-    case "unknown":
-    case "date":
-    case "nan":
-    case "enum":
-    case "literal":
-    case "file":
-    case "transform":
-    case "custom":
-      break;
-    default: {
-      kind;
-      for (const key in def) {
-        const desc = Object.getOwnPropertyDescriptor(def, key);
-        if (!desc || desc.get)
-          continue;
-        const value = desc.value;
-        if (!value || typeof value !== "object")
-          continue;
-        if (value._zod)
-          check3(value);
-        else if (Array.isArray(value))
-          for (const el of value)
-            check3(el);
-      }
+  if (def.type === "lazy") {
+    check3(inst._zod.innerType);
+  } else {
+    const shape = def.shape;
+    if (shape)
+      for (const key of Reflect.ownKeys(shape))
+        check3(shape[key]);
+    for (const key in def) {
+      const value = def[key];
+      if (!value || typeof value !== "object")
+        continue;
+      if (value._zod)
+        check3(value);
+      else if (Array.isArray(value))
+        for (const el of value)
+          check3(el);
     }
   }
   stack.delete(inst);
@@ -18149,7 +18075,6 @@ function initializeContext(params) {
     cycles: params?.cycles ?? "ref",
     reused: params?.reused ?? "inline",
     intersections: [],
-    deferred: [],
     external: params?.external ?? void 0
   };
 }
@@ -18496,8 +18421,6 @@ function finalize(ctx, schema) {
         compactTypeUnion(entry[1].def ?? entry[1].schema);
       }
     }
-    for (const rewrite of ctx.deferred)
-      rewrite();
     if (ctx.intersections.length) {
       const carriers = /* @__PURE__ */ new Map();
       for (const seen of ctx.seen.values()) {
@@ -18666,68 +18589,6 @@ function inputOptin(schema) {
   }
   return schema._zod.optin;
 }
-function stringifyKeyNames(bySchema, json3, visited) {
-  if (json3.$ref) {
-    if (visited.has(json3))
-      return json3;
-    visited.add(json3);
-    const def = bySchema.get(json3)?.def;
-    if (!def)
-      return json3;
-    const inlined = stringifyKeyNames(bySchema, def, visited);
-    return inlined === def ? json3 : inlined;
-  }
-  for (const keyword of ["anyOf", "oneOf"]) {
-    const branches = json3[keyword];
-    if (!Array.isArray(branches))
-      continue;
-    const mapped = branches.map((branch) => stringifyKeyNames(bySchema, branch, visited));
-    if (mapped.some((branch, i) => branch !== branches[i]))
-      json3 = { ...json3, [keyword]: mapped };
-  }
-  const types = Array.isArray(json3.type) ? json3.type : [json3.type];
-  const numericType = !types.includes("string") && types.some((t) => t === "number" || t === "integer");
-  const values = json3.enum ?? (json3.const !== void 0 ? [json3.const] : void 0);
-  if (!numericType && !values?.some((v) => typeof v === "number"))
-    return json3;
-  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json3;
-  if (rest.enum)
-    rest.enum = rest.enum.map((v) => typeof v === "number" ? String(v) : v);
-  else if (typeof rest.const === "number")
-    rest.const = String(rest.const);
-  if (!numericType)
-    return rest;
-  rest.type = "string";
-  if (!values)
-    rest.pattern = (types.includes("number") ? number : integer).source;
-  return rest;
-}
-function rewriteKeyNames(ctx) {
-  const bySchema = /* @__PURE__ */ new Map();
-  for (const entry of ctx.seen.values()) {
-    if (entry.def && !bySchema.has(entry.schema))
-      bySchema.set(entry.schema, entry);
-  }
-  const rewrites = /* @__PURE__ */ new Map();
-  for (const record3 of pendingRecords.get(ctx) ?? []) {
-    const seen = ctx.seen.get(record3);
-    const names = (seen?.def ?? seen?.schema)?.propertyNames;
-    if (!names || names === true || rewrites.has(names))
-      continue;
-    const rewritten = stringifyKeyNames(bySchema, names, /* @__PURE__ */ new Set());
-    if (rewritten !== names)
-      rewrites.set(names, rewritten);
-  }
-  if (!rewrites.size)
-    return;
-  for (const entry of ctx.seen.values()) {
-    for (const carrier of [entry.schema, entry.def]) {
-      const rewritten = carrier && rewrites.get(carrier.propertyNames);
-      if (rewritten)
-        carrier.propertyNames = rewritten;
-    }
-  }
-}
 function serializeDefaultValue(value, schema, ctx, json3, params) {
   let unrepresentable = false;
   const serialized = JSON.stringify(value, (_, val) => {
@@ -18775,10 +18636,9 @@ function toJSONSchema(input3, params) {
   extractDefs(ctx, input3);
   return finalize(ctx, input3);
 }
-var formatMap, stringProcessor, numberProcessor, booleanProcessor, bigintProcessor, symbolProcessor, nullProcessor, undefinedProcessor, voidProcessor, neverProcessor, anyProcessor, unknownProcessor, dateProcessor, enumProcessor, literalProcessor, nanProcessor, templateLiteralProcessor, fileProcessor, successProcessor, customProcessor, functionProcessor, transformProcessor, mapProcessor, setProcessor, arrayProcessor, objectProcessor, unionProcessor, intersectionProcessor, tupleProcessor, pendingRecords, recordProcessor, nullableProcessor, nonoptionalProcessor, UNREPRESENTABLE_DEFAULT, defaultProcessor, prefaultProcessor, catchProcessor, pipeProcessor, readonlyProcessor, promiseProcessor, optionalProcessor, lazyProcessor, allProcessors;
+var formatMap, stringProcessor, numberProcessor, booleanProcessor, bigintProcessor, symbolProcessor, nullProcessor, undefinedProcessor, voidProcessor, neverProcessor, anyProcessor, unknownProcessor, dateProcessor, enumProcessor, literalProcessor, nanProcessor, templateLiteralProcessor, fileProcessor, successProcessor, customProcessor, functionProcessor, transformProcessor, mapProcessor, setProcessor, arrayProcessor, objectProcessor, unionProcessor, intersectionProcessor, tupleProcessor, recordProcessor, nullableProcessor, nonoptionalProcessor, UNREPRESENTABLE_DEFAULT, defaultProcessor, prefaultProcessor, catchProcessor, pipeProcessor, readonlyProcessor, promiseProcessor, optionalProcessor, lazyProcessor, allProcessors;
 var init_json_schema_processors = __esm({
   "node_modules/zod/v4/core/json-schema-processors.js"() {
-    init_regexes();
     init_to_json_schema();
     init_util();
     formatMap = {
@@ -18808,12 +18668,12 @@ var init_json_schema_processors = __esm({
       if (contentEncoding)
         json3.contentEncoding = contentEncoding;
       if (patterns && patterns.size > 0) {
-        const patternList = [...patterns];
-        if (patternList.length === 1)
-          json3.pattern = patternList[0].source;
-        else if (patternList.length > 1) {
+        const regexes = [...patterns];
+        if (regexes.length === 1)
+          json3.pattern = regexes[0].source;
+        else if (regexes.length > 1) {
           json3.allOf = [
-            ...patternList.map((regex) => ({
+            ...regexes.map((regex) => ({
               ...ctx.target === "draft-07" || ctx.target === "draft-04" || ctx.target === "openapi-3.0" ? { type: "string" } : {},
               pattern: regex.source
             }))
@@ -19147,7 +19007,6 @@ var init_json_schema_processors = __esm({
       if (typeof maximum === "number")
         json3.maxItems = maximum;
     };
-    pendingRecords = /* @__PURE__ */ new WeakMap();
     recordProcessor = (schema, ctx, _json, params) => {
       const json3 = _json;
       const def = schema._zod.def;
@@ -19170,13 +19029,6 @@ var init_json_schema_processors = __esm({
             ...params,
             path: [...params.path, "propertyNames"]
           });
-          let pending = pendingRecords.get(ctx);
-          if (!pending) {
-            pending = [];
-            pendingRecords.set(ctx, pending);
-            ctx.deferred.push(() => rewriteKeyNames(ctx));
-          }
-          pending.push(schema);
         }
         json3.additionalProperties = process2(def.valueType, ctx, {
           ...params,
@@ -19188,7 +19040,7 @@ var init_json_schema_processors = __esm({
       if (keyValues && !def.partial && !omittableOnInput) {
         const validKeyValues = [...keyValues].filter((v) => typeof v === "string" || typeof v === "number");
         if (validKeyValues.length > 0) {
-          json3.required = validKeyValues.map(String);
+          json3.required = validKeyValues;
         }
       }
     };
@@ -44849,6 +44701,51 @@ var init_daemon = __esm({
   }
 });
 
+// src/turn-context-client.ts
+function contextEndpoint(apiBaseUrl) {
+  const url3 = new URL(apiBaseUrl);
+  if (url3.username || url3.password || url3.search || url3.hash) {
+    throw new Error("URL do backend n\xE3o pode conter credenciais, query ou fragmento.");
+  }
+  if (url3.protocol !== "https:" && !(url3.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url3.hostname))) {
+    throw new Error("Backend precisa HTTPS ou loopback.");
+  }
+  url3.pathname = `${url3.pathname.replace(/\/$/, "")}/api/checkpoint/turn-context`;
+  return url3;
+}
+async function fetchTurnContext(projectId, apiBaseUrl, readSecret) {
+  const identity = projectIdSchema.parse(projectId);
+  const endpoint = contextEndpoint(apiBaseUrl);
+  const secret = readSecret(identity);
+  if (!secret)
+    throw new Error("Identidade do dispositivo indispon\xEDvel.");
+  const deviceSecret = deviceSecretSchema.parse(secret);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId: identity, deviceSecret }),
+    // A 307/308 must never forward the device credential to a different destination.
+    redirect: "error",
+    signal: AbortSignal.timeout(3e3)
+  });
+  if (!response.ok)
+    throw new Error(`Reconciliation HTTP ${response.status}`);
+  const parsed = backendTurnContextSchema.parse(await response.json());
+  if (parsed.projectId !== identity)
+    throw new Error("Projeto remoto divergente.");
+  return parsed;
+}
+var projectIdSchema, deviceSecretSchema;
+var init_turn_context_client = __esm({
+  "src/turn-context-client.ts"() {
+    "use strict";
+    init_zod();
+    init_turn_context();
+    projectIdSchema = external_exports.string().uuid();
+    deviceSecretSchema = external_exports.string().regex(/^sup_dev_ckpt_[A-Za-z0-9_-]{43}$/);
+  }
+});
+
 // src/turn-runtime.ts
 var turn_runtime_exports = {};
 __export(turn_runtime_exports, {
@@ -44934,27 +44831,7 @@ function defaultRuntimeDeps() {
         timeout: 5e3
       }) }, cwd, async () => ({ ok: true, latest: { ...latest, summary: "Checkpoint remoto", publishedSha: latest.publishedSha } })));
     },
-    reconcile: async (projectId, apiBaseUrl) => {
-      const secret = resolveKeychain().get(projectId);
-      if (!secret)
-        throw new Error("Identidade do dispositivo indispon\xEDvel.");
-      const url3 = new URL(apiBaseUrl);
-      if (url3.protocol !== "https:" && !(url3.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url3.hostname))) {
-        throw new Error("Backend precisa HTTPS ou loopback.");
-      }
-      const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/checkpoint/turn-context`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, deviceSecret: secret }),
-        signal: AbortSignal.timeout(3e3)
-      });
-      if (!response.ok)
-        throw new Error(`Reconciliation HTTP ${response.status}`);
-      const parsed = backendTurnContextSchema.parse(await response.json());
-      if (parsed.projectId !== projectId)
-        throw new Error("Projeto remoto divergente.");
-      return parsed;
-    },
+    reconcile: (projectId, apiBaseUrl) => fetchTurnContext(projectId, apiBaseUrl, (identity) => resolveKeychain().get(identity)),
     ensureServices: async (cwd) => {
       ensureDaemon(cwd);
       let preview = { healthy: false, url: null };
@@ -45450,6 +45327,7 @@ var init_turn_runtime = __esm({
     init_daemon();
     init_sync();
     init_keychain();
+    init_turn_context_client();
     init_turn_model();
     init_turn_workspace();
     init_turn_validation();
@@ -46046,9 +45924,18 @@ function gitHooksVerified(root) {
   try {
     for (const [name, expected] of [["pre-commit", preCommitHook], ["pre-push", prePushHook]]) {
       const file3 = import_node_path13.default.join(root, ".githooks", name);
-      import_node_fs13.default.accessSync(file3, import_node_fs13.default.constants.R_OK | import_node_fs13.default.constants.X_OK);
-      if (import_node_fs13.default.readFileSync(file3, "utf8") !== expected)
-        return false;
+      const descriptor = import_node_fs13.default.openSync(file3, import_node_fs13.default.constants.O_RDONLY | import_node_fs13.default.constants.O_NOFOLLOW | import_node_fs13.default.constants.O_NONBLOCK);
+      try {
+        const stat = import_node_fs13.default.fstatSync(descriptor);
+        if (!stat.isFile())
+          return false;
+        const userId = process.geteuid?.();
+        const executeMask = userId === void 0 || userId === 0 ? 73 : userId === stat.uid ? 64 : [process.getegid?.(), ...process.getgroups?.() ?? []].includes(stat.gid) ? 8 : 1;
+        if ((stat.mode & executeMask) === 0 || import_node_fs13.default.readFileSync(descriptor, "utf8") !== expected)
+          return false;
+      } finally {
+        import_node_fs13.default.closeSync(descriptor);
+      }
     }
     return true;
   } catch {
@@ -46446,7 +46333,8 @@ var package_default = {
     dotenv: "^16.4.5",
     "@types/node": "^20.12.7",
     esbuild: "^0.20.2",
-    typescript: "^5.4.5"
+    typescript: "^5.4.5",
+    zod: "4.5.2"
   }
 };
 

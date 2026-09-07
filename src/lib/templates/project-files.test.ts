@@ -1,6 +1,8 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { runInNewContext } from 'node:vm'
+import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 import { describe, it, expect } from 'vitest'
 import {
   CI_JOB_NAMES,
@@ -788,17 +790,30 @@ describe('E2E — o CI instala os motores que a suíte usa', () => {
   const config = file('playwright.config.ts')
 
   it('worker local usa dev Webpack isolado; CI continua com build de produção', () => {
-    const evaluate = (env: Record<string, string>) => {
-      const context = { process: { env }, devices: {}, defineConfig: (value: unknown) => value, result: null as unknown }
-      runInNewContext(config.replace(/^import .*$/m, '').replace('export default defineConfig', 'result = defineConfig'), context)
-      return context.result as { webServer?: { command: string; reuseExistingServer: boolean; url: string } }
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-playwright-config-'))
+    try {
+      const configPath = path.join(root, 'playwright.config.mjs')
+      fs.writeFileSync(configPath, config, { flag: 'wx', mode: 0o600 })
+      fs.symlinkSync(path.join(process.cwd(), 'node_modules'), path.join(root, 'node_modules'), 'dir')
+      const inherited = { ...process.env }
+      for (const key of ['SUPREMO_VALIDATION', 'PLAYWRIGHT_PORT', 'PLAYWRIGHT_BASE_URL']) delete inherited[key]
+      const inspect = (env: Record<string, string>) => {
+        // Import the generated module and real Playwright package from disk.
+        // The loader is fixed; generated code never becomes an eval/data URL.
+        const output = execFileSync(process.execPath, ['--input-type=module', '-e',
+          'const { default: config } = await import(process.argv[1]); process.stdout.write(JSON.stringify(config));',
+          pathToFileURL(configPath).href], { cwd: root, env: { ...inherited, ...env }, encoding: 'utf8' })
+        return JSON.parse(output) as { webServer?: { command: string; reuseExistingServer: boolean; url: string } }
+      }
+      const local = inspect({ SUPREMO_VALIDATION: '1', PLAYWRIGHT_PORT: '4191', CI: 'true' })
+      expect(local.webServer).toMatchObject({ command: 'npm run dev:preview -- --port 4191', reuseExistingServer: false, url: 'http://localhost:4191' })
+      expect(packageJson.scripts['dev:preview']).toBe('next dev --webpack')
+      const production = inspect({ CI: 'true', PLAYWRIGHT_PORT: '4192' })
+      expect(production.webServer?.command).toBe('npm run build && npm run start -- --port 4192')
+      expect(inspect({ PLAYWRIGHT_BASE_URL: 'https://preview.example.invalid' }).webServer).toBeUndefined()
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
     }
-    const local = evaluate({ SUPREMO_VALIDATION: '1', PLAYWRIGHT_PORT: '4191', CI: 'true' })
-    expect(local.webServer).toMatchObject({ command: 'npm run dev:preview -- --port 4191', reuseExistingServer: false, url: 'http://localhost:4191' })
-    expect(packageJson.scripts['dev:preview']).toBe('next dev --webpack')
-    const production = evaluate({ CI: 'true', PLAYWRIGHT_PORT: '4192' })
-    expect(production.webServer?.command).toBe('npm run build && npm run start -- --port 4192')
-    expect(evaluate({ PLAYWRIGHT_BASE_URL: 'https://preview.example.invalid' }).webServer).toBeUndefined()
   })
 
   // Bug real: o CI instalava só chromium, mas o projeto "mobile" usa

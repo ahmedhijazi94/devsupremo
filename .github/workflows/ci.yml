@@ -153,14 +153,10 @@ jobs:
           echo "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
           chmod +x gitleaks
-      - name: Rodar Gitleaks
-        run: ./gitleaks detect --source . --redact --exit-code 1 --no-banner
-      - name: Verificar CLI como distribuída no scaffold (sem allowlist do Supremo)
-        run: |
-          mkdir -p "$RUNNER_TEMP/scaffold-secrets/tools/supremo-cli/dist"
-          cp packages/cli/dist/bin.js "$RUNNER_TEMP/scaffold-secrets/tools/supremo-cli/dist/bin.js"
-          cd "$RUNNER_TEMP/scaffold-secrets"
-          "$GITHUB_WORKSPACE/gitleaks" detect --source . --no-git --redact --exit-code 1 --no-banner
+      - name: Verificar histórico e CLI distribuída (mesmo comando local)
+        env:
+          GITLEAKS_BIN: ${{ github.workspace }}/gitleaks
+        run: bash scripts/scan-secrets.sh
 
   codeql:
     name: Análise estática

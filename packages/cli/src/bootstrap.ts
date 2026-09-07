@@ -386,8 +386,21 @@ export function gitHooksVerified(root: string): boolean {
   try {
     for (const [name, expected] of [['pre-commit', preCommitHook], ['pre-push', prePushHook]] as const) {
       const file = path.join(root, '.githooks', name)
-      fs.accessSync(file, fs.constants.R_OK | fs.constants.X_OK)
-      if (fs.readFileSync(file, 'utf8') !== expected) return false
+      // Validate permissions and bytes on the same inode, refusing symlinks.
+      // Separate access/read operations could inspect two different files.
+      // O_NONBLOCK lets fstat reject FIFOs/devices without waiting for a writer.
+      const descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
+      try {
+        const stat = fs.fstatSync(descriptor)
+        if (!stat.isFile()) return false
+        const userId = process.geteuid?.()
+        const executeMask = userId === undefined || userId === 0 ? 0o111
+          : userId === stat.uid ? 0o100
+            : [process.getegid?.(), ...(process.getgroups?.() ?? [])].includes(stat.gid) ? 0o010 : 0o001
+        if ((stat.mode & executeMask) === 0 || fs.readFileSync(descriptor, 'utf8') !== expected) return false
+      } finally {
+        fs.closeSync(descriptor)
+      }
     }
     return true
   } catch { return false }

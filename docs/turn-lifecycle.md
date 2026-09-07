@@ -137,11 +137,12 @@ Resultados finais locais:
 | Verificação | Resultado |
 | --- | --- |
 | Supremo | 1.061 testes passaram, 70 arquivos |
-| Cobertura Supremo | 92,33% linhas; 93,71% branches; 94,44% funções |
-| CLI | 403 testes passaram, 21 arquivos |
+| Cobertura Supremo | 92,33% linhas; 93,72% branches; 94,44% funções |
+| CLI | 415 testes passaram, 22 arquivos |
 | Typecheck | Supremo e CLI sem erros; CLI agora também exigida na CI |
 | Lint | Zero erros; cinco avisos já existentes fora deste trabalho |
-| Auditoria estrita / bundle Gitleaks | Zero achados / zero vazamentos |
+| Auditoria estrita | Zero achados |
+| Gitleaks | Histórico completo e CLI distribuída sem achados não revisados |
 | Build de produção | Supremo e scaffold aprovados com Webpack |
 | Distribuição | CLI 1.5.0 instalada por HTTP, com hash, sem registry |
 | PostgreSQL descartável | RLS, retry, rollback, autoridade e bloqueio de produção aprovados |
@@ -152,6 +153,23 @@ Resultados finais locais:
 O build padrão com Turbopack encontrou restrição de abertura de porta neste
 ambiente. O build Webpack é a comprovação de produção realizada. Nenhum
 check foi removido para converter essa falha em sucesso.
+
+`npm run audit:secrets` reproduz as duas varreduras de segredos da CI com
+Gitleaks instalado (`GITLEAKS_BIN` aceita o caminho do executável): histórico
+Git completo com o baseline revisado e bundle copiado para o caminho do
+scaffold, fora das exceções do repositório. `audit:security` é uma auditoria
+de regras de código e não substitui essas varreduras. Uma fixture fictícia
+do teste de sanitização foi revisada individualmente em `.gitleaksignore`
+por commit/arquivo/regra/linha; o teste atual constrói seu valor em runtime.
+
+A revisão de segurança substituiu a avaliação de strings no teste de
+Playwright pela execução do módulo gerado e passou a verificar hooks pelo
+mesmo descritor, recusando symlinks e FIFOs. O cliente de contexto valida
+projeto, formato da credencial e URL antes do envio; redirecionamentos são
+recusados. A origem configurada no projeto ainda não é vinculada ao item do
+keychain: a configuração local permanece uma entrada de confiança do usuário.
+O Zod da CLI está declarado e fixado no lock, preservando o pacote completo
+que funciona sem buscar dependências durante a instalação distribuída.
 
 `scripts/test-generated-worker.mts` foi conectado à CI: uma mudança cosmética
 no scaffold passa por tipos, lint, cobertura, segurança e Playwright reais

@@ -356,6 +356,48 @@ describe('checkNodeVersion — aviso claro, NUNCA bloqueia (seção 8)', () => {
 
 
 describe('bootstrap verifies real installed gates and public identity', () => {
+  it.skipIf(process.platform === 'win32')('rejects a POSIX FIFO without blocking bootstrap', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-bootstrap-fifo-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root })
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: root })
+      fs.mkdirSync(path.join(root, '.githooks'))
+      execFileSync('mkfifo', [path.join(root, '.githooks/pre-commit')])
+      fs.writeFileSync(path.join(root, '.githooks/pre-push'), prePushHook, { mode: 0o755 })
+      // A separate process and a hard timeout make the pre-fix hanging open
+      // fail the regression without freezing the whole test runner.
+      const source = fileURLToPath(new URL('./bootstrap.ts', import.meta.url))
+      const output = execFileSync(process.execPath, ['--import', 'tsx', '-e',
+        'const {gitHooksVerified} = require(process.argv[1]); process.stdout.write(String(gitHooksVerified(process.argv[2])));',
+        source, root], { cwd: process.cwd(), encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' })
+      expect(output).toBe('false')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  }, 10_000)
+
+  it.each(['symlink', 'not-executable', 'directory'] as const)('rejects %s instead of declaring Git hooks ready', (scenario) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-bootstrap-gate-kind-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root })
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: root })
+      fs.mkdirSync(path.join(root, '.githooks'))
+      const hook = path.join(root, '.githooks/pre-commit')
+      fs.writeFileSync(hook, preCommitHook, { mode: 0o755 })
+      fs.writeFileSync(path.join(root, '.githooks/pre-push'), prePushHook, { mode: 0o755 })
+      if (scenario === 'not-executable') {
+        fs.chmodSync(hook, 0o644)
+      } else {
+        fs.unlinkSync(hook)
+        if (scenario === 'directory') fs.mkdirSync(hook)
+        else {
+          const target = path.join(root, 'outside-hook')
+          fs.writeFileSync(target, preCommitHook, { mode: 0o755 })
+          fs.symlinkSync(target, hook)
+        }
+      }
+      expect(gitHooksVerified(root)).toBe(false)
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
   it('does not accept a hook that mentions verify but exits before validation', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-bootstrap-gates-'))
     try {

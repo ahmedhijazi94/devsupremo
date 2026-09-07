@@ -149,7 +149,8 @@ describe('reconciliation binds backend feedback to the actual local project snap
   })
 
   it('sanitizes credentials before writing recovery evidence', () => {
-    const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    // Synthetic token, constructed at runtime so the fixture is not a stored credential.
+    const secret = 'ghp_' + 'a'.repeat(36)
     const result = reconcileRecovery({ workspace, queue: [checkpoint], feedback: { current: { ...feedback, evidence: `Authorization: ${secret}\nhttps://host/path?token=secret`, summary: `token=${secret}` }, previousFailure: null },
       previous: null, remoteStatus: 'fresh', now: NOW })
     expect(JSON.stringify(result)).not.toContain(secret)

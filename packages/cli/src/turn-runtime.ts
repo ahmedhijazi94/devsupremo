@@ -10,6 +10,7 @@ import { acceptanceContractSchema } from './turn-acceptance'
 import { daemonStatus, ensureDaemon, readProjectConfig } from './daemon'
 import { defaultSyncDeps, runSync } from './sync'
 import { resolveKeychain } from './keychain'
+import { fetchTurnContext } from './turn-context-client'
 import { beginRepair, canAutoRepairPaths, classifyFailure, deriveProjectHealth, finishRepair, isReadOnlyDiagnostic, reconcileRecovery, repairPatchPaths, turnStateSchema, validationEvidenceMatches,
   type CheckpointLink, type ProjectHealth, type TurnContext, type TurnState, type ValidationEvidence, type WorkspaceSnapshot } from './turn-model'
 import { captureTree, captureTurnCheckpoint, gitText, readJson, TURN_DIR, withTurnLock, writeJson } from './turn-workspace'
@@ -86,22 +87,7 @@ function defaultRuntimeDeps(): RuntimeDeps {
         cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
       }) }, cwd, async () => ({ ok: true, latest: { ...latest, summary: 'Checkpoint remoto', publishedSha: latest.publishedSha } })))
     },
-    reconcile: async (projectId, apiBaseUrl) => {
-      const secret = resolveKeychain().get(projectId)
-      if (!secret) throw new Error('Identidade do dispositivo indisponível.')
-      const url = new URL(apiBaseUrl)
-      if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) {
-        throw new Error('Backend precisa HTTPS ou loopback.')
-      }
-      const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/api/checkpoint/turn-context`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, deviceSecret: secret }), signal: AbortSignal.timeout(3000),
-      })
-      if (!response.ok) throw new Error(`Reconciliation HTTP ${response.status}`)
-      const parsed = backendTurnContextSchema.parse(await response.json())
-      if (parsed.projectId !== projectId) throw new Error('Projeto remoto divergente.')
-      return parsed
-    },
+    reconcile: (projectId, apiBaseUrl) => fetchTurnContext(projectId, apiBaseUrl, (identity) => resolveKeychain().get(identity)),
     ensureServices: async (cwd) => {
       ensureDaemon(cwd)
       let preview: TurnContext['preview'] = { healthy: false, url: null }

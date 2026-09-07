@@ -28,9 +28,10 @@ insert into auth.users values('${id(1)}'),('${id(2)}');
 insert into projects(id,user_id) values('${id(11)}','${id(1)}'),('${id(22)}','${id(2)}');
 insert into checkpoint_devices(id,owner_user_id,secret_hash) values('${id(31)}','${id(1)}','not-a-secret-hash-a'),('${id(32)}','${id(2)}','not-a-secret-hash-b');`)
 
-const reportSql = (over: { checkpoint?: number; project?: number; device?: number; revision?: number; commit?: string; validation?: string; validated?: string | null } = {}) => {
+const reportSql = (over: { checkpoint?: number; project?: number; device?: number; revision?: number; commit?: string; validation?: string; validated?: string | null; createdAt?: string } = {}) => {
   const validated = over.validated === null ? 'null' : `'${over.validated ?? sha}'`
-  return `select public.report_local_checkpoint('${id(over.checkpoint ?? 41)}','${id(over.project ?? 11)}','${id(over.device ?? 31)}','${over.commit ?? sha}',now(),${over.revision ?? 1},'${over.validation ?? 'pending'}',${validated},'local');`
+  const createdAt = over.createdAt ? `'${over.createdAt}'::timestamptz` : 'now()'
+  return `select public.report_local_checkpoint('${id(over.checkpoint ?? 41)}','${id(over.project ?? 11)}','${id(over.device ?? 31)}','${over.commit ?? sha}',${createdAt},${over.revision ?? 1},'${over.validation ?? 'pending'}',${validated},'local');`
 }
 const report = (over: Parameters<typeof reportSql>[0] = {}) => run(`set role service_role; ${reportSql(over)}`)
 assert.equal(report(), 'recorded')
@@ -63,7 +64,7 @@ const finished = new Promise<void>((resolve, reject) => {
   publisher.once('close', (code) => code === 0 ? resolve() : reject(new Error(stderr)))
 })
 const locked = new Promise<void>((resolve) => publisher.stdout.on('data', (chunk: Buffer) => { if (chunk.toString().includes('LOCKED')) resolve() }))
-publisher.stdin.end(`begin; update checkpoints set push_status='published',published_sha='${sha}' where id='${id(41)}'; select 'LOCKED'; select pg_sleep(0.3); commit;`)
+publisher.stdin.end(`begin; update checkpoints set push_status='publishing' where id='${id(41)}'; update checkpoints set push_status='published',published_sha='${sha}' where id='${id(41)}'; select 'LOCKED'; select pg_sleep(0.3); commit;`)
 await locked
 assert.equal(report({ revision: 10, validation: 'failed' }), 'ignored')
 await finished
@@ -76,4 +77,20 @@ assert.equal(run(`select push_status||':'||integration_status from checkpoints w
 assert.equal(run(`select count(*) from checkpoints where push_status in ('publishing','published','integrated');`), '1')
 assert.equal(report({ checkpoint: 45 }), 'recorded')
 assert.equal(run(`select count(*) from checkpoints where push_status in ('publishing','published','integrated');`), '1')
-console.log('✓ PostgreSQL real: metadata idempotente, ordem de revisões, dono/device/SHA, revogação, RLS, restore e corrida com publicação; metadata não altera a base remota.')
+
+// A device clock behind the parent must not let sync ignore the new published
+// head, or allow another device to pass the freshness check with the old parent.
+const latestKnown = () => run("select id from checkpoints where push_status in ('publishing','published','integrated') order by created_at desc limit 1;")
+assert.equal(report({ checkpoint: 46, createdAt: '2000-01-01T00:00:00Z' }), 'recorded')
+assert.equal(latestKnown(), id(41))
+run(`set role service_role; update checkpoints set push_status='publishing',parent_checkpoint_id='${id(41)}' where id='${id(46)}';`)
+assert.equal(latestKnown(), id(46))
+const serverOrder = run(`select created_at from checkpoints where id='${id(46)}';`)
+assert.notEqual(new Date(serverOrder).getUTCFullYear(), 2000)
+// The same checkpoint's publication retry and delayed metadata do not move it.
+run(`set role service_role; update checkpoints set push_status='publishing' where id='${id(46)}';`)
+assert.equal(report({ checkpoint: 46, revision: 50, createdAt: '1990-01-01T00:00:00Z' }), 'ignored')
+assert.equal(run(`select created_at from checkpoints where id='${id(46)}';`), serverOrder)
+run(`set role service_role; update checkpoints set push_status='published',published_sha='${sha}' where id='${id(46)}';`)
+assert.equal(latestKnown(), id(46))
+console.log('✓ PostgreSQL real: metadata idempotente, revisões, dono/device/SHA, revogação, RLS, restore e corrida com publicação; relógio local atrasado não altera a ordem remota.')

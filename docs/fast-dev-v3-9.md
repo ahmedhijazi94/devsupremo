@@ -34,6 +34,9 @@ Offline, a fila e o registro permanecem locais e serão reenviados após reconex
 A migration 020 aplica revisões monotônicas atomicamente. Um relatório atrasado
 não rebaixa um checkpoint publicado/integrado e metadata local não passa a ser a
 base de sincronização de código. Restore exige uma versão efetivamente publicada.
+Ao entrar em publicação, a ordem do checkpoint recebe a hora do servidor uma
+única vez; relógio local atrasado e retries não podem fazer a sincronização
+ignorar a nova versão ou aceitar sua antecessora como base atual.
 Registros legados sem ambiente/prova aguardam confirmação atual do projeto e
 repositório, depois passam pela varredura antes do envio.
 

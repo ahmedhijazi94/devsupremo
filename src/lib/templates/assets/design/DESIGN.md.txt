@@ -27,10 +27,11 @@ Carregando, vazio, preenchido, erro recuperável, sem permissão e envio em anda
 Preserve o que a pessoa digitou quando houver erro. Evite envios duplicados.
 
 ## Validação
-A conferência manual de celular, desktop, teclado e claro/escuro pertence ao usuário.
-O agente valida pelo código e pelos testes automatizados do projeto. Não controlar
-navegador, clicar, preencher formulários ou tirar screenshots para QA sem pedido
-explícito do usuário, inclusive na primeira tela e em mudanças de layout.
+QA de baixo risco é autorizado em development no preview local, com usuários sintéticos:
+celular, desktop, teclado, claro/escuro, navegação, formulário fictício e screenshots.
+Use Playwright quando houver provas relacionadas. Preserve o processo e o HMR.
+Pagamentos, emails reais, dados/serviços externos e produção exigem autorização
+explícita para a ação concreta. O usuário decide as preferências visuais finais.
 A rota /design-system fica disponível ao usuário apenas em desenvolvimento ou com
 SUPREMO_PREVIEW=1; responde 404 em produção normal. Preserve o preview saudável.
 

@@ -22,6 +22,17 @@ export type PushStatus =
   | 'push_failed'
 
 export interface CheckpointRecord {
+  /** Explicitly unapproved until evidence for this exact commit is attached. */
+  validationStatus?: 'pending' | 'running' | 'passed' | 'failed' | 'deferred'
+  validationId?: string
+  validatedSha?: string
+  treeSha?: string
+  workspaceHeadSha?: string
+  turnId?: string
+  environment?: 'development' | 'production' | 'unknown'
+  /** Diff base can skip a failed, unpublished snapshot without changing its proof. */
+  changesetBaseSha?: string
+  draft?: boolean
   checkpointId: string
   projectId: string
   commitSha: string
@@ -126,6 +137,7 @@ export function buildCheckpointRecord(input: {
     changedPaths: [...input.changedPaths],
     pushStatus: 'local',
     attempts: 0,
+    validationStatus: 'pending',
     ...(input.restoredFromCheckpointId
       ? { restoredFromCheckpointId: input.restoredFromCheckpointId }
       : {}),

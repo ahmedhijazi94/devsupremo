@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -69,6 +69,8 @@ describe('verify rápido bloqueia achados graves', () => {
     for (const command of ['tsc', 'eslint', 'vitest']) {
       writeFileSync(join(dir, 'bin', command), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     }
+    execFileSync('git', ['init', '-q'], { cwd: dir })
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'validation base'], { cwd: dir })
     writeFileSync(join(dir, 'scripts/verify.mjs'), harnessFiles()['scripts/verify.mjs']!)
     const result = spawnSync(process.execPath, ['scripts/verify.mjs', 'quick'], {
       cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}` },

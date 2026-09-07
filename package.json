@@ -12,6 +12,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "audit:security": "node scripts/security-audit.js",
+    "audit:secrets": "bash scripts/scan-secrets.sh",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

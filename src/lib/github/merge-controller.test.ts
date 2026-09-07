@@ -53,6 +53,7 @@ describe('reconcileMerge — modo NATIVE_GITHUB', () => {
     const r = await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'native' })
     expect(gw.enableNativeAutoMerge).not.toHaveBeenCalled()
     expect(r.state).toBe('ci_failed')
+    expect(r.headSha).toBe(SHA)
     expect(r.merged).toBe(false)
   })
 })
@@ -64,6 +65,7 @@ describe('reconcileMerge — modo SUPREMO_MANAGED', () => {
     expect(gw.merge).toHaveBeenCalledWith(7, SHA) // expectedSha = HEAD validado
     expect(r.merged).toBe(true)
     expect(r.state).toBe('merged')
+    expect(r.headSha).toBe(SHA)
   })
 
   it('NÃO mescla se um check falhou', async () => {
@@ -113,6 +115,7 @@ describe('reconcileMerge — modo SUPREMO_MANAGED', () => {
     expect(gw.merge).not.toHaveBeenCalled()
     expect(r.decision).toBe('wait')
     expect(r.reasons.join(' ')).toMatch(/HEAD mudou/i)
+    expect(r.headSha).toBe(SHA2)
   })
 
   it('checks de um SHA diferente do HEAD não liberam merge', async () => {

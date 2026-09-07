@@ -22,23 +22,54 @@ function guardUnknownCommand(argv: string[]): void {
 }
 
 program
+  .command('turn <event>')
+  .description('Protocolo executável de turnos e validação em background')
+  .option('--host <name>', 'Host que entregou o evento', 'assisted')
+  .action(async (event: string, options: { host: string }) => {
+    const { runTurnEvent } = await import('./turn-runtime')
+    const fs = await import('node:fs')
+    try {
+      const raw = process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8')
+      const output = await runTurnEvent(event, process.cwd(), raw.trim() ? JSON.parse(raw) as unknown : {}, options.host)
+      console.log(JSON.stringify(output))
+    } catch (error) {
+      const { sanitizeDiagnostic } = await import('../../../src/lib/checkpoint/feedback')
+      console.log(JSON.stringify({ protocolVersion: 1, workerAvailable: true, allowed: false,
+        reason: sanitizeDiagnostic(error instanceof Error ? error.message : String(error)) }))
+      process.exitCode = 1
+    }
+  })
+
+program
+  .command('host <event>')
+  .description('Instala ou verifica adapters de lifecycle')
+  .action(async (event: string) => {
+    const adapter = await import('./host-adapters')
+    if (event !== 'install' && event !== 'status') throw new Error('Use host install ou host status.')
+    console.log(JSON.stringify(event === 'install' ? adapter.installHostAdapters(process.cwd()) : adapter.inspectHostAdapters(process.cwd())))
+  })
+
+program
   .command('bootstrap <project-id>')
   .description('Prepara o workspace local do projeto (autoriza no navegador)')
   .requiredOption('-u, --url <url>', 'URL do Supremo, ex.: https://supremo.app')
   .option('-d, --dir <dir>', 'Pasta-base onde criar o projeto (padrão: pasta atual)')
+  .option('--host <name>', 'Agente usado no projeto: claude-code ou codex', 'claude-code')
   .option('--start', '(sem efeito — preview e daemon já sobem sempre; aceito por compatibilidade)')
   .action(
     async (
       projectId: string,
-      options: { url: string; dir?: string; start?: boolean },
+      options: { url: string; dir?: string; start?: boolean; host: string },
     ) => {
       const { runBootstrap } = await import('./bootstrap')
       try {
+        if (options.host !== 'claude-code' && options.host !== 'codex') throw new Error('Host inválido: use claude-code ou codex.')
         await runBootstrap({
           projectId,
           url: options.url,
-          dir: options.dir,
-          start: options.start,
+          ...(options.dir === undefined ? {} : { dir: options.dir }),
+          ...(options.start === undefined ? {} : { start: options.start }),
+          host: options.host,
         })
       } catch (error) {
         console.error(
@@ -94,9 +125,9 @@ program
         readSyncedRemoteState(cwd),
       )
       const record = runCheckpoint(summary, projectId, deps, {
-        conversationId: options.conversationId,
-        messageId: options.messageId,
-        originAgent: options.originAgent,
+        ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
+        ...(options.messageId === undefined ? {} : { messageId: options.messageId }),
+        ...(options.originAgent === undefined ? {} : { originAgent: options.originAgent }),
         parentCheckpointIdOverride,
       })
       console.log(

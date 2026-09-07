@@ -45,7 +45,7 @@ describe('reconcileCheckpointsForPr — escopo exato (projeto + PR + só publish
     const { client, calls } = fakeClient()
     void reconcileCheckpointsForPr(
       client,
-      { projectId: 'proj-1', prNumber: 42 },
+      { projectId: 'proj-1', prNumber: 42, publishedSha: 'observed-sha' },
       { pushStatus: null, integrationStatus: 'ci_running' },
     )
     expect(calls.update).toEqual({ integration_status: 'ci_running' })
@@ -56,7 +56,7 @@ describe('reconcileCheckpointsForPr — escopo exato (projeto + PR + só publish
     const { client, calls } = fakeClient()
     void reconcileCheckpointsForPr(
       client,
-      { projectId: 'proj-1', prNumber: 42 },
+      { projectId: 'proj-1', prNumber: 42, publishedSha: 'observed-sha' },
       { pushStatus: 'integrated', integrationStatus: 'merged' },
     )
     expect(calls.eq).toEqual([
@@ -81,6 +81,15 @@ describe('reconcileCheckpointsForPr — escopo exato (projeto + PR + só publish
         { pushStatus: 'integrated', integrationStatus: 'merged' },
       ),
     ).rejects.toThrow(/connection reset/)
+  })
+  it('sem merge exige SHA e nunca aplica um diagnóstico a todos os checkpoints da PR', async () => {
+    const { client, calls } = fakeClient()
+    await expect(reconcileCheckpointsForPr(client, { projectId: 'proj-1', prNumber: 42 },
+      { pushStatus: null, integrationStatus: 'ci_failed' })).rejects.toThrow(/SHA observado/)
+    expect(calls.update).toBeUndefined()
+    await reconcileCheckpointsForPr(client, { projectId: 'proj-1', prNumber: 42, publishedSha: 'observed-sha' },
+      { pushStatus: null, integrationStatus: 'ci_failed' })
+    expect(calls.eq).toContainEqual(['published_sha', 'observed-sha'])
   })
 })
 
@@ -245,5 +254,12 @@ describe('checkpoints — isolamento entre projetos com cliente privilegiado', (
     await upsertCheckpoint(client, { ...input, id: 'new-id' })
     await upsertCheckpoint(client, { ...input, id: 'new-id', summary: 'retry' })
     expect(rows.get('new-id')).toMatchObject({ project_id: 'attacker', summary: 'retry', push_status: 'publishing' })
+  })
+  it('mantém a revisão imutável em retries e colisões concorrentes dentro do mesmo projeto', async () => {
+    const { client, rows } = checkpointDatabase()
+    await upsertCheckpoint(client, { ...input, id: 'new-id', commitSha: 'a'.repeat(40) })
+    await expect(upsertCheckpoint(client, { ...input, id: 'new-id', commitSha: 'b'.repeat(40), summary: 'changed revision' })).rejects.toThrow(/outro SHA/)
+    expect(rows.get('new-id')).toMatchObject({ commit_sha: 'a'.repeat(40), summary: input.summary })
+    expect(await getCheckpointState(client, 'new-id', input.projectId)).toMatchObject({ commitSha: 'a'.repeat(40) })
   })
 })

@@ -29,3 +29,9 @@
 # válida, não foi gerado por criptografia e nunca autenticou serviço algum.
 # Exceção restrita ao commit/arquivo/regra/linha revisados, sem excluir testes.
 53bb9ca8c1732c3b717b7253af1d0580775f65d5:src/lib/checkpoint/feedback.test.ts:private-key:48
+
+# packages/cli/src/turn-model.test.ts — fixture de sanitização, formada pelo
+# prefixo de PAT seguido do alfabeto e dos dez dígitos em ordem. Nunca foi uma
+# credencial real; agora é construída em runtime. Como o scan inclui todo o
+# histórico, a exceção identifica somente esta linha deste commit já revisado.
+a8c26a867ee7619660fe2b69ffce5a61a5af934b:packages/cli/src/turn-model.test.ts:github-pat:152

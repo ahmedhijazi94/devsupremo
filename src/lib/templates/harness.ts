@@ -1,6 +1,9 @@
+import { preCommitHook, prePushHook } from '../../../packages/cli/src/git-hooks'
 import { recoveryContextScript } from './recovery-context'
+import { claudeHookSettings, codexHookSettings, turnHookScript } from '../../../packages/cli/src/host-adapters'
 import {
   BROAD_FILE_COUNT,
+  CODE_BUILD_FAILURE_PATTERNS,
   ENV_BUILD_FAILURE_PATTERNS,
   FULL_PATTERNS,
   NEXT_TSCONFIG_TYPES_GLOB_RE,
@@ -51,6 +54,8 @@ export function harnessPackageScripts(): Record<string, string> {
     // código — 100% local (pid do daemon lido direto, sem npx no caminho
     // saudável), custo próximo de zero quando já está tudo de pé.
     'supremo:resume': 'node scripts/supremo-status.mjs --ensure',
+    'supremo:turn': 'supremo turn',
+    'supremo:host': 'supremo host',
     // Sincronização entre máquinas (v3.3, seção 31) — política PRÓPRIA, SÓ no
     // primeiro pedido da sessão (independente de supremo:resume acima, que
     // agora roda todo pedido). Checagem leve (um SELECT, nunca GitHub),
@@ -683,10 +688,26 @@ export function verifyScript(): string {
 //   node scripts/verify.mjs            → auto (git diff working+staged)
 //   node scripts/verify.mjs --staged   → auto, só staged (usado no pre-commit)
 //   node scripts/verify.mjs quick|security|full → força o nível
-import { exec, execSync } from 'node:child_process'
+import { exec, execSync, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 const execAsync = promisify(exec)
 import fs, { readFileSync } from 'node:fs'
+const args = process.argv.slice(2)
+const baseIndex = args.indexOf('--base')
+const base = baseIndex >= 0 ? args[baseIndex + 1] : 'HEAD'
+if (!base || !/^[a-f0-9]{40}(?:\\^)?$|^HEAD(?:\\^)?$/.test(base)) throw new Error('Base de validação inválida.')
+// Resolve refs once; every check and receipt refers to the same immutable SHA.
+const validationBase = execFileSync('git', ['rev-parse', '--verify', base], { encoding: 'utf8' }).trim()
+const background = args.includes('--background')
+const evidence = { schemaVersion: 1, sha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), base: validationBase, status: 'running', level: null, checks: [], startedAt: new Date().toISOString() }
+const saveEvidence = (status) => {
+  if (!background) return
+  evidence.status = status
+  evidence.completedAt = new Date().toISOString()
+  fs.mkdirSync('.supremo', { recursive: true })
+  fs.writeFileSync('.supremo/verify-result.json.tmp', JSON.stringify(evidence, null, 2) + '\\n')
+  fs.renameSync('.supremo/verify-result.json.tmp', '.supremo/verify-result.json')
+}
 ${recoveryContextScript().replace("import fs from 'node:fs'\n", "").replace("export function", "function")}
 
 const FULL_PATTERNS = ${serializePatterns(FULL_PATTERNS)}
@@ -696,7 +717,8 @@ const BROAD_FILE_COUNT = ${BROAD_FILE_COUNT}
 // Só o passo \`build\` consulta isto — ver ENV_BUILD_FAILURE_PATTERNS em
 // verify-classifier.ts (fonte única, mesma regra testada lá).
 const ENV_BUILD_FAILURE_PATTERNS = ${serializePatterns(ENV_BUILD_FAILURE_PATTERNS)}
-const isKnownEnvironmentalBuildFailure = (output) => ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
+const CODE_BUILD_FAILURE_PATTERNS = ${serializePatterns(CODE_BUILD_FAILURE_PATTERNS)}
+const isKnownEnvironmentalBuildFailure = (output) => !CODE_BUILD_FAILURE_PATTERNS.some((re) => re.test(output)) && ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
 
 // Ruído CONHECIDO/transitório do Next em tsconfig.json (v3-11) — MESMA
 // detecção estrutural de isKnownNextTsconfigNoise em verify-classifier.ts
@@ -748,7 +770,7 @@ function knownNoisePaths(paths) {
   if (!paths.includes('tsconfig.json')) return []
   let before
   try {
-    before = execSync('git show HEAD:tsconfig.json', { encoding: 'utf8' })
+    before = execFileSync('git', ['show', validationBase + ':tsconfig.json'], { encoding: 'utf8' })
   } catch {
     return []
   }
@@ -765,7 +787,7 @@ function changedFiles(stagedOnly) {
   try {
     const cmds = stagedOnly
       ? ['git diff --cached --name-only']
-      : ['git diff --name-only HEAD', 'git diff --cached --name-only']
+      : ['git diff --name-only ' + validationBase, 'git diff --cached --name-only', 'git ls-files --others --exclude-standard']
     const set = new Set()
     for (const c of cmds) {
       for (const line of execSync(c, { encoding: 'utf8' }).split('\\n')) {
@@ -775,7 +797,7 @@ function changedFiles(stagedOnly) {
     }
     return [...set]
   } catch {
-    return []
+    throw new Error('Não foi possível determinar arquivos para validação.')
   }
 }
 
@@ -803,16 +825,20 @@ function classify(paths, noisePaths) {
 // supabase local). Num bootstrap fresco isso não existe (por design: só env
 // pública chega). Então excluímos RLS do vitest padrão e só rodamos os testes
 // de RLS quando há Supabase local; senão, o gate "Políticas RLS" do CI cobre.
-const hasLocalDb = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)
+const hasLocalDb = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY) && (() => {
+  // A service role alone does not authorize a target; only loopback development.
+  try { return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').hostname) }
+  catch { return false }
+})()
 const UNIT = 'vitest run --coverage --exclude "**/*.rls.test.ts"'
-const rlsStep = hasLocalDb ? [['rls / isolamento', 'vitest run rls.test']] : []
+const rlsStep = hasLocalDb ? [['rls / isolamento', 'npm run test:rls']] : []
 
 const STEPS = {
   quick: [
     ['typecheck', 'tsc --noEmit'],
     ['lint', 'eslint'],
-    ['testes afetados', 'vitest run --changed HEAD --passWithNoTests --exclude "**/*.rls.test.ts"'],
-    ['secret scan', 'node scripts/security-audit.js --staged --strict'],
+    ['testes afetados', 'vitest run --changed ' + validationBase + ' --passWithNoTests --exclude "**/*.rls.test.ts"'],
+    ['secret scan', 'node scripts/security-audit.js ' + (background ? '--strict' : '--staged --strict')],
   ],
   security: [
     ['typecheck', 'tsc --noEmit'],
@@ -831,20 +857,25 @@ const STEPS = {
   ],
 }
 
-const args = process.argv.slice(2)
 const stagedOnly = args.includes('--staged')
 const forced = args.find((a) => ['quick', 'security', 'full'].includes(a))
 const paths = changedFiles(stagedOnly)
 const { level, reason } = forced
   ? { level: forced, reason: 'Nível forçado.' }
   : classify(paths, knownNoisePaths(paths))
+evidence.level = level
 
 console.log(\`\\n▸ verify [\${level.toUpperCase()}] — \${reason} (\${paths.length} arquivo(s))\\n\`)
 const sourceChanged = paths.some((p) => /\\.[cm]?[jt]sx?$/.test(p) && !/\\.d\\.ts$/.test(p))
 const recovery = readRecoveryContext()
 const knownCoverageFailure = recovery.failure?.failures?.some((failure) => /cobertura|coverage/i.test(failure?.name ?? '')) ?? false
-if (level === 'quick' && (sourceChanged || knownCoverageFailure)) {
+if (level === 'quick' && (knownCoverageFailure || (sourceChanged && !args.includes('--draft')))) {
   STEPS.quick[2] = ['testes e cobertura', UNIT]
+}
+// Low-risk browser smoke is automatic in the isolated development validation.
+// Draft saves defer browser startup to postflight; acceptance contracts can select more tests.
+if (background && !args.includes('--draft') && paths.some((p) => /^(app|components|src\\/(app|components))\\//.test(p)) && fs.existsSync('e2e/smoke.spec.ts')) {
+  STEPS[level].push(['browser e2e', 'playwright test e2e/smoke.spec.ts'])
 }
 const t0 = Date.now()
 let buildDeferred = false
@@ -865,12 +896,14 @@ for (let index = 0; index < results.length; index++) {
     console.error(\`\\n✗ verify \${level} falhou em: \${label}\\n\`)
   } else console.log(\`  • \${label}… ok (\${result.value.seconds}s)\`)
 }
-if (results.some((result) => result.status === 'rejected')) process.exit(1)
+for (let index = 0; index < results.length; index++) evidence.checks.push({ name: checks[index][0], status: results[index].status === 'rejected' ? 'failed' : 'passed' })
+if (results.some((result) => result.status === 'rejected')) { saveEvidence('failed'); process.exit(1) }
 for (const [label, cmd] of STEPS[level].filter(([label]) => label === 'build')) {
   process.stdout.write(\`  • \${label}… \`)
   try {
     execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] })
     console.log('ok')
+    evidence.checks.push({ name: label, status: 'passed' })
   } catch (err) {
     const output = \`\${err.stdout ?? ''}\${err.stderr ?? ''}\`.toString()
     // SÓ o build pode ser deferido, e SÓ com uma assinatura CONHECIDA de
@@ -882,19 +915,24 @@ for (const [label, cmd] of STEPS[level].filter(([label]) => label === 'build')) 
       console.log('DEFERIDO (limitação ambiental do sandbox)')
       console.log('  ℹ build falhou por limitação ambiental conhecida (porta/processo ocupado ou rede indisponível pra recurso externo) — não é erro de código. Deferido para a CI obrigatória (fail-closed lá); checkpoint local pode prosseguir.')
       buildDeferred = true
+      evidence.checks.push({ name: label, status: 'deferred' })
       continue
     }
     console.log('FALHOU')
     if (err.stdout) process.stderr.write(err.stdout.toString())
     if (err.stderr) process.stderr.write(err.stderr.toString())
     console.error(\`\\n✗ verify \${level} falhou em: \${label}\\n\`)
+    evidence.checks.push({ name: label, status: 'failed' })
+    saveEvidence('failed')
     process.exit(1)
   }
 }
 if (!hasLocalDb && (level === 'security' || level === 'full')) {
-  console.log('  ℹ RLS pulado (sem Supabase local) — validado no gate "Políticas RLS" do CI. Para rodar local: npm run local:start && npm run test:rls')
+  evidence.checks.push({ name: 'rls / isolamento', status: 'deferred' })
+  console.log('  ℹ RLS pendente (sem Supabase local) — exige aprovação do gate "Políticas RLS" do CI. Para rodar local: npm run local:start && npm run test:rls')
 }
 const deferredSuffix = buildDeferred ? ' — build DEFERIDO para a CI (limitação ambiental do sandbox; CI é fail-closed antes do merge)' : ''
+saveEvidence(evidence.checks.some((check) => check.status === 'deferred') ? 'deferred' : 'passed')
 console.log(\`\\n✓ verify \${level} passou em \${((Date.now() - t0) / 1000).toFixed(1)}s\${deferredSuffix}\\n\`)
 `
 }
@@ -903,8 +941,8 @@ console.log(\`\\n✓ verify \${level} passou em \${((Date.now() - t0) / 1000).to
 export function setupLocalScript(): string {
   return `#!/usr/bin/env node
 // GERADO pelo Supremo — setup local idempotente. Rodar de novo não destrói nada.
-import { execSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { execSync, execFileSync } from 'node:child_process'
+import { existsSync, chmodSync } from 'node:fs'
 
 const step = (label, fn) => {
   process.stdout.write(\`  • \${label}… \`)
@@ -930,41 +968,26 @@ step('dependências', () => {
 })
 
 step('git hooks', () => {
+  for (const file of ['.githooks/pre-commit', '.githooks/pre-push']) {
+    if (!existsSync(file)) throw new Error(file + ' ausente; instalação incompleta.')
+    chmodSync(file, 0o755)
+  }
   execSync('git config core.hooksPath .githooks', { stdio: 'ignore' })
+  if (execSync('git config --get core.hooksPath', { encoding: 'utf8' }).trim() !== '.githooks') throw new Error('Git hooks não foram ativados.')
+})
+
+step('turn lifecycle adapter', () => {
+  execFileSync(process.execPath, ['node_modules/supremo-cli/dist/bin.js', 'host', 'install'], { stdio: 'inherit' })
 })
 
 step('baseline (verify quick)', () => {
   execSync('node scripts/verify.mjs quick', { stdio: 'inherit' })
 })
 
-console.log('\\n✓ pronto. Preview persistente: npm run preview:ensure\\n')
+console.log('\\n✓ componentes instalados. Bootstrap verifica daemon, preview, ambiente e modo do host.\\n')
 `
 }
 
-const preCommitHook = `#!/bin/sh
-# GERADO pelo Supremo — validação rápida/adaptativa do que está staged.
-exec node scripts/verify.mjs --staged
-`
-
-const prePushHook = `#!/bin/sh
-# GERADO pelo Supremo (v3) — defesa local em profundidade.
-#
-# 1) NUNCA empurrar direto para a main. A integração na main é do GitHub/Supremo
-#    (assíncrona), só com os required checks do HEAD atual verdes. No GitHub Free
-#    privado, sem branch protection nativa, este hook é a barreira local que impede
-#    o push direto. Trabalhe sempre numa branch de desenvolvimento.
-while read -r _local_ref _local_sha remote_ref _remote_sha; do
-  case "$remote_ref" in
-    refs/heads/main|refs/heads/master)
-      echo "✗ Push direto para a main bloqueado. Trabalhe numa branch de desenvolvimento;" >&2
-      echo "  a main é integrada pelos gates (auto-merge), nunca por push direto." >&2
-      exit 1
-      ;;
-  esac
-done
-# 2) validação adaptativa antes do push; o GitHub CI é a barreira independente final.
-exec node scripts/verify.mjs
-`
 
 /**
  * Todos os arquivos do harness (relativos à raiz do projeto gerado). O conjunto
@@ -1229,6 +1252,10 @@ if (process.argv.includes('--ensure') && !healthy) {
 
 export function harnessFiles(): Record<string, string> {
   return {
+    '.claude/settings.json': claudeHookSettings(),
+    '.codex/hooks.json': codexHookSettings(),
+    'scripts/supremo-codex-hook.mjs': turnHookScript('codex'),
+    'scripts/supremo-turn-hook.mjs': turnHookScript(),
     'scripts/recovery-context.mjs': recoveryContextScript(),
     'scripts/verify.mjs': verifyScript(),
     'scripts/setup-local.mjs': setupLocalScript(),

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GithubCredentials } from '@/lib/projects/repository'
 import { getChecks, getFailedJobLogs, getPullRequest } from '@/lib/github/client'
 import { resolveRequiredChecks } from '@/lib/github/reconcile'
+import { getAcceptanceEvidence } from '@/lib/github/acceptance'
 import { buildValidationFeedback, withFeedbackEvidence } from './feedback'
 import { saveCheckpointFeedback } from './feedback-store'
 
@@ -26,6 +27,14 @@ export async function capturePrFeedback(client: SupabaseClient, projectId: strin
     } catch {
       feedback.evidence = 'Log detalhado indisponível. Os gates identificados falharam; nova consulta automática em background.'
     }
+  }
+  try {
+    const acceptance = await getAcceptanceEvidence(creds, projectId, pr.headSha)
+    if (acceptance) feedback.acceptance = acceptance
+  } catch {
+    // Gates remain authoritative. Missing/corrupt custom proof stays absent,
+    // so recovery cannot treat a generic green RLS gate as custom evidence.
+    feedback.acceptance = undefined
   }
   await saveCheckpointFeedback(client, feedback)
 }

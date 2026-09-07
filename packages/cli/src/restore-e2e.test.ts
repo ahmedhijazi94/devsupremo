@@ -185,7 +185,11 @@ describe('restore — E2E real: patch aplicado → checkpoint E criado → publi
         http,
         reader: defaultCommitReader(dir),
       }
-      const publishOutcome = await processCheckpoint(eRecord!, ctx)
+      const pending = await processCheckpoint(eRecord!, ctx)
+      expect(pending.result).toBe('deferred')
+      expect(published).toHaveLength(0)
+      // This test targets publication after its independently tested worker attaches SHA evidence.
+      const publishOutcome = await processCheckpoint({ ...eRecord!, validationStatus: 'passed', validatedSha: eRecord!.commitSha }, ctx)
       expect(publishOutcome.result).toBe('done')
       expect(publishOutcome.record.pushStatus).toBe('published')
       expect(published).toHaveLength(1)

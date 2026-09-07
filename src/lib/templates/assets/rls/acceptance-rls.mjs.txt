@@ -1,0 +1,104 @@
+#!/usr/bin/env node
+// Named RLS acceptance proofs run against the ephemeral CI database.
+// A generic green RLS job does not prove these custom checks were executed.
+import { spawnSync, execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { z } from 'zod'
+
+const root = fs.realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'))
+const destination = path.join(root, '.supremo/acceptance-result/acceptance.json')
+const contractFile = path.join(root, '.supremo/acceptance.json')
+const testPath = z.string().min(1).max(300).refine((file) => !file.startsWith('/') &&
+  !file.split(/[\\/]/).includes('..') &&
+  (/^(?:tests?|e2e|src)\//.test(file) && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file) || /^supabase\/.+\.rls\.test\.[cm]?[jt]sx?$/.test(file)))
+const contractSchema = z.object({
+  version: z.literal(1),
+  criteria: z.array(z.object({ id: z.string().min(1).max(100), description: z.string().min(1).max(2000),
+    requiredChecks: z.array(z.string().min(1).max(200)).min(1).max(30) })).min(1).max(100),
+  checks: z.array(z.object({ name: z.string().min(1).max(200), type: z.enum(['unit', 'e2e', 'rls']),
+    files: z.array(testPath).min(1).max(30) })).min(1).max(50),
+}).superRefine((contract, ctx) => {
+  const names = new Set(contract.checks.map((check) => check.name))
+  if (names.size !== contract.checks.length || new Set(contract.criteria.map((criterion) => criterion.id)).size !== contract.criteria.length ||
+      contract.criteria.some((criterion) => criterion.requiredChecks.some((name) => !names.has(name))) ||
+      contract.checks.some((check) => check.type !== 'rls' && check.files.some((file) => file.startsWith('supabase/')))) {
+    ctx.addIssue({ code: 'custom', message: 'Contrato de aceite inconsistente.' })
+  }
+})
+const vitestReport = z.object({
+  success: z.literal(true), numTotalTests: z.number().int().positive(),
+  numFailedTests: z.literal(0), numPendingTests: z.literal(0), numTodoTests: z.literal(0),
+  testResults: z.array(z.object({ name: z.string(), status: z.literal('passed'),
+    assertionResults: z.array(z.object({ status: z.literal('passed') })).min(1),
+  })).min(1),
+})
+let report = null
+let temp = null
+try {
+  fs.rmSync(destination, { force: true })
+  if (!fs.existsSync(contractFile)) process.exit(0)
+  const contract = contractSchema.parse(JSON.parse(fs.readFileSync(contractFile, 'utf8')))
+  const selected = contract.checks.filter((check) => check.type === 'rls')
+  if (!selected.length) process.exit(0)
+  const project = z.object({ projectId: z.string().uuid() }).parse(JSON.parse(fs.readFileSync(path.join(root, '.supremo/project.json'), 'utf8')))
+  const sha = z.string().regex(/^[a-f0-9]{40}$/).parse(process.env.SUPREMO_ACCEPTANCE_SHA)
+  if (execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim() !== sha) throw new Error('SHA de aceite diverge do checkout.')
+  const runId = z.coerce.number().int().positive().parse(process.env.GITHUB_RUN_ID)
+  const runAttempt = z.coerce.number().int().positive().parse(process.env.GITHUB_RUN_ATTEMPT)
+  report = { version: 1, sha, projectId: project.projectId, environment: 'development', runId, runAttempt,
+    checks: [], criterionIds: [], completedAt: new Date().toISOString() }
+  const database = new URL(process.env.SUPABASE_URL || '')
+  if (database.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(database.hostname) ||
+      !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.SUPABASE_ANON_KEY) {
+    throw new Error('Aceite RLS exige banco de testes loopback e credenciais efêmeras.')
+  }
+  temp = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-acceptance-'))
+  let failed = false
+  for (const [index, check] of selected.entries()) {
+    let passed = false
+    try {
+      const files = [...new Set(check.files)].map((file) => {
+        const resolved = fs.realpathSync(path.join(root, file))
+        const relative = path.relative(root, resolved)
+        if (!fs.statSync(resolved).isFile() || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+          throw new Error('Prova de aceite fora do projeto.')
+        }
+        return resolved
+      })
+      const output = path.join(temp, `${index}.json`)
+      const result = spawnSync(process.execPath, [path.join(root, 'node_modules/vitest/vitest.mjs'), 'run', ...files,
+        '--no-file-parallelism', '--maxWorkers=1', '--reporter=json', '--outputFile=' + output], {
+        cwd: root, env: { ...process.env, CI: 'true' }, encoding: 'utf8', timeout: 300_000, killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024,
+      })
+      if (result.error || result.status !== 0) throw new Error('Prova nomeada falhou ou não executou.')
+      const evidence = vitestReport.parse(JSON.parse(fs.readFileSync(output, 'utf8')))
+      // Every explicitly selected file must have actually executed passing tests.
+      const executed = new Set(evidence.testResults.map((file) => fs.realpathSync(file.name)))
+      if (files.some((file) => !executed.has(file))) throw new Error('Arquivo de prova não executado.')
+      passed = true
+    } catch {
+      failed = true
+      console.error('Uma prova RLS nomeada falhou, ficou vazia, foi pulada ou não executou. Consulte o contrato de aceite.')
+    }
+    report.checks.push({ name: check.name, type: 'rls', status: passed ? 'passed' : 'failed' })
+  }
+  if (spawnSync('git', ['diff', '--quiet', 'HEAD'], { cwd: root }).status !== 0) throw new Error('A validação alterou arquivos versionados.')
+  report.criterionIds = contract.criteria.filter((criterion) => criterion.requiredChecks.every((name) =>
+    report.checks.some((check) => check.name === name && check.status === 'passed'))).map((criterion) => criterion.id)
+  if (failed) process.exitCode = 1
+} catch {
+  // Never export test output or environment secrets into the acceptance artifact.
+  console.error('Aceite RLS inválido ou sem execução comprovada; integração bloqueada.')
+  if (report) report.checks = report.checks.map((check) => ({ ...check, status: 'failed' }))
+  process.exitCode = 1
+} finally {
+  if (report) {
+    report.completedAt = new Date().toISOString()
+    fs.mkdirSync(path.dirname(destination), { recursive: true })
+    fs.writeFileSync(destination, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })
+  }
+  if (temp) fs.rmSync(temp, { recursive: true, force: true })
+}

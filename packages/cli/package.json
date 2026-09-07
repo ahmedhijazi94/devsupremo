@@ -1,6 +1,6 @@
 {
   "name": "supremo-cli",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "CLI do Supremo: bootstrap, preview persistente e checkpoints em background.",
   "license": "MIT",
   "author": "Supremo",
@@ -34,14 +34,16 @@
     "build": "esbuild src/bin.ts --bundle --platform=node --target=node18 --outfile=dist/bin.js",
     "prepublishOnly": "npm run build",
     "start": "node dist/bin.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
-  "//": "Sem dependencies de runtime: o esbuild empacota tudo em dist/bin.js (self-contained), ent\u00e3o o npx s\u00f3 baixa o bundle. Estas ficam em devDependencies porque o build precisa empacot\u00e1-las.",
+  "//": "Sem dependencies de runtime: o esbuild empacota tudo em dist/bin.js (self-contained), então o npx só baixa o bundle. Estas ficam em devDependencies porque o build precisa empacotá-las.",
   "devDependencies": {
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
     "@types/node": "^20.12.7",
     "esbuild": "^0.20.2",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "zod": "4.5.2"
   }
 }

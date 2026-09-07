@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   defaultCheckpointDeps,
+  classifyCheckpointRisk,
+  detectMigrations,
   parseQueue,
   serializeQueue,
   CHECKPOINT_DIR,
@@ -22,6 +24,8 @@ import { resolveKeychain } from './keychain'
 import { startDatabaseWorker } from './database-queue'
 import { runDatabaseDirect } from './database'
 import { startFeedbackWorker } from './feedback'
+import { evidenceFor, startLocalValidationWorker } from './turn-validation'
+import { gitText, readJson, TURN_DIR, withTurnLock } from './turn-workspace'
 import {
   applyRestore,
   defaultRestoreDeps,
@@ -55,7 +59,7 @@ const RETRIABLE: ReadonlySet<PushStatus> = new Set<PushStatus>([
 export function selectNextPending(
   queue: readonly CheckpointRecord[],
 ): CheckpointRecord | null {
-  for (const r of queue) if (RETRIABLE.has(r.pushStatus)) return r
+  for (const r of queue) if (RETRIABLE.has(r.pushStatus) && r.validationStatus !== 'failed') return r
   return null
 }
 
@@ -177,6 +181,10 @@ export async function processCheckpoint(
   record: CheckpointRecord,
   ctx: DaemonContext,
 ): Promise<ProcessOutcome> {
+  if (record.projectId !== ctx.projectId) return { record, result: 'failed', reason: 'project_mismatch' }
+  if (record.validationStatus && (record.validationStatus !== 'passed' && record.validationStatus !== 'deferred' || record.validatedSha !== record.commitSha)) {
+    return { record, result: 'deferred', reason: 'local_validation_required' }
+  }
   const secret = ctx.getSecret()
   if (!secret) {
     return {
@@ -491,6 +499,8 @@ export async function processRestores(
   config: DaemonConfig,
   overrides: { http?: DaemonHttp; deps?: RestoreDeps } = {},
 ): Promise<number> {
+  const active = readJson(path.join(config.cwd, TURN_DIR, 'state.json')) as { turn?: { status?: string } } | null
+  if (active?.turn?.status === 'active') return 0
   const secret = config.getSecret()
   if (!secret) return 0
 
@@ -506,12 +516,14 @@ export async function processRestores(
   const deps = overrides.deps ?? defaultRestoreDeps(defaultCheckpointDeps(config.cwd), config.cwd)
   for (const req of pending) {
     try {
-      const outcome = applyRestore(
-        req.targetCheckpointId,
-        req.targetSummary,
-        config.projectId,
-        deps,
-      )
+      const outcome = await withTurnLock(config.cwd, () => {
+        // Polling crosses a network boundary. A new turn may have claimed the workspace meanwhile.
+        const latest = readJson(path.join(config.cwd, TURN_DIR, 'state.json')) as { turn?: { status?: string } } | null
+        if (latest?.turn?.status === 'active' || readJson(path.join(config.cwd, TURN_DIR, 'mutation-lease.json')) !== null) {
+          throw new Error('Workspace ocupado por um turno; restauração não aplicada.')
+        }
+        return applyRestore(req.targetCheckpointId, req.targetSummary, config.projectId, deps)
+      })
       // Sinaliza (v3-12) — nunca falha o restore por causa disto: a migration
       // já foi preservada como está (nunca reescrita), isto é só visibilidade
       // pra um caso que nunca deveria acontecer (migration histórica editada
@@ -561,8 +573,30 @@ export async function drainOnce(config: DaemonConfig): Promise<number> {
   }
   let processed = 0
   for (;;) {
-    const next = selectNextPending(queue)
+    let next = selectNextPending(queue)
     if (!next) break
+    if (next.validationStatus) {
+      const evidence = evidenceFor(config.cwd, next)
+      if (!evidence || !['passed', 'deferred'].includes(evidence.status)) break
+    }
+    const nextId = next.checkpointId
+    const earlier = queue.slice(0, queue.findIndex((item) => item.checkpointId === nextId))
+    const lastPublished = earlier.filter((item) => ['published', 'integrated'].includes(item.pushStatus)).at(-1)
+    const unpublished = earlier.slice(lastPublished ? earlier.indexOf(lastPublished) + 1 : 0)
+    if (unpublished.some((item) => item.validationStatus === 'failed')) {
+      const first = unpublished[0]!
+      const changesetBaseSha = lastPublished?.commitSha ?? gitText(config.cwd, ['rev-parse', `${first.commitSha}^`])
+      const changedPaths = gitText(config.cwd, ['diff', '--name-only', '-z', changesetBaseSha, next.commitSha]).split('\0').filter(Boolean)
+      const rebased = { ...next, parentCheckpointId: lastPublished?.checkpointId ?? first.parentCheckpointId,
+        changesetBaseSha, changedPaths, riskLevel: classifyCheckpointRisk(changedPaths), migrations: detectMigrations(changedPaths) }
+      if (next.changesetBaseSha !== changesetBaseSha) {
+        // Skipping an unpublished failed snapshot expands the change under review.
+        // Its full diff must be validated before the daemon can publish it.
+        fs.appendFileSync(queuePath, serializeQueue([{ ...rebased, validationStatus: 'pending' }]))
+        break
+      }
+      next = rebased
+    }
     const outcome = await processCheckpoint(next, ctx)
     queue = upsertQueue(queue, outcome.record)
     // Nunca regravar o snapshot lido antes da rede: o agente pode ter anexado
@@ -597,12 +631,14 @@ export async function runDaemonLoop(
   const idleMs = opts.idleMs ?? 3000
   let stopped = false
   // Independente do upload/CI/backoff: o banco responde mesmo com checkpoint pendente.
+  const stopLocalValidationWorker = startLocalValidationWorker(cwd)
   const stopDatabaseWorker = startDatabaseWorker(cwd, (operation) => runDatabaseDirect(operation, cwd))
   const stopFeedbackWorker = startFeedbackWorker(daemonConfig)
   process.on('SIGTERM', () => {
     stopped = true
     stopDatabaseWorker()
     stopFeedbackWorker()
+    stopLocalValidationWorker()
   })
   while (!stopped) {
     let queue: CheckpointRecord[] = []

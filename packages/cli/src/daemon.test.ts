@@ -97,6 +97,10 @@ function fakes(opts: { secret?: string | null; publishThrows?: unknown }) {
       if (opts.publishThrows) throw opts.publishThrows
       return { prNumber: 42 }
     },
+    pollRestores: async () => { throw new Error('Unexpected restore poll') },
+    reportRestoreApplied: async () => { throw new Error('Unexpected restore report') },
+    reportRestoreFailed: async () => { throw new Error('Unexpected restore report') },
+    syncStatus: async () => { throw new Error('Unexpected sync') },
   }
   const ctx: DaemonContext = {
     projectId: 'proj-1',
@@ -253,6 +257,21 @@ describe('processRestores — restore no próprio Supremo (v3.1 finalização)',
     const { http } = fakeHttp({ pending: [] })
     const n = await processRestores({ ...cfg, getSecret: () => 'sup_dev_ckpt_x' }, { http })
     expect(n).toBe(0)
+  })
+
+  it('does not restore over a new turn that starts while the remote poll is in flight', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'supremo-restore-turn-race-'))
+    const { http, failed, applied } = fakeHttp({})
+    http.pollRestores = async () => {
+      mkdirSync(join(cwd, '.supremo/turns'), { recursive: true })
+      writeFileSync(join(cwd, '.supremo/turns/state.json'), JSON.stringify({ turn: { status: 'active' } }))
+      return [{ restoreRequestId: 'req-race', targetCheckpointId: 'cpB', targetSummary: 'previous card' }]
+    }
+    try {
+      expect(await processRestores({ ...cfg, cwd, getSecret: () => 'device-test' }, { http })).toBe(1)
+      expect(applied).toEqual([])
+      expect(failed).toEqual([expect.objectContaining({ restoreRequestId: 'req-race', error: expect.stringContaining('Workspace ocupado') })])
+    } finally { rmSync(cwd, { recursive: true, force: true }) }
   })
 
   it('aplica e reporta "applied" com o checkpoint E resultante', async () => {

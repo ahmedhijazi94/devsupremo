@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { preCommitHook, prePushHook } from './git-hooks'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
@@ -12,6 +14,9 @@ import {
   migrationDryRunSynced,
   patchConfigMajorVersion,
   previewStatusHealthy,
+  previewStatusUrl,
+  projectIdentityValid,
+  gitHooksVerified,
   projectListHasRef,
   resolveSupabaseBin,
   supabaseLinkArgs,
@@ -224,17 +229,21 @@ describe('daemonCliOutputLooksValid — detecta CLI publicada desatualizada', ()
 describe('validateLocalReadiness — bootstrap só declara "pronto" se for verdade', () => {
   it('tudo certo (daemon E preview saudáveis) → ok, sem issues', () => {
     const r = validateLocalReadiness({
+      setupSucceeded: true, gitHooksVerified: true, lifecycleVerified: true,
+      validationWorkerAvailable: true, databaseEnvironmentReady: true, integrationMode: 'enforced',
       projectJsonOk: true,
       hasDaemonIdentity: true,
       daemonRunning: true,
       npmScriptsCompatible: true,
       previewHealthy: true,
     })
-    expect(r).toEqual({ ok: true, issues: [] })
+    expect(r).toEqual({ ok: true, state: 'ready', integrationMode: 'enforced', issues: [] })
   })
 
   it('project.json ausente/incompleto → issue mesmo sem daemon', () => {
     const r = validateLocalReadiness({
+      setupSucceeded: true, gitHooksVerified: true, lifecycleVerified: true,
+      validationWorkerAvailable: true, databaseEnvironmentReady: true, integrationMode: 'enforced',
       projectJsonOk: false,
       hasDaemonIdentity: false,
       daemonRunning: false,
@@ -247,6 +256,8 @@ describe('validateLocalReadiness — bootstrap só declara "pronto" se for verda
 
   it('daemon não subiu → issue (só quando há identidade de device)', () => {
     const r = validateLocalReadiness({
+      setupSucceeded: true, gitHooksVerified: true, lifecycleVerified: true,
+      validationWorkerAvailable: true, databaseEnvironmentReady: true, integrationMode: 'enforced',
       projectJsonOk: true,
       hasDaemonIdentity: true,
       daemonRunning: false,
@@ -259,6 +270,8 @@ describe('validateLocalReadiness — bootstrap só declara "pronto" se for verda
 
   it('CLI publicada incompatível → issue explícita (a causa raiz do bug real)', () => {
     const r = validateLocalReadiness({
+      setupSucceeded: true, gitHooksVerified: true, lifecycleVerified: true,
+      validationWorkerAvailable: true, databaseEnvironmentReady: true, integrationMode: 'enforced',
       projectJsonOk: true,
       hasDaemonIdentity: true,
       daemonRunning: true,
@@ -269,19 +282,24 @@ describe('validateLocalReadiness — bootstrap só declara "pronto" se for verda
     expect(r.issues.some((i) => i.includes('desatualizada'))).toBe(true)
   })
 
-  it('sem identidade de daemon (projeto sem device) → não exige daemon/scripts, mas AINDA exige preview', () => {
+  it('sem identidade de daemon → nunca declara experiência automática pronta', () => {
     const r = validateLocalReadiness({
+      setupSucceeded: true, gitHooksVerified: true, lifecycleVerified: true,
+      validationWorkerAvailable: true, databaseEnvironmentReady: true, integrationMode: 'enforced',
       projectJsonOk: true,
       hasDaemonIdentity: false,
       daemonRunning: false,
       npmScriptsCompatible: null,
       previewHealthy: true,
     })
-    expect(r).toEqual({ ok: true, issues: [] })
+    expect(r.state).toBe('not_ready')
+    expect(r.issues).toContain('identidade do checkpoint daemon ausente')
   })
 
   it('preview não saudável → issue, MESMO com daemon perfeito (bug real: bootstrap declarava pronto com preview morto)', () => {
     const r = validateLocalReadiness({
+      setupSucceeded: true, gitHooksVerified: true, lifecycleVerified: true,
+      validationWorkerAvailable: true, databaseEnvironmentReady: true, integrationMode: 'enforced',
       projectJsonOk: true,
       hasDaemonIdentity: true,
       daemonRunning: true,
@@ -333,5 +351,77 @@ describe('checkNodeVersion — aviso claro, NUNCA bloqueia (seção 8)', () => {
 
   it('Node 18 (fora do engines atual do template, >=20) → warn', () => {
     expect(checkNodeVersion('v18.19.0').status).toBe('warn')
+  })
+})
+
+
+describe('bootstrap verifies real installed gates and public identity', () => {
+  it.skipIf(process.platform === 'win32')('rejects a POSIX FIFO without blocking bootstrap', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-bootstrap-fifo-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root })
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: root })
+      fs.mkdirSync(path.join(root, '.githooks'))
+      execFileSync('mkfifo', [path.join(root, '.githooks/pre-commit')])
+      fs.writeFileSync(path.join(root, '.githooks/pre-push'), prePushHook, { mode: 0o755 })
+      // A separate process and a hard timeout make the pre-fix hanging open
+      // fail the regression without freezing the whole test runner.
+      const source = fileURLToPath(new URL('./bootstrap.ts', import.meta.url))
+      const output = execFileSync(process.execPath, ['--import', 'tsx', '-e',
+        'const {gitHooksVerified} = require(process.argv[1]); process.stdout.write(String(gitHooksVerified(process.argv[2])));',
+        source, root], { cwd: process.cwd(), encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' })
+      expect(output).toBe('false')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  }, 10_000)
+
+  it.each(['symlink', 'not-executable', 'directory'] as const)('rejects %s instead of declaring Git hooks ready', (scenario) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-bootstrap-gate-kind-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root })
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: root })
+      fs.mkdirSync(path.join(root, '.githooks'))
+      const hook = path.join(root, '.githooks/pre-commit')
+      fs.writeFileSync(hook, preCommitHook, { mode: 0o755 })
+      fs.writeFileSync(path.join(root, '.githooks/pre-push'), prePushHook, { mode: 0o755 })
+      if (scenario === 'not-executable') {
+        fs.chmodSync(hook, 0o644)
+      } else {
+        fs.unlinkSync(hook)
+        if (scenario === 'directory') fs.mkdirSync(hook)
+        else {
+          const target = path.join(root, 'outside-hook')
+          fs.writeFileSync(target, preCommitHook, { mode: 0o755 })
+          fs.symlinkSync(target, hook)
+        }
+      }
+      expect(gitHooksVerified(root)).toBe(false)
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('does not accept a hook that mentions verify but exits before validation', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-bootstrap-gates-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root })
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: root })
+      fs.mkdirSync(path.join(root, '.githooks'))
+      fs.writeFileSync(path.join(root, '.githooks/pre-commit'), preCommitHook, { mode: 0o755 })
+      fs.writeFileSync(path.join(root, '.githooks/pre-push'), prePushHook, { mode: 0o755 })
+      expect(gitHooksVerified(root)).toBe(true)
+      fs.writeFileSync(path.join(root, '.githooks/pre-commit'), '#!/bin/sh\nexit 0\n# scripts/verify.mjs\n')
+      expect(gitHooksVerified(root)).toBe(false)
+    } finally { fs.rmSync(root, { force: true, recursive: true }) }
+  })
+  it('uses the actual healthy preview URL and never invents port 3000', () => {
+    expect(previewStatusUrl(JSON.stringify({ running: true, healthy: true, url: 'http://localhost:3017' }))).toBe('http://localhost:3017')
+    expect(previewStatusUrl(JSON.stringify({ running: true, healthy: true }))).toBeNull()
+    expect(previewStatusUrl(JSON.stringify({ running: true, healthy: false, url: 'http://localhost:3017' }))).toBeNull()
+    expect(previewStatusUrl(JSON.stringify({ running: true, healthy: true, url: 'https://production.example.com' }))).toBeNull()
+  })
+  it('only accepts HTTPS control plane or HTTP loopback for the expected project', () => {
+    const data = (projectId: string, supremoUrl: string) => JSON.stringify({ projectId, supremoUrl })
+    expect(projectIdentityValid(data('one', 'https://supremo.example.com'), 'one')).toBe(true)
+    expect(projectIdentityValid(data('one', 'http://localhost:9000'), 'one')).toBe(true)
+    expect(projectIdentityValid(data('one', 'http://remote.example.com'), 'one')).toBe(false)
+    expect(projectIdentityValid(data('two', 'https://supremo.example.com'), 'one')).toBe(false)
   })
 })

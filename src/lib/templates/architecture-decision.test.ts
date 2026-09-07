@@ -22,7 +22,7 @@ describe('decisão de identidade por requisito, não por persistência', () => {
     expect(agents).toContain('Cobertura mínima de 80%')
     expect(agents).toContain('passar `npm test` não comprova o threshold')
     expect(agents).not.toContain('Toda Server Action começa verificando a sessão')
-    expect(content('CLAUDE.md')).toContain('teste cross-user somente com ownership')
+    expect(content('CLAUDE.md')).toMatch(/teste cross-user somente com ownership/i)
     expect(content('ARCHITECTURE.md')).toContain('autenticar apenas operações que dependem de identidade')
     expect(content('SECURITY.md')).not.toContain('em qualquer policy')
   })

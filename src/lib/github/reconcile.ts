@@ -18,6 +18,10 @@ export const RECONCILABLE_STATES: readonly IntegrationState[] = [
   'ci_running',
   'merge_pending',
   'validated',
+  // Failed runs still need durable diagnostics and can be rerun while the
+  // workspace is offline. Capture failures must not fall out of the sweep.
+  'ci_failed',
+  'security_blocked',
 ]
 
 export function isReconcilable(state: IntegrationState | string | null | undefined): boolean {

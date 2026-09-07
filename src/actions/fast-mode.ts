@@ -3,21 +3,11 @@
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { freshGithubToken } from '@/lib/github-token'
-import { enableBranchProtection } from '@/lib/github/client'
+import { ensureRequiredBranchChecks } from '@/lib/github/client'
 import type { GithubCredentials } from '@/lib/projects/repository'
 import { requiredGates } from '@/lib/templates/project-files'
 
-/**
- * Modo rápido, por projeto. Rápido como Lovable, seguro sempre.
- *
- * A segurança por ESTRUTURA (RLS obrigatório, auth.uid(), guard de SQL, sem
- * segredo no código) é validada no write, instantânea — não depende deste
- * modo. O modo rápido só muda o conjunto de gates OBRIGATÓRIOS para o merge:
- * os baratos (tipos, build, segredos, vulnerabilidades) ficam sempre; os lentos
- * (testes, E2E) deixam de travar. O teste de RLS trava ou avisa conforme a
- * escolha do projeto. Reaplica a proteção de branch, senão o GitHub bloquearia
- * o merge mesmo com o modo ligado.
- */
+/** Legacy project preference. Faster editing never weakens CI integration gates. */
 
 const PROJECT_COLUMNS =
   'id, user_id, github_account_id, github_repo_full_name, default_branch, ' +
@@ -92,8 +82,7 @@ export async function getFastMode(
     return {
       state: {
         fastMode: Boolean(project.fast_mode),
-        rlsMode:
-          (project.fast_mode_rls as 'block' | 'warn' | null) ?? 'block',
+        rlsMode: 'block',
       },
     }
   } catch (error) {
@@ -115,7 +104,8 @@ export async function setFastMode(input: {
     .safeParse(input)
   if (!parsed.success) return { error: 'Dados inválidos.' }
 
-  const { projectId, fastMode, rlsMode } = parsed.data
+  const { projectId, fastMode } = parsed.data
+  const rlsMode = 'block' as const
 
   try {
     const { user, supabase } = await requireProjectOwner(
@@ -129,8 +119,7 @@ export async function setFastMode(input: {
       .eq('id', projectId)
       .eq('user_id', user.id)
 
-    // Reaplica a proteção de branch com o conjunto de gates do modo. Sem isto o
-    // GitHub continuaria exigindo TODOS os checks e o merge rápido não passaria.
+    // Repair legacy fast-mode protection: every required check remains mandatory.
     const resolved = await resolveGithub(projectId)
     if (!resolved.ok) {
       return {
@@ -141,7 +130,7 @@ export async function setFastMode(input: {
     }
 
     try {
-      await enableBranchProtection(
+      await ensureRequiredBranchChecks(
         resolved.creds,
         resolved.defaultBranch,
         requiredGates(fastMode, rlsMode),
@@ -152,7 +141,7 @@ export async function setFastMode(input: {
       return {
         warning:
           'Modo salvo. A proteção de branch não pôde ser ajustada no GitHub ' +
-          `(${toActionError(error)}), mas o merge pelo Supremo respeita o modo.`,
+          `(${toActionError(error)}), mas o merge pelo Supremo continua exigindo todos os gates.`,
       }
     }
 

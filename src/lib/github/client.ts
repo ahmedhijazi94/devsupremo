@@ -260,6 +260,7 @@ export interface PullRequestInfo {
   mergeable: boolean | null
   /** node_id GraphQL — necessário para habilitar o auto-merge nativo. */
   nodeId: string
+  autoMergeEnabled?: boolean
 }
 
 export async function openOrUpdatePullRequest(
@@ -352,6 +353,7 @@ export async function getPullRequest(
     merged: data.merged,
     mergeable: data.mergeable,
     nodeId: data.node_id,
+    autoMergeEnabled: data.auto_merge != null,
   }
 }
 
@@ -555,6 +557,19 @@ export async function enableNativeAutoMerge(
     // Repo sem auto-merge nativo, ou PR já mesclável na hora: não é erro fatal.
     return false
   }
+}
+
+/** Withdraw a previously armed native merge when current protections are insufficient. */
+export async function disableNativeAutoMerge(creds: GithubCredentials, prNodeId: string): Promise<boolean> {
+  try {
+    await octokitFor(creds).graphql(
+      `mutation($pr: ID!) {
+        disablePullRequestAutoMerge(input: { pullRequestId: $pr }) { pullRequest { id } }
+      }`,
+      { pr: prNodeId },
+    )
+    return true
+  } catch { return false }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -769,4 +784,28 @@ export async function enableBranchProtection(
     allow_force_pushes: false,
     allow_deletions: false,
   })
+}
+
+/** Add integration checks without clearing custom reviews, access restrictions,
+ * strictness, app bindings or additional required checks already configured. */
+export async function ensureRequiredBranchChecks(
+  creds: GithubCredentials, branch: string, required: readonly string[],
+): Promise<void> {
+  const gh = octokitFor(creds)
+  let protection
+  try {
+    protection = (await gh.repos.getBranchProtection({ owner: creds.owner, repo: creds.repo, branch })).data
+  } catch (error) {
+    if ((error as { status?: number }).status !== 404) throw error
+    await enableBranchProtection(creds, branch, [...required])
+    return
+  }
+  const status = protection.required_status_checks
+  const checks = [...(status?.checks ?? [])].map((check) => ({ context: check.context, app_id: check.app_id ?? -1 }))
+  const seen = new Set(checks.map((check) => check.context))
+  for (const context of [...(status?.contexts ?? []), ...required]) {
+    if (!seen.has(context)) { checks.push({ context, app_id: -1 }); seen.add(context) }
+  }
+  await gh.repos.updateStatusCheckProtection({ owner: creds.owner, repo: creds.repo, branch,
+    strict: status?.strict ?? false, checks })
 }

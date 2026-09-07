@@ -55,10 +55,12 @@ describe('resolveRequiredChecks — fonte real do template', () => {
     )
   })
 
-  it('modo rápido exige ao menos os gates baratos + build', () => {
-    const fast = resolveRequiredChecks({ fastMode: true, rlsMode: 'warn' })
-    expect(fast).toContain('Build de produção')
-    expect(fast).toContain('Varredura de segredos')
+  it('modo rápido legado não remove testes, E2E ou isolamento dos gates de integração', () => {
+    const full = resolveRequiredChecks({ fastMode: false, rlsMode: 'block' })
+    expect(resolveRequiredChecks({ fastMode: true, rlsMode: 'warn' })).toEqual(full)
+    expect(full).toContain('Testes e cobertura')
+    expect(full).toContain('End-to-end')
+    expect(full).toContain('Políticas RLS')
   })
 })
 
@@ -134,6 +136,7 @@ describe('reconcileProjectPr — caminho único, re-lê pelo gateway', () => {
         state: 'open',
       })),
       getChecks: vi.fn(async () => ({ checks: green, headSha: SHA })),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: SHA })),
@@ -208,6 +211,7 @@ describe('cleanupIntegrationBranchIfMerged — só apaga após confirmar DE NOVO
         state: pr.merged ? 'closed' : 'open',
       })),
       getChecks: vi.fn(async () => ({ checks: [], headSha: 'sha' })),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: 'sha' })),
@@ -252,6 +256,7 @@ describe('cleanupIntegrationBranchIfMerged — só apaga após confirmar DE NOVO
         state: 'closed', // fechada, mas SEM merge — o caso que a regra exige preservar
       })),
       getChecks: vi.fn(async () => ({ checks: [], headSha: 'sha' })),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: 'sha' })),
@@ -303,6 +308,7 @@ describe('cleanupIntegrationBranchIfMerged — só apaga após confirmar DE NOVO
         return { headSha: 'sha', headRef: 'supremo/cp-abc123', nodeId: 'n', merged: true, state: 'closed' }
       }),
       getChecks: vi.fn(async () => ({ checks: [], headSha: 'sha' })),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: 'sha' })),
@@ -337,6 +343,7 @@ describe('cleanupIntegrationBranchIfMerged — só apaga após confirmar DE NOVO
         state: 'closed',
       })),
       getChecks: vi.fn(async () => ({ checks: [], headSha: 'sha' })),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: 'sha' })),
@@ -509,6 +516,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
         rows.push(newer!)
         return { headSha: observedSha, checks: [{ name: gate, status: 'completed', conclusion: 'failure' }] }
       },
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true), enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: 'must-not-merge' })), deleteBranch: vi.fn(async () => {}),
     }
@@ -547,6 +555,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
         state: 'open',
       }),
       getChecks: async () => ({ checks: green, headSha: FINAL_HEAD_SHA }),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: 'não deveria ser chamado' })),
@@ -703,6 +712,7 @@ describe('sequência completa: merge + checkpoint + cleanup (v3-13, requisito 7)
         state: 'closed',
       })),
       getChecks: vi.fn(async () => ({ checks: [], headSha: SHA })),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: SHA })),
@@ -824,6 +834,7 @@ describe('retry do cleanup REALMENTE alcançável pelo fallback existente, sem a
         state: 'closed',
       })),
       getChecks: vi.fn(async () => ({ checks: [], headSha: SHA })),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: SHA })),
@@ -930,6 +941,7 @@ describe('retry do cleanup REALMENTE alcançável pelo fallback existente, sem a
         state: 'closed',
       })),
       getChecks: vi.fn(async () => ({ checks: [], headSha: SHA })),
+      hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: SHA })),

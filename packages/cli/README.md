@@ -14,7 +14,8 @@ O comando:
 2. você autoriza no navegador (logado no Supremo) — nenhum segredo vai pelo terminal;
 3. o CLI **clona** o repositório (cria a pasta automaticamente na pasta atual),
    escreve o `.env.local` (só variáveis públicas), instala as dependências,
-   configura os git hooks e roda o baseline (`npm run verify`).
+   configura os git hooks e prepara a infraestrutura local. Não executa uma suíte
+   de testes no bootstrap; o baseline pode ser solicitado com `setup:local -- --validate-baseline`.
 
 O bootstrap prepara o daemon, o preview persistente e os hooks de turno.
 Abra a pasta criada no agente e descreva a funcionalidade. Os adapters de
@@ -34,7 +35,7 @@ a CLI mostra ajuda. A antiga ponte MCP (`connect`/`mcp`) foi removida.
 Checkpoints são locais; envio e integração rodam em background, sem esperar
 CI para a próxima edição.
 
-### Turnos e evidências (1.5.0)
+### Turnos e evidências (1.6.0)
 
 `supremo host install` instala os adapters preservando hooks e permissões
 existentes. `supremo host status` diferencia instalação válida de execução
@@ -42,18 +43,25 @@ comprovada; sem recibos, a integração é `assisted`, não `enforced`.
 
 Os hooks chamam `supremo turn preflight`, `before-mutation`, `mutation` e
 `complete`. O preflight reconcilia backend/cache/fila; o postflight captura o
-estado sem alterar o HEAD ou o staging do usuário. Saves têm debounce; testes
-e builds usam uma cópia Git isolada, preservando o preview.
+estado sem alterar o HEAD ou o staging do usuário. O padrão é implementar e
+entregar o preview: testes, QA e builds locais somente quando solicitados.
+O worker verifica segredos no snapshot antes do envio e registra `deferred`;
+isso não equivale a aprovação funcional. Os testes obrigatórios continuam na CI.
+O registro do checkpoint é sincronizado mesmo com validação pendente ou falha.
 
 `supremo turn status` mostra estado persistido. `repair-start` e
 `repair-complete` são comandos internos do agente para tentativas de reparo.
-O próximo pedido recebe a pendência automaticamente em um host ativo e com
-hooks confiados. A correção só é resolvida com evidência da mesma revisão;
-produção, provas ausentes, concorrência e diagnósticos antigos bloqueiam o
-reparo. O daemon enfileira e valida; não inicia outro modelo por conta própria.
+O próximo pedido recebe a pendência em um host ativo e com hooks confiados.
+Falhas comuns anteriores de tipos/lint/testes são diagnósticos e não bloqueiam
+edição ou checkpoint. Riscos de segurança, RLS, ambiente e migrations mantêm
+suas restrições. A correção só é resolvida com evidência da mesma revisão;
+não se apaga uma falha porque houve uma edição. O daemon não inicia outro modelo.
 
 Configure `.supremo/lifecycle.json` com
-`{"max_auto_repair_attempts":3}` (1–10). Esgotamento exige atenção humana.
+`{"max_auto_repair_attempts":3,"validation_mode":"on_request"}` (tentativas 1–10).
+`supremo turn validate` solicita a suíte local isolada explicitamente.
+`validation_mode: "background"` é uma opção expressa para testes locais automáticos.
+Esgotamento do reparo de segurança exige atenção humana.
 O contrato opcional `.supremo/acceptance.json` liga critérios a testes unitários,
 E2E ou RLS nomeados; critérios sem prova não são aprovados. Testes RLS que
 dependem de banco isolado continuam pendentes para os gates remotos.
@@ -79,7 +87,7 @@ a fila contém apenas a operação e o prazo, nunca credenciais. O worker de ban
 é independente do upload de checkpoints e de seu backoff. Uma resposta local
 não substitui a validação de autorização no servidor.
 
-Ao atualizar um projeto que já tem o daemon 1.3.0 em execução, atualize a CLI
+Ao atualizar um projeto que tem um daemon anterior em execução, atualize a CLI
 incluída em `tools/supremo-cli` e reinicie somente o daemon no terminal autorizado
 (`npm run daemon:stop`, depois `npm run daemon:ensure`). Não é necessário refazer
 bootstrap, trocar banco ou reiniciar o preview. Um daemon antigo é diagnosticado

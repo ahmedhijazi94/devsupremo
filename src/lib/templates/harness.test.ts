@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -566,6 +566,26 @@ describe('harness generator', () => {
     writeFileSync(file, verifyScript(), 'utf8')
     // node --check lança se houver erro de sintaxe.
     expect(() => execFileSync(process.execPath, ['--check', file])).not.toThrow()
+  })
+
+  it('installs the workspace without tests and runs baseline only on explicit request', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-setup-policy-'))
+    try {
+      for (const folder of ['scripts', '.githooks', 'node_modules/supremo-cli/dist', 'bin']) mkdirSync(join(dir, folder), { recursive: true })
+      writeFileSync(join(dir, '.env.local'), '')
+      writeFileSync(join(dir, '.githooks/pre-commit'), '#!/bin/sh\n')
+      writeFileSync(join(dir, '.githooks/pre-push'), '#!/bin/sh\n')
+      writeFileSync(join(dir, 'node_modules/supremo-cli/dist/bin.js'), '// fixture: host installation succeeds\n')
+      writeFileSync(join(dir, 'bin/git'), '#!/bin/sh\nif [ "$2" = "--get" ]; then echo .githooks; fi\n')
+      chmodSync(join(dir, 'bin/git'), 0o755)
+      writeFileSync(join(dir, 'scripts/verify.mjs'), 'import fs from "node:fs"; fs.writeFileSync("baseline-ran", "yes");\n')
+      writeFileSync(join(dir, 'scripts/setup-local.mjs'), setupLocalScript())
+      const env = { ...process.env, PATH: join(dir, 'bin') + ':' + process.env.PATH }
+      execFileSync(process.execPath, ['scripts/setup-local.mjs'], { cwd: dir, env, stdio: 'pipe' })
+      expect(existsSync(join(dir, 'baseline-ran'))).toBe(false)
+      execFileSync(process.execPath, ['scripts/setup-local.mjs', '--validate-baseline'], { cwd: dir, env, stdio: 'pipe' })
+      expect(readFileSync(join(dir, 'baseline-ran'), 'utf8')).toBe('yes')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('o setup-local.mjs gerado é JavaScript VÁLIDO (node --check)', () => {

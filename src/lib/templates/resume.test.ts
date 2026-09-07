@@ -594,10 +594,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 
 const PID_FILE = '.supremo/preview.pid'
 const PORT_FILE = '.supremo/preview.port'
-const PORT = Number(process.env.PORT || 3000)
 
 function bumpCount() {
   let n = 0
@@ -616,15 +616,29 @@ function readState() {
   try { port = Number(fs.readFileSync(PORT_FILE, 'utf8').trim()) } catch {}
   return { pid: Number.isFinite(pid) && pid > 0 ? pid : null, port: Number.isFinite(port) ? port : null }
 }
-function waitReady(timeoutMs) {
-  const deadline = Date.now() + timeoutMs
+function waitReady(child, instance, timeoutMs) {
   return new Promise((resolve) => {
-    const tryOnce = () => {
-      const req = http.get({ host: '127.0.0.1', port: PORT, timeout: 300 }, (res) => { res.resume(); resolve(true) })
-      req.on('error', () => { if (Date.now() < deadline) setTimeout(tryOnce, 50); else resolve(false) })
-      req.on('timeout', () => { req.destroy() })
+    let finished = false
+    const finish = (port) => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      child.removeAllListeners('message')
+      child.removeAllListeners('exit')
+      resolve(port)
     }
-    tryOnce()
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    child.once('exit', () => finish(null))
+    child.on('message', (ready) => {
+      // IPC belongs to this child. An unrelated listener can never supply readiness.
+      if (ready?.pid !== child.pid || ready?.instance !== instance || !Number.isInteger(ready?.port) || ready.port < 1) return
+      const req = http.get({ host: '127.0.0.1', port: ready.port, timeout: 300 }, (res) => {
+        res.resume()
+        finish(res.statusCode === 200 && res.headers['x-preview-fixture'] === instance ? ready.port : null)
+      })
+      req.on('error', () => finish(null))
+      req.on('timeout', () => req.destroy())
+    })
   })
 }
 
@@ -639,17 +653,20 @@ if (cmd === 'ensure') {
     process.exit(0)
   }
   fs.mkdirSync(path.dirname(PID_FILE), { recursive: true })
-  const child = spawn(
-    process.execPath,
-    ['-e', \`require('http').createServer((_, res) => res.end('ok')).listen(\${PORT}, '127.0.0.1')\`],
-    { detached: true, stdio: 'ignore' },
-  )
-  child.unref()
-  const ready = await waitReady(5000)
-  if (ready) {
+  const instance = randomUUID()
+  const child = spawn(process.execPath, ['scripts/retry-http-server.cjs'], {
+    detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    env: { ...process.env, PREVIEW_FIXTURE_INSTANCE: instance },
+  })
+  const readyPort = await waitReady(child, instance, 5000)
+  if (readyPort !== null) {
     fs.writeFileSync(PID_FILE, String(child.pid))
-    fs.writeFileSync(PORT_FILE, String(PORT))
+    fs.writeFileSync(PORT_FILE, String(readyPort))
+  } else {
+    child.kill()
   }
+  if (child.connected) child.disconnect()
+  child.unref()
 }
 
 if (cmd === 'status') {
@@ -660,10 +677,22 @@ if (cmd === 'status') {
 `
   }
 
-  function setup(port: number, succeedFromCall: number): { env: NodeJS.ProcessEnv; callLogFile: string } {
+  function setup(succeedFromCall: number): { env: NodeJS.ProcessEnv; callLogFile: string } {
     dir = mkdtempSync(join(tmpdir(), 'supremo-resume-retry-'))
     mkdirSync(join(dir, 'scripts'), { recursive: true })
 
+    // Let the child bind port 0 itself: no select-then-close reservation race.
+    writeFileSync(join(dir, 'scripts/retry-http-server.cjs'), `
+const http = require('node:http')
+const instance = process.env.PREVIEW_FIXTURE_INSTANCE
+const server = http.createServer((_, res) => {
+  res.setHeader('x-preview-fixture', instance)
+  res.end('ok')
+})
+server.listen(0, '127.0.0.1', () => {
+  process.send({ pid: process.pid, port: server.address().port, instance })
+})
+`, 'utf8')
     writeFileSync(join(dir, 'scripts/preview.mjs'), flakyPreviewShim(succeedFromCall), 'utf8')
     writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'resume-retry-fixture', scripts: {} }))
@@ -672,7 +701,6 @@ if (cmd === 'status') {
     const callLogFile = join(dir, 'preview-ensure-call-count.txt')
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
       PREVIEW_ENSURE_CALL_LOG: callLogFile,
       // O shim decide healthy por CONTAGEM de chamada, não por tempo — a
@@ -711,16 +739,17 @@ if (cmd === 'status') {
   it(
     '1) 1ª tentativa do ensure falha → 2) retry único recupera → 3) healthy vira true → 4) só então o resultado libera o trabalho',
     () => {
-      const port = 21000 + Math.floor(Math.random() * 4000)
       // Sucede só a partir da 2ª chamada — a 1ª está garantida a falhar.
-      const { env, callLogFile } = setup(port, 2)
+      const { env, callLogFile } = setup(2)
       preWarmDaemon(env)
 
       const { status, result } = runResume(env)
 
-      expect(status).toBe(0)
+      expect(status, JSON.stringify(result)).toBe(0)
       expect(result?.preview.healthy).toBe(true)
       expect(result?.daemon.healthy).toBe(true)
+      const port = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(port).toBeGreaterThan(0)
       expect(result?.preview.url).toBe(`http://localhost:${port}`)
       // Exatamente 2 chamadas: a 1ª (falhou) + UMA única recuperação —
       // nunca um loop, nunca uma 3ª tentativa.
@@ -732,10 +761,9 @@ if (cmd === 'status') {
   it(
     'retry TAMBÉM falha → supremo:resume sai com código de erro, preview.healthy fica false, NUNCA uma 3ª tentativa',
     () => {
-      const port = 21000 + Math.floor(Math.random() * 4000)
       // succeedFromCall bem maior que o total de chamadas esperado (2):
       // toda tentativa falha, sempre.
-      const { env, callLogFile } = setup(port, 99)
+      const { env, callLogFile } = setup(99)
       preWarmDaemon(env)
 
       const { status, result } = runResume(env)

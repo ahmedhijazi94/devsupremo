@@ -217,6 +217,24 @@ describe('lockfile — sem ele o CI quebra antes de instalar', () => {
     expect(lock.packages['']?.name).toBe('meu-app')
   })
 
+  it('tracks the bundled CLI during Git staging but ignores unrelated build outputs', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-ignore-cli-'))
+    try {
+      fs.writeFileSync(path.join(dir, '.gitignore'), file('.gitignore'))
+      for (const output of ['tools/supremo-cli/dist/bin.js', 'tools/supremo-cli/dist/debug.js', 'other/dist/private.js', 'dist/app.js']) {
+        fs.mkdirSync(path.dirname(path.join(dir, output)), { recursive: true })
+        fs.writeFileSync(path.join(dir, output), '// generated')
+      }
+      execFileSync('git', ['init', '-q'], { cwd: dir })
+      // This is the explicit path that previously made preflight fail with "ignored".
+      execFileSync('git', ['add', '--', 'tools/supremo-cli/dist/bin.js'], { cwd: dir })
+      const tracked = execFileSync('git', ['ls-files'], { cwd: dir, encoding: 'utf8' })
+      expect(tracked.trim()).toBe('tools/supremo-cli/dist/bin.js')
+      const ignored = execFileSync('git', ['check-ignore', 'tools/supremo-cli/dist/debug.js', 'other/dist/private.js', 'dist/app.js'], { cwd: dir, encoding: 'utf8' })
+      expect(ignored.split('\n').filter(Boolean)).toEqual(['tools/supremo-cli/dist/debug.js', 'other/dist/private.js', 'dist/app.js'])
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+
   it('o .gitignore não exclui o lockfile', () => {
     const ignore = file('.gitignore')
       .split('\n')
@@ -695,7 +713,7 @@ describe('Turn Lifecycle — documentação acompanha protocolo executável', ()
     expect(agents).toContain('not_ready')
     expect(agents).toContain('degraded')
   })
-  it.each(['AGENTS.md', 'CLAUDE.md'])('%s autoriza QA sintético local e protege ações reais', (name) => {
+  it.each(['AGENTS.md', 'CLAUDE.md'])('%s permite QA somente solicitado e protege ações reais', (name) => {
     const doc = norm(file(name))
     expect(doc).toMatch(/development/)
     expect(doc).toMatch(/sintéticos/)
@@ -703,7 +721,21 @@ describe('Turn Lifecycle — documentação acompanha protocolo executável', ()
     expect(doc).toMatch(/email real/)
     expect(doc).toMatch(/produção/)
     expect(doc).toMatch(/autorização explícita/)
-    expect(doc).not.toContain('não use ferramentas de controle do navegador para QA')
+    expect(doc).toContain('QA só acontece quando solicitado pelo usuário')
+    expect(doc).toContain('O agente só executa testes')
+    expect(doc).toContain('quando o usuário pedir explicitamente')
+    expect(doc).not.toContain('QA automático de baixo risco é autorizado')
+    expect(doc).not.toContain('rode `npm run test:coverage` localmente')
+  })
+  it('provides current policy without encouraging routine CLI bundle inspection or broad repair', () => {
+    for (const name of ['AGENTS.md', 'CLAUDE.md', '.supremo/DEVELOPMENT.md']) {
+      const doc = norm(file(name))
+      expect(doc).toContain('preview')
+      expect(doc).toContain('quando o usuário pedir explicitamente')
+      expect(doc).toMatch(/não (?:delegue por rotina|leia o bundle)/)
+      expect(doc).not.toContain('Recovery seguro precede feature')
+      expect(doc).not.toContain('só então continue a feature')
+    }
   })
   it('contexto reconcilia backend, freshness, checkpoint e versão; recovery é estado', () => {
     const agents = file('AGENTS.md')

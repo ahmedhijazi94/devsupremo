@@ -5,7 +5,9 @@
  * novo; Restore sempre preserva a versão que já está no workspace atual.
  *
  * O que NÃO está aqui é scaffold editável — página, migration, teste funcional
- * do app, documentação ou package.json. É onde funcionalidade, schema e
+ * do app, documentação do usuário ou package.json. A política operacional em
+ * `.supremo/DEVELOPMENT.md` é gerenciada; AGENTS/CLAUDE preservam as instruções do
+ * usuário e só recebem atualização de um bloco identificado no sync. É onde funcionalidade, schema e
  * dependências do app vivem. O smoke E2E estrutural é rail: valida o contrato
  * de saúde da plataforma, nunca copy/feature.
  *
@@ -44,6 +46,7 @@ export const PLATFORM_MANAGED_PATHS = [
   'scripts/verify.mjs',
   'scripts/supremo-status.mjs',
   'scripts/recovery-context.mjs',
+  '.supremo/DEVELOPMENT.md',
   'scripts/setup-local.mjs',
   'scripts/supremo-turn-hook.mjs',
   'scripts/supremo-codex-hook.mjs',

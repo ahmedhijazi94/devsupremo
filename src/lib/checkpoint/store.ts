@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CheckpointDeviceRow, CheckpointDeviceStore } from './devices'
+import type { LocalCheckpointReport } from './local-report'
 
 /**
  * Adapters Supabase (service_role) do checkpoint daemon — I/O puro sobre
@@ -62,6 +63,24 @@ export function supabaseCheckpointDeviceStore(
 }
 
 // ── Persistência de checkpoints (metadata + estado de push) ──────────────────
+
+/** Atomic status-only insert/update. The RPC cannot grant publication or change a remote SHA. */
+export async function reportLocalCheckpoint(
+  client: SupabaseClient,
+  deviceId: string,
+  report: LocalCheckpointReport,
+): Promise<'recorded' | 'ignored' | 'conflict'> {
+  const { data, error } = await client.rpc('report_local_checkpoint', {
+    p_id: report.checkpointId, p_project_id: report.projectId, p_device_id: deviceId,
+    p_commit_sha: report.commitSha, p_created_at: report.createdAt, p_revision: report.revision,
+    p_validation_status: report.validationStatus, p_validated_sha: report.validatedSha,
+    p_upload_status: report.uploadStatus,
+  })
+  if (error || !['recorded', 'ignored', 'conflict'].includes(data as string)) {
+    throw new Error('Falha ao registrar o checkpoint local.')
+  }
+  return data as 'recorded' | 'ignored' | 'conflict'
+}
 
 export interface CheckpointUpsert {
   id: string
@@ -354,6 +373,8 @@ export async function getCheckpointForRestore(
     .from('checkpoints')
     .select('id, project_id, commit_sha, summary')
     .eq('id', id)
+    .in('push_status', ['published', 'integrated'])
+    .not('published_sha', 'is', null)
     .maybeSingle()
   if (!data) return null
   return {

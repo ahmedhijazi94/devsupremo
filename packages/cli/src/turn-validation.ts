@@ -47,6 +47,89 @@ export function evidenceFor(cwd: string, record: CheckpointRecord): LocalEvidenc
     && item.fingerprint === (record.treeSha ?? gitText(cwd, ['rev-parse', `${record.commitSha}^{tree}`])) ? item : null
 }
 
+/** Opt-in local QA. Secret transport checks are always enforced separately. */
+export function localValidationMode(cwd: string): 'on_request' | 'background' {
+  return z.object({ validation_mode: z.enum(['on_request', 'background']).default('on_request') })
+    .parse(readJson(path.join(cwd, '.supremo/lifecycle.json')) ?? {}).validation_mode
+}
+
+function validationRequestFile(cwd: string, record: CheckpointRecord): string {
+  return path.join(cwd, VALIDATION_DIR, 'requests', `${z.string().uuid().parse(record.checkpointId)}.json`)
+}
+function hasValidationRequest(cwd: string, record: CheckpointRecord): boolean {
+  const request = z.object({ sha: z.string(), projectId: z.string() }).safeParse(readJson(validationRequestFile(cwd, record)))
+  return request.success && request.data.sha === record.commitSha && request.data.projectId === record.projectId
+}
+export function requestCheckpointValidation(cwd: string, record: CheckpointRecord): void {
+  writeJson(validationRequestFile(cwd, record), { projectId: record.projectId, sha: record.commitSha, requestedAt: new Date().toISOString() })
+  const requested = { ...record, validationStatus: 'pending' as const }
+  delete requested.validationId
+  delete requested.validatedSha
+  defaultCheckpointDeps(cwd).appendQueue(requested)
+}
+
+// Built into the CLI: changing an app's audit script cannot bypass the upload boundary.
+// This fast static check is deliberately distinct from the full CI security audit.
+const TRANSPORT_SECRET_PATTERNS = [
+  /\bgh[pousr]_[A-Za-z0-9]{36,}\b/,
+  /\bgithub_pat_[A-Za-z0-9_]{30,}\b/,
+  /\bsbp_[a-f0-9]{40,}\b/,
+  /\b(?:sb_secret_|sup_dev_ckpt_)[A-Za-z0-9_-]{20,}\b/,
+  /\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{32,}\b/,
+  /\b(?:sk|rk)_live_[A-Za-z0-9]{20,}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./,
+]
+
+/** Reads immutable blobs in one bounded Git process. Never executes project code,
+ * follows workspace symlinks, prints secret values, or marks unrequested QA passed. */
+export function scanCheckpointForUpload(cwd: string, record: CheckpointRecord): LocalEvidence {
+  const startedAt = new Date().toISOString()
+  const fingerprint = gitText(cwd, ['rev-parse', `${record.commitSha}^{tree}`])
+  const baseSha = record.changesetBaseSha ?? gitText(cwd, ['rev-parse', `${record.commitSha}^`])
+  let status: LocalEvidence['status'] = 'deferred'
+  let logs = 'Varredura de segredos do snapshot concluída. Testes locais não solicitados; gates de CI continuam pendentes.'
+  try {
+    if (record.environment !== 'development') throw new Error('Publicação requer ambiente de desenvolvimento autorizado.')
+    const entries = gitText(cwd, ['ls-tree', '-r', '-z', record.commitSha]).split('\0').filter(Boolean).map((entry) => {
+      const match = /^(\d+) (blob|commit) ([a-f0-9]{40})\t([\s\S]+)$/.exec(entry)
+      if (!match || match[2] !== 'blob') throw new Error('Snapshot contém entrada não verificável para publicação.')
+      const file = match[4]!
+      if (/(^|\/)\.env(?:$|\.(?!(?:example|sample|template)$))/.test(file) || /(^|\/)(?:id_rsa|id_ed25519)$/.test(file)) {
+        throw new Error('Snapshot contém arquivo reservado a credenciais locais.')
+      }
+      return { sha: match[3]!, file }
+    })
+    const hashes = [...new Set(entries.map((entry) => entry.sha))]
+    const blobs = execFileSync('git', ['cat-file', '--batch'], { cwd, input: hashes.join('\n') + '\n',
+      stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, timeout: 15_000 })
+    let offset = 0
+    for (const sha of hashes) {
+      const end = blobs.indexOf(10, offset)
+      if (end < 0) throw new Error('Leitura de snapshot incompleta.')
+      const header = blobs.subarray(offset, end).toString('utf8').split(' ')
+      const size = Number(header[2])
+      if (header[0] !== sha || header[1] !== 'blob' || !Number.isSafeInteger(size) || size < 0 || end + size + 1 >= blobs.length) throw new Error('Blob inválido na varredura.')
+      const content = blobs.subarray(end + 1, end + 1 + size).toString('utf8')
+      if (TRANSPORT_SECRET_PATTERNS.some((pattern) => pattern.test(content))) throw new Error('Possível segredo encontrado no snapshot; publicação bloqueada. Conteúdo omitido.')
+      offset = end + size + 2
+    }
+  } catch {
+    // Child errors can retain stdout with the original blobs: never serialize them.
+    status = 'failed'
+    logs = 'Varredura de segredos não autorizou o upload: segredo, arquivo privado ou snapshot não verificável. Conteúdo omitido; preview preservado.'
+  }
+  const evidence: LocalEvidence = { id: crypto.randomUUID(), projectId: record.projectId, checkpointId: record.checkpointId,
+    sha: record.commitSha, fingerprint, baseSha, environment: record.environment ?? 'unknown', status,
+    startedAt, finishedAt: new Date().toISOString(), criterionIds: [], acceptanceCriteria: [], logs,
+    summary: status === 'deferred' ? 'Segredos verificados; validação funcional não solicitada, CI pendente.' : 'Publicação bloqueada pela varredura de segredos.',
+    checks: [{ name: 'secret scan', type: 'security', status: status === 'failed' ? 'failed' : 'passed' }] }
+  writeJson(path.join(cwd, VALIDATION_DIR, `${evidence.id}.json`), evidence)
+  return evidence
+}
+
 const verifyReportSchema = z.object({
   sha: z.string().regex(/^[a-f0-9]{40}$/), base: z.string().regex(/^[a-f0-9]{40}$/),
   status: z.enum(['passed', 'failed', 'deferred']), checks: localEvidenceSchema.shape.checks.min(1),
@@ -180,10 +263,17 @@ export async function drainLocalValidation(cwd: string): Promise<number> {
   }
   try {
     const deps = defaultCheckpointDeps(cwd)
-    const record = deps.readQueue().find((item) => item.validationStatus === 'pending' || item.validationStatus === 'running')
-    if (!record) return await validateDraft(cwd)
+    // Pending legacy records stay visible until preflight confirms their environment.
+    // Missing authority is not evidence of a code/secret failure.
+    const record = deps.readQueue().find((item) => item.environment !== undefined && item.environment !== 'unknown' &&
+      (item.validationStatus === 'pending' || item.validationStatus === 'running' || hasValidationRequest(cwd, item)))
+    if (!record) return localValidationMode(cwd) === 'background' ? await validateDraft(cwd) : 0
     deps.appendQueue({ ...record, validationStatus: 'running' })
-    const evidence = await validateCheckpoint(cwd, record)
+    const requested = hasValidationRequest(cwd, record)
+    const transport = scanCheckpointForUpload(cwd, record)
+    const evidence = transport.status === 'failed' || !(requested || localValidationMode(cwd) === 'background')
+      ? transport : await validateCheckpoint(cwd, record)
+    if (requested) fs.rmSync(validationRequestFile(cwd, record), { force: true })
     const latest = deps.readQueue().find((item) => item.checkpointId === record.checkpointId) ?? record
     deps.appendQueue({ ...latest, validationStatus: evidence.status, validationId: evidence.id, validatedSha: evidence.sha })
     return 1

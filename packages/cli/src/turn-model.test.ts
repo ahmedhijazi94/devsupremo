@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { FeedbackEnvelope, ValidationFeedback } from '../../../src/lib/checkpoint/feedback'
 import {
-  acceptanceSatisfied, beginRepair, browserQaPolicy, canAutoRepairPaths, classifyFailure,
+  acceptanceSatisfied, beginRepair, blocksDevelopment, browserQaPolicy, canAutoRepairPaths, classifyFailure,
   deriveProjectHealth, finishRepair, reconcileRecovery, recoveryStateSchema,
   transitionTurn, turnStateSchema, validationEvidenceMatches, repairPatchPaths, isReadOnlyDiagnostic,
   type CheckpointLink, type RecoveryState, type TurnState, type ValidationEvidence, type WorkspaceSnapshot,
@@ -310,9 +310,10 @@ describe('explicit executable state and behavior evidence', () => {
     checkpointId: null, integrationMode: 'enforced', status: 'active',
   }
 
-  it('cannot skip preflight or continue the new feature before recovery closes', () => {
+  it('cannot skip preflight or bypass safety recovery, while ordinary QA allows work', () => {
     expect(() => transitionTurn(state, 'postflight', NOW)).toThrow(/inválida/)
-    expect(() => transitionTurn({ ...state, recovery: pending() }, 'work', NOW)).toThrow(/Recovery pendente/)
+    expect(transitionTurn({ ...state, recovery: pending() }, 'work', NOW).phase).toBe('work')
+    expect(() => transitionTurn({ ...state, recovery: pending({ failures: [{ name: 'RLS', type: 'rls', summary: 'isolation failure' }] }) }, 'work', NOW)).toThrow(/Recovery pendente/)
     const repairTurn = transitionTurn({ ...state, recovery: pending() }, 'recovery', NOW)
     expect(transitionTurn({ ...repairTurn, recovery: complete(repairing()) }, 'work', LATER).phase).toBe('work')
   })
@@ -343,8 +344,21 @@ describe('explicit executable state and behavior evidence', () => {
     expect(deriveProjectHealth({ ...input, activeTurn: true })).toBe('developing')
     expect(deriveProjectHealth({ ...input, recovery: repairing() })).toBe('repairing')
     expect(deriveProjectHealth({ ...input, recovery: pending({ status: 'stale' }) })).toBe('needs_attention')
-    expect(deriveProjectHealth({ ...input, recovery: pending() })).toBe('blocked')
-    expect(deriveProjectHealth({ ...input, validations: [evidence({ status: 'failed' })] })).toBe('blocked')
+    expect(deriveProjectHealth({ ...input, recovery: pending() })).toBe('needs_attention')
+    expect(deriveProjectHealth({ ...input, validations: [evidence({ status: 'failed' })] })).toBe('needs_attention')
+  })
+
+  it('keeps historical QA failure but recognizes only fresh exact remote approval for current health', () => {
+    const recovery = pending({ status: 'stale' })
+    const input = { recovery, validations: [evidence({ source: 'remote', remoteSha: REMOTE })], workspace,
+      securityState: 'safe' as const, remoteStatus: 'fresh' as const, activeTurn: false }
+    expect(deriveProjectHealth(input)).toBe('healthy')
+    expect(recovery).toMatchObject({ required: true, status: 'stale' })
+    expect(deriveProjectHealth({ ...input, validations: [evidence({ status: 'pending', checks: [] })] })).toBe('needs_attention')
+    expect(deriveProjectHealth({ ...input, validations: [evidence()] })).toBe('needs_attention')
+    expect(deriveProjectHealth({ ...input, validations: [evidence({ source: 'remote', remoteSha: REMOTE, fingerprint: 'other-tree' })] })).toBe('needs_attention')
+    expect(deriveProjectHealth({ ...input, remoteStatus: 'offline' })).toBe('needs_attention')
+    expect(deriveProjectHealth({ ...input, recovery: pending({ failures: [{ name: 'RLS', type: 'rls', summary: 'unsafe' }] }) })).toBe('blocked')
   })
 
   it.each([
@@ -357,5 +371,16 @@ describe('explicit executable state and behavior evidence', () => {
   it('keeps setup/registry failures separate from code/security repairs', () => {
     expect(classifyFailure('RLS Docker unavailable', 'infrastructure')).toBe('external_dependency')
     expect(classifyFailure('Unrecognized check', 'code')).toBe('code')
+  })
+})
+
+describe('development failure policy', () => {
+  it.each(['code', 'typecheck', 'lint', 'build', 'unit', 'integration', 'e2e', 'runtime'] as const)('keeps %s visible without blocking development', (type) => {
+    const failure = pending({ failures: [{ name: type, type, summary: 'previous failure' }] })
+    expect(blocksDevelopment(failure)).toBe(false)
+    expect(failure.required).toBe(true)
+  })
+  it.each(['security', 'rls', 'migration', 'environment', 'external_dependency', 'unknown'] as const)('keeps %s guarded', (type) => {
+    expect(blocksDevelopment(pending({ failures: [{ name: type, type, summary: 'unsafe or unverified authority' }] }))).toBe(true)
   })
 })

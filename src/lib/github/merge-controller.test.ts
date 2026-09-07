@@ -22,6 +22,7 @@ function gateway(over: Partial<MergeGateway> & { headSha?: string; checksHeadSha
       state: 'open',
     })),
     getChecks: vi.fn(async () => ({ checks: green, headSha: over.checksHeadSha ?? head })),
+    hasRequiredChecks: vi.fn(async () => true),
     allowAutoMerge: vi.fn(async () => true),
     enableNativeAutoMerge: vi.fn(async () => true),
     merge: vi.fn(async () => ({ sha: head })),
@@ -38,6 +39,38 @@ describe('reconcileMerge — modo NATIVE_GITHUB', () => {
     expect(gw.allowAutoMerge).toHaveBeenCalled()
     expect(gw.merge).not.toHaveBeenCalled() // quem mescla é o GitHub
     expect(r.state).toBe('merge_pending')
+  })
+
+  it('never arms native merge while any required check is absent', async () => {
+    const gw = gateway({ getChecks: vi.fn(async () => ({ checks: [], headSha: SHA })) })
+    expect((await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'native' })).decision).toBe('wait')
+    expect(gw.enableNativeAutoMerge).not.toHaveBeenCalled()
+  })
+  it('withdraws armed native merge when protection no longer contains every gate', async () => {
+    const gw = gateway({
+      hasRequiredChecks: vi.fn(async () => false),
+      disableNativeAutoMerge: vi.fn(async () => true),
+      getPullRequest: vi.fn(async () => ({ headSha: SHA, headRef: 'supremo/cp-x', nodeId: 'PR_node', merged: false, state: 'open', autoMergeEnabled: true })),
+    })
+    const result = await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'native' })
+    expect(result).toMatchObject({ state: 'security_blocked', decision: 'blocked', merged: false })
+    expect(gw.disableNativeAutoMerge).toHaveBeenCalledWith('PR_node')
+    expect(gw.enableNativeAutoMerge).not.toHaveBeenCalled()
+  })
+  it('reports failure to withdraw an unsafe native merge without claiming it stopped', async () => {
+    const gw = gateway({
+      hasRequiredChecks: vi.fn(async () => false), disableNativeAutoMerge: vi.fn(async () => false),
+      getPullRequest: vi.fn(async () => ({ headSha: SHA, headRef: 'supremo/cp-x', nodeId: 'PR_node', merged: false, state: 'open', autoMergeEnabled: true })),
+    })
+    expect((await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'native' })).reasons.join(' ')).toContain('não confirmou')
+    expect(gw.enableNativeAutoMerge).not.toHaveBeenCalled()
+  })
+  it('does not arm native auto-merge after the HEAD changes', async () => {
+    const gw = gateway()
+    vi.mocked(gw.getPullRequest).mockResolvedValueOnce({ headSha: SHA, headRef: 'supremo/cp-x', nodeId: 'PR_node', merged: false, state: 'open' })
+      .mockResolvedValueOnce({ headSha: SHA2, headRef: 'supremo/cp-x', nodeId: 'PR_node', merged: false, state: 'open' })
+    expect((await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'native' })).decision).toBe('wait')
+    expect(gw.enableNativeAutoMerge).not.toHaveBeenCalled()
   })
 
   it('gate falho no nativo → não habilita e reporta o bloqueio', async () => {

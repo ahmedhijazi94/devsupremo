@@ -357,7 +357,7 @@ export function validateLocalReadiness(input: {
     }
   }
   if (!input.previewHealthy) issues.push('preview não subiu saudável')
-  if (!input.setupSucceeded) issues.push('setup:local falhou; baseline/instalação incompleto')
+  if (!input.setupSucceeded) issues.push('setup:local falhou; instalação incompleta')
   if (!input.gitHooksVerified) issues.push('git hooks ausentes ou não ativados')
   if (!input.lifecycleVerified) issues.push('turn lifecycle adapter ausente/incompatível')
   if (!input.validationWorkerAvailable) issues.push('worker local de validação indisponível')
@@ -684,8 +684,8 @@ export async function runBootstrap(opts: {
   ok('Dependências instaladas')
 
   // Linka o checkout ao Supabase remoto (auth guiada + link + validação do ref),
-  // para o agente operar o banco online. Antes do baseline: a experiência final
-  // mostra os passos do Supabase e só então "Verify passou".
+  // para o agente operar o banco online. Setup prepara a infraestrutura;
+  // não executa QA nem afirma que a aplicação passou pelos testes.
   const linked = config.supabase?.projectRef
     ? await linkSupabaseRemote(dest, config.supabase)
     : false
@@ -694,7 +694,7 @@ export async function runBootstrap(opts: {
   try {
     run('npm', ['run', 'setup:local'], dest)
     setupSucceeded = true
-    ok('Verify passou')
+    ok('Infraestrutura local preparada; testes sob demanda e CI em background')
   } catch {
     console.error('• setup:local falhou. Instalação incompleta será marcada not_ready.')
   }

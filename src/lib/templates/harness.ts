@@ -980,9 +980,12 @@ step('turn lifecycle adapter', () => {
   execFileSync(process.execPath, ['node_modules/supremo-cli/dist/bin.js', 'host', 'install'], { stdio: 'inherit' })
 })
 
-step('baseline (verify quick)', () => {
-  execSync('node scripts/verify.mjs quick', { stdio: 'inherit' })
-})
+// Baseline tests are opt-in; installing a workspace must not start a QA cycle.
+if (process.argv.includes('--validate-baseline')) {
+  step('baseline solicitado (verify quick)', () => {
+    execSync('node scripts/verify.mjs quick', { stdio: 'inherit' })
+  })
+}
 
 console.log('\\n✓ componentes instalados. Bootstrap verifica daemon, preview, ambiente e modo do host.\\n')
 `

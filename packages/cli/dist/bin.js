@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 var __create = Object.create;
+var __freeze = Object.freeze;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -32,6 +33,7 @@ var __toESM = (mod, isNodeMode, target2) => (target2 = mod != null ? __create(__
   isNodeMode || !mod || !mod.__esModule ? __defProp(target2, "default", { value: mod, enumerable: true }) : target2,
   mod
 ));
+var __template = (cooked, raw) => __freeze(__defProp(cooked, "raw", { value: __freeze(raw || cooked.slice()) }));
 
 // node_modules/zod/v4/core/util.js
 var util_exports = {};
@@ -548,8 +550,8 @@ function explicitlyAborted(x, startIndex = 0) {
 }
 function prefixIssues(path21, issues) {
   return issues.map((iss) => {
-    var _a3;
-    (_a3 = iss).path ?? (_a3.path = []);
+    var _a4;
+    (_a4 = iss).path ?? (_a4.path = []);
     iss.path.unshift(path21);
     return iss;
   });
@@ -558,17 +560,17 @@ function unwrapMessage(message) {
   return typeof message === "string" ? message : message?.message;
 }
 function attachSchema(issues, start, inst) {
-  var _a3;
+  var _a4;
   for (let i = start; i < issues.length; i++) {
-    (_a3 = issues[i]).schema ?? (_a3.schema = inst);
+    (_a4 = issues[i]).schema ?? (_a4.schema = inst);
   }
 }
 function finalizeIssue(iss, ctx, config2) {
-  var _a3;
+  var _a4;
   const traits = iss.inst?._zod?.traits;
   if (traits?.has("$ZodType")) {
     if (traits.has("$ZodCheck"))
-      (_a3 = iss).schema ?? (_a3.schema = iss.inst);
+      (_a4 = iss).schema ?? (_a4.schema = iss.inst);
     else
       iss.schema = iss.inst;
   }
@@ -1085,7 +1087,7 @@ function formatError(error61, mapper = (issue2) => issue2.message) {
 function treeifyError(error61, mapper = (issue2) => issue2.message) {
   const result2 = { errors: [] };
   const processError = (error62, path21 = []) => {
-    var _a3;
+    var _a4;
     for (const issue2 of error62.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
         issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
@@ -1117,7 +1119,7 @@ function treeifyError(error61, mapper = (issue2) => issue2.message) {
             curr = curr.properties[el];
           } else {
             curr.items ?? (curr.items = []);
-            (_a3 = curr.items)[el] ?? (_a3[el] = { errors: [] });
+            (_a4 = curr.items)[el] ?? (_a4[el] = { errors: [] });
             curr = curr.items[el];
           }
           if (terminal) {
@@ -1542,10 +1544,10 @@ var init_checks = __esm({
     init_regexes();
     init_util();
     $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
-      var _a3;
+      var _a4;
       inst._zod ?? (inst._zod = {});
       inst._zod.def = def;
-      (_a3 = inst._zod).onattach ?? (_a3.onattach = []);
+      (_a4 = inst._zod).onattach ?? (_a4.onattach = []);
     });
     _whenHasSize = (payload) => {
       const val = payload.value;
@@ -1619,8 +1621,8 @@ var init_checks = __esm({
     $ZodCheckMultipleOf = /* @__PURE__ */ $constructor("$ZodCheckMultipleOf", (inst, def) => {
       $ZodCheck.init(inst, def);
       inst._zod.onattach.push((inst2) => {
-        var _a3;
-        (_a3 = inst2._zod.bag).multipleOf ?? (_a3.multipleOf = def.value);
+        var _a4;
+        (_a4 = inst2._zod.bag).multipleOf ?? (_a4.multipleOf = def.value);
       });
       inst._zod.check = (payload) => {
         if (typeof payload.value !== typeof def.value)
@@ -1756,9 +1758,9 @@ var init_checks = __esm({
       };
     });
     $ZodCheckMaxSize = /* @__PURE__ */ $constructor("$ZodCheckMaxSize", (inst, def) => {
-      var _a3;
+      var _a4;
       $ZodCheck.init(inst, def);
-      (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasSize);
+      (_a4 = inst._zod.def).when ?? (_a4.when = _whenHasSize);
       inst._zod.onattach.push((inst2) => {
         const curr = inst2._zod.bag.maximum ?? Number.POSITIVE_INFINITY;
         if (def.maximum < curr)
@@ -1781,9 +1783,9 @@ var init_checks = __esm({
       };
     });
     $ZodCheckMinSize = /* @__PURE__ */ $constructor("$ZodCheckMinSize", (inst, def) => {
-      var _a3;
+      var _a4;
       $ZodCheck.init(inst, def);
-      (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasSize);
+      (_a4 = inst._zod.def).when ?? (_a4.when = _whenHasSize);
       inst._zod.onattach.push((inst2) => {
         const curr = inst2._zod.bag.minimum ?? Number.NEGATIVE_INFINITY;
         if (def.minimum > curr)
@@ -1806,9 +1808,9 @@ var init_checks = __esm({
       };
     });
     $ZodCheckSizeEquals = /* @__PURE__ */ $constructor("$ZodCheckSizeEquals", (inst, def) => {
-      var _a3;
+      var _a4;
       $ZodCheck.init(inst, def);
-      (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasSize);
+      (_a4 = inst._zod.def).when ?? (_a4.when = _whenHasSize);
       inst._zod.onattach.push((inst2) => {
         const bag = inst2._zod.bag;
         bag.minimum = def.size;
@@ -1833,9 +1835,9 @@ var init_checks = __esm({
       };
     });
     $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (inst, def) => {
-      var _a3;
+      var _a4;
       $ZodCheck.init(inst, def);
-      (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasLength);
+      (_a4 = inst._zod.def).when ?? (_a4.when = _whenHasLength);
       inst._zod.onattach.push((inst2) => {
         const curr = inst2._zod.bag.maximum ?? Number.POSITIVE_INFINITY;
         if (def.maximum < curr)
@@ -1860,9 +1862,9 @@ var init_checks = __esm({
       };
     });
     $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (inst, def) => {
-      var _a3;
+      var _a4;
       $ZodCheck.init(inst, def);
-      (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasLength);
+      (_a4 = inst._zod.def).when ?? (_a4.when = _whenHasLength);
       inst._zod.onattach.push((inst2) => {
         const curr = inst2._zod.bag.minimum ?? Number.NEGATIVE_INFINITY;
         if (def.minimum > curr)
@@ -1887,9 +1889,9 @@ var init_checks = __esm({
       };
     });
     $ZodCheckLengthEquals = /* @__PURE__ */ $constructor("$ZodCheckLengthEquals", (inst, def) => {
-      var _a3;
+      var _a4;
       $ZodCheck.init(inst, def);
-      (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasLength);
+      (_a4 = inst._zod.def).when ?? (_a4.when = _whenHasLength);
       inst._zod.onattach.push((inst2) => {
         const bag = inst2._zod.bag;
         bag.minimum = def.length;
@@ -1916,7 +1918,7 @@ var init_checks = __esm({
       };
     });
     $ZodCheckStringFormat = /* @__PURE__ */ $constructor("$ZodCheckStringFormat", (inst, def) => {
-      var _a3, _b;
+      var _a4, _b2;
       $ZodCheck.init(inst, def);
       inst._zod.onattach.push((inst2) => {
         const bag = inst2._zod.bag;
@@ -1927,7 +1929,7 @@ var init_checks = __esm({
         }
       });
       if (def.pattern)
-        (_a3 = inst._zod).check ?? (_a3.check = (payload) => {
+        (_a4 = inst._zod).check ?? (_a4.check = (payload) => {
           def.pattern.lastIndex = 0;
           if (def.pattern.test(payload.value))
             return;
@@ -1942,7 +1944,7 @@ var init_checks = __esm({
           });
         });
       else
-        (_b = inst._zod).check ?? (_b.check = () => {
+        (_b2 = inst._zod).check ?? (_b2.check = () => {
         });
     });
     $ZodCheckRegex = /* @__PURE__ */ $constructor("$ZodCheckRegex", (inst, def) => {
@@ -2694,7 +2696,7 @@ var init_schemas = __esm({
     init_versions();
     init_util();
     $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
-      var _a3;
+      var _a4;
       inst ?? (inst = {});
       inst._zod.def = def;
       inst._zod.bag = inst._zod.bag || {};
@@ -2707,7 +2709,7 @@ var init_schemas = __esm({
         }
       }
       if (checks.length === 0) {
-        (_a3 = inst._zod).deferred ?? (_a3.deferred = []);
+        (_a4 = inst._zod).deferred ?? (_a4.deferred = []);
         inst._zod.deferred?.push(() => {
           inst._zod.run = inst._zod.parse;
         });
@@ -4447,8 +4449,8 @@ var init_memoizer = __esm({
         return empty;
       },
       guard(inst) {
-        var _a3;
-        (_a3 = inst._zod).deferred ?? (_a3.deferred = []);
+        var _a4;
+        (_a4 = inst._zod).deferred ?? (_a4.deferred = []);
         inst._zod.deferred.push(() => {
           const base = inst._zod.parse;
           const wrapped = (payload, ctx) => {
@@ -4462,11 +4464,11 @@ var init_memoizer = __esm({
         });
       },
       attach(inst) {
-        var _a3;
+        var _a4;
         let isRecursiveInst;
         let lastCtx;
         let lastBucket;
-        (_a3 = inst._zod).deferred ?? (_a3.deferred = []);
+        (_a4 = inst._zod).deferred ?? (_a4.deferred = []);
         inst._zod.deferred.push(() => {
           const base = inst._zod.parse;
           const wrapped = (payload, ctx) => {
@@ -15007,7 +15009,7 @@ function handleUnrepresentable(schema, ctx, json2, params, message) {
   return true;
 }
 function process2(schema, ctx, _params = { path: [], schemaPath: [] }) {
-  var _a3;
+  var _a4;
   const def = schema._zod.def;
   const seen = ctx.seen.get(schema);
   if (seen) {
@@ -15057,13 +15059,13 @@ function process2(schema, ctx, _params = { path: [], schemaPath: [] }) {
     delete result2.schema.default;
   }
   if (ctx.io === "input" && "_prefault" in result2.schema)
-    (_a3 = result2.schema).default ?? (_a3.default = result2.schema._prefault);
+    (_a4 = result2.schema).default ?? (_a4.default = result2.schema._prefault);
   delete result2.schema._prefault;
   const _result = ctx.seen.get(schema);
   return _result.schema;
 }
-function encodeJSONPointerSegment(segment) {
-  return segment.replace(/~/g, "~0").replace(/\//g, "~1");
+function encodeJSONPointerSegment(segment2) {
+  return segment2.replace(/~/g, "~0").replace(/\//g, "~1");
 }
 function extractDefs(ctx, schema) {
   const root = ctx.seen.get(schema);
@@ -18306,8 +18308,8 @@ function detectVersion(schema, defaultTarget) {
 function applyMinItems(items, minItems) {
   return items.map((item, index) => index < minItems ? item : item.optional());
 }
-function decodeJSONPointerSegment(segment) {
-  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+function decodeJSONPointerSegment(segment2) {
+  return segment2.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
@@ -24355,6 +24357,16 @@ var init_turn_model = __esm({
   }
 });
 
+// ../../src/lib/checkpoint/acceptance-path.ts
+var _a3, segment, _b, ACCEPTANCE_TEST_PATH_SOURCE;
+var init_acceptance_path = __esm({
+  "../../src/lib/checkpoint/acceptance-path.ts"() {
+    "use strict";
+    segment = String.raw(_a3 || (_a3 = __template(["(?!.{1,2}(?:/|$)|(?:node_modules|.git|.supremo)(?:/|$))[^/\\\0-\x7F]+"], ["(?!\\.{1,2}(?:/|$)|(?:node_modules|\\.git|\\.supremo)(?:/|$))[^/\\\\\\x00-\\x1f\\x7f]+"])));
+    ACCEPTANCE_TEST_PATH_SOURCE = String.raw(_b || (_b = __template(["^(?:(?:tests?|e2e|src|app|pages|lib|components|actions|hooks|features)/", "(?:/", ")*.(?:test|spec).[cm]?[jt]sx?|supabase/", "(?:/", ")*.rls.test.[cm]?[jt]sx?)$"], ["^(?:(?:tests?|e2e|src|app|pages|lib|components|actions|hooks|features)/", "(?:/", ")*\\.(?:test|spec)\\.[cm]?[jt]sx?|supabase/", "(?:/", ")*\\.rls\\.test\\.[cm]?[jt]sx?)$"])), segment, segment, segment, segment);
+  }
+});
+
 // src/turn-acceptance.ts
 var testPath, acceptanceContractSchema;
 var init_turn_acceptance = __esm({
@@ -24362,7 +24374,11 @@ var init_turn_acceptance = __esm({
     "use strict";
     init_zod();
     init_turn_model();
-    testPath = external_exports.string().min(1).max(300).refine((file2) => !file2.startsWith("/") && !file2.split(/[\\/]/).includes("..") && (/^(?:tests?|e2e|src)\//.test(file2) && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file2) || /^supabase\/.+\.rls\.test\.[cm]?[jt]sx?$/.test(file2)), "Test path must name a project test");
+    init_acceptance_path();
+    testPath = external_exports.string().min(1).max(300).regex(
+      new RegExp(ACCEPTANCE_TEST_PATH_SOURCE),
+      "Test path must name a project test using a canonical relative path"
+    );
     acceptanceContractSchema = external_exports.object({
       version: external_exports.literal(1),
       criteria: external_exports.array(acceptanceCriterionSchema).min(1).max(100),
@@ -25451,13 +25467,13 @@ var init_validation_policy = __esm({
     "use strict";
     TRUSTED_VALIDATION_POLICIES = [
       {
-        "version": "4.0.0",
+        "version": "4.0.1",
         "kind": "public",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
           "scripts/security-audit.js": "4b7a368ef7a8726dab9af6ac8b34562ea0cd865b",
           "scripts/verify.mjs": "3fef150381c494a8db95e0703deb380602eee283",
-          "scripts/acceptance-rls.mjs": "c0f7e4f2fc10609c8ebeabbd0bbce5205cd1483c",
+          "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
           "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
           "scripts/rls-isolation-reporter.mjs": "661e6292d8b3161f3490324604a3fe27f220bcbf",
           "scripts/rls-isolation-gate.mjs": "47ab4659fcd79d6cd587623eb4631bed4b6477b5",
@@ -28367,18 +28383,18 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "6924c7e5cf7c2a01e4f2424ea01f87bd3da49049edf9aca62834fead7bdc8472"
+            "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
           ]
         ]
       },
       {
-        "version": "4.0.0",
+        "version": "4.0.1",
         "kind": "solo",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
           "scripts/security-audit.js": "4b7a368ef7a8726dab9af6ac8b34562ea0cd865b",
           "scripts/verify.mjs": "3fef150381c494a8db95e0703deb380602eee283",
-          "scripts/acceptance-rls.mjs": "c0f7e4f2fc10609c8ebeabbd0bbce5205cd1483c",
+          "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
           "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
           "scripts/rls-isolation-reporter.mjs": "661e6292d8b3161f3490324604a3fe27f220bcbf",
           "scripts/rls-isolation-gate.mjs": "47ab4659fcd79d6cd587623eb4631bed4b6477b5",
@@ -31288,18 +31304,18 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "6924c7e5cf7c2a01e4f2424ea01f87bd3da49049edf9aca62834fead7bdc8472"
+            "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
           ]
         ]
       },
       {
-        "version": "4.0.0",
+        "version": "4.0.1",
         "kind": "team",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
           "scripts/security-audit.js": "4b7a368ef7a8726dab9af6ac8b34562ea0cd865b",
           "scripts/verify.mjs": "3fef150381c494a8db95e0703deb380602eee283",
-          "scripts/acceptance-rls.mjs": "c0f7e4f2fc10609c8ebeabbd0bbce5205cd1483c",
+          "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
           "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
           "scripts/rls-isolation-reporter.mjs": "661e6292d8b3161f3490324604a3fe27f220bcbf",
           "scripts/rls-isolation-gate.mjs": "47ab4659fcd79d6cd587623eb4631bed4b6477b5",
@@ -34209,7 +34225,7 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "6924c7e5cf7c2a01e4f2424ea01f87bd3da49049edf9aca62834fead7bdc8472"
+            "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
           ]
         ]
       }
@@ -35106,6 +35122,7 @@ async function validateCheckpoint(cwd, record3, signal) {
   let logs = "";
   let status = "failed";
   let checks = [];
+  let failedStage = { name: "validation infrastructure", type: "external_dependency", status: "failed" };
   let criterionIds = [];
   let acceptanceCriteria = [];
   const fingerprint = gitText(cwd, ["rev-parse", "".concat(record3.commitSha, "^{tree}")]);
@@ -35119,7 +35136,9 @@ async function validateCheckpoint(cwd, record3, signal) {
     added = true;
     if (import_node_fs16.default.existsSync(import_node_path18.default.join(cwd, "node_modules")))
       import_node_fs16.default.symlinkSync(import_node_path18.default.join(cwd, "node_modules"), import_node_path18.default.join(scratch, "node_modules"), "dir");
+    failedStage = { name: "validation integrity", type: "security", status: "failed" };
     verifyTrustedFiles(scratch);
+    failedStage = { name: "validation infrastructure", type: "external_dependency", status: "failed" };
     const script = import_node_path18.default.join(scratch, "scripts/verify.mjs");
     if (!import_node_fs16.default.existsSync(script))
       throw new Error("Worker indispon\xEDvel: scripts/verify.mjs ausente.");
@@ -35135,9 +35154,22 @@ async function validateCheckpoint(cwd, record3, signal) {
       NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:9",
       NEXT_PUBLIC_SUPABASE_ANON_KEY: "supremo-synthetic-smoke-key"
     };
-    const acceptanceRaw = readJson(import_node_path18.default.join(scratch, ".supremo/acceptance.json"));
-    const acceptance = acceptanceRaw === null ? null : acceptanceContractSchema.parse(acceptanceRaw);
+    failedStage = { name: "acceptance contract", type: "code", status: "failed" };
+    const acceptancePath = import_node_path18.default.join(scratch, ".supremo/acceptance.json");
+    const acceptance = import_node_fs16.default.lstatSync(acceptancePath, { throwIfNoEntry: false }) ? acceptanceContractSchema.parse(JSON.parse(
+      readStableFile(acceptancePath, 256 * 1024, scratch).content
+    )) : null;
+    for (const check2 of acceptance?.checks ?? []) {
+      for (const file2 of check2.files) {
+        try {
+          readStableFile(import_node_path18.default.join(scratch, file2), 16 * 1024 * 1024, scratch);
+        } catch {
+          throw new Error("Crit\xE9rio sem arquivo de prova regular no snapshot: ".concat(file2));
+        }
+      }
+    }
     acceptanceCriteria = acceptance?.criteria ?? [];
+    failedStage = { name: "validation infrastructure", type: "external_dependency", status: "failed" };
     if (import_node_fs16.default.existsSync(import_node_path18.default.join(scratch, "e2e/smoke.spec.ts")) || acceptance?.checks.some((check2) => check2.type === "e2e")) {
       env.PLAYWRIGHT_PORT = String(await availableBrowserPort());
     }
@@ -35171,8 +35203,6 @@ async function validateCheckpoint(cwd, record3, signal) {
     if (acceptance !== null) {
       const contract = acceptance;
       for (const check2 of contract.checks) {
-        if (check2.files.some((file2) => !import_node_fs16.default.existsSync(import_node_path18.default.join(scratch, file2))))
-          throw new Error("Crit\xE9rio sem arquivo de prova execut\xE1vel.");
         if (check2.type === "rls") {
           checks.push({ name: check2.name, type: check2.type, status: "deferred" });
           status = "deferred";
@@ -35211,7 +35241,7 @@ async function validateCheckpoint(cwd, record3, signal) {
     logs += "\n".concat(failure.stdout ?? "", "\n").concat(failure.stderr ?? "", "\n").concat(failure.message);
     status = "failed";
     if (checks.length === 0)
-      checks = [{ name: "validation infrastructure", type: "external_dependency", status: "failed" }];
+      checks = [failedStage];
   } finally {
     if (added) {
       try {
@@ -35452,6 +35482,7 @@ var init_turn_validation = __esm({
     init_worker_process();
     init_trusted_validation();
     init_validation_policy();
+    init_stable_file();
     VALIDATION_DIR = ".supremo/validation";
     localEvidenceSchema = external_exports.object({
       id: external_exports.string().uuid(),
@@ -35497,6 +35528,67 @@ var init_turn_validation = __esm({
         context.addIssue({ code: "custom", message: "Status de valida\xE7\xE3o inconsistente com os checks executados." });
       }
     });
+  }
+});
+
+// ../../src/lib/checkpoint/local-diagnostic.ts
+function inferLocalDiagnostic(evidence) {
+  if (evidence.logs.includes("Test path must name a project test"))
+    return "acceptance_test_path";
+  const failed = evidence.checks.filter((check2) => check2.status === "failed");
+  if (failed.some((check2) => check2.name === "acceptance contract"))
+    return "acceptance_contract";
+  if (failed.some((check2) => check2.name === "validation integrity"))
+    return "validation_integrity";
+  const type = failed[0]?.type;
+  switch (type) {
+    case "typecheck":
+    case "lint":
+    case "build":
+    case "security":
+    case "rls":
+    case "migration":
+    case "environment":
+      return type;
+    case "unit":
+    case "integration":
+    case "e2e":
+      return "tests";
+    case "external_dependency":
+      return "infrastructure";
+    default:
+      return "validation";
+  }
+}
+var localDiagnosticCodeSchema, storedLocalDiagnosticSchema;
+var init_local_diagnostic = __esm({
+  "../../src/lib/checkpoint/local-diagnostic.ts"() {
+    "use strict";
+    init_zod();
+    localDiagnosticCodeSchema = external_exports.enum([
+      "acceptance_test_path",
+      "acceptance_contract",
+      "validation_integrity",
+      "typecheck",
+      "lint",
+      "build",
+      "tests",
+      "security",
+      "rls",
+      "migration",
+      "environment",
+      "infrastructure",
+      "validation"
+    ]);
+    storedLocalDiagnosticSchema = external_exports.object({
+      source: external_exports.literal("local"),
+      version: external_exports.literal(1),
+      projectId: external_exports.string().uuid(),
+      checkpointId: external_exports.string().uuid(),
+      commitSha: external_exports.string().regex(/^[a-f0-9]{40}$/),
+      revision: external_exports.number().int().positive(),
+      code: localDiagnosticCodeSchema
+    }).strict();
   }
 });
 
@@ -35804,6 +35896,14 @@ async function reportLocalCheckpoints(config2, http = defaultDaemonHttp(config2.
     const input2 = localReportFor(record3, revisions.get(record3.checkpointId) ?? 1);
     if (!input2)
       continue;
+    if (input2.validationStatus === "failed" && input2.validatedSha === input2.commitSha) {
+      try {
+        const evidence = evidenceFor(config2.cwd, record3);
+        if (evidence?.status === "failed")
+          input2.diagnosticCode = inferLocalDiagnostic(evidence);
+      } catch {
+      }
+    }
     const fingerprint = (0, import_node_crypto10.createHash)("sha256").update(JSON.stringify(input2)).digest("hex");
     if (receipts[record3.checkpointId] === fingerprint)
       continue;
@@ -36079,6 +36179,7 @@ var init_daemon = __esm({
     init_database();
     init_feedback2();
     init_turn_validation();
+    init_local_diagnostic();
     init_turn_workspace();
     init_restore();
     RETRIABLE = /* @__PURE__ */ new Set([
@@ -37413,7 +37514,7 @@ var {
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.7.0",
+  version: "1.7.1",
   description: "CLI do Supremo: bootstrap, preview persistente e checkpoints em background.",
   license: "MIT",
   author: "Supremo",

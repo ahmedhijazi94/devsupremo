@@ -20,9 +20,15 @@ export interface SecretRequestView {
   environment: SecretEnvironment | null; targetRef: string | null; status: 'pending' | 'fulfilled'
 }
 export interface SecretRequestRecord extends SecretRequestView { accountId: string | null }
-export class SecretRequestError extends Error {}
+export type SecretRequestErrorCode = 'schema_unavailable' | 'access_denied' | 'authentication_failed' | 'storage_unavailable'
+export class SecretRequestError extends Error {
+  constructor(message: string, readonly code?: SecretRequestErrorCode) { super(message) }
+}
 export function safeSecretError(error: unknown): string {
   return error instanceof SecretRequestError ? error.message : 'Não foi possível concluir a operação de secrets. Verifique o vínculo e tente novamente.'
+}
+export function safeSecretFailure(error: unknown): { error: string; errorCode?: SecretRequestErrorCode } {
+  return { error: safeSecretError(error), ...(error instanceof SecretRequestError && error.code ? { errorCode: error.code } : {}) }
 }
 export function requireSecretBinding(input: {
   target: SecretTarget; environment: SecretEnvironment; accountId: string | null; targetRef: string | null; databaseEnvironment: unknown

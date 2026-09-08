@@ -51,6 +51,17 @@ describe('project secret form', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
     expect(field.value).toBe('draft')
   })
+  it('keeps missing schema visible and reveals the named field after the platform database recovers', async () => {
+    mocks.get.mockResolvedValueOnce({ error: 'A estrutura dos pedidos de chaves não está disponível no banco do Supremo.', errorCode: 'schema_unavailable' })
+    render(<SecretsCard projectId={projectId} />)
+    expect((await screen.findByRole('alert')).textContent).toContain('banco do Supremo')
+    expect(screen.queryByPlaceholderText('Cole a chave')).toBeNull()
+    expect(screen.queryByText('configurado')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+    expect(await screen.findByLabelText('PAYMENT_API_KEY')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(mocks.save).not.toHaveBeenCalled()
+  })
   it('polls new requests into an already open page and preserves pending field content', async () => {
     vi.useFakeTimers()
     render(<SecretsCard projectId={projectId} />)

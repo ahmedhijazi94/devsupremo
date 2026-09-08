@@ -1,8 +1,9 @@
 import { z } from 'zod'
+import { localDiagnosticCodeSchema } from './local-diagnostic'
 
 const sha = z.string().regex(/^[a-f0-9]{40}$/)
 
-/** Status-only telemetry. No code, prompt, path, environment value or log is accepted. */
+/** Status and allowlisted diagnostic codes. No source, prompt, path, environment value or log is accepted. */
 export const localCheckpointReportSchema = z.object({
   deviceSecret: z.string().min(10).max(256),
   projectId: z.string().uuid(),
@@ -13,7 +14,11 @@ export const localCheckpointReportSchema = z.object({
   validationStatus: z.enum(['pending', 'running', 'passed', 'failed', 'deferred']),
   validatedSha: sha.nullable(),
   uploadStatus: z.enum(['local', 'upload_pending', 'push_failed']),
+  diagnosticCode: localDiagnosticCodeSchema.optional(),
 }).strict().superRefine((report, ctx) => {
+  if (report.diagnosticCode && (report.validationStatus !== 'failed' || report.validatedSha !== report.commitSha)) {
+    ctx.addIssue({ code: 'custom', message: 'Diagnostic requires failed validation for this exact commit.' })
+  }
   if (report.validatedSha !== null && report.validatedSha !== report.commitSha) {
     ctx.addIssue({ code: 'custom', message: 'Validation belongs to another commit.' })
   }

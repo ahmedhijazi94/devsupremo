@@ -65,6 +65,46 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); fs.rmSync(cwd, { force: true, recursive: true }) })
 
 describe('validation evidence is bound to the executed isolated snapshot', () => {
+  it.each(['passed', 'failed'] as const)('executes the real E2E acceptance paths outside src/ and records %s proofs', async (expected) => {
+    fs.appendFileSync(path.join(cwd, '.gitignore'), 'node_modules\n')
+    fs.symlinkSync(path.resolve('../../node_modules'), path.join(cwd, 'node_modules'), 'dir')
+    fs.writeFileSync(path.join(cwd, 'package.json'), JSON.stringify({ type: 'module' }))
+    fs.writeFileSync(path.join(cwd, 'vitest.config.mjs'), "export default { test: { environment: 'node', include: ['**/*.test.ts'], maxWorkers: 1, fileParallelism: false } }\n")
+    const files = ['lib/tickets/schema.test.ts', 'app/app/actions.test.ts', 'app/login/actions.test.ts']
+    for (const file of files) {
+      fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true })
+      fs.writeFileSync(path.join(cwd, file), `import { it, expect } from 'vitest'; it('executes the selected proof', () => expect(1).toBe(${expected === 'failed' && file.startsWith('lib/') ? 2 : 1}));\n`)
+    }
+    writeJson(path.join(cwd, '.supremo/acceptance.json'), { version: 1,
+      criteria: [{ id: 'tickets', description: 'Inputs and authorization', requiredChecks: ['ticket-unit'] }],
+      checks: [{ name: 'ticket-unit', type: 'unit', files }] })
+    const evidence = await validateCheckpoint(cwd, capture())
+    expect(evidence.status, evidence.logs).toBe(expected)
+    expect(evidence.checks, evidence.logs).toContainEqual({ name: 'ticket-unit', type: 'unit', status: expected })
+    expect(evidence.criterionIds).toEqual(expected === 'passed' ? ['tickets'] : [])
+    for (const file of files) expect(evidence.logs).toContain(file)
+    expect(evidence.checks.some((check) => check.name === 'validation infrastructure')).toBe(false)
+  }, 20_000)
+
+  it.each(['malformed-json', 'invalid-path', 'missing-proof', 'symlink-proof', 'dangling-contract'] as const)('classifies %s as an acceptance contract failure before running tests', async (scenario) => {
+    verifier("throw new Error('Worker must not execute an invalid acceptance contract');")
+    const file = scenario === 'invalid-path' ? 'app/../tests/gate.test.ts' : 'app/actions.test.ts'
+    const acceptance = path.join(cwd, '.supremo/acceptance.json')
+    writeJson(acceptance, { version: 1,
+      criteria: [{ id: 'tickets', description: 'Input validation', requiredChecks: ['ticket-unit'] }],
+      checks: [{ name: 'ticket-unit', type: 'unit', files: [file] }] })
+    if (scenario === 'malformed-json') fs.writeFileSync(acceptance, '{ invalid JSON')
+    if (scenario === 'symlink-proof') {
+      fs.mkdirSync(path.join(cwd, 'app'))
+      fs.symlinkSync('../tests/gate.test.ts', path.join(cwd, file))
+    }
+    if (scenario === 'dangling-contract') { fs.unlinkSync(acceptance); fs.symlinkSync('absent.json', acceptance) }
+    const evidence = await validateCheckpoint(cwd, capture())
+    expect(evidence).toMatchObject({ status: 'failed', checks: [{ name: 'acceptance contract', type: 'code', status: 'failed' }] })
+    expect(evidence.logs).not.toContain('Worker must not execute')
+    expect(evidence.criterionIds).toEqual([])
+  })
+
   it.each([
     ['empty checks', 'report.checks = []'],
     ['contradictory status', "report.checks[0].status = 'failed'"],

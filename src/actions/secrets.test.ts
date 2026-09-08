@@ -4,6 +4,7 @@ vi.mock('@/lib/auth', () => ({ requireProjectOwner: mocks.owner }))
 vi.mock('@/lib/supabase/admin', () => ({ createServiceClient: () => ({ service: true }) }))
 vi.mock('@/lib/secret-requests/store', () => ({ secretRequestStore: mocks.store }))
 import { dismissSecretRequest, getSecretRequests, saveSecret } from './secrets'
+import { secretRequestStorageError } from '@/lib/secret-requests/storage-errors'
 const projectId = '11111111-1111-4111-8111-111111111111'
 const requestId = '22222222-2222-4222-8222-222222222222'
 const binding = { target: 'supabase', environment: 'development', targetRef: 'projectref', accountId: 'account' }
@@ -47,5 +48,17 @@ describe('secret owner actions', () => {
     expect(mocks.fulfill).not.toHaveBeenCalled()
     mocks.dismiss.mockRejectedValue(new Error('database private-value'))
     expect(await dismissSecretRequest({ projectId, requestId })).toEqual({ error: expect.not.stringContaining('private-value') })
+  })
+  it('returns a classified database failure and recovers after schema availability without changing authorization', async () => {
+    mocks.list.mockRejectedValueOnce(secretRequestStorageError({ code: '42703', message: 'private-value' }))
+    const failed = await getSecretRequests(projectId)
+    expect(failed.errorCode).toBe('schema_unavailable')
+    expect(failed.requests).toBeUndefined()
+    expect(JSON.stringify(failed)).not.toContain('private-value')
+    const recovered = await getSecretRequests(projectId)
+    expect(recovered.requests).toHaveLength(1)
+    expect(recovered.error).toBeUndefined()
+    expect(mocks.owner).toHaveBeenCalledTimes(2)
+    expect(mocks.deliver).not.toHaveBeenCalled()
   })
 })

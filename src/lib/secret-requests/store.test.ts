@@ -112,6 +112,19 @@ describe('owner scoped secret request store', () => {
     await expect(promise).rejects.toThrow()
     await expect(promise).rejects.not.toThrow('private-value')
   })
+  it.each([
+    ['42703', 'schema_unavailable'],
+    ['42501', 'access_denied'],
+    ['PGRST003', 'storage_unavailable'],
+  ])('reports %s accurately when project ownership succeeds but secret storage is unavailable', async (code, expectedCode) => {
+    const fixture = clientFixture((call) => call.table === 'secret_requests' ? { data: null, error: { code, message: 'private-value' } } : undefined)
+    const port = secretRequestStore(fixture.client, 'owner', projectId)
+    await port.authorize()
+    await expect(port.list()).rejects.toMatchObject({ code: expectedCode })
+    expect(fixture.calls.filter((call) => call.table === 'secret_requests')).toHaveLength(1)
+    expect(mocks.deliver).not.toHaveBeenCalled()
+    expect(mocks.credentials).not.toHaveBeenCalled()
+  })
   it('does not deliver after a Vercel account is removed', async () => {
     const { client } = clientFixture((call) => call.table === 'vercel_accounts' ? { data: null, error: null } : undefined)
     const vercelRecord: SecretRequestRecord = { ...record, target: 'vercel', environment: 'preview', targetRef: 'vercelproject' }

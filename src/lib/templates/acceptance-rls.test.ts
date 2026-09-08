@@ -8,7 +8,7 @@ import { buildProjectFiles } from './project-files'
 import { isolationGateFiles } from './isolation-gate'
 
 const projectId = '00000000-0000-4000-8000-000000000001'
-type Scenario = 'pass' | 'fail' | 'skip' | 'todo' | 'empty' | 'excluded' | 'wrong-sha' | 'remote-db' | 'missing-file' | 'mixed' | 'no-contract' | 'supabase'
+type Scenario = 'pass' | 'fail' | 'skip' | 'todo' | 'empty' | 'excluded' | 'wrong-sha' | 'remote-db' | 'missing-file' | 'mixed' | 'no-contract' | 'supabase' | 'colocated' | 'traversal'
 interface AcceptanceReport {
   version: number; projectId: string; sha: string; runId: number; runAttempt: number
   checks: Array<{ name: string; type: string; status: string }>; criterionIds: string[]
@@ -47,7 +47,9 @@ async function executeAcceptance(scenario: Scenario): Promise<{ code: number | n
     if (scenario !== 'no-contract') fs.writeFileSync(path.join(root, '.supremo/acceptance.json'), JSON.stringify({
       version: 1, criteria: [{ id: 'ownership', description: 'owner access is proven', requiredChecks: ['owner-access', ...(scenario === 'mixed' ? ['ui-form'] : [])] }],
       checks: [{ name: 'owner-access', type: 'rls', files: [proofFile, ...(scenario === 'missing-file' ? ['tests/absent.rls.test.ts'] : [])] },
-        ...(scenario === 'mixed' ? [{ name: 'ui-form', type: 'e2e', files: ['e2e/form.spec.ts'] }] : [])],
+        ...(scenario === 'mixed' ? [{ name: 'ui-form', type: 'e2e', files: ['e2e/form.spec.ts'] }] : []),
+        ...(scenario === 'colocated' ? [{ name: 'ticket-unit', type: 'unit', files: ['lib/tickets/schema.test.ts', 'app/app/actions.test.ts', 'app/login/actions.test.ts'] }] : []),
+        ...(scenario === 'traversal' ? [{ name: 'unsafe', type: 'unit', files: ['app/../tests/ownership.rls.test.ts'] }] : [])],
     }))
     execFileSync('git', ['init', '-q'], { cwd: root })
     execFileSync('git', ['add', '.'], { cwd: root })
@@ -74,6 +76,12 @@ async function executeAcceptance(scenario: Scenario): Promise<{ code: number | n
 }
 
 describe('named RLS acceptance executes actual Vitest proofs', () => {
+  it('accepts the real mixed contract with colocated app/lib proofs while executing only the named RLS gate', async () => {
+    const result = await executeAcceptance('colocated')
+    expect(result.code, result.output).toBe(0)
+    expect(result.requests).toBe(1)
+    expect(result.report?.checks).toEqual([{ name: 'owner-access', type: 'rls', status: 'passed' }])
+  }, 20_000)
   it('can name the native scaffold isolation tests under supabase/', async () => {
     const result = await executeAcceptance('supabase')
     expect(result.code, result.output).toBe(0)
@@ -93,7 +101,7 @@ describe('named RLS acceptance executes actual Vitest proofs', () => {
     expect(result.report?.checks.some((check) => check.status === 'passed')).toBe(false)
     expect(result.report?.criterionIds).toEqual([])
   }, 20_000)
-  it.each(['wrong-sha', 'remote-db'] as const)('%s is rejected before tests or requests execute', async (scenario) => {
+  it.each(['wrong-sha', 'remote-db', 'traversal'] as const)('%s is rejected before tests or requests execute', async (scenario) => {
     const result = await executeAcceptance(scenario)
     expect(result.code).not.toBe(0)
     expect(result.requests).toBe(0)

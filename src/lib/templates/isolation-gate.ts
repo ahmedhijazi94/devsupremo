@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { ACCEPTANCE_TEST_PATH_SOURCE } from '../checkpoint/acceptance-path'
 
 /** Standalone test tooling: no imports into app runtime or the editing harness. */
 export function isolationGateFiles(): Array<{ path: string; content: string }> {
   const scripts = ['rls-isolation-inventory.mjs', 'rls-isolation-reporter.mjs', 'rls-isolation-gate.mjs']
   return [
-    { path: 'scripts/acceptance-rls.mjs', content: readFileSync(join(process.cwd(), 'src/lib/templates/assets/rls/acceptance-rls.mjs.txt'), 'utf8') },
+    { path: 'scripts/acceptance-rls.mjs', content: readFileSync(join(process.cwd(), 'src/lib/templates/assets/rls/acceptance-rls.mjs.txt'), 'utf8')
+      .replace('__SUPREMO_ACCEPTANCE_TEST_PATH_SOURCE__', JSON.stringify(ACCEPTANCE_TEST_PATH_SOURCE)) },
     ...scripts.map((name) => ({ path: `scripts/${name}`, content: readFileSync(join(process.cwd(), 'scripts', name), 'utf8') })),
     { path: 'supabase/isolation.ts', content: readFileSync(join(process.cwd(), 'src/lib/templates/assets/rls/isolation.ts.txt'), 'utf8') },
   ]

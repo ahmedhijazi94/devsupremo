@@ -5,6 +5,7 @@ import { requireUser, toActionError } from '@/lib/auth'
 import { humanCheckpointStatus, humanRestoreStatus } from '@/lib/checkpoint/restore'
 import { validationFeedbackSchema } from '@/lib/checkpoint/feedback'
 import { localCheckpointPresentation } from '@/lib/checkpoint/local-report'
+import { readLocalDiagnostic, type LocalDiagnosticPresentation } from '@/lib/checkpoint/local-diagnostic'
 
 /**
  * Histórico + Restore (v3.1 finalização) — o usuário nunca precisa abrir o
@@ -27,6 +28,7 @@ export interface CheckpointHistoryItem {
   validationSummary?: string
   canRestore?: boolean
   localState?: 'pending' | 'failed'
+  validationDiagnostic?: LocalDiagnosticPresentation | undefined
 }
 
 export async function listProjectCheckpoints(
@@ -40,7 +42,7 @@ export async function listProjectCheckpoints(
     const { data, error } = await supabase
       .from('checkpoints')
       .select(
-        'id, parent_checkpoint_id, summary, risk_level, push_status, integration_status, migrations, pr_number, created_at, restored_from_checkpoint_id, project_id, validation_feedback, published_sha, local_validation_status, local_upload_status',
+        'id, parent_checkpoint_id, summary, risk_level, push_status, integration_status, migrations, pr_number, created_at, restored_from_checkpoint_id, project_id, validation_feedback, published_sha, local_validation_status, local_upload_status, commit_sha, local_report_revision',
       )
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
@@ -62,6 +64,10 @@ export async function listProjectCheckpoints(
         restoredFromCheckpointId: (r.restored_from_checkpoint_id as string | null) ?? null,
         canRestore: ['published', 'integrated'].includes(r.push_status as string) && typeof r.published_sha === 'string',
         ...(r.push_status === 'local' ? { localState: localCheckpointPresentation(r.local_validation_status, r.local_upload_status).state } : {}),
+        validationDiagnostic: r.push_status === 'local' ? readLocalDiagnostic(r.validation_feedback, {
+          projectId, checkpointId: r.id,
+          commitSha: r.commit_sha, revision: r.local_report_revision, validationStatus: r.local_validation_status,
+        }) : undefined,
         validationLabel: r.push_status === 'local'
           ? localCheckpointPresentation(r.local_validation_status, r.local_upload_status).label
           : r.push_status === 'published' && (r.integration_status === 'ci_failed' || r.integration_status === 'security_blocked')

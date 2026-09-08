@@ -6,6 +6,7 @@ import { decryptToken } from '@/lib/crypto'
 import { assertSameBinding, requireSecretBinding, secretEnvironmentSchema, secretTargetSchema, SecretRequestError, type SecretRequestRecord } from './policy'
 import type { SecretRequestPort } from './service'
 import { deliverSecret } from './provider'
+import { secretRequestStorageError } from './storage-errors'
 
 const rowSchema = z.object({ id: z.string().uuid(), name: z.string(), description: z.string().nullable(), target: secretTargetSchema.nullable(),
   environment: secretEnvironmentSchema.nullable(), target_ref: z.string().nullable(), target_account_id: z.string().nullable(), status: z.enum(['pending', 'fulfilled']) })
@@ -36,16 +37,16 @@ export function secretRequestStore(client: SupabaseClient, userId: string, proje
     },
     list: async () => {
       const result = await scoped().order('created_at', { ascending: true }).limit(101)
-      if (result.error) throw new SecretRequestError('Não foi possível carregar os pedidos. Confirme que a migration 024 foi aplicada.')
+      if (result.error) throw secretRequestStorageError(result.error)
       return (result.data ?? []).map(record)
     },
     insert: async (entries) => {
       const result = await client.from('secret_requests').upsert(entries.map((entry) => ({ user_id: userId, project_id: projectId, name: entry.name,
         description: entry.description, target: entry.target, environment: entry.environment, target_ref: entry.targetRef, target_account_id: entry.accountId, is_secret: true })),
       { onConflict: 'project_id,name,target,environment,target_ref,target_account_id', ignoreDuplicates: true })
-      if (result.error) throw new SecretRequestError('Não foi possível registrar os pedidos de secrets.')
+      if (result.error) throw secretRequestStorageError(result.error)
     },
-    find: async (id) => { const result = await scoped().eq('id', id).maybeSingle(); if (result.error) throw new SecretRequestError('Não foi possível consultar o pedido.'); return result.data ? record(result.data) : null },
+    find: async (id) => { const result = await scoped().eq('id', id).maybeSingle(); if (result.error) throw secretRequestStorageError(result.error); return result.data ? record(result.data) : null },
     audit: async (row) => {
       const result = await client.from('audit_logs').insert({ user_id: userId, action: 'secret.delivery_requested', resource_type: 'project', resource_id: projectId,
         metadata: { requestId: row.id, name: row.name, target: row.target, environment: row.environment, targetRef: row.targetRef }, ip_address: null })
@@ -75,7 +76,7 @@ export function secretRequestStore(client: SupabaseClient, userId: string, proje
     },
     dismiss: async (id) => {
       const result = await client.from('secret_requests').delete().eq('id', id).eq('project_id', projectId).eq('user_id', userId)
-      if (result.error) throw new SecretRequestError('Não foi possível dispensar o pedido.')
+      if (result.error) throw secretRequestStorageError(result.error)
     },
   }
   return port

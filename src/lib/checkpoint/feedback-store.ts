@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sanitizeDiagnostic, validationFeedbackSchema, type ValidationFeedback, type FeedbackEnvelope } from './feedback'
+import { storedLocalDiagnosticSchema } from './local-diagnostic'
 
 function safeFeedback(feedback: ValidationFeedback): ValidationFeedback {
   return validationFeedbackSchema.parse({
@@ -17,6 +18,9 @@ function safeFeedback(feedback: ValidationFeedback): ValidationFeedback {
 
 function feedbackFromRow(row: Record<string, unknown> | null, column: string, projectId: string): ValidationFeedback | null {
   if (row?.[column] == null) return null
+  const local = storedLocalDiagnosticSchema.safeParse(row[column])
+  if (column === 'validation_feedback' && local.success && local.data.projectId === projectId &&
+    local.data.checkpointId === row.id && local.data.commitSha === row.commit_sha) return null
   const parsed = validationFeedbackSchema.safeParse(row[column])
   if (!parsed.success || parsed.data.projectId !== projectId || parsed.data.checkpointId !== row.id ||
     parsed.data.commitSha !== row.commit_sha || parsed.data.publishedSha !== row.published_sha) {
@@ -40,7 +44,7 @@ export async function saveCheckpointFeedback(client: SupabaseClient, feedback: V
     ...(safe.state === 'passed' || safe.state === 'integrated' ? { validation_success: safe } : {}),
   })
     .eq('project_id', safe.projectId).eq('id', safe.checkpointId).eq('commit_sha', safe.commitSha).eq('published_sha', safe.publishedSha)
-    .or(`validation_feedback.is.null,validation_feedback->>observedAt.lt.${safe.observedAt}`)
+    .or(`validation_feedback.is.null,validation_feedback->>source.eq.local,validation_feedback->>observedAt.lt.${safe.observedAt}`)
   if (error) throw new Error('Não foi possível guardar o diagnóstico de validação.')
 }
 

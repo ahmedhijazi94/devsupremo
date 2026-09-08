@@ -2,7 +2,7 @@
 import type { ValidationManifest } from '../validation-integrity'
 export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
   {
-    "version": "4.0.1",
+    "version": "4.0.2",
     "kind": "public",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -2918,12 +2918,12 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
+        "b086887052d4b7651c71748dcf199f07925c0903671117ba8b0eff5adde9d0d3"
       ]
     ]
   },
   {
-    "version": "4.0.1",
+    "version": "4.0.2",
     "kind": "solo",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -2937,7 +2937,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       "vitest.config.ts": "5452ad737da17e315bcaaa1be2e2d138f67f3915",
       "vitest.setup.ts": "a9d0dd31aa6eae87f8689e99b802b92a020b30d9",
       "playwright.config.ts": "00862f7365ef877397dbdbcd561a014d684cc38b",
-      "e2e/smoke.spec.ts": "c4d7f36fcdc6fb9a0bd5cf2a4d16e8b7d16b102f",
+      "e2e/smoke.spec.ts": "1cbc9274efb10b61602139ca8bda68c9224a5b9b",
       "eslint.config.mjs": "42fe347c89ba48a3ad45d6e18eb47f6caaf9665a",
       "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4"
     },
@@ -5839,12 +5839,12 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
+        "b086887052d4b7651c71748dcf199f07925c0903671117ba8b0eff5adde9d0d3"
       ]
     ]
   },
   {
-    "version": "4.0.1",
+    "version": "4.0.2",
     "kind": "team",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -5858,7 +5858,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       "vitest.config.ts": "5452ad737da17e315bcaaa1be2e2d138f67f3915",
       "vitest.setup.ts": "a9d0dd31aa6eae87f8689e99b802b92a020b30d9",
       "playwright.config.ts": "00862f7365ef877397dbdbcd561a014d684cc38b",
-      "e2e/smoke.spec.ts": "c4d7f36fcdc6fb9a0bd5cf2a4d16e8b7d16b102f",
+      "e2e/smoke.spec.ts": "1cbc9274efb10b61602139ca8bda68c9224a5b9b",
       "eslint.config.mjs": "42fe347c89ba48a3ad45d6e18eb47f6caaf9665a",
       "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4"
     },
@@ -8760,7 +8760,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
+        "b086887052d4b7651c71748dcf199f07925c0903671117ba8b0eff5adde9d0d3"
       ]
     ]
   }

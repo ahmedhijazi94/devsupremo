@@ -953,6 +953,24 @@ describe('E2E — o CI instala os motores que a suíte usa', () => {
 })
 
 describe('E2E — o smoke test corresponde ao app gerado', () => {
+  it('exige um submit utilizável no formulário de credenciais, sem depender do texto de abas ou botões', () => {
+    const smoke = file('e2e/smoke.spec.ts')
+    expect(smoke).not.toContain("getByRole('button', { name: 'Entrar' })")
+    expect(smoke).toContain("const form = page.locator('form:visible')")
+    expect(smoke).toContain(".filter({ has: page.locator('input[type=\"email\"]:visible') })")
+    expect(smoke).toContain(".filter({ has: page.locator('input[type=\"password\"]:visible') })")
+    expect(smoke).toContain('await expect(field).toHaveCount(1)')
+    expect(smoke).toContain('await expect(field).toBeEditable()')
+    expect(smoke).toContain('await expect(field).toHaveAccessibleName(/\\S/)')
+    expect(smoke).toContain('await expect(form).toHaveCount(1)')
+    expect(smoke).toContain('await expect(submit).toHaveCount(1)')
+    expect(smoke).toContain('await expect(submit).toBeVisible()')
+    expect(smoke).toContain('await expect(submit).toBeEnabled()')
+    expect(smoke).toContain("await email.fill('smoke@example.invalid')")
+    expect(smoke.indexOf('await password.fill(')).toBeLessThan(smoke.indexOf('await expect(submit).toBeEnabled()'))
+    expect(smoke).not.toContain('submit.click(')
+  })
+
   it('o h1 que o teste procura existe na página', () => {
     expect(file('app/page.tsx')).toContain('meu-app')
     expect(file('e2e/smoke.spec.ts')).toContain('level: 1')

@@ -133,6 +133,10 @@ function split(sql: string): { text: string; bodies: string[] } {
 /** Proibido em qualquer contexto, migration incluída. */
 const ALWAYS_FORBIDDEN: Array<{ pattern: RegExp; reason: string }> = [
   {
+    pattern: /\bcron"?\s*\.|\b(?:pg_cron|supremo_jobs)\b/i,
+    reason: 'Rotinas recorrentes usam o canal tipado de jobs e manifesto versionado; cron não é permitido em SQL genérico ou migrations automáticas.',
+  },
+  {
     pattern: /\bdrop\s+database\b/i,
     reason: 'DROP DATABASE nunca é permitido.',
   },

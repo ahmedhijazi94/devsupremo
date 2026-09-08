@@ -2,12 +2,16 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendTurnContext } from '../../../src/lib/checkpoint/turn-context'
 import { defaultCheckpointDeps } from './checkpoint'
 import { runTurnEvent, type RuntimeDeps } from './turn-runtime'
 import { drainLocalValidation, evidenceFor } from './turn-validation'
 import { captureTree, gitText, readJson, writeJson } from './turn-workspace'
+
+// These protocol fixtures deliberately use a tiny validator. Integrity of generated
+// validators is covered independently by trusted-validation and generated-worker tests.
+vi.mock('./trusted-validation', () => ({ verifyTrustedFiles: () => {} }))
 
 const PROJECT = '11111111-1111-4111-8111-111111111111'
 const OTHER = '22222222-2222-4222-8222-222222222222'
@@ -41,6 +45,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(root, '.supremo'))
   fs.mkdirSync(path.join(root, 'scripts'))
   fs.writeFileSync(path.join(root, '.gitignore'), '.supremo/turns/\n.supremo/validation/\n.supremo/checkpoints/\n.supremo/turn-context.json\n.supremo/validation-feedback.json\n')
+  writeJson(path.join(root, '.supremo/lifecycle.json'), { validation_mode: 'on_request' })
   writeJson(path.join(root, '.supremo/project.json'), { projectId: PROJECT, supremoUrl: 'https://supremo.example.invalid' })
   fs.writeFileSync(path.join(root, 'scripts/verify.mjs'), fixtureVerify)
   source('export const tickets = [];\n')
@@ -159,11 +164,12 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
     expect(queue()[0]?.validationStatus).toBe('failed')
   })
 
-  it('recovery bloqueia edições nos testes, shell e saída via symlink', async () => {
+  it('reparo delimitado explícito bloqueia edições nos testes, shell e saída via symlink', async () => {
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
     source('export const ticket = 1;'); await runTurnEvent('complete', root); remoteFailure()
     backend.feedback.current!.failures = [{ name: 'security', category: 'security' }]
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
+    expect((await runTurnEvent('repair-start', root)).allowed).toBe(true)
     for (const file of ['tests/ownership.test.ts', '.github/workflows/ci.yml', 'supabase/migrations/001.sql']) {
       expect((await runTurnEvent('before-mutation', root, { tool_name: 'Write', tool_input: { file_path: file } })).allowed).toBe(false)
     }
@@ -184,7 +190,8 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
     source('export const ticket = 1;'); await runTurnEvent('complete', root); remoteFailure()
     backend.feedback.current!.failures = [{ name: 'security', category: 'security' }]
     for (let attempt = 1; attempt <= 3; attempt++) {
-      const start = await runTurnEvent('preflight', root, input(), 'claude-code', deps)
+      await runTurnEvent('preflight', root, input(), 'claude-code', deps)
+      const start = await runTurnEvent('repair-start', root)
       expect(start.state?.turn.recovery?.attempts).toBe(attempt)
       source(`BROKEN ${attempt}`)
       await runTurnEvent('repair-complete', root)
@@ -193,11 +200,19 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
       expect(state.state?.turn.recovery?.status).toBe(attempt === 3 ? 'needs_human_attention' : 'pending')
     }
     const final = await runTurnEvent('preflight', root, input(), 'claude-code', deps)
-    expect(final.allowed).toBe(false)
+    // The unattended/delimited repair budget stays exhausted. It cannot prevent
+    // the owner from asking the foreground agent to implement a new correction.
+    expect(final.allowed).toBe(true)
+    expect(final.context).toMatchObject({ permissions: { diagnostics: true, editing: true } })
+    expect(final.state?.turn.status).toBe('active')
+    expect(final.state?.turn.phase).toBe('work')
+    expect(final.projectHealth).toBe('developing')
+    expect((await runTurnEvent('before-mutation', root, { ...input(), tool_name: 'Write', tool_input: { file_path: 'src/card.ts' } })).allowed).toBe(true)
+    expect((await runTurnEvent('repair-start', root, input())).allowed).toBe(false)
     expect(final.state?.turn.recovery?.attempts).toBe(3)
   }, 30_000)
 
-  it('valida saves com debounce somente após opt-in explícito, sem alterar HEAD', async () => {
+  it('valida saves com debounce em background, sem alterar HEAD', async () => {
     writeJson(path.join(root, '.supremo/lifecycle.json'), { validation_mode: 'background' })
     await runTurnEvent('preflight', root, input(), 'claude-code', deps)
     source('export const ticket = 42;')

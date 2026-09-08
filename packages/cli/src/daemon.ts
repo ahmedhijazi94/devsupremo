@@ -21,7 +21,9 @@ import {
   type Changeset,
   type CommitReader,
 } from './changeset'
+import { readRestoreReceipts, recoverRestoreReceipt, writeRestoreReceipt, type RestoreReceipt } from './restore-outbox'
 import { resolveKeychain } from './keychain'
+import { readDeviceSecret, deviceIssuer } from './device-identity'
 import { startDatabaseWorker } from './database-queue'
 import { runDatabaseDirect } from './database'
 import { startFeedbackWorker } from './feedback'
@@ -109,6 +111,9 @@ export interface PublishInput {
 }
 
 export interface PendingRestore {
+  claimToken: string
+  leaseExpiresAt: string
+  environment: 'development'
   restoreRequestId: string
   targetCheckpointId: string
   targetSummary: string
@@ -128,11 +133,16 @@ export interface DaemonHttp {
   reportRestoreApplied(input: {
     deviceSecret: string
     restoreRequestId: string
+    projectId: string
+    claimToken: string
+    resultCommitSha: string | null
     resultCheckpointId: string | null
   }): Promise<void>
   reportRestoreFailed(input: {
     deviceSecret: string
     restoreRequestId: string
+    projectId: string
+    claimToken: string
     error: string
   }): Promise<void>
   /**
@@ -281,13 +291,13 @@ export async function processCheckpoint(
 export const SYNC_STATUS_TIMEOUT_MS = 2000
 
 export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
-  const base = apiBaseUrl.replace(/\/$/, '')
+  const base = deviceIssuer(apiBaseUrl)
   // CodeQL js/file-access-to-http sinaliza dado de arquivo (o conteúdo dos
   // arquivos do changeset, lido por defaultCommitReader em changeset.ts)
   // chegando a um fetch(). Isso é o PROPÓSITO desta função: enviar o
   // checkpoint (código do PRÓPRIO usuário) ao backend do Supremo que ele
-  // mesmo configurou (apiBaseUrl vem de .supremo/project.json, escrito pelo
-  // bootstrap — nunca de input não confiável), não uma exfiltração acidental
+  // mesmo configurou (apiBaseUrl pode vir do checkout, mas a credencial é liberada somente
+  // quando sua origem corresponde ao issuer persistido no keychain), não uma exfiltração acidental
   // de um arquivo sensível não relacionado. Suprimido nas 2 linhas exatas
   // abaixo com esta justificativa — a regra e o job continuam ativos para
   // qualquer outro fluxo novo.
@@ -331,26 +341,18 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
       return { prNumber: data.prNumber ?? 0 }
     },
     pollRestores: async (input) => {
-      const data = (await postJson('/api/checkpoint/restore-poll', input)) as {
+      const data = (await postJson('/api/checkpoint/restore-poll', input, SYNC_STATUS_TIMEOUT_MS)) as {
         requests?: PendingRestore[]
       }
       return data.requests ?? []
     },
     reportRestoreApplied: async (input) => {
-      await postJson('/api/checkpoint/restore-report', {
-        deviceSecret: input.deviceSecret,
-        restoreRequestId: input.restoreRequestId,
-        status: 'applied',
-        resultCheckpointId: input.resultCheckpointId,
-      })
+      const data = await postJson('/api/checkpoint/restore-report', { ...input, status: 'applied' }, SYNC_STATUS_TIMEOUT_MS) as { ok?: boolean }
+      if (data.ok !== true) throw new NetworkError('restore_not_acknowledged')
     },
     reportRestoreFailed: async (input) => {
-      await postJson('/api/checkpoint/restore-report', {
-        deviceSecret: input.deviceSecret,
-        restoreRequestId: input.restoreRequestId,
-        status: 'failed',
-        error: input.error,
-      })
+      const data = await postJson('/api/checkpoint/restore-report', { ...input, status: 'failed' }, SYNC_STATUS_TIMEOUT_MS) as { ok?: boolean }
+      if (data.ok !== true) throw new NetworkError('restore_not_acknowledged')
     },
     syncStatus: async (input) => {
       const data = (await postJson(
@@ -576,70 +578,82 @@ function startLocalReportWorker(config: DaemonConfig): () => void {
   return () => { stopped = true; if (timer) clearTimeout(timer) }
 }
 
-/**
- * Consulta e aplica pedidos de "Restaurar" (v3.1 finalização). Roda ANTES da
- * fila de checkpoints normais: se um restore criar o checkpoint "E", ele já
- * entra na fila a tempo de ser publicado nesta mesma passada. NUNCA falha
- * silenciosamente — todo pedido reivindicado termina 'applied' ou 'failed' no
- * backend, mesmo quando o alvo não existe no histórico local desta máquina.
- *
- * `http`/`deps` são injetáveis (testáveis sem rede/git real); em produção
- * `drainOnce` chama sem eles e usa os adapters reais.
- */
+/** Persistent restore receipts decouple local application from delivery of ACKs. */
 export async function processRestores(
   config: DaemonConfig,
   overrides: { http?: DaemonHttp; deps?: RestoreDeps } = {},
 ): Promise<number> {
-  const active = readJson(path.join(config.cwd, TURN_DIR, 'state.json')) as { turn?: { status?: string } } | null
-  if (active?.turn?.status === 'active') return 0
   const secret = config.getSecret()
   if (!secret) return 0
-
   const http = overrides.http ?? defaultDaemonHttp(config.apiBaseUrl)
-  let pending: Awaited<ReturnType<DaemonHttp['pollRestores']>>
-  try {
-    pending = await http.pollRestores({ deviceSecret: secret, projectId: config.projectId })
-  } catch {
-    return 0 // offline: tenta de novo no próximo tick, sem derrubar o daemon
-  }
-  if (pending.length === 0) return 0
-
   const deps = overrides.deps ?? defaultRestoreDeps(defaultCheckpointDeps(config.cwd), config.cwd)
-  for (const req of pending) {
+  const receipts = readRestoreReceipts(config.cwd, config.projectId)
+  const report = async (receipt: RestoreReceipt): Promise<boolean> => {
+    const identity = { deviceSecret: secret, projectId: config.projectId,
+      restoreRequestId: receipt.requestId, claimToken: receipt.claimToken }
     try {
-      const outcome = await withTurnLock(config.cwd, () => {
-        // Polling crosses a network boundary. A new turn may have claimed the workspace meanwhile.
+      if (receipt.status === 'applied') await http.reportRestoreApplied({ ...identity,
+        resultCheckpointId: receipt.resultCommitSha ? receipt.resultCheckpointId : null,
+        resultCommitSha: receipt.resultCommitSha })
+      else if (receipt.status === 'failed') await http.reportRestoreFailed({ ...identity, error: receipt.error! })
+      else return false
+      receipt.acknowledged = true
+      writeRestoreReceipt(config.cwd, receipt)
+      return true
+    } catch {
+      // Remain in the outbox. Offline ACK is never converted into a failed restore.
+      return false
+    }
+  }
+  for (let receipt of receipts) {
+    if (receipt.acknowledged) continue
+    if (receipt.status === 'applying') {
+      receipt = await withTurnLock(config.cwd, () => recoverRestoreReceipt(receipt, deps))
+      writeRestoreReceipt(config.cwd, receipt)
+    }
+    if (!await report(receipt)) return 0
+  }
+  const active = readJson(path.join(config.cwd, TURN_DIR, 'state.json')) as { turn?: { status?: string } } | null
+  if (active?.turn?.status === 'active') return 0
+  let pending: PendingRestore[]
+  try { pending = await http.pollRestores({ deviceSecret: secret, projectId: config.projectId }) }
+  catch { return 0 }
+  for (const req of pending) {
+    if (!req.claimToken || req.environment !== 'development' ||
+      !(Date.parse(req.leaseExpiresAt) > Date.now() + 60_000)) continue
+    const old = readRestoreReceipts(config.cwd, config.projectId).find((r) => r.requestId === req.restoreRequestId)
+    if (old) { await report(old); continue }
+    let receipt: RestoreReceipt = { projectId: config.projectId, requestId: req.restoreRequestId,
+      claimToken: req.claimToken, targetCheckpointId: req.targetCheckpointId, resultCheckpointId: deps.uuid(),
+      status: 'applying', resultCommitSha: null, error: null, acknowledged: false }
+    try {
+      const delivery = await withTurnLock(config.cwd, () => {
+        const previous = readRestoreReceipts(config.cwd, config.projectId).find((r) => r.requestId === req.restoreRequestId)
+        if (previous) return { receipt: recoverRestoreReceipt(previous, deps) }
         const latest = readJson(path.join(config.cwd, TURN_DIR, 'state.json')) as { turn?: { status?: string } } | null
         if (latest?.turn?.status === 'active' || readJson(path.join(config.cwd, TURN_DIR, 'mutation-lease.json')) !== null) {
-          throw new Error('Workspace ocupado por um turno; restauração não aplicada.')
+          throw new Error('Workspace ocupado')
         }
-        return applyRestore(req.targetCheckpointId, req.targetSummary, config.projectId, deps)
+        // Persist before changing files. A restarted daemon consults this receipt first.
+        writeRestoreReceipt(config.cwd, receipt)
+        return { outcome: applyRestore(req.targetCheckpointId, req.targetSummary, config.projectId, deps,
+          { resultCheckpointId: receipt.resultCheckpointId, environment: req.environment, requestId: req.restoreRequestId }) }
       })
-      // Sinaliza (v3-12) — nunca falha o restore por causa disto: a migration
-      // já foi preservada como está (nunca reescrita), isto é só visibilidade
-      // pra um caso que nunca deveria acontecer (migration histórica editada
-      // in-place em algum checkpoint).
+      if ('receipt' in delivery) { receipt = delivery.receipt; await report(receipt); continue }
+      const outcome = delivery.outcome
       if (outcome.migrationConflicts.length > 0) {
-        console.error(
-          `⚠ restore: ${outcome.migrationConflicts.length} migration(s) com conteúdo divergente entre o estado atual e o alvo do restore — preservada(s) como está(ão) (nunca reescrita(s)): ${outcome.migrationConflicts.join(', ')}`,
-        )
+        console.error(`Restauração preservou migrations divergentes: ${outcome.migrationConflicts.join(', ')}`)
       }
-      await http.reportRestoreApplied({
-        deviceSecret: secret,
-        restoreRequestId: req.restoreRequestId,
-        resultCheckpointId: outcome.applied ? (outcome.record?.checkpointId ?? null) : null,
-      })
+      receipt = { ...receipt, status: 'applied', resultCommitSha: outcome.record?.commitSha ?? null }
     } catch (err) {
-      const message =
-        err instanceof RestoreTargetNotFoundLocallyError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : 'falha desconhecida ao aplicar restore'
-      await http
-        .reportRestoreFailed({ deviceSecret: secret, restoreRequestId: req.restoreRequestId, error: message })
-        .catch(() => {})
+      const recovered = recoverRestoreReceipt(receipt, deps)
+      receipt = recovered.status === 'applied' ? recovered : { ...receipt, status: 'failed',
+        error: err instanceof RestoreTargetNotFoundLocallyError ? err.message :
+          err instanceof Error && err.message === 'Workspace ocupado' ? 'Workspace ocupado por um turno; restauração não aplicada.' :
+            'Restauração interrompida. Trabalho preservado; solicite novamente.' }
     }
+    writeRestoreReceipt(config.cwd, receipt)
+    await report(receipt)
   }
   return pending.length
 }
@@ -723,14 +737,15 @@ export async function runDaemonLoop(
     projectId: config.projectId,
     apiBaseUrl: config.apiBaseUrl,
     cwd,
-    getSecret: () => keychain.get(config.projectId),
+    getSecret: () => readDeviceSecret(keychain, config.projectId, config.apiBaseUrl),
   }
   const idleMs = opts.idleMs ?? 3000
   let stopped = false
+  let authorityUnavailable = false
   // Independente do upload/CI/backoff: o banco responde mesmo com checkpoint pendente.
   const stopLocalValidationWorker = startLocalValidationWorker(cwd)
   const stopLocalReportWorker = startLocalReportWorker(daemonConfig)
-  const stopDatabaseWorker = startDatabaseWorker(cwd, (operation) => runDatabaseDirect(operation, cwd))
+  const stopDatabaseWorker = startDatabaseWorker(cwd, (operation, options) => runDatabaseDirect(operation, cwd, options))
   const stopFeedbackWorker = startFeedbackWorker(daemonConfig)
   process.on('SIGTERM', () => {
     stopped = true
@@ -746,7 +761,15 @@ export async function runDaemonLoop(
     } catch {
       /* sem fila ainda */
     }
-    await drainOnce(daemonConfig)
+    try {
+      await drainOnce(daemonConfig)
+      authorityUnavailable = false
+    } catch {
+      // A missing/legacy/mismatched private identity must stop network work,
+      // not terminate the supervisor or lose its local database/preview channels.
+      if (!authorityUnavailable) process.stderr.write('[daemon] Identidade ou backend indisponível; confirme a origem e a autorização. Checkpoints locais preservados.\n')
+      authorityUnavailable = true
+    }
     try {
       fs.rmSync(path.join(cwd, NOTIFY_FILE))
     } catch {

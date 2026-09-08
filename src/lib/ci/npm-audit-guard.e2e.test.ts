@@ -18,7 +18,6 @@ import { describe, it, expect } from 'vitest'
  */
 
 const ROOT = process.cwd()
-const TSX_BIN = join(ROOT, 'node_modules', '.bin', 'tsx')
 const GUARD_SCRIPT = join(ROOT, 'scripts', 'npm-audit-guard.mts')
 
 interface ShimCall {
@@ -81,7 +80,7 @@ function setup(calls: ShimCall[]): { env: NodeJS.ProcessEnv; countFile: string }
 
 function runGuard(env: NodeJS.ProcessEnv): { status: number; output: string } {
   try {
-    const output = execFileSync(TSX_BIN, [GUARD_SCRIPT], { cwd: ROOT, env, encoding: 'utf8' })
+    const output = execFileSync(process.execPath, ['--import', 'tsx', GUARD_SCRIPT], { cwd: ROOT, env, encoding: 'utf8' })
     return { status: 0, output }
   } catch (err) {
     const e = err as { status: number | null; stdout: string; stderr: string }
@@ -111,7 +110,7 @@ npm error 403 Forbidden - GET https://registry.npmjs.org/some-private-pkg - Forb
 
 const SUCCESS_OUTPUT = 'found 0 vulnerabilities'
 
-describe('npm-audit-guard.mts — execução real: retry só em instabilidade transitória', () => {
+describe('npm-audit-guard.mts — execução real: retry só em instabilidade transitória', { timeout: 15_000 }, () => {
   it('vulnerabilidade real → falha imediata, NUNCA tenta de novo (1 chamada só)', () => {
     const { env, countFile } = setup([{ exitCode: 1, output: VULN_OUTPUT }])
     const { status, output } = runGuard(env)

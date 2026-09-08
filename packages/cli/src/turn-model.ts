@@ -101,7 +101,7 @@ export interface TurnContext {
   securityState: 'safe' | 'unsafe' | 'unknown'
   integrationMode: IntegrationMode
   reconciliation: { status: 'fresh' | 'offline' | 'invalid'; observedAt: string }
-  developmentPolicy?: { validation: 'on_request' | 'background'; previousFailures: 'none' | 'advisory' | 'blocking' }
+  developmentPolicy?: { validation: 'on_request' | 'background_adaptive'; previousFailures: 'none' | 'advisory' | 'blocking' }
 }
 
 export const turnStateSchema = z.object({
@@ -246,8 +246,8 @@ export function reconcileRecovery(input: ReconcileRecoveryInput): RecoveryState 
   return linked
 }
 
-/** Unresolved QA is visible without turning ordinary editing into mandatory recovery.
- * Safety/authority findings still require a verified repair before unrelated work. */
+/** Classifies failures requiring restricted repair; foreground permissions are
+ * derived independently from fresh development authority. */
 export function blocksDevelopment(recovery: RecoveryState | null): boolean {
   return recovery?.required === true && recovery.failures.some((failure) =>
     ['security', 'rls', 'migration', 'environment', 'external_dependency', 'unknown'].includes(failure.type))
@@ -415,7 +415,11 @@ export function deriveProjectHealth(input: {
   securityState: TurnContext['securityState']
   remoteStatus: TurnContext['reconciliation']['status']
   activeTurn: boolean
+  managedRepair?: boolean
 }): ProjectHealth {
+  if (input.activeTurn && input.remoteStatus === 'fresh' && input.workspace.environment === 'development') {
+    return input.managedRepair && input.recovery?.status === 'repairing' ? 'repairing' : 'developing'
+  }
   if (input.securityState === 'unsafe' || input.remoteStatus === 'invalid') return 'blocked'
   const matching = input.validations.filter((evidence) => validationEvidenceMatches(evidence, input.workspace))
   if (input.recovery?.required) {
@@ -440,7 +444,7 @@ export function deriveProjectHealth(input: {
   return 'healthy'
 }
 
-/** Minimal executable transitions; a host cannot skip preflight or open recovery. */
+/** Transitions within an explicitly delimited repair, not foreground authorization. */
 export function transitionTurn(state: TurnState, phase: TurnPhase, now: string): TurnState {
   const allowed: Record<TurnPhase, readonly TurnPhase[]> = {
     preflight: ['work', 'recovery'], work: ['background_validation', 'postflight'],

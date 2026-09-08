@@ -1,0 +1,32 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import AppPage from './page'
+
+const boundary = vi.hoisted(() => ({ getUser: vi.fn(), from: vi.fn(), upsert: vi.fn() }))
+vi.mock('@/lib/supabase/server', () => ({ createClient: async () => ({ auth: boundary, from: boundary.from }) }))
+vi.mock('next/navigation', () => ({ redirect: (url: string): never => { throw new Error(`redirect:${url}`) } }))
+
+beforeEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+  boundary.from.mockReturnValue({ upsert: boundary.upsert })
+  boundary.upsert.mockResolvedValue({ error: null })
+})
+
+describe('fronteira da área privada', () => {
+  it('nega a entrada sem sessão antes de acessar dados', async () => {
+    boundary.getUser.mockResolvedValue({ data: { user: null } })
+    await expect(AppPage()).rejects.toThrow('redirect:/login')
+    expect(boundary.from).not.toHaveBeenCalled()
+  })
+  it.each(['ana@example.invalid', undefined])('usa somente a identidade autenticada no profile (%s)', async (email) => {
+    boundary.getUser.mockResolvedValue({ data: { user: { id: 'authenticated-user', email } } })
+    render(await AppPage())
+    expect(screen.getByRole('main')).toBeVisible()
+    expect(boundary.from).toHaveBeenCalledWith('profiles')
+    expect(boundary.upsert).toHaveBeenCalledWith(
+      { user_id: 'authenticated-user', display_name: email ?? 'sem nome' },
+      { onConflict: 'user_id' },
+    )
+  })
+})

@@ -47,7 +47,7 @@ export function DeleteProjectDialog({
         setIsOpen(false)
         router.push('/dashboard')
         router.refresh()
-      } catch (err) {
+      } catch {
         toast.error('Erro ao excluir projeto.')
       }
     })

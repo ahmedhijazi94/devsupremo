@@ -60,6 +60,11 @@ export interface Database {
           name: string
           description: string | null
           is_secret: boolean
+          target: 'supabase' | 'vercel' | null
+          environment: 'development' | 'preview' | 'production' | null
+          target_ref: string | null
+          target_account_id: string | null
+          updated_at: string
           status: 'pending' | 'fulfilled'
           created_at: string
           fulfilled_at: string | null
@@ -71,6 +76,11 @@ export interface Database {
           name: string
           description?: string | null
           is_secret?: boolean
+          target?: 'supabase' | 'vercel' | null
+          environment?: 'development' | 'preview' | 'production' | null
+          target_ref?: string | null
+          target_account_id?: string | null
+          updated_at?: string
           status?: 'pending' | 'fulfilled'
           created_at?: string
           fulfilled_at?: string | null

@@ -10,7 +10,7 @@ import {
   selectReconcilable,
 } from './reconcile'
 import { parseWebhookForReconcile } from './webhook'
-import { listPendingIntegrationBranchCleanups, reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
+import { reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
 import { humanCheckpointStatus } from '@/lib/checkpoint/restore'
 import type { MergeGateway } from './merge-controller'
 import type { CheckRun } from './merge-policy'
@@ -136,6 +136,7 @@ describe('reconcileProjectPr — caminho único, re-lê pelo gateway', () => {
         state: 'open',
       })),
       getChecks: vi.fn(async () => ({ checks: green, headSha: SHA })),
+      verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
@@ -162,7 +163,7 @@ describe('reconcileProjectPr — caminho único, re-lê pelo gateway', () => {
     expect(events).toContain('reconciliation_result')
   })
 
-  it('modo native não mescla ele mesmo — habilita auto-merge nativo', async () => {
+  it('modo native também fica vinculado ao SHA verificado', async () => {
     const gateway = gw()
     await reconcileProjectPr({
       gateway,
@@ -170,8 +171,8 @@ describe('reconcileProjectPr — caminho único, re-lê pelo gateway', () => {
       requiredChecks: ['G'],
       mode: 'native',
     })
-    expect(gateway.enableNativeAutoMerge).toHaveBeenCalled()
-    expect(gateway.merge).not.toHaveBeenCalled()
+    expect(gateway.enableNativeAutoMerge).not.toHaveBeenCalled()
+    expect(gateway.merge).toHaveBeenCalledWith(1, 'a'.repeat(40))
   })
 })
 
@@ -197,163 +198,43 @@ describe('isManagedIntegrationBranch — namespace gerenciado, nunca a branch pa
   })
 })
 
-describe('cleanupIntegrationBranchIfMerged — só apaga após confirmar DE NOVO no GitHub (v3-13)', () => {
-  function gwWithPr(pr: { headRef: string; merged: boolean }): MergeGateway & {
-    deleteBranch: ReturnType<typeof vi.fn>
-    getPullRequest: ReturnType<typeof vi.fn>
-  } {
-    return {
-      getPullRequest: vi.fn(async () => ({
-        headSha: 'sha',
-        headRef: pr.headRef,
-        nodeId: 'n',
-        merged: pr.merged,
-        state: pr.merged ? 'closed' : 'open',
-      })),
-      getChecks: vi.fn(async () => ({ checks: [], headSha: 'sha' })),
-      hasRequiredChecks: vi.fn(async () => true),
-      allowAutoMerge: vi.fn(async () => true),
-      enableNativeAutoMerge: vi.fn(async () => true),
-      merge: vi.fn(async () => ({ sha: 'sha' })),
-      deleteBranch: vi.fn(async () => {}),
-    }
-  }
-
-  // 1. merged → branch removida.
-  it('PR confirmada merged (namespace gerenciado) → apaga a branch', async () => {
-    const gateway = gwWithPr({ headRef: 'supremo/cp-abc123', merged: true })
-    const out = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
-    expect(gateway.deleteBranch).toHaveBeenCalledWith('supremo/cp-abc123')
-    expect(out).toEqual({
-      attempted: true,
-      deleted: true,
-      branch: 'supremo/cp-abc123',
-      reason: expect.stringContaining('removida'),
-    })
-  })
-
-  // 2. open → preservada (nem chega a checar namespace — já para na releitura).
-  it('PR ainda aberta (merged: false) → NUNCA apaga, branch preservada', async () => {
-    const gateway = gwWithPr({ headRef: 'supremo/cp-abc123', merged: false })
-    const out = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
-    expect(gateway.deleteBranch).not.toHaveBeenCalled()
-    expect(out.attempted).toBe(false)
-    expect(out.deleted).toBe(false)
-    expect(out.branch).toBe('supremo/cp-abc123')
-  })
-
-  // 3. closed sem merge → preservada (mesmo sinal que "open" pro gateway:
-  // merged permanece false; quem chama só invoca isto quando result.merged
-  // é true, então uma PR fechada-sem-merge nunca chega aqui na prática —
-  // mas a função em si, isolada, tem que se recusar de qualquer jeito).
-  it('PR fechada SEM merge (merged: false, state: closed) → NUNCA apaga', async () => {
-    const gateway: MergeGateway = {
-      getPullRequest: vi.fn(async () => ({
-        headSha: 'sha',
-        headRef: 'supremo/cp-abc123',
-        nodeId: 'n',
-        merged: false,
-        state: 'closed', // fechada, mas SEM merge — o caso que a regra exige preservar
-      })),
-      getChecks: vi.fn(async () => ({ checks: [], headSha: 'sha' })),
-      hasRequiredChecks: vi.fn(async () => true),
-      allowAutoMerge: vi.fn(async () => true),
-      enableNativeAutoMerge: vi.fn(async () => true),
-      merge: vi.fn(async () => ({ sha: 'sha' })),
-      deleteBranch: vi.fn(async () => {}),
-    }
-    const out = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
-    expect(gateway.deleteBranch).not.toHaveBeenCalled()
-    expect(out.attempted).toBe(false)
-  })
-
-  // 4. branch fora de supremo/ → nunca removida (mesmo que a PR esteja merged).
-  it('PR merged mas headRef FORA do namespace supremo/ → NUNCA apaga (nunca toca PR de terceiro/Dependabot)', async () => {
-    const gateway = gwWithPr({ headRef: 'dependabot/npm_and_yarn/lodash-4.17.21', merged: true })
-    const out = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
-    expect(gateway.deleteBranch).not.toHaveBeenCalled()
-    expect(out.attempted).toBe(false)
-    expect(out.deleted).toBe(false)
-    expect(out.branch).toBe('dependabot/npm_and_yarn/lodash-4.17.21')
-  })
-
-  // 5. main → impossível remover, mesmo que headRef seja literalmente a branch padrão.
-  it('PR merged com headRef == defaultBranch (hipotético) → IMPOSSÍVEL apagar, main nunca é candidata', async () => {
-    const gateway = gwWithPr({ headRef: 'main', merged: true })
-    const out = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
-    expect(gateway.deleteBranch).not.toHaveBeenCalled()
-    expect(out.attempted).toBe(false)
-  })
-
-  // 6. branch já inexistente → idempotente (deleteBranch real já é silencioso
-  // nesse caso — ver mcp/github.ts; aqui provamos que o CALLER trata sucesso
-  // igual não importa quantas vezes rodar).
-  it('branch já apagada (delete não lança, idempotente por natureza) → sucesso, repetir de novo também é sucesso', async () => {
-    const gateway = gwWithPr({ headRef: 'supremo/cp-abc123', merged: true })
-    const first = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
-    const second = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
-    expect(first.deleted).toBe(true)
-    expect(second.deleted).toBe(true) // repetir não é erro — idempotente
-    expect(gateway.deleteBranch).toHaveBeenCalledTimes(2)
-  })
-
-  // 7. erro temporário do GitHub → nunca lança (merge/checkpoint, já
-  // persistidos por quem chama ANTES disto, continuam intactos), e repetir
-  // depois (webhook de novo, ou o fallback) tenta de novo normalmente.
-  it('erro temporário na releitura da PR → nunca lança, sinaliza fail-safe, repetir depois funciona normalmente', async () => {
-    let shouldFail = true
+describe('cleanup preserves refs without atomic compare-and-swap', () => {
+  it('a delayed merge-A cleanup never deletes B published on the same ref', async () => {
+    const ref = 'supremo/cp-abc123'
+    let liveSha = 'a'.repeat(40)
     const gateway: MergeGateway = {
       getPullRequest: vi.fn(async () => {
-        if (shouldFail) throw new Error('ETIMEDOUT: GitHub API indisponível (transitório)')
-        return { headSha: 'sha', headRef: 'supremo/cp-abc123', nodeId: 'n', merged: true, state: 'closed' }
+        liveSha = 'b'.repeat(40) // concurrent publication and a new open PR
+        return { headSha: 'a'.repeat(40), headRef: ref, nodeId: 'A', merged: true, state: 'closed' }
       }),
-      getChecks: vi.fn(async () => ({ checks: [], headSha: 'sha' })),
-      hasRequiredChecks: vi.fn(async () => true),
-      allowAutoMerge: vi.fn(async () => true),
-      enableNativeAutoMerge: vi.fn(async () => true),
-      merge: vi.fn(async () => ({ sha: 'sha' })),
-      deleteBranch: vi.fn(async () => {}),
+      getChecks: vi.fn(async () => ({ checks: [], headSha: liveSha })),
+      verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
+      hasRequiredChecks: vi.fn(async () => true), allowAutoMerge: vi.fn(async () => true),
+      enableNativeAutoMerge: vi.fn(async () => true), merge: vi.fn(async () => ({ sha: liveSha })),
+      deleteBranch: vi.fn(async () => { liveSha = '' }),
     }
+    const first = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
+    const retry = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
+    expect(first.deleted).toBe(false)
+    expect(retry.deleted).toBe(false)
+    expect(gateway.deleteBranch).not.toHaveBeenCalled()
+    expect(liveSha).toBe('b'.repeat(40))
+  })
+  it.each([{ merged: false, headRef: 'supremo/cp-a' }, { merged: true, headRef: 'main' },
+    { merged: true, headRef: 'third-party/ref' }])('also preserves $headRef (merged=$merged)', async (pr) => {
+    const gateway = { getPullRequest: vi.fn(async () => ({ ...pr, headSha: 'sha', nodeId: 'n', state: 'closed' })),
+      deleteBranch: vi.fn() } as unknown as MergeGateway
+    const result = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 1, defaultBranch: 'main' })
+    expect(result).toMatchObject({ attempted: false, deleted: false })
+    expect(gateway.deleteBranch).not.toHaveBeenCalled()
+  })
+  it('GitHub lookup failure remains harmless to the previously persisted merge', async () => {
     const events: string[] = []
-    const failedAttempt = await cleanupIntegrationBranchIfMerged(
-      gateway,
-      { prNumber: 9, defaultBranch: 'main' },
-      { event: (n) => events.push(n) },
-    )
-    expect(failedAttempt.deleted).toBe(false)
-    expect(failedAttempt.attempted).toBe(true)
+    const gateway = { getPullRequest: vi.fn(async () => { throw new Error('offline') }), deleteBranch: vi.fn() } as unknown as MergeGateway
+    await expect(cleanupIntegrationBranchIfMerged(gateway, { prNumber: 1, defaultBranch: 'main' },
+      { event: (name) => events.push(name) })).resolves.toMatchObject({ deleted: false })
     expect(events).toContain('integration_branch_cleanup_error')
     expect(gateway.deleteBranch).not.toHaveBeenCalled()
-
-    // A "próxima reconciliação" (webhook novo ou fallback) — o GitHub já não
-    // está mais indisponível — repete e desta vez funciona.
-    shouldFail = false
-    const retried = await cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' })
-    expect(retried.deleted).toBe(true)
-    expect(gateway.deleteBranch).toHaveBeenCalledWith('supremo/cp-abc123')
-  })
-
-  it('erro no PRÓPRIO deleteBranch (não na releitura) → também nunca lança, mesmo fail-safe', async () => {
-    const gateway: MergeGateway = {
-      getPullRequest: vi.fn(async () => ({
-        headSha: 'sha',
-        headRef: 'supremo/cp-abc123',
-        nodeId: 'n',
-        merged: true,
-        state: 'closed',
-      })),
-      getChecks: vi.fn(async () => ({ checks: [], headSha: 'sha' })),
-      hasRequiredChecks: vi.fn(async () => true),
-      allowAutoMerge: vi.fn(async () => true),
-      enableNativeAutoMerge: vi.fn(async () => true),
-      merge: vi.fn(async () => ({ sha: 'sha' })),
-      deleteBranch: vi.fn(async () => {
-        throw new Error('403: rate limited (transitório)')
-      }),
-    }
-    await expect(
-      cleanupIntegrationBranchIfMerged(gateway, { prNumber: 9, defaultBranch: 'main' }),
-    ).resolves.toMatchObject({ attempted: true, deleted: false })
   })
 })
 
@@ -516,6 +397,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
         rows.push(newer!)
         return { headSha: observedSha, checks: [{ name: gate, status: 'completed', conclusion: 'failure' }] }
       },
+      verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true), enableNativeAutoMerge: vi.fn(async () => true),
       merge: vi.fn(async () => ({ sha: 'must-not-merge' })), deleteBranch: vi.fn(async () => {}),
@@ -555,6 +437,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
         state: 'open',
       }),
       getChecks: async () => ({ checks: green, headSha: FINAL_HEAD_SHA }),
+      verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true),
@@ -594,6 +477,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
         state: merged ? 'closed' : 'open',
       }),
       getChecks: async () => ({ checks: green, headSha: FINAL_HEAD_SHA }),
+      verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       allowAutoMerge: async () => true,
       enableNativeAutoMerge: async () => true,
       merge: async () => {
@@ -669,291 +553,5 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
     expect(rows[0]!.push_status).toBe('integrated')
     // O outro, ainda 'published', reconcilia normalmente.
     expect(rows[1]!.push_status).toBe('integrated')
-  })
-})
-
-/**
- * Sequência REAL de ponta a ponta (v3-13, requisito 7 do pedido): mesmo
- * quando o cleanup da branch falha por um erro transitório do GitHub, o
- * merge JÁ mesclou e o checkpoint JÁ reconciliou pra Integrado — nessa
- * ordem exata, igual à fiação real do webhook/reconcile route
- * (reconcileProjectPr → reconcileCheckpointsForPr → cleanup, cleanup por
- * ÚLTIMO e sempre best-effort).
- */
-describe('sequência completa: merge + checkpoint + cleanup (v3-13, requisito 7) — falha no cleanup nunca contamina o que já foi persistido', () => {
-  const PROJECT_ID = 'proj-teste-v3-13'
-  const PR_NUMBER = 42
-
-  function seedRow(): { id: string; project_id: string; pr_number: number; push_status: string; integration_status: string | null; commit_sha: string; published_sha: string | null; created_at: string } {
-    return {
-      id: 'checkpoint-v3-13',
-      project_id: PROJECT_ID,
-      pr_number: PR_NUMBER,
-      push_status: 'published',
-      integration_status: 'ci_running',
-      commit_sha: 'local-sha',
-      published_sha: 'published-sha',
-      created_at: '2026-01-01T00:00:00.000Z',
-    }
-  }
-
-  it('cleanup falha (GitHub indisponível) → merge JÁ aconteceu e checkpoint JÁ reconciliou pra Integrado, intactos; repetir o cleanup depois funciona', async () => {
-    const rows = [seedRow()]
-    const client = fakeCheckpointsClient(rows)
-
-    let deleteAttempts = 0
-    const SHA = 'final-sha'
-    const gateway: MergeGateway = {
-      getPullRequest: vi.fn(async () => ({
-        headSha: SHA,
-        headRef: 'supremo/cp-final',
-        nodeId: 'n',
-        merged: true, // PR já mesclada — reconcileMerge retorna 'merged' de cara
-        state: 'closed',
-      })),
-      getChecks: vi.fn(async () => ({ checks: [], headSha: SHA })),
-      hasRequiredChecks: vi.fn(async () => true),
-      allowAutoMerge: vi.fn(async () => true),
-      enableNativeAutoMerge: vi.fn(async () => true),
-      merge: vi.fn(async () => ({ sha: SHA })),
-      deleteBranch: vi.fn(async () => {
-        deleteAttempts += 1
-        if (deleteAttempts === 1) throw new Error('502: GitHub indisponível (transitório)')
-        // 2ª tentativa (a "próxima reconciliação"): sucesso.
-      }),
-    }
-
-    // 1) reconcileProjectPr — o mesmo caminho único do webhook/fallback.
-    const result = await reconcileProjectPr({
-      gateway,
-      prNumber: PR_NUMBER,
-      requiredChecks: [],
-      mode: 'supremo_managed',
-    })
-    expect(result.merged).toBe(true)
-    expect(result.state).toBe('merged')
-
-    // 2) reconcileCheckpointsForPr — persistido ANTES do cleanup, exatamente
-    // como a fiação real do route.
-    await reconcileCheckpointsForPr(
-      client,
-      { projectId: PROJECT_ID, prNumber: PR_NUMBER },
-      checkpointStatusFromReconcile(result),
-    )
-    expect(rows[0]!.push_status).toBe('integrated')
-    expect(rows[0]!.integration_status).toBe('merged')
-
-    // 3) cleanup — falha (transitório). NUNCA lança, e o que já foi
-    // persistido nos passos 1-2 continua exatamente como estava.
-    const cleanupResult = await cleanupIntegrationBranchIfMerged(gateway, {
-      prNumber: PR_NUMBER,
-      defaultBranch: 'main',
-    })
-    expect(cleanupResult.deleted).toBe(false)
-    expect(rows[0]!.push_status).toBe('integrated') // intacto — cleanup não desfez nada
-    expect(rows[0]!.integration_status).toBe('merged')
-
-    // 4) "a próxima reconciliação" (webhook novo, ou o fallback periódico)
-    // reconcilia de novo — reconcileProjectPr é idempotente (PR já merged,
-    // noop) — e desta vez o cleanup consegue.
-    const secondResult = await reconcileProjectPr({
-      gateway,
-      prNumber: PR_NUMBER,
-      requiredChecks: [],
-      mode: 'supremo_managed',
-    })
-    expect(secondResult.merged).toBe(true) // continua correto, idempotente
-    // PR já estava `merged` desde a 1ª leitura — reconcileMerge nunca chama
-    // `.merge()` de novo pra uma PR já mesclada (noop, ver merge-controller.ts).
-    expect(gateway.merge).not.toHaveBeenCalled()
-
-    const retriedCleanup = await cleanupIntegrationBranchIfMerged(gateway, {
-      prNumber: PR_NUMBER,
-      defaultBranch: 'main',
-    })
-    expect(retriedCleanup.deleted).toBe(true)
-    expect(deleteAttempts).toBe(2)
-
-    // Checkpoint continua Integrado o tempo todo — nunca regrediu por causa
-    // da falha/retry do cleanup.
-    expect(rows[0]!.push_status).toBe('integrated')
-    expect(rows[0]!.integration_status).toBe('merged')
-  })
-})
-
-/**
- * v3-14 — a pergunta que o teste acima (v3-13) NÃO responde: como o sistema,
- * sozinho, ACHA essa PR de novo pra tentar o cleanup uma segunda vez? Chamar
- * `cleanupIntegrationBranchIfMerged` à mão duas vezes prova que a FUNÇÃO é
- * idempotente/retentável — não prova que ela é ALCANÇÁVEL em produção.
- *
- * BUG REAL: uma vez `push_status='integrated'`, o projeto sai de
- * `RECONCILABLE_STATES` (nunca mais selecionado por `listProjectsForReconcile`)
- * e a PR, fechada, não aparece mais via `getOpenPullRequestNumber` — a
- * varredura PRINCIPAL do fallback nunca mais visita essa PR. Este teste
- * simula o CICLO INTEIRO do fallback (`/api/github/reconcile` route) duas
- * vezes, contra o MESMO estado persistido (checkpoints em memória — nenhuma
- * alteração nova no projeto entre as duas execuções), replicando a MESMA
- * sequência de chamadas que o route real faz: reconcile → checkpoint →
- * cleanup (1ª execução, falha) → ... → `listPendingIntegrationBranchCleanups`
- * (a MESMA query que o route roda na 2ª varredura) → cleanup de novo (2ª
- * execução do fallback, sucesso).
- */
-describe('retry do cleanup REALMENTE alcançável pelo fallback existente, sem alteração nova no projeto (v3-14)', () => {
-  const PROJECT_ID = 'proj-teste-v3-14'
-  const PR_NUMBER = 77
-  const BRANCH = 'supremo/cp-v3-14'
-  const SHA = 'sha-v3-14'
-
-  function seedRow(): FakeCheckpointRow {
-    return {
-      id: 'checkpoint-v3-14',
-      project_id: PROJECT_ID,
-      pr_number: PR_NUMBER,
-      push_status: 'published',
-      integration_status: 'ci_running',
-      commit_sha: 'local-sha',
-      published_sha: SHA,
-      created_at: '2026-01-01T00:00:00.000Z',
-      integration_branch: BRANCH,
-    }
-  }
-
-  it('1) merge confirmado; 2) 1ª deleção falha; 3) Integrado intacto; 4) fallback REENCONTRA via listPendingIntegrationBranchCleanups; 5) 2ª deleção passa; 6) branch some', async () => {
-    const rows = [seedRow()]
-    const client = fakeCheckpointsClient(rows)
-
-    let deleteAttempts = 0
-    let branchExistsOnGithub = true
-    const gateway: MergeGateway = {
-      getPullRequest: vi.fn(async () => ({
-        headSha: SHA,
-        headRef: BRANCH,
-        nodeId: 'n',
-        merged: true,
-        state: 'closed',
-      })),
-      getChecks: vi.fn(async () => ({ checks: [], headSha: SHA })),
-      hasRequiredChecks: vi.fn(async () => true),
-      allowAutoMerge: vi.fn(async () => true),
-      enableNativeAutoMerge: vi.fn(async () => true),
-      merge: vi.fn(async () => ({ sha: SHA })),
-      deleteBranch: vi.fn(async (branch: string) => {
-        deleteAttempts += 1
-        if (deleteAttempts === 1) throw new Error('502: GitHub indisponível (transitório)')
-        expect(branch).toBe(BRANCH)
-        branchExistsOnGithub = false
-      }),
-    }
-
-    // ── EXECUÇÃO 1 do fallback/webhook: reconcile → checkpoint → cleanup (falha) ──
-    // 1) merge confirmado.
-    const result = await reconcileProjectPr({
-      gateway,
-      prNumber: PR_NUMBER,
-      requiredChecks: [],
-      mode: 'supremo_managed',
-    })
-    expect(result.merged).toBe(true)
-    expect(result.state).toBe('merged')
-
-    await reconcileCheckpointsForPr(
-      client,
-      { projectId: PROJECT_ID, prNumber: PR_NUMBER },
-      checkpointStatusFromReconcile(result),
-    )
-    // 3) estado funcional já é Integrado neste ponto.
-    expect(rows[0]!.push_status).toBe('integrated')
-    expect(rows[0]!.integration_status).toBe('merged')
-
-    // 2) primeira deleção falha (transitório) — nunca lança.
-    const firstCleanup = await cleanupIntegrationBranchIfMerged(gateway, {
-      prNumber: PR_NUMBER,
-      defaultBranch: 'main',
-    })
-    expect(firstCleanup.deleted).toBe(false)
-    expect(deleteAttempts).toBe(1)
-    expect(branchExistsOnGithub).toBe(true) // branch continua existindo
-
-    // 3) (reforço) o estado funcional continua Integrado depois da falha —
-    // nada regrediu por causa do cleanup ter falhado.
-    expect(rows[0]!.push_status).toBe('integrated')
-    expect(rows[0]!.integration_status).toBe('merged')
-
-    // ── "o tempo passa" — NENHUMA alteração nova no projeto: nenhum checkpoint
-    // novo, nenhum evento de webhook novo. Só o fallback periódico roda de
-    // novo, sozinho, no ciclo seguinte. ──
-
-    // 4) EXECUÇÃO 2 do fallback: a varredura PRINCIPAL (RECONCILABLE_STATES +
-    // getOpenPullRequestNumber) NÃO acharia mais esta PR — ela já está
-    // 'integrated'/fechada. É `listPendingIntegrationBranchCleanups` (a MESMA
-    // query que a rota `/api/github/reconcile` roda na sua segunda varredura)
-    // que precisa reencontrar o cleanup pendente sozinha, sem nenhum ponteiro
-    // externo apontando pra essa PR.
-    const pending = await listPendingIntegrationBranchCleanups(client)
-    expect(pending).toContainEqual({
-      projectId: PROJECT_ID,
-      prNumber: PR_NUMBER,
-      integrationBranch: BRANCH,
-    })
-
-    // O route real itera exatamente assim: pra cada candidato achado,
-    // resolve o projeto e chama cleanupIntegrationBranchIfMerged de novo —
-    // nunca reconcileProjectPr (já sabemos que mergeou pelo checkpoint; a
-    // própria função confirma de novo no GitHub antes de apagar).
-    const candidate = pending.find(
-      (p) => p.projectId === PROJECT_ID && p.prNumber === PR_NUMBER,
-    )
-    expect(candidate).toBeDefined() // a PR É alcançável — não foi perdida
-    const retriedCleanup = await cleanupIntegrationBranchIfMerged(gateway, {
-      prNumber: candidate!.prNumber,
-      defaultBranch: 'main',
-    })
-
-    // 5) segunda deleção passa.
-    expect(retriedCleanup.deleted).toBe(true)
-    expect(deleteAttempts).toBe(2)
-    // 6) branch some (do lado do GitHub, ver o fake acima).
-    expect(branchExistsOnGithub).toBe(false)
-
-    // O checkpoint nunca regrediu de Integrado em NENHUM momento desta
-    // sequência — nem durante a falha, nem durante o retry bem-sucedido.
-    expect(rows[0]!.push_status).toBe('integrated')
-    expect(rows[0]!.integration_status).toBe('merged')
-  })
-
-  it('depois do cleanup ter sucesso, a PR sai naturalmente do próximo `limit()` mais cedo se checkpoints mais novos existirem — nunca é uma fila que precisa de "ack" explícito', async () => {
-    // Prova que o design é best-effort/self-healing: uma vez que a branch já
-    // não existe, chamar cleanup DE NOVO (o próximo ciclo do fallback, se por
-    // acaso ainda encontrar esta PR) continua seguro — deleteBranch real já é
-    // idempotente (ver mcp/github.ts), e aqui simulamos exatamente isso.
-    const rows = [seedRow()]
-    rows[0]!.push_status = 'integrated'
-    rows[0]!.integration_status = 'merged'
-    const client = fakeCheckpointsClient(rows)
-
-    const gateway: MergeGateway = {
-      getPullRequest: vi.fn(async () => ({
-        headSha: SHA,
-        headRef: BRANCH,
-        nodeId: 'n',
-        merged: true,
-        state: 'closed',
-      })),
-      getChecks: vi.fn(async () => ({ checks: [], headSha: SHA })),
-      hasRequiredChecks: vi.fn(async () => true),
-      allowAutoMerge: vi.fn(async () => true),
-      enableNativeAutoMerge: vi.fn(async () => true),
-      merge: vi.fn(async () => ({ sha: SHA })),
-      deleteBranch: vi.fn(async () => {}), // já não existe — silencioso, como o real
-    }
-
-    const pending = await listPendingIntegrationBranchCleanups(client)
-    expect(pending).toHaveLength(1)
-    const outcome = await cleanupIntegrationBranchIfMerged(gateway, {
-      prNumber: pending[0]!.prNumber,
-      defaultBranch: 'main',
-    })
-    expect(outcome.deleted).toBe(true) // idempotente — sucesso mesmo "já apagada"
   })
 })

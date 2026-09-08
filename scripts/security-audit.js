@@ -20,6 +20,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const ts = require('typescript')
 
 const ROOT = path.resolve(__dirname, '..')
 const args = process.argv.slice(2)
@@ -126,9 +127,123 @@ function stripNoise(source) {
 const tsFiles = collectFiles(path.join(ROOT, 'src'), ['.ts', '.tsx'])
   .concat(collectFiles(path.join(ROOT, 'app'), ['.ts', '.tsx']))
   .concat(collectFiles(path.join(ROOT, 'lib'), ['.ts', '.tsx']))
+  .concat(collectFiles(path.join(ROOT, 'components'), ['.ts', '.tsx']))
+  .concat(collectFiles(path.join(ROOT, 'actions'), ['.ts', '.tsx']))
   .filter((file) => !file.endsWith('.test.ts') && !file.endsWith('.test.tsx'))
 
 const sqlFiles = collectFiles(path.join(ROOT, 'supabase'), ['.sql'])
+
+// Tokenize comments and literal/function bodies before checking DDL. This is a
+// bounded contract check for explicit table/FK/index declarations, not a SQL
+// planner: complex DDL remains covered by the disposable database and RLS tests.
+function sqlStatements(source) {
+  let result = '', i = 0
+  while (i < source.length) {
+    const rest = source.slice(i)
+    if (rest.startsWith('--')) { const end = source.indexOf('\n', i); i = end < 0 ? source.length : end; continue }
+    if (rest.startsWith('/*')) {
+      let depth = 1; i += 2
+      while (i < source.length && depth) {
+        if (source.slice(i, i + 2) === '/*') { depth++; i += 2 }
+        else if (source.slice(i, i + 2) === '*/') { depth--; i += 2 }
+        else i++
+      }
+      result += ' '; continue
+    }
+    const dollar = rest.match(/^\$(?:[a-z_][\w]*)?\$/i)?.[0]
+    if (dollar || rest[0] === "'") {
+      const delimiter = dollar || "'"
+      i += delimiter.length
+      while (i < source.length) {
+        if (source.startsWith(delimiter, i)) {
+          i += delimiter.length
+          if (!dollar && source[i] === "'") { i++; continue }
+          break
+        }
+        i++
+      }
+      result += "''"; continue
+    }
+    result += source[i++]
+  }
+  return result.split(';').map((statement) => statement.trim()).filter(Boolean)
+}
+function commaParts(body) {
+  const parts = []; let depth = 0, start = 0
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === '(') depth++
+    if (body[i] === ')') depth--
+    if (body[i] === ',' && depth === 0) { parts.push(body.slice(start, i).trim()); start = i + 1 }
+  }
+  parts.push(body.slice(start).trim())
+  return parts
+}
+const normalTable = (name) => name.split('.').map((part) => part.startsWith('"') ? part.slice(1, -1) : part.toLowerCase()).join('.').replace(/^public\./, '')
+const ddl = sqlFiles.filter((file) => file.includes(`${path.sep}migrations${path.sep}`)).sort()
+  .flatMap((file) => sqlStatements(fs.readFileSync(file, 'utf8')).flatMap((statement) => {
+    const alter = statement.match(/^(ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?[\w".]+\s+)([\s\S]+)$/i)
+    return (alter ? commaParts(alter[2]).map((clause) => alter[1] + clause) : [statement]).map((statement) => ({ file, statement }))
+  }))
+const sqlContracts = new Map()
+for (const { file, statement } of ddl) {
+  const create = statement.match(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w".]+)\s*\(([\s\S]*)\)$/i)
+  if (/^CREATE\s+(?:UNLOGGED\s+|TEMP(?:ORARY)?\s+)?TABLE\b/i.test(statement) && !create) {
+    finding('HIGH', 'SQL_CONTRACT', rel(file), 1, statement.slice(0, 150),
+      'DDL de tabela fora do contrato estático reconhecido. Exige suporte/prova explícita; não pode ser omitido silenciosamente da validação.')
+  }
+  const alter = statement.match(/^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?([\w".]+)\s+([\s\S]+)$/i)
+  const index = statement.match(/^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?[\w"]+\s+ON\s+([\w".]+)\s*(?:USING\s+\w+\s*)?\(([^)]+)\)\s*$/i)
+  const drop = statement.match(/^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([\w".]+)/i)
+  if (drop) { sqlContracts.delete(normalTable(drop[1])); continue }
+  const dropIndex = statement.match(/^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?([\w".]+)/i)
+  if (dropIndex) {
+    for (const entry of sqlContracts.values()) entry.indexes = entry.indexes.filter((item) => item.name !== normalTable(dropIndex[1]))
+    continue
+  }
+  const match = create || alter || index
+  if (!match) continue
+  const name = normalTable(match[1])
+  const entry = sqlContracts.get(name) ?? { name, file, fks: [], indexes: [], rls: null, created: false }
+  if (create) entry.created = true
+  const dropConstraint = alter?.[2].match(/^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?([\w"]+)/i)
+  if (dropConstraint) {
+    const constraintName = normalTable(dropConstraint[1])
+    entry.fks = entry.fks.filter((fk) => fk.name !== constraintName)
+    entry.indexes = entry.indexes.filter((item) => item.name !== constraintName)
+  }
+  const dropColumn = alter?.[2].match(/^DROP\s+(?:COLUMN\s+)?(?:IF\s+EXISTS\s+)?"?(\w+)"?/i)
+  if (dropColumn && !dropConstraint) {
+    entry.fks = entry.fks.filter((fk) => !fk.columns.includes(dropColumn[1].toLowerCase()))
+    entry.indexes = entry.indexes.filter((item) => !item.columns.includes(dropColumn[1].toLowerCase()))
+  }
+  const definitions = create ? commaParts(create[2]) : alter ? [alter[2].replace(/^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?/i, '')] : []
+  for (const definition of definitions) {
+    const foreign = definition.match(/\bFOREIGN\s+KEY\s*\(([^)]+)\)\s+REFERENCES\b/i)
+    const column = definition.match(/^"?(\w+)"?\s+/)?.[1]
+    const columns = foreign ? foreign[1].replaceAll('"', '').split(',').map((col) => col.trim().toLowerCase())
+      : /\bREFERENCES\b/i.test(definition) && column ? [column.toLowerCase()] : null
+    if (columns) entry.fks.push({ name: normalTable(definition.match(/^CONSTRAINT\s+([\w"]+)/i)?.[1] ?? `${name}_${columns.join('_')}_fkey`), columns, explicitDelete: /\bON\s+DELETE\s+(?:CASCADE|RESTRICT|SET\s+NULL|SET\s+DEFAULT|NO\s+ACTION)\b/i.test(definition), file })
+    const primary = definition.match(/\b(?:PRIMARY\s+KEY|UNIQUE)\s*\(([^)]+)\)/i)
+    const constraintName = definition.match(/^CONSTRAINT\s+([\w"]+)/i)?.[1]
+    if (primary) entry.indexes.push({ name: constraintName ? normalTable(constraintName) : `${name}_pkey`, columns: primary[1].replaceAll('"', '').split(',').map((col) => col.trim().toLowerCase()) })
+    else if (column && /\b(?:PRIMARY\s+KEY|UNIQUE)\b/i.test(definition)) entry.indexes.push({ name: /PRIMARY/i.test(definition) ? `${name}_pkey` : `${name}_${column}_key`, columns: [column.toLowerCase()] })
+  }
+  if (index) entry.indexes.push({ name: normalTable(statement.match(/\bINDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w"]+)/i)[1]), columns: index[2].replaceAll('"', '').split(',').map((col) => col.trim().replace(/\s+(ASC|DESC).*$/i, '').toLowerCase()) })
+  if (alter && /^(ENABLE|DISABLE)\s+ROW\s+LEVEL\s+SECURITY$/i.test(alter[2])) entry.rls = /^ENABLE/i.test(alter[2])
+  sqlContracts.set(name, entry)
+}
+for (const entry of sqlContracts.values()) {
+  if (entry.created && entry.rls !== true || entry.rls === false) finding('CRITICAL', 'SQL_CONTRACT', rel(entry.file), 1, entry.name,
+    'O estado final das migrations não mantém RLS ativo. Preserve RLS e valide as policies no banco descartável; comentários não contam como DDL.')
+  for (const fk of entry.fks) {
+    if (!fk.explicitDelete) finding('HIGH', 'SQL_CONTRACT', rel(fk.file), 1, `${entry.name}(${fk.columns.join(',')})`,
+      'Foreign key sem comportamento ON DELETE explícito. Defina o contrato de exclusão sem alterar dados existentes por rotina.')
+    if (!entry.indexes.some(({ columns }) => fk.columns.every((column, i) => columns[i] === column))) {
+      finding('HIGH', 'SQL_INDEX', rel(fk.file), 1, `${entry.name}(${fk.columns.join(',')})`,
+        'Foreign key sem índice completo iniciado pelas colunas referenciadoras. Adicione uma migration forward-only com o índice; índices parciais não cobrem todas as linhas.')
+    }
+  }
+}
 
 say(`\n${COLORS.DIM}Supremo — auditoria de segurança${COLORS.RESET}`)
 say(
@@ -140,46 +255,8 @@ say(
 // ═════════════════════════════════════════════════════════════
 section('1 · Row Level Security')
 
-let tablesTotal = 0
-let tablesProtected = 0
-
-for (const file of sqlFiles) {
-  const source = fs.readFileSync(file, 'utf8')
-  const lines = source.split('\n')
-
-  const created = [
-    ...source.matchAll(
-      /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["']?([\w.]+)["']?/gi,
-    ),
-  ]
-
-  for (const match of created) {
-    const qualified = match[1]
-    const table = qualified.split('.').pop()
-    tablesTotal++
-
-    const rlsPattern = new RegExp(
-      `ALTER TABLE\\s+(?:IF EXISTS\\s+)?["']?(?:\\w+\\.)?${table}["']?\\s+ENABLE ROW LEVEL SECURITY`,
-      'i',
-    )
-
-    if (rlsPattern.test(source)) {
-      tablesProtected++
-    } else {
-      const lineNumber = lines.findIndex((l) => l.includes(match[0])) + 1 || 1
-      finding(
-        'CRITICAL',
-        'RLS',
-        rel(file),
-        lineNumber,
-        match[0],
-        `Tabela "${table}" criada sem RLS. Sem isso, a anon key lê a tabela inteira. ` +
-          `Adicione: ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`,
-      )
-    }
-  }
-
-}
+const tablesTotal = [...sqlContracts.values()].filter((entry) => entry.created).length
+const tablesProtected = [...sqlContracts.values()].filter((entry) => entry.created && entry.rls === true).length
 
 // Estado final das policies: uma correção forward-only deve poder remover uma
 // policy antiga. Esta regra reconhece condições simples; não substitui testes RLS.
@@ -244,6 +321,58 @@ if (tablesTotal > 0 && tablesProtected === tablesTotal) {
 // Importações estáticas de Client Components não podem alcançar credenciais
 // privilegiadas. Server Actions explícitas são fronteiras RPC válidas.
 const sourceByFile = new Map(tsFiles.map((file) => [file, fs.readFileSync(file, 'utf8')]))
+const syntaxByFile = new Map([...sourceByFile].map(([file, content]) => [file,
+  ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)]))
+function visitNodes(root, predicate, skipNestedFunctions = false) {
+  const matches = []
+  function visit(node) {
+    if (node !== root && skipNestedFunctions && ts.isFunctionLike(node)) return
+    if (predicate(node)) matches.push(node)
+    ts.forEachChild(node, visit)
+  }
+  visit(root)
+  return matches
+}
+function methodName(call) {
+  return ts.isPropertyAccessExpression(call.expression) ? call.expression.name.text
+    : ts.isIdentifier(call.expression) ? call.expression.text : null
+}
+function literal(node) {
+  return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : null
+}
+function hasDirective(node, directive) {
+  return Boolean(node.statements?.some((statement) => ts.isExpressionStatement(statement) && literal(statement.expression) === directive))
+}
+function functionName(node) {
+  return node.name?.getText() ?? (ts.isVariableDeclaration(node.parent) ? node.parent.name.getText() : '(ação inline)')
+}
+function executableEntries(file, syntax) {
+  const serverModule = hasDirective(syntax, 'use server')
+  const route = /[\\/]route\.tsx?$/.test(file)
+  return visitNodes(syntax, (node) => {
+    if (!ts.isFunctionLike(node) || !node.body) return false
+    if (hasDirective(node.body, 'use server')) return true
+    if (!serverModule && !route) return false
+    if (node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return true
+    return ts.isVariableDeclaration(node.parent) && ts.isVariableDeclarationList(node.parent.parent)
+      && node.parent.parent.parent.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+  })
+}
+// Query chains are real syntax nodes. Comments, strings containing example code,
+// multiline calls and template interpolation do not erase the identifiers.
+function queryChains(syntax) {
+  return visitNodes(syntax, (node) => ts.isCallExpression(node) && methodName(node) === 'from')
+    .map((start) => {
+      const methods = [start]
+      let end = start
+      while (ts.isPropertyAccessExpression(end.parent) && end.parent.expression === end
+        && ts.isCallExpression(end.parent.parent) && end.parent.parent.expression === end.parent) {
+        end = end.parent.parent
+        methods.push(end)
+      }
+      return { start, end, table: literal(start.arguments[0]), methods }
+    })
+}
 function localImport(from, specifier) {
   const base = specifier.startsWith('.') ? path.resolve(path.dirname(from), specifier)
     : specifier.startsWith('@/') ? path.join(ROOT, fs.existsSync(path.join(ROOT, 'src')) ? 'src' : '', specifier.slice(2)) : null
@@ -251,25 +380,40 @@ function localImport(from, specifier) {
   return [base, `${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), path.join(base, 'index.tsx')]
     .find((candidate) => sourceByFile.has(candidate))
 }
-for (const [entry, content] of sourceByFile) {
-  if (!/^\s*['"]use client['"]/m.test(content)) continue
+for (const [entry] of sourceByFile) {
+  if (!hasDirective(syntaxByFile.get(entry), 'use client')) continue
   const pending = [entry], seen = new Set()
   while (pending.length) {
     const file = pending.pop()
     if (seen.has(file)) continue
     seen.add(file)
-    const source = sourceByFile.get(file)
-    if (file !== entry && /^\s*['"]use server['"]/m.test(source)) continue
-    const privileged = /process\.env\.(SUPABASE_SERVICE_ROLE_KEY|GITHUB_APP_PRIVATE_KEY|ENCRYPTION_KEY)\b|import\s*['"]server-only['"]/.test(source)
+    const syntax = syntaxByFile.get(file)
+    if (file !== entry && hasDirective(syntax, 'use server')) continue
+    const privileged = visitNodes(syntax, (node) =>
+      (ts.isImportDeclaration(node) && literal(node.moduleSpecifier) === 'server-only') ||
+      (ts.isPropertyAccessExpression(node) && node.expression.getText(syntax) === 'process.env'
+        && !node.name.text.startsWith('NEXT_PUBLIC_') && node.name.text !== 'NODE_ENV') ||
+      (ts.isElementAccessExpression(node) && node.expression.getText(syntax) === 'process.env'
+        && !(literal(node.argumentExpression)?.startsWith('NEXT_PUBLIC_')))).length > 0
     if (privileged) {
       finding('CRITICAL', 'CLIENT_SERVER_BOUNDARY', rel(entry), 1, `Importação alcança ${rel(file)}`,
         'Um componente cliente alcança código privilegiado. Separe a operação em Server Action ou Route Handler com autorização no servidor.')
       break
     }
-    const imports = source.matchAll(/^\s*(?:import|export)\s+(?!type\b)(?:[^;\n]*?\s+from\s*)?['"]([^'"]+)['"]/gm)
-    for (const match of imports) {
-      const resolved = localImport(file, match[1])
+    const imports = visitNodes(syntax, (node) =>
+      ((ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly) || (ts.isExportDeclaration(node) && !node.isTypeOnly)) && node.moduleSpecifier
+      || (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || methodName(node) === 'require')))
+    for (const node of imports) {
+      const specifier = literal(node.moduleSpecifier ?? node.arguments?.[0])
+      if (!specifier) continue
+      const resolved = localImport(file, specifier)
       if (resolved) pending.push(resolved)
+    }
+    // Mutations belong in a server entry point even when the browser SDK would
+    // apply RLS. This is an enforceable boundary, not a claim about business logic.
+    if (queryChains(syntax).some((chain) => chain.methods.some((call) => ['insert', 'update', 'delete', 'upsert'].includes(methodName(call))))) {
+      finding('HIGH', 'CLIENT_MUTATION', rel(entry), 1, 'Mutação de dados no componente cliente',
+        'Mova a mutação para Server Action/Route Handler, validando entradas e permissões no servidor.')
     }
   }
 }
@@ -302,185 +446,107 @@ for (const file of tsFiles) {
 // ═════════════════════════════════════════════════════════════
 section('2 · Autorização em Server Actions e Route Handlers')
 
-/** Formas aceitas de provar que a sessão foi verificada. */
-const AUTH_MARKERS = [
-  /auth\s*\.\s*getUser\s*\(/,
-  /requireUser\s*\(/,
-  /requireProjectOwner\s*\(/,
-  /getSession\s*\(/,
-  /resolveMcpToken\s*\(/,
-  /parseAuthorizationHeader\s*\(/,
-  // Checkpoint daemon (v3.1): endpoints máquina-a-máquina sem sessão/cookie
-  // (o daemon roda headless na máquina do dev) — autoriza pelo secret do
-  // device, fail-closed, mesmo status de "prova de identidade" que os
-  // marcadores acima dão aos outros mecanismos não-baseados-em-sessão.
-  /authenticateDeviceSecret\s*\(/,
-  /CRON_SECRET/,
-  // O callback de OAuth roda antes de existir sessão — é ele que a cria.
-  /exchangeCodeForSession\s*\(/,
-]
-
+// Per-entry analysis: another function's getUser(), a comment, or a nested
+// unused helper cannot authorize this entry point. Static analysis recognizes
+// explicit guards; executable negative tests remain the authorization proof.
+const THROWING_GUARDS = new Set(['requireUser', 'requireProjectOwner'])
+const SESSION_CALLS = new Set(['getUser', 'authenticateDeviceSecret', 'resolveMcpToken'])
+function localGuard(syntax, name, seen = new Set()) {
+  if (!name || seen.has(name)) return false
+  seen.add(name)
+  const target = syntax.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)
+  if (!target?.body) return false
+  const calls = visitNodes(target.body, ts.isCallExpression, true)
+  const dataPosition = Math.min(...calls.filter((call) => ['from', 'rpc'].includes(methodName(call))).map((call) => call.pos), Infinity)
+  return calls.some((call) => call.pos < dataPosition &&
+    (THROWING_GUARDS.has(methodName(call)) || localGuard(syntax, methodName(call), seen)))
+}
 let guardedActions = 0
-
-for (const file of tsFiles) {
-  const source = fs.readFileSync(file, 'utf8')
-  const clean = stripNoise(source)
-  const lines = source.split('\n')
-
-  const isServerAction = /^\s*['"]use server['"]/m.test(source)
-  const isRouteHandler = /\/route\.tsx?$/.test(file)
-  if (!isServerAction && !isRouteHandler) continue
-
-  // Um arquivo que só reexporta ou só define tipos não tem o que proteger.
-  const hasExportedFunction = /export\s+(async\s+)?function\s+\w+/.test(clean)
-  if (!hasExportedFunction) continue
-
-  // O risco é acesso a DADO sem checar a sessão — é o que a própria mensagem
-  // do achado diz. Um handler que não toca em tabela nem storage (logout, que
-  // só encerra a sessão; um webhook de auth) não é endpoint de dado, e cobrar
-  // getUser() dele é falso positivo. A regra segue o dado, não o verbo HTTP.
-  const accessesData = /\.\s*(from|rpc)\s*\(|\.\s*storage\b/.test(clean)
-  if (!accessesData) continue
-
-  const authenticated = AUTH_MARKERS.some((marker) => marker.test(clean))
-
-  if (authenticated) {
-    guardedActions++
-    continue
-  }
-
-  // Apenas INSERT direto nas tabelas write-only conhecidas. SELECT/returning,
-  // RPC, Storage, SQL dinâmico e clientes privilegiados não recebem a exceção.
-  const inserts = [...source.matchAll(/\.\s*from\s*\(\s*['"](\w+)['"]\s*\)\s*\.\s*insert\s*\(/g)].filter((match) => /^\.\s*from\s*\(/.test(clean.slice(match.index)))
-  const fromCount = [...clean.matchAll(/\.\s*from\s*\(/g)].length
-  const publicWriteOnly = inserts.length > 0 && inserts.length === fromCount
-    && inserts.every((insert) => publicSubmissionTables.has(insert[1].toLowerCase()))
-    && !/\.\s*(select|update|delete|upsert|rpc)\s*\(|\.\s*storage\b|service_role|serviceRole|SUPABASE_SERVICE_ROLE_KEY|createAdminClient/i.test(clean)
-  if (publicWriteOnly) continue
-
-  const lineNumber =
-    lines.findIndex((l) => /export\s+(async\s+)?function/.test(l)) + 1 || 1
-
-  finding(
-    'CRITICAL',
-    'AUTHZ',
-    rel(file),
-    lineNumber,
-    lines[lineNumber - 1] ?? '',
-    'Acesso a dados sem verificação de sessão ou contrato reconhecido de INSERT público write-only. ' +
-      'Para dados privados, valide identidade e escopo; para envio público, mantenha RLS sem leitura/update/delete.',
-  )
-}
-
-if (guardedActions > 0) {
-  strength(`${guardedActions} action(s)/handler(s) com verificação de sessão`)
-}
-
-// ═════════════════════════════════════════════════════════════
-// 3. IDOR
-// ═════════════════════════════════════════════════════════════
-section('3 · IDOR — objeto acessado por ID sem checar dono')
-
-/**
- * Extrai as cadeias que começam em `.from(` e vão até o fim da expressão.
- * A versão anterior casava `.update(` em qualquer lugar do arquivo — foi
- * assim que `decipher.update()` virou "IDOR no Supabase".
- */
-function supabaseChains(source) {
-  const chains = []
-  const pattern = /\.from\s*\(\s*['"`](\w+)['"`]\s*\)/g
-  let match
-
-  while ((match = pattern.exec(source)) !== null) {
-    const start = match.index
-    let end = start
-    let depth = 0
-    let seenBody = false
-
-    for (let i = start; i < source.length && i < start + 1200; i++) {
-      const char = source[i]
-      if (char === '(') {
-        depth++
-        seenBody = true
-      } else if (char === ')') {
-        depth--
-        if (seenBody && depth === 0) {
-          const next = source.slice(i + 1, i + 3)
-          // A cadeia continua enquanto houver `.metodo(`
-          if (!/^\s*\.\s*$|^\s*\.\w/.test(next)) {
-            end = i + 1
-            break
-          }
-        }
-      } else if (char === '\n' && depth === 0 && seenBody) {
-        const rest = source.slice(i + 1, i + 40)
-        if (!/^\s*\./.test(rest)) {
-          end = i
-          break
-        }
+for (const [file, syntax] of syntaxByFile) {
+  for (const entry of executableEntries(file, syntax)) {
+    const calls = visitNodes(entry.body, ts.isCallExpression, true)
+    const dataCalls = calls.filter((call) => ['from', 'rpc'].includes(methodName(call))
+      || (ts.isPropertyAccessExpression(call.expression) && /\.storage\b/.test(call.expression.getText(syntax))))
+    if (!dataCalls.length) continue
+    const firstData = Math.min(...dataCalls.map((call) => call.getStart(syntax)))
+    const preceding = calls.filter((call) => call.getStart(syntax) < firstData)
+    const guards = preceding.filter((call) => THROWING_GUARDS.has(methodName(call)) || localGuard(syntax, methodName(call)))
+    const sessionChecks = preceding.filter((call) => SESSION_CALLS.has(methodName(call)))
+    const denial = visitNodes(entry.body, (node) => ts.isIfStatement(node)
+      && node.getStart(syntax) < firstData
+      && visitNodes(node.thenStatement, (branch) => ts.isReturnStatement(branch) || ts.isThrowStatement(branch)
+        || ts.isCallExpression(branch) && methodName(branch) === 'redirect').length > 0, true)
+    const conditionalIdentity = dataCalls.every((call) => {
+      let parent = call.parent
+      while (parent && parent !== entry) {
+        if (ts.isIfStatement(parent) && /^(?:user|session\.user)(?:\s*&&|$)/.test(parent.expression.getText(syntax))
+          && parent.thenStatement.pos <= call.pos && parent.thenStatement.end >= call.end) return true
+        parent = parent.parent
       }
-      end = i + 1
-    }
-
-    chains.push({
-      table: match[1],
-      text: source.slice(start, end),
-      index: start,
+      return false
     })
-  }
-
-  return chains
-}
-
-const OWNERSHIP_MARKERS = [
-  /\.eq\s*\(\s*['"`]user_id['"`]/,
-  /\.eq\s*\(\s*['"`]owner_id['"`]/,
-  /\.match\s*\(\s*\{[^}]*user_id/,
-]
-
-/** Tabelas cujo dono não é uma coluna user_id da própria linha. */
-const OWNERLESS_TABLES = new Set(['audit_logs', 'oauth_states'])
-
-let ownershipChecked = 0
-
-for (const file of tsFiles) {
-  const source = fs.readFileSync(file, 'utf8')
-  const clean = stripNoise(source)
-
-  // Um repositório que exige userId por assinatura já é a checagem.
-  const isScopedRepository = /repository\.ts$/.test(file)
-
-  for (const chain of supabaseChains(clean)) {
-    const writesOrReadsById =
-      /\.(update|delete|upsert)\s*\(/.test(chain.text) ||
-      /\.eq\s*\(\s*['"`]id['"`]/.test(chain.text)
-
-    if (!writesOrReadsById) continue
-    if (OWNERLESS_TABLES.has(chain.table)) continue
-
-    const hasOwnership = OWNERSHIP_MARKERS.some((m) => m.test(chain.text))
-
-    if (hasOwnership || isScopedRepository) {
-      ownershipChecked++
-      continue
+    const authenticated = guards.length > 0 || (sessionChecks.length > 0 && (denial.length > 0 || conditionalIdentity))
+    const chains = queryChains(entry.body)
+    const publicWriteOnly = chains.length > 0 && chains.every((chain) => publicSubmissionTables.has(chain.table?.toLowerCase())
+      && chain.methods.some((call) => methodName(call) === 'insert')
+      && !chain.methods.some((call) => ['select', 'update', 'delete', 'upsert', 'rpc'].includes(methodName(call))))
+      && !calls.some((call) => methodName(call) === 'rpc' || /(?:Admin|Service)Client/.test(methodName(call) ?? ''))
+      && !/service_role|serviceRole|SUPABASE_SERVICE_ROLE_KEY/.test(entry.body.getText(syntax))
+    if (!authenticated && !publicWriteOnly) {
+      finding('CRITICAL', 'AUTHZ', rel(file), syntax.getLineAndCharacterOfPosition(entry.getStart(syntax)).line + 1,
+        functionName(entry), 'Esta operação acessa dados sem guard de identidade e negação de acesso reconhecidos antes do I/O. Outra função do arquivo não autoriza esta entrada; preserve provas executáveis de acesso negado.')
+    } else if (authenticated) guardedActions++
+    const mutations = calls.filter((call) => ['insert', 'update', 'upsert', 'delete', 'rpc'].includes(methodName(call)))
+    const validators = preceding.filter((call) => ['parse', 'safeParse', 'parseAsync', 'safeParseAsync'].includes(methodName(call)))
+    const rawParameters = new Set(entry.parameters.filter((param) => ts.isIdentifier(param.name)).map((param) => param.name.text))
+    const rawInputReachesQuery = chains.some((chain) => visitNodes(chain.end, (node) => ts.isIdentifier(node)
+      && rawParameters.has(node.text) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)).length > 0)
+    if (mutations.length && rawInputReachesQuery && !validators.length) {
+      finding('HIGH', 'SERVER_INPUT', rel(file), syntax.getLineAndCharacterOfPosition(entry.getStart(syntax)).line + 1,
+        functionName(entry), 'A mutação recebe parâmetros sem validação de entrada reconhecida antes do I/O. Valide com schema no servidor e use o resultado validado.')
     }
-
-    const lineNumber = clean.slice(0, chain.index).split('\n').length
-    finding(
-      'HIGH',
-      'IDOR',
-      rel(file),
-      lineNumber,
-      chain.text.split('\n').slice(0, 2).join(' ').replace(/\s+/g, ' '),
-      `Query em "${chain.table}" acessa objeto por ID sem filtrar por dono. ` +
-        `Adicione .eq('user_id', user.id) — o RLS é a primeira camada, não a única.`,
-    )
   }
 }
+if (guardedActions > 0) strength(`${guardedActions} entrada(s) com guard local reconhecido; autorização efetiva exige testes negativos`)
 
-if (ownershipChecked > 0) {
-  strength(`${ownershipChecked} query(s) com filtro explícito por dono`)
+// ═════════════════════════════════════════════════════════════
+// 3. IDOR — syntax, never code examples inside comments/strings
+// ═════════════════════════════════════════════════════════════
+section('3 · IDOR — objeto acessado por ID sem escopo')
+const SCOPE_COLUMNS = new Set(['user_id', 'owner_id', 'owner_user_id', 'org_id', 'organization_id',
+  'team_id', 'workspace_id', 'account_id', 'tenant_id', 'project_id', 'device_id', 'user_code', 'device_code_hash'])
+let ownershipChecked = 0
+for (const [file, syntax] of syntaxByFile) {
+  for (const chain of queryChains(syntax)) {
+    const byId = chain.methods.some((call) => methodName(call) === 'eq' && literal(call.arguments[0]) === 'id')
+    const changesRows = chain.methods.some((call) => ['update', 'delete', 'upsert'].includes(methodName(call)))
+    if (!byId && !changesRows) continue
+    const scoped = chain.methods.some((call) =>
+      ['eq', 'in'].includes(methodName(call)) && SCOPE_COLUMNS.has(literal(call.arguments[0]))
+      || (methodName(call) === 'match' && ts.isObjectLiteralExpression(call.arguments[0]) && call.arguments[0].properties.some((prop) => SCOPE_COLUMNS.has(prop.name?.getText(syntax).replace(/['"]/g, '')))))
+    if (scoped) { ownershipChecked++; continue }
+    // The row itself can be the authenticated user's profile. Equality with a
+    // literal ID or arbitrary request parameter does not meet this exception.
+    const ownProfile = chain.table === 'profiles' && chain.methods.some((call) => methodName(call) === 'eq'
+      && literal(call.arguments[0]) === 'id' && /^(?:user|session\.user)\.id$/.test(call.arguments[1]?.getText(syntax) ?? ''))
+    if (ownProfile) { ownershipChecked++; continue }
+    const ownUpsert = chain.methods.some((call) => methodName(call) === 'upsert' && call.arguments[0]
+      && ts.isObjectLiteralExpression(call.arguments[0]) && call.arguments[0].properties.some((property) =>
+        ts.isPropertyAssignment(property) && SCOPE_COLUMNS.has(property.name.getText(syntax).replace(/['"]/g, ''))
+        && /^(?:user|session\.user)\.id$/.test(property.initializer.getText(syntax))
+        && call.arguments[1] && ts.isObjectLiteralExpression(call.arguments[1]) && call.arguments[1].properties.some((option) =>
+          ts.isPropertyAssignment(option) && option.name.getText(syntax) === 'onConflict'
+          && literal(option.initializer)?.split(',').map((key) => key.trim()).includes(property.name.getText(syntax).replace(/['"]/g, '')))))
+    if (ownUpsert) { ownershipChecked++; continue }
+    const exposed = executableEntries(file, syntax).some((entry) => entry.pos <= chain.start.pos && entry.end >= chain.end.end)
+    // Internal privileged adapters can receive already-authorized capabilities.
+    // Report uncertainty explicitly instead of claiming a proven vulnerability
+    // or silently exempting a filename. Exposed mutations always fail closed.
+    finding(exposed && changesRows ? 'HIGH' : 'MEDIUM', 'IDOR', rel(file), syntax.getLineAndCharacterOfPosition(chain.start.getStart(syntax)).line + 1,
+      chain.end.getText(syntax), `Query em "${chain.table ?? '(tabela dinâmica)'}" sem filtro explícito de dono/escopo. ${exposed && changesRows ? 'A mutação exposta deve limitar a operação por identidade/escopo.' : 'A autorização do chamador não foi provada pela análise local; exige revisão/prova executável.'} Nome de arquivo repository.ts não é autorização.`)
+  }
 }
+if (ownershipChecked > 0) strength(`${ownershipChecked} query(s) com filtro explícito de escopo; a origem do escopo exige prova de autorização`)
 
 // ═════════════════════════════════════════════════════════════
 // 4. Segredos
@@ -678,5 +744,7 @@ if (STRICT && blocking > 0) {
 say(
   blocking > 0
     ? `\n${COLORS.HIGH}Auditoria concluída com ${blocking} achado(s) para revisar.${COLORS.RESET}\n`
-    : `\n${COLORS.OK}Auditoria limpa.${COLORS.RESET}\n`,
+    : findings.length > 0
+      ? `\n${COLORS.MEDIUM}Sem achados CRITICAL/HIGH; ${findings.length} achado(s) adicionais exigem revisão.${COLORS.RESET}\n`
+      : `\n${COLORS.OK}Auditoria sem achados.${COLORS.RESET}\n`,
 )

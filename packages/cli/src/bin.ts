@@ -5,6 +5,7 @@ import { Command } from 'commander'
 // versão publicada.
 import pkg from '../package.json'
 import { isKnownOrGlobal, unknownCommandMessage } from './command-guard'
+import { readDeviceSecret, saveDeviceIdentity, deviceIssuer } from './device-identity'
 
 const program = new Command()
 
@@ -20,6 +21,14 @@ function guardUnknownCommand(argv: string[]): void {
   console.error(unknownCommandMessage(first!))
   process.exit(1)
 }
+
+program
+  .command('engine <action>')
+  .description('Controla o motor: status, pause/resume (autocura), automatic/on-request (testes locais)')
+  .action(async (action: string) => {
+    const { controlEngine } = await import('./engine-controls')
+    console.log(JSON.stringify(await controlEngine(process.cwd(), action)))
+  })
 
 program
   .command('turn <event>')
@@ -47,6 +56,26 @@ program
     const adapter = await import('./host-adapters')
     if (event !== 'install' && event !== 'status') throw new Error('Use host install ou host status.')
     console.log(JSON.stringify(event === 'install' ? adapter.installHostAdapters(process.cwd()) : adapter.inspectHostAdapters(process.cwd())))
+  })
+
+program
+  .command('authorize')
+  .description('Reautoriza a identidade deste projeto no navegador, preservando arquivos e preview')
+  .requiredOption('-u, --url <url>', 'Origem confiável do Supremo que autorizará o dispositivo')
+  .action(async (options: { url: string }) => {
+    const [{ authorizeDevice }, keychainModule, { readProjectConfig }, fs, path] = await Promise.all([
+      import('./bootstrap'), import('./keychain'), import('./daemon'), import('node:fs'), import('node:path'),
+    ])
+    const cwd = process.cwd(), config = readProjectConfig(cwd)
+    if (!config) throw new Error('Identidade do projeto ausente.')
+    const issuer = deviceIssuer(options.url)
+    const authorized = await authorizeDevice(config.projectId, issuer)
+    if (!authorized.daemon) throw new Error('O servidor não retornou uma identidade de dispositivo.')
+    saveDeviceIdentity(keychainModule.resolveKeychain(), config.projectId, issuer, authorized.daemon.deviceSecret)
+    const filename = path.join(cwd, '.supremo/project.json')
+    const existing = JSON.parse(fs.readFileSync(filename, 'utf8')) as Record<string, unknown>
+    fs.writeFileSync(filename, JSON.stringify({ ...existing, projectId: config.projectId, supremoUrl: issuer }, null, 2) + '\n')
+    console.log('✓ Dispositivo reautorizado na origem confirmada. Reinicie somente o daemon no terminal autorizado; preserve o preview.')
   })
 
 program
@@ -188,7 +217,7 @@ program
           projectId: cfg.projectId,
           apiBaseUrl: cfg.apiBaseUrl,
           cwd,
-          getSecret: () => kc.get(cfg.projectId),
+          getSecret: () => readDeviceSecret(kc, cfg.projectId, cfg.apiBaseUrl),
         })
         console.log(`processados: ${n}`)
         return
@@ -227,7 +256,7 @@ program
     }
     const keychainModule = await import('./keychain')
     const kc = keychainModule.resolveKeychain()
-    const deviceSecret = kc.get(cfg.projectId)
+    const deviceSecret = readDeviceSecret(kc, cfg.projectId, cfg.apiBaseUrl)
     const http = daemon.defaultDaemonHttp(cfg.apiBaseUrl)
 
     const outcome = await sync.runSync(
@@ -246,15 +275,64 @@ program
   })
 
 program
-  .command('db <operation>')
-  .description('Banco development: status, migrate ou anonymous-auth (autoridade do servidor)')
-  .action(async (operation: string) => {
+  .command('secrets')
+  .description('Solicita campos no formulário do projeto; valores nunca passam pela CLI')
+  .addCommand(new Command('request').argument('<names...>')
+    .requiredOption('--reason <reason>', 'Por que o aplicativo precisa destes campos')
+    .requiredOption('--target <target>', 'Destino: supabase (Edge Functions) ou vercel')
+    .option('--environment <environment>', 'Ambiente do destino: development, preview ou production', 'development')
+    .action(async (names: string[], options: { reason: string; target: string; environment: string }) => {
+      const { secretRequestOptionsSchema } = await import('./project-service-request')
+      const { runDatabase } = await import('./database')
+      const input = secretRequestOptionsSchema.parse({ requests: names.map(name => ({ name,
+        description: options.reason, target: options.target, environment: options.environment })) })
+      console.log(JSON.stringify(await runDatabase('secrets-request', process.cwd(), input)))
+    }))
+  .addCommand(new Command('status')
+    .description('Mostra nomes e situação dos pedidos, sem valores')
+    .action(async () => {
+      const { runDatabase } = await import('./database')
+      console.log(JSON.stringify(await runDatabase('secrets-status')))
+    }))
+
+program
+  .command('jobs <operation>')
+  .description('Tarefas Supabase: list, history, apply, pause, resume ou remove; apply lê supabase/jobs.json')
+  .option('--job-id <id>', 'Identificador da tarefa gerenciada')
+  .option('--limit <number>', 'Máximo de linhas (1–100)')
+  .option('--offset <number>', 'Deslocamento da página (0–10000)')
+  .option('--environment <environment>', 'Ambiente esperado nas leituras')
+  .action(async (operation: string, options: Record<string, unknown>) => {
+    if (!['list', 'history', 'apply', 'pause', 'resume', 'remove'].includes(operation)) throw new Error('Operação de tarefas inválida.')
+    const { databaseOperationSchema, parseDatabaseOptions } = await import('./database-request')
+    const { runDatabase } = await import('./database')
+    const selected = databaseOperationSchema.parse(`cron-${operation}`)
+    for (const key of ['limit', 'offset']) if (options[key] !== undefined) options[key] = Number(options[key])
+    console.log(JSON.stringify(await runDatabase(selected, process.cwd(), parseDatabaseOptions(selected, options))))
+  })
+
+program
+  .command('db <operation> [sql]')
+  .description('Banco: status/migrate/anonymous-auth; leitura autorizada inspect/query/logs/report')
+  .option('--sql <query>', 'Consulta SELECT somente leitura (também aceita argumento entre aspas)')
+  .option('--environment <environment>', 'Exige development, production ou unknown; padrão usa o vínculo atual')
+  .option('--limit <rows>', 'Máximo de linhas por página (1–200)')
+  .option('--offset <rows>', 'Deslocamento de paginação (0–10000)')
+  .option('--table <name>', 'Tabela public a inspecionar')
+  .option('--minutes <minutes>', 'Intervalo de logs em minutos (1–1440)')
+  .option('--source <service>', 'Logs: postgres, auth, api, functions, storage ou realtime')
+  .option('--level <level>', 'Logs: all ou error')
+  .action(async (operation: string, sql: string | undefined, options: Record<string, unknown>) => {
     try {
-      if (operation !== 'status' && operation !== 'migrate' && operation !== 'anonymous-auth') {
-        throw new Error('Use db status, db migrate ou db anonymous-auth.')
-      }
+      const { databaseOperationSchema, parseDatabaseOptions } = await import('./database-request')
+      const selected = databaseOperationSchema.parse(operation)
+      if (selected.startsWith('cron-') || selected.startsWith('secrets-')) throw new Error('Use os comandos jobs ou secrets para esta operação.')
+      if (sql !== undefined && options.sql !== undefined) throw new Error('Forneça SQL por argumento ou --sql, uma única vez.')
+      const args: Record<string, unknown> = { ...options, ...(sql !== undefined ? { sql } : {}) }
+      for (const key of ['limit', 'offset', 'minutes']) if (args[key] !== undefined) args[key] = Number(args[key])
+      const parsed = parseDatabaseOptions(selected, args)
       const database = await import('./database')
-      console.log(JSON.stringify(await database.runDatabase(operation)))
+      console.log(JSON.stringify(await database.runDatabase(selected, process.cwd(), parsed)))
     } catch (error) {
       console.error(error instanceof Error ? error.message : 'Falha ao acessar o banco.')
       process.exitCode = 1

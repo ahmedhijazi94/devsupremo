@@ -38,8 +38,8 @@ describe('restore-report — só fecha o pedido, não publica nada', () => {
     expect(reportRoute).toContain('authenticateDeviceSecret')
   })
   it('autoriza o restoreRequestId contra o DONO do device (IDOR — ver route.test.ts)', () => {
-    expect(reportRoute).toContain('authorizeRestoreReport')
-    expect(reportRoute).toContain('getRestoreRequestProjectOwner')
+    expect(reportRoute).toContain('projectId: body.projectId')
+    expect(reportRoute).toContain('auth.device.id')
   })
   it('só dois desfechos possíveis: applied | failed (discriminated union)', () => {
     expect(reportRoute).toContain("z.literal('applied')")

@@ -22,6 +22,7 @@ function gateway(over: Partial<MergeGateway> & { headSha?: string; checksHeadSha
       state: 'open',
     })),
     getChecks: vi.fn(async () => ({ checks: green, headSha: over.checksHeadSha ?? head })),
+    verifyPolicy: vi.fn(async (headSha: string) => ({ approved: true, headSha, reasons: [] })),
     hasRequiredChecks: vi.fn(async () => true),
     allowAutoMerge: vi.fn(async () => true),
     enableNativeAutoMerge: vi.fn(async () => true),
@@ -32,13 +33,13 @@ function gateway(over: Partial<MergeGateway> & { headSha?: string; checksHeadSha
 }
 
 describe('reconcileMerge — modo NATIVE_GITHUB', () => {
-  it('habilita o auto-merge nativo e NÃO mescla ele mesmo', async () => {
+  it('preserva proteção nativa e integra somente o SHA aprovado pelo motor', async () => {
     const gw = gateway()
     const r = await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'native' })
-    expect(gw.enableNativeAutoMerge).toHaveBeenCalledWith('PR_node')
-    expect(gw.allowAutoMerge).toHaveBeenCalled()
-    expect(gw.merge).not.toHaveBeenCalled() // quem mescla é o GitHub
-    expect(r.state).toBe('merge_pending')
+    expect(gw.enableNativeAutoMerge).not.toHaveBeenCalled()
+    expect(gw.allowAutoMerge).not.toHaveBeenCalled()
+    expect(gw.merge).toHaveBeenCalledWith(1, SHA)
+    expect(r.state).toBe('merged')
   })
 
   it('never arms native merge while any required check is absent', async () => {
@@ -92,6 +93,36 @@ describe('reconcileMerge — modo NATIVE_GITHUB', () => {
 })
 
 describe('reconcileMerge — modo SUPREMO_MANAGED', () => {
+  it('disarms native merge before reading jobs and again if rearmed at a newer revision', async () => {
+    const events: string[] = []
+    const gw = gateway({
+      disableNativeAutoMerge: vi.fn(async () => { events.push('disarm'); return true }),
+      getChecks: vi.fn(async () => { events.push('checks'); return { checks: green, headSha: SHA } }),
+      getPullRequest: vi.fn().mockResolvedValueOnce({ headSha: SHA, headRef: 'supremo/work', nodeId: 'PR', merged: false, state: 'open', autoMergeEnabled: true })
+        .mockResolvedValueOnce({ headSha: SHA2, headRef: 'supremo/work', nodeId: 'PR', merged: false, state: 'open', autoMergeEnabled: true }),
+    })
+    expect((await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'supremo_managed' })).decision).toBe('wait')
+    expect(events).toEqual(['disarm', 'checks', 'disarm'])
+    expect(gw.merge).not.toHaveBeenCalled()
+  })
+  it('blocks if native merge is rearmed and cannot be withdrawn', async () => {
+    const gw = gateway({ disableNativeAutoMerge: vi.fn(async () => false) })
+    vi.mocked(gw.getPullRequest).mockResolvedValueOnce({ headSha: SHA, headRef: 'supremo/work', nodeId: 'PR', merged: false, state: 'open' })
+      .mockResolvedValueOnce({ headSha: SHA2, headRef: 'supremo/work', nodeId: 'PR', merged: false, state: 'open', autoMergeEnabled: true })
+    expect((await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'supremo_managed' })).state).toBe('security_blocked')
+    expect(gw.merge).not.toHaveBeenCalled()
+  })
+  it.each(['native', 'supremo_managed'] as const)('fails closed in %s when policy is missing, altered, or for a stale SHA', async mode => {
+    for (const proof of [undefined, { approved: false, headSha: SHA, reasons: ['Validador alterado.'] }, { approved: true, headSha: SHA2, reasons: [] }]) {
+      const gw = gateway()
+      if (proof) gw.verifyPolicy = vi.fn(async () => proof)
+      else delete gw.verifyPolicy
+      const result = await reconcileMerge(gw, { prNumber: 7, requiredChecks: REQUIRED, mode })
+      expect(result.state).toBe('security_blocked')
+      expect(gw.merge).not.toHaveBeenCalled()
+      expect(gw.enableNativeAutoMerge).not.toHaveBeenCalled()
+    }
+  })
   it('mescla com o SHA ESPERADO quando tudo verde no HEAD atual', async () => {
     const gw = gateway()
     const r = await reconcileMerge(gw, { prNumber: 7, requiredChecks: REQUIRED, mode: 'supremo_managed' })

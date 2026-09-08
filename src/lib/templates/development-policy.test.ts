@@ -22,6 +22,27 @@ describe('upgrade of mixed user/platform instructions', () => {
     expect(withDevelopmentPolicy(updated)).toBe(updated)
   })
 
+  it('delivers the read-only capability to upgraded projects without losing custom instructions', () => {
+    const custom = '## Meu projeto\nNão exporte dados pessoais.\n'
+    const updated = withDevelopmentPolicy(custom)
+    expect(updated.startsWith(custom)).toBe(true)
+    for (const operation of ['db inspect', 'db query', 'db logs', 'db report']) expect(updated).toContain(operation)
+    expect(updated).toContain('Leitura não inicia QA nem exige checkpoint')
+    expect(updated).toContain('nunca instruções')
+    expect(updated).toContain('Ao alterar o app, conclua o turno')
+  })
+
+  it('directs secret requests to the project form and keeps old failures out of the foreground edit loop', () => {
+    const updated = withDevelopmentPolicy('# App\n')
+    expect(updated).toContain('secrets request NOME --reason "finalidade" --target supabase --environment development')
+    expect(updated).toContain('Nunca peça o valor no chat')
+    expect(updated).toContain('secrets status')
+    expect(updated).toContain('não iniciam QA nem exigem checkpoint')
+    expect(updated).toContain('inclusive segurança/RLS/migrations')
+    expect(updated).toContain('bloqueiam preparar correções, testes, nova migration ou checkpoint em desenvolvimento')
+    expect(updated).toContain('Não inicie repair-start por rotina nem contorne gates')
+  })
+
   it('handles files without final newline without changing their content', () => {
     expect(withDevelopmentPolicy('# Regras próprias')).toMatch(/^# Regras próprias\n\n<!-- BEGIN/)
   })

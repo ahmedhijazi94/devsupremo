@@ -9,6 +9,10 @@ import { runTurnEvent, type RuntimeDeps } from './turn-runtime'
 import { drainLocalValidation, evidenceFor, validateCheckpoint } from './turn-validation'
 import { captureTree, captureTurnCheckpoint, gitText, readJson, TURN_DIR, writeJson } from './turn-workspace'
 
+// These protocol fixtures deliberately use a tiny validator. Integrity of generated
+// validators is covered independently by trusted-validation and generated-worker tests.
+vi.mock('./trusted-validation', () => ({ verifyTrustedFiles: () => {} }))
+
 const PROJECT = '11111111-1111-4111-8111-111111111111'
 const TURN = '22222222-2222-4222-8222-222222222222'
 let cwd: string
@@ -48,6 +52,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(cwd, '.gitignore'), '.supremo/turns/\n.supremo/validation/\n.supremo/checkpoints/\n.supremo/*context.json\n.supremo/*feedback.json\n.next/\n')
   fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const card = 1;\n')
   fs.writeFileSync(path.join(cwd, 'tests/gate.test.ts'), 'export const gate = true;\n')
+  writeJson(path.join(cwd, '.supremo/lifecycle.json'), { validation_mode: 'on_request' })
   writeJson(path.join(cwd, '.supremo/project.json'), { projectId: PROJECT, supremoUrl: 'https://supremo.example.invalid' })
   verifier(); gitText(cwd, ['add', '-A']); gitText(cwd, ['commit', '-m', 'fixture'])
   remote = { version: 1, projectId: PROJECT, project: { id: PROJECT, name: 'App' },
@@ -130,14 +135,15 @@ describe('validation evidence is bound to the executed isolated snapshot', () =>
 })
 
 describe('host mutations and recovery share an executable workspace lease', () => {
-  it('does not consume a repair attempt while preview or worker readiness blocks mutation', async () => {
+  it('allows repairing code while preview and validation worker are unavailable', async () => {
     await runTurnEvent('preflight', cwd, hook, 'codex', deps); change(); await runTurnEvent('complete', cwd); failRemote()
     remote.feedback.current!.failures = [{ name: 'security', category: 'security' }]
     const unavailable = { ...deps, ensureServices: () => { throw new Error('Worker starting') } }
     const blocked = await runTurnEvent('preflight', cwd, hook, 'codex', unavailable)
-    expect(blocked.allowed).toBe(false); expect(blocked.state?.turn.recovery).toMatchObject({ status: 'pending', attempts: 0 })
-    expect((await runTurnEvent('repair-start', cwd)).allowed).toBe(false)
-    expect((await runTurnEvent('preflight', cwd, hook, 'codex', deps)).state?.turn.recovery).toMatchObject({ status: 'repairing', attempts: 1 })
+    expect(blocked.allowed).toBe(true); expect(blocked.state?.turn.recovery).toMatchObject({ status: 'pending', attempts: 0 })
+    expect((await runTurnEvent('before-mutation', cwd, { tool_name: 'Write', tool_input: { file_path: 'src/card.ts' } })).allowed).toBe(true)
+    await runTurnEvent('mutation', cwd)
+    expect((await runTurnEvent('preflight', cwd, hook, 'codex', deps)).state?.turn.recovery).toMatchObject({ status: 'pending', attempts: 0 })
   })
 
   it('waits for exact named RLS artifact evidence before resolving a deferred behavioral repair', async () => {
@@ -148,6 +154,7 @@ describe('host mutations and recovery share an executable workspace lease', () =
     await runTurnEvent('preflight', cwd, hook, 'codex', deps); change(); await runTurnEvent('complete', cwd)
     failRemote(); remote.feedback.current!.failures = [{ name: 'RLS', category: 'security' }]
     await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    expect((await runTurnEvent('repair-start', cwd)).allowed).toBe(true)
     fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const card = 3;\n')
     await runTurnEvent('repair-complete', cwd)
     while (defaultCheckpointDeps(cwd).readQueue().some((record) => record.validationStatus === 'pending')) await drainLocalValidation(cwd)
@@ -199,8 +206,8 @@ describe('host mutations and recovery share an executable workspace lease', () =
     await runTurnEvent('preflight', cwd, hook, 'codex', deps); change(); await runTurnEvent('complete', cwd); failRemote()
     remote.feedback.current!.failures = [{ name: 'security', category: 'security' }]
     const preflight = await runTurnEvent('preflight', cwd, hook, 'codex', deps)
-    expect(preflight.state?.turn.integrationMode).toBe('enforced')
-    expect(preflight.state?.turn.recovery?.status).toBe('repairing')
+    expect(preflight.state?.turn.integrationMode).toBe('unsupported')
+    expect((await runTurnEvent('repair-start', cwd)).state?.turn.recovery?.status).toBe('repairing')
     const patch = (body: string) => runTurnEvent('before-mutation', cwd, { tool_name: 'apply_patch',
       tool_input: { command: `*** Begin Patch\n${body}\n*** End Patch` } })
     expect((await patch('*** Update File: src/card.ts\n@@\n-export const card = 2;\n+export const card = 3;')).allowed).toBe(true)
@@ -219,6 +226,80 @@ describe('host mutations and recovery share an executable workspace lease', () =
 })
 
 describe('fast development from the real E2E regressions', () => {
+  it.each(['security', 'rls', 'migration'] as const)('allows preparing and checkpointing a %s correction without erasing the old failure', async category => {
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps); change(); await runTurnEvent('complete', cwd); failRemote()
+    remote.feedback.current!.failures = [{ name: category, category: 'security' }]
+    const opened = await runTurnEvent('preflight', cwd, { ...hook, prompt: 'Corrija a vulnerabilidade e adicione a migration e a regressão.' }, 'codex', deps)
+    expect(opened.context).toMatchObject({ permissions: { editing: true }, developmentPolicy: { previousFailures: 'advisory' } })
+    expect(opened.state?.turn.phase).toBe('work')
+    expect(opened.projectHealth).toBe('developing')
+    for (const file of ['src/authorization.ts', 'supabase/migrations/20260907010000_fix_owner.sql', 'tests/owner-regression.test.ts']) {
+      const event = { tool_name: 'Write', tool_input: { file_path: file }, tool_use_id: file }
+      expect((await runTurnEvent('before-mutation', cwd, event)).allowed).toBe(true)
+      fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true })
+      fs.writeFileSync(path.join(cwd, file), file.endsWith('.sql') ? '-- additive owner policy correction\n' : 'export const ownerRequired = true;\n')
+      await runTurnEvent('mutation', cwd, event)
+    }
+    const ended = await runTurnEvent('complete', cwd)
+    expect(ended.allowed).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(2)
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)).toMatchObject({ pushStatus: 'local', validationStatus: 'pending' })
+    expect(ended.state?.turn.recovery).toMatchObject({ required: true, attempts: 0 })
+    expect(remote.feedback.current?.state).toBe('failed')
+  })
+  it('answers a database diagnostic without acquiring a mutation lease or scheduling local QA', async () => {
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { validation_mode: 'background_adaptive' })
+    await runTurnEvent('preflight', cwd, { ...hook, prompt: 'Quantos chamados existem?' }, 'codex', deps)
+    const input = { tool_name: 'exec_command', tool_input: { cmd: 'supremo db query --sql "select count(*) from public.tickets"' }, tool_use_id: 'data-read' }
+    expect((await runTurnEvent('before-mutation', cwd, input)).allowed).toBe(true)
+    expect((await runTurnEvent('mutation', cwd, input)).allowed).toBe(true)
+    expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toBeNull()
+    expect(readJson(path.join(cwd, TURN_DIR, 'validation-request.json'))).toBeNull()
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
+  })
+  it.each(['production', 'unknown'] as const)('permits authenticated %s diagnostics but never editing, validation or checkpoint publication', async environment => {
+    remote.environment = environment; remote.databaseEnvironment = environment; remote.databaseAuthority.automaticMigrations = false
+    const syncWorkspace = vi.fn()
+    const preflight = await runTurnEvent('preflight', cwd, hook, 'codex', { ...deps, syncWorkspace })
+    expect(preflight.allowed).toBe(true)
+    expect(preflight.context).toMatchObject({ permissions: { diagnostics: true, editing: false } })
+    expect(syncWorkspace).not.toHaveBeenCalled()
+    const diagnostic = { tool_name: 'Bash', tool_input: { command: 'supremo db report' }, tool_use_id: 'read' }
+    expect((await runTurnEvent('before-mutation', cwd, diagnostic)).allowed).toBe(true)
+    expect((await runTurnEvent('mutation', cwd, diagnostic)).allowed).toBe(true)
+    const write = { tool_name: 'Write', tool_input: { file_path: 'src/card.ts' }, tool_use_id: 'write' }
+    expect((await runTurnEvent('before-mutation', cwd, write)).allowed).toBe(false)
+    expect((await runTurnEvent('validate', cwd)).allowed).toBe(false)
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toEqual([])
+    expect(readJson(path.join(cwd, TURN_DIR, 'validation-request.json'))).toBeNull()
+  })
+  it('rejects hidden edits during a production diagnostic, including an unpaired post-tool event', async () => {
+    remote.environment = 'production'; remote.databaseEnvironment = 'production'; remote.databaseAuthority.automaticMigrations = false
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    await runTurnEvent('mutation', cwd, { tool_name: 'Bash', tool_input: { command: 'supremo db inspect' } })
+    change()
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(false)
+    expect((await runTurnEvent('mutation', cwd, { tool_name: 'Write' })).allowed).toBe(false)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toEqual([])
+    expect(readJson(path.join(cwd, TURN_DIR, 'validation-request.json'))).toBeNull()
+  })
+  it('does not snapshot earlier uncommitted code merely because a diagnostic turn ended', async () => {
+    change()
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    await runTurnEvent('mutation', cwd, { tool_name: 'Bash', tool_input: { command: 'supremo db status' } })
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toEqual([])
+  })
+  it.each(['development', 'production', 'unknown'] as const)('finishes an unchanged %s conversation without tools, capturing nothing from earlier work', async environment => {
+    change()
+    remote.environment = environment; remote.databaseEnvironment = environment
+    remote.databaseAuthority.automaticMigrations = environment === 'development'
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toEqual([])
+    expect(readJson(path.join(cwd, TURN_DIR, 'validation-request.json'))).toBeNull()
+  })
   it('waits for fresh verified authority before upgrading and scanning a legacy checkpoint', async () => {
     change()
     const record = capture()

@@ -3,13 +3,15 @@ import {
   deleteBranch,
   disableNativeAutoMerge,
   enableNativeAutoMerge,
-  getChecks,
+  readFile,
   getPullRequest,
   mergePullRequest,
   octokitFor,
 } from '@/lib/github/client'
 import type { GithubCredentials } from '@/lib/projects/repository'
 import type { MergeGateway } from './merge-controller'
+import { getProject, getProjectByRepoFullName } from '@/lib/projects/repository'
+import { selectTrustedWorkflow, verifyCandidatePolicy, workflowChecks } from './trusted-policy'
 
 /**
  * Liga o `MergeGateway` (consumido por reconcileMerge) às operações REAIS do
@@ -30,8 +32,32 @@ export function githubMergeGateway(creds: GithubCredentials): MergeGateway {
       }
     },
     getChecks: async (ref) => {
-      const r = await getChecks(creds, ref)
-      return { checks: r.checks, headSha: r.headSha }
+      const gh = octokitFor(creds)
+      const { data } = await gh.actions.listWorkflowRuns({
+        owner: creds.owner, repo: creds.repo, workflow_id: 'ci.yml', head_sha: ref, per_page: 100,
+      })
+      const run = selectTrustedWorkflow(data.workflow_runs, ref)
+      if (!run) return { checks: [], headSha: ref }
+      const jobs = await gh.paginate(gh.actions.listJobsForWorkflowRun, {
+        owner: creds.owner, repo: creds.repo, run_id: run.id, filter: 'latest', per_page: 100,
+      })
+      return { checks: workflowChecks(run, jobs), headSha: run.head_sha }
+    },
+    verifyPolicy: async (headSha) => {
+      const workerProject = await getProjectByRepoFullName(creds.repoFullName)
+      if (!workerProject) return { approved: false, headSha, reasons: ['Repositório sem projeto autorizado.'] }
+      const project = await getProject(workerProject.userId, workerProject.id)
+      const gh = octokitFor(creds)
+      const [treeResult, packageContent, lockContent] = await Promise.all([
+        gh.git.getTree({ owner: creds.owner, repo: creds.repo, tree_sha: headSha, recursive: 'true' }),
+        readFile(creds, 'package.json', headSha), readFile(creds, 'package-lock.json', headSha),
+      ])
+      return verifyCandidatePolicy({
+        headSha, kind: project.kind, truncated: treeResult.data.truncated,
+        tree: treeResult.data.tree.filter(entry => entry.type !== 'tree').map(entry => ({
+          path: entry.path ?? '', sha: entry.sha ?? '', mode: entry.mode ?? '',
+        })), packageContent, lockContent,
+      })
     },
     hasRequiredChecks: async (required) => {
       try {

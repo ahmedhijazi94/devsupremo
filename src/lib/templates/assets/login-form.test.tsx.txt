@@ -1,0 +1,63 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { LoginForm } from './login-form'
+
+const auth = vi.hoisted(() => ({
+  signInWithPassword: vi.fn(), signUp: vi.fn(), push: vi.fn(), refresh: vi.fn(),
+}))
+vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({ auth }) }))
+vi.mock('next/navigation', () => ({ useRouter: () => auth }))
+
+beforeEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+  auth.signInWithPassword.mockResolvedValue({ error: null })
+  auth.signUp.mockResolvedValue({ error: null })
+})
+function credentials() {
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.invalid' } })
+  fireEvent.change(screen.getByLabelText('Senha'), { target: { value: 'development-password' } })
+}
+
+describe('login e cadastro', () => {
+  it('envia credenciais, aguarda autenticação e abre a área privada', async () => {
+    render(<LoginForm />)
+    credentials()
+    fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    await waitFor(() => expect(auth.push).toHaveBeenCalledWith('/app'))
+    expect(auth.signInWithPassword).toHaveBeenCalledWith({ email: 'ana@example.invalid', password: 'development-password' })
+    expect(auth.refresh).toHaveBeenCalledOnce()
+  })
+  it('mantém a pessoa no formulário quando o servidor recusa a senha', async () => {
+    auth.signInWithPassword.mockResolvedValue({ error: { message: 'Credenciais inválidas' } })
+    render(<LoginForm />)
+    credentials()
+    fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    expect(await screen.findByText('Credenciais inválidas')).toBeVisible()
+    expect(auth.push).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Entrar' })).toBeEnabled()
+  })
+  it('permite cadastro com retorno à origem atual e alternância de modo', async () => {
+    render(<LoginForm />)
+    credentials()
+    fireEvent.click(screen.getByRole('button', { name: 'Não tem conta? Criar uma' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Criar conta' }))
+    await waitFor(() => expect(auth.signUp).toHaveBeenCalledWith({
+      email: 'ana@example.invalid', password: 'development-password',
+      options: { emailRedirectTo: `${location.origin}/auth/callback` },
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Já tem conta? Entrar' }))
+    expect(screen.getByRole('button', { name: 'Entrar' })).toBeVisible()
+  })
+  it('bloqueia o botão enquanto a autenticação está pendente', async () => {
+    let complete: (value: { error: null }) => void = () => undefined
+    auth.signInWithPassword.mockImplementation(() => new Promise(resolve => { complete = resolve }))
+    render(<LoginForm />)
+    credentials()
+    fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    expect(screen.getByRole('button', { name: '...' })).toBeDisabled()
+    complete({ error: null })
+    await waitFor(() => expect(auth.push).toHaveBeenCalledWith('/app'))
+    expect(auth.signInWithPassword).toHaveBeenCalledOnce()
+  })
+})

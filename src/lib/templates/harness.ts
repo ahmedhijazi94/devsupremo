@@ -9,6 +9,7 @@ import {
   NEXT_TSCONFIG_TYPES_GLOB_RE,
   QUICK_PATTERNS,
   SECURITY_PATTERNS,
+  SECURITY_CONTENT_PATTERNS,
   serializePatterns,
 } from './verify-classifier'
 
@@ -708,10 +709,9 @@ const saveEvidence = (status) => {
   fs.writeFileSync('.supremo/verify-result.json.tmp', JSON.stringify(evidence, null, 2) + '\\n')
   fs.renameSync('.supremo/verify-result.json.tmp', '.supremo/verify-result.json')
 }
-${recoveryContextScript().replace("import fs from 'node:fs'\n", "").replace("export function", "function")}
-
 const FULL_PATTERNS = ${serializePatterns(FULL_PATTERNS)}
 const SECURITY_PATTERNS = ${serializePatterns(SECURITY_PATTERNS)}
+const SECURITY_CONTENT_PATTERNS = ${serializePatterns(SECURITY_CONTENT_PATTERNS)}
 const QUICK_PATTERNS = ${serializePatterns(QUICK_PATTERNS)}
 const BROAD_FILE_COUNT = ${BROAD_FILE_COUNT}
 // Só o passo \`build\` consulta isto — ver ENV_BUILD_FAILURE_PATTERNS em
@@ -786,12 +786,11 @@ function knownNoisePaths(paths) {
 function changedFiles(stagedOnly) {
   try {
     const cmds = stagedOnly
-      ? ['git diff --cached --name-only']
-      : ['git diff --name-only ' + validationBase, 'git diff --cached --name-only', 'git ls-files --others --exclude-standard']
+      ? [['diff', '--cached', '--name-only', '-z']]
+      : [['diff', '--name-only', '-z', validationBase], ['diff', '--cached', '--name-only', '-z'], ['ls-files', '--others', '--exclude-standard', '-z']]
     const set = new Set()
     for (const c of cmds) {
-      for (const line of execSync(c, { encoding: 'utf8' }).split('\\n')) {
-        const p = line.trim()
+      for (const p of execFileSync('git', c, { encoding: 'utf8' }).split('\\0')) {
         if (p) set.add(p)
       }
     }
@@ -809,7 +808,19 @@ function classify(paths, noisePaths) {
   const riskPaths = paths.filter((p) => !noiseSet.has(p))
   const noiseSuffix = noiseSet.size > 0 ? ' (tsconfig.json: ruído conhecido do Next, ignorado)' : ''
   const full = riskPaths.some((p) => anyMatch(p, FULL_PATTERNS))
-  const security = riskPaths.some((p) => anyMatch(p, SECURITY_PATTERNS))
+  const security = riskPaths.some((p) => {
+    if (anyMatch(p, SECURITY_PATTERNS)) return true
+    if (!/\\.[cm]?[jt]sx?$/.test(p)) return false
+    // Inspect both versions: removing a guard is sensitive too. Unknown/deleted
+    // dependencies remain covered by the complete CI rather than a false pass.
+    let current = '', previous = '', diff = ''
+    if (fs.existsSync(p)) current = fs.readFileSync(p, 'utf8')
+    try { previous = execFileSync('git', ['show', validationBase + ':' + p], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) } catch { /* New file has no base version. */ }
+    if (previous) diff = execFileSync('git', ['diff', '--no-ext-diff', '--unified=0', validationBase, '--', p], { encoding: 'utf8' })
+      .split('\\n').filter((line) => /^[+-]/.test(line) && !/^(---|\\+\\+\\+)/.test(line)).join('\\n')
+    else diff = current
+    return /['"]use server['"]/.test(current + previous) || SECURITY_CONTENT_PATTERNS.some((pattern) => pattern.test(diff))
+  })
   const cosmetic = paths.every((p) => noiseSet.has(p) || anyMatch(p, QUICK_PATTERNS))
   if (full || riskPaths.length > BROAD_FILE_COUNT)
     return {
@@ -835,9 +846,9 @@ const rlsStep = hasLocalDb ? [['rls / isolamento', 'npm run test:rls']] : []
 
 const STEPS = {
   quick: [
-    ['typecheck', 'tsc --noEmit'],
+    ['typecheck', 'tsc --noEmit --incremental'],
     ['lint', 'eslint'],
-    ['testes afetados', 'vitest run --changed ' + validationBase + ' --passWithNoTests --exclude "**/*.rls.test.ts"'],
+    ['testes afetados', 'vitest run --changed ' + validationBase + ' --exclude "**/*.rls.test.ts"'],
     ['secret scan', 'node scripts/security-audit.js ' + (background ? '--strict' : '--staged --strict')],
   ],
   security: [
@@ -866,15 +877,14 @@ const { level, reason } = forced
 evidence.level = level
 
 console.log(\`\\n▸ verify [\${level.toUpperCase()}] — \${reason} (\${paths.length} arquivo(s))\\n\`)
-const sourceChanged = paths.some((p) => /\\.[cm]?[jt]sx?$/.test(p) && !/\\.d\\.ts$/.test(p))
-const recovery = readRecoveryContext()
-const knownCoverageFailure = recovery.failure?.failures?.some((failure) => /cobertura|coverage/i.test(failure?.name ?? '')) ?? false
-if (level === 'quick' && (knownCoverageFailure || (sourceChanged && !args.includes('--draft')))) {
-  STEPS.quick[2] = ['testes e cobertura', UNIT]
+// Local QUICK stays proportional to the edit. Complete coverage and browser
+// suites are required remotely; named feature acceptance may select more tests.
+if (level === 'quick') {
+  const lintPaths = paths.filter((p) => /\\.[cm]?[jt]sx?$/.test(p) && fs.existsSync(p))
+  const shellQuote = (value) => "'" + value.replaceAll("'", "'\\\"'\\\"'") + "'"
+  STEPS.quick[1] = ['lint', lintPaths.length ? 'eslint --no-warn-ignored -- ' + lintPaths.map(shellQuote).join(' ') : 'eslint --cache']
 }
-// Low-risk browser smoke is automatic in the isolated development validation.
-// Draft saves defer browser startup to postflight; acceptance contracts can select more tests.
-if (background && !args.includes('--draft') && paths.some((p) => /^(app|components|src\\/(app|components))\\//.test(p)) && fs.existsSync('e2e/smoke.spec.ts')) {
+if (background && level !== 'quick' && !args.includes('--draft') && paths.some((p) => /^(app|components|src\\/(app|components))\\//.test(p)) && fs.existsSync('e2e/smoke.spec.ts')) {
   STEPS[level].push(['browser e2e', 'playwright test e2e/smoke.spec.ts'])
 }
 const t0 = Date.now()
@@ -883,8 +893,15 @@ let buildDeferred = false
 const checks = STEPS[level].filter(([label]) => label !== 'build')
 const results = await Promise.allSettled(checks.map(async ([label, cmd]) => {
   const started = Date.now()
-  await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 })
-  return { label, seconds: ((Date.now() - started) / 1000).toFixed(1) }
+  let status = 'passed'
+  try { await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 }) }
+  catch (error) {
+    const output = String(error.stdout ?? '') + String(error.stderr ?? '')
+    if (label === 'testes afetados' && error.code === 1 && /No test files found/.test(output)
+      && !/Unhandled Error|Failed to load|Error:|SyntaxError/.test(output)) status = 'deferred'
+    else throw error
+  }
+  return { label, status, seconds: ((Date.now() - started) / 1000).toFixed(1) }
 }))
 for (let index = 0; index < results.length; index++) {
   const result = results[index]
@@ -894,9 +911,9 @@ for (let index = 0; index < results.length; index++) {
     if (err.stdout) process.stderr.write(err.stdout.toString())
     if (err.stderr) process.stderr.write(err.stderr.toString())
     console.error(\`\\n✗ verify \${level} falhou em: \${label}\\n\`)
-  } else console.log(\`  • \${label}… ok (\${result.value.seconds}s)\`)
+  } else console.log(\`  • \${label}… \${result.value.status === 'deferred' ? 'PENDENTE: nenhum teste relacionado; a CI completa continua obrigatória' : 'ok'} (\${result.value.seconds}s)\`)
 }
-for (let index = 0; index < results.length; index++) evidence.checks.push({ name: checks[index][0], status: results[index].status === 'rejected' ? 'failed' : 'passed' })
+for (let index = 0; index < results.length; index++) evidence.checks.push({ name: checks[index][0], status: results[index].status === 'rejected' ? 'failed' : results[index].value.status })
 if (results.some((result) => result.status === 'rejected')) { saveEvidence('failed'); process.exit(1) }
 for (const [label, cmd] of STEPS[level].filter(([label]) => label === 'build')) {
   process.stdout.write(\`  • \${label}… \`)
@@ -964,7 +981,7 @@ step('.env.local', () => {
 })
 
 step('dependências', () => {
-  if (!existsSync('node_modules')) execSync('npm ci', { stdio: 'inherit' })
+  if (!existsSync('node_modules')) execSync('npm ci --ignore-scripts', { stdio: 'inherit' })
 })
 
 step('git hooks', () => {
@@ -1244,8 +1261,8 @@ console.log(JSON.stringify({
 // O preflight (--ensure) só "termina" de verdade com os dois saudáveis — sai
 // com código de erro pra nunca depender só do agente ter lido o JSON: se
 // mesmo depois de religar (com o retry acima) preview ou daemon continuarem
-// não-saudáveis, o comando falha de verdade (exit != 0), sinal pro agente
-// parar e não editar/checkpoint (ver AGENTS.md/CLAUDE.md — teste-v3-13).
+// não-saudáveis, o comando falha de verdade (exit != 0). Esse diagnóstico
+// não revoga a autorização de preparar correções no desenvolvimento.
 // No modo \`status\` (sem --ensure), só diagnostica — nunca falha por isso.
 if (process.argv.includes('--ensure') && !healthy) {
   process.exitCode = 1

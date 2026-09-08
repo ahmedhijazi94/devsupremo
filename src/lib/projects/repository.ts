@@ -529,36 +529,5 @@ export async function logAudit(
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Pedidos de secret — o agente pede, o dono preenche no Supremo
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Registra que o projeto precisa de uma env var (chave de API etc.). Guarda só
- * o PEDIDO — o valor nunca passa por aqui. Idempotente por (projeto, nome).
- */
-export async function createSecretRequest(
-  userId: string,
-  projectId: string,
-  name: string,
-  description: string | null,
-  isSecret: boolean,
-): Promise<void> {
-  const { error } = await db()
-    .from('secret_requests')
-    .upsert(
-      {
-        user_id: userId,
-        project_id: projectId,
-        name,
-        description,
-        is_secret: isSecret,
-        status: 'pending',
-      },
-      { onConflict: 'project_id,name' },
-    )
-
-  if (error) {
-    throw new Error(`Falha ao registrar o pedido de secret: ${error.message}`)
-  }
-}
+// Secret requests now require an explicit destination/environment and an owner-checked
+// store in lib/secret-requests. The old implicit Vercel helper was intentionally removed.

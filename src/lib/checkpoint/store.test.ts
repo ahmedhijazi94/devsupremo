@@ -263,3 +263,27 @@ describe('checkpoints — isolamento entre projetos com cliente privilegiado', (
     expect(await getCheckpointState(client, 'new-id', input.projectId)).toMatchObject({ commitSha: 'a'.repeat(40) })
   })
 })
+
+describe('durable checkpoint reconciliation discovery', () => {
+  it('selects published checkpoints by recorded PR, regardless of project state/active branch', async () => {
+    const { listPendingCheckpointReconciliations } = await import('./store')
+    const calls: unknown[][] = []
+    const query = { eq: (...args: unknown[]) => { calls.push(['eq',...args]); return query },
+      not: (...args: unknown[]) => { calls.push(['not',...args]); return query },
+      order: (...args: unknown[]) => { calls.push(['order',...args]); return query },
+      limit: async () => ({ data: [{ project_id: 'p', pr_number: 7 }, { project_id: 'p', pr_number: 7 },
+        { project_id: 'p', pr_number: 8 }], error: null }) }
+    const client = { from: () => ({ select: () => query }) } as unknown as import('@supabase/supabase-js').SupabaseClient
+    expect(await listPendingCheckpointReconciliations(client)).toEqual([{ projectId: 'p', prNumber: 7 }, { projectId: 'p', prNumber: 8 }])
+    expect(calls).toContainEqual(['eq','push_status','published'])
+    expect(calls).toContainEqual(['not','pr_number','is',null])
+  })
+  it('a failed restore write or unacknowledged RPC never resolves as success', async () => {
+    const { reportRestoreApplied } = await import('./store')
+    const authority = { id: 'r', projectId: 'p', deviceId: 'd', claimToken: 't' }
+    const broken = { rpc: async () => ({ data: null, error: { code: '23503' } }) } as unknown as import('@supabase/supabase-js').SupabaseClient
+    await expect(reportRestoreApplied(broken,authority,'c','a'.repeat(40))).rejects.toThrow('Confirmação')
+    const conflict = { rpc: async () => ({ data: 'conflict', error: null }) } as unknown as import('@supabase/supabase-js').SupabaseClient
+    expect(await reportRestoreApplied(conflict,authority,'c','a'.repeat(40))).toBe(false)
+  })
+})

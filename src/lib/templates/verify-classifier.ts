@@ -38,7 +38,8 @@ export const SECURITY_PATTERNS: RegExp[] = [
   /(^|\/)proxy\.ts$/,
   /(^|\/)middleware\.ts$/,
   /(^|\/)app\/api\//,
-  /(^|\/)actions?\//,
+  /(^|\/)actions?(?:\/|\.[cm]?[jt]sx?$)/,
+  /(^|\/)route\.[cm]?[jt]sx?$/,
   /(^|\/)server\//,
   /rls/i,
   /auth/i,
@@ -60,6 +61,15 @@ export const QUICK_PATTERNS: RegExp[] = [
 
 /** Acima disso, tratamos como mudança ampla → FULL. */
 export const BROAD_FILE_COUNT = 25
+
+/** Changed executable source can be sensitive even with an ordinary filename. */
+export const SECURITY_CONTENT_PATTERNS: RegExp[] = [
+  /['"]use server['"]/,
+  /\b(?:auth|storage)\s*\./,
+  /\.\s*(?:from|rpc)\s*\(/,
+  /\b(?:requireUser|requireProjectOwner|createAdminClient)\s*\(/,
+  /\bprocess\s*\.\s*env\b/,
+]
 
 /**
  * Assinaturas CONHECIDAS e estritas de falha AMBIENTAL do sandbox — nunca um
@@ -208,6 +218,7 @@ export function classifyRisk(
   changedPaths: readonly string[],
   capabilities: readonly CapabilityId[] = [],
   knownNoisePaths: readonly string[] = [],
+  changedContent: Readonly<Record<string, string>> = {},
 ): RiskResult {
   const applicable = securityChecksFor(capabilities)
   const changed = changedPaths.length
@@ -221,7 +232,8 @@ export function classifyRisk(
   const noiseSuffix = noiseSet.size > 0 ? ' (tsconfig.json: ruído conhecido do Next, ignorado na classificação)' : ''
 
   const hasFull = riskPaths.some((p) => matchesAny(p, FULL_PATTERNS))
-  const hasSecurity = riskPaths.some((p) => matchesAny(p, SECURITY_PATTERNS))
+  const hasSecurity = riskPaths.some((p) => matchesAny(p, SECURITY_PATTERNS) ||
+    (/[.][cm]?[jt]sx?$/.test(p) && SECURITY_CONTENT_PATTERNS.some((pattern) => pattern.test(changedContent[p] ?? ''))))
   const allCosmetic = changedPaths.every((p) => noiseSet.has(p) || matchesAny(p, QUICK_PATTERNS))
 
   if (hasFull || riskPaths.length > BROAD_FILE_COUNT) {

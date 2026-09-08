@@ -18,6 +18,8 @@ const root = fs.realpathSync(process.argv[2] ?? '')
 if (!/^\/(?:private\/)?tmp\/supremo-[^/]+$/.test(root)) throw new Error('Use um scaffold descartável supremo-* em /tmp.')
 if (fs.existsSync(path.join(root, '.git'))) throw new Error('O scaffold deve começar sem histórico Git.')
 const PROJECT = crypto.randomUUID()
+writeJson(path.join(root, '.supremo/lifecycle.json'), { validation_mode: 'background_adaptive', validation: { debounce_ms: 250 }, auto_heal: { enabled: false } })
+const drain = async () => { await new Promise(resolve => setTimeout(resolve, 300)); return drainLocalValidation(root) }
 const status = (): { pid: number; url: string; healthy: boolean } => JSON.parse(execFileSync(process.execPath,
   ['scripts/preview.mjs', 'status'], { cwd: root, encoding: 'utf8' })) as { pid: number; url: string; healthy: boolean }
 const before = status()
@@ -76,11 +78,14 @@ try {
   fs.writeFileSync(file, firstSource)
   await page.getByRole('heading', { name: 'Central de chamados', exact: true }).waitFor()
   measurements.firstVisibleMs = Math.round(performance.now() - start)
+  const returnStart = performance.now()
   assert.equal((await call('complete', 'first')).allowed, true)
-  assert.equal(await drainLocalValidation(root), 1)
+  measurements.returnControlMs = Math.round(performance.now() - returnStart)
+  assert.equal(await drain(), 1)
   const first = queue().at(-1)!
-  assert.equal(first.validationStatus, 'deferred')
-  assert.deepEqual(evidenceFor(root, first)?.checks.map(check => check.type), ['security'])
+  assert.notEqual(first.validationStatus, 'failed', evidenceFor(root, first)?.logs)
+  for (const type of ['typecheck', 'lint', 'security']) assert.ok(evidenceFor(root, first)?.checks.some(check => check.type === type && check.status === 'passed'))
+  assert.ok(!evidenceFor(root, first)?.checks.some(check => check.type === 'e2e' || check.type === 'build'))
   assert.equal(await page.getByLabel('Nome', { exact: false }).inputValue(), 'Rascunho preservado')
 
   // Controlled remote failure, reproducing the user's old-selector problem.
@@ -102,9 +107,9 @@ try {
   await page.getByRole('heading', { name: dateTitle, exact: true }).waitFor()
   measurements.coldChangeVisibleMs = Math.round(performance.now() - nextStart)
   assert.equal((await call('complete', 'new-conversation')).allowed, true)
-  await drainLocalValidation(root)
+  await drain()
   assert.equal(queue().length, 2)
-  assert.equal(queue().at(-1)?.validationStatus, 'deferred')
+  assert.notEqual(queue().at(-1)?.validationStatus, 'failed', evidenceFor(root, queue().at(-1)!)?.logs)
   assert.equal(await page.getByLabel('Nome', { exact: false }).inputValue(), 'Rascunho preservado')
   const after = status()
   assert.equal(after.pid, before.pid)
@@ -112,7 +117,7 @@ try {
   assert.equal(gitText(root, ['rev-parse', 'HEAD']), initialHead)
   assert.deepEqual(fs.readFileSync(path.join(root, '.git/index')), initialIndex)
   console.log(JSON.stringify({ result: 'passed', scope: 'Generated app, real HMR/browser/Git/new OS processes; controlled backend/model boundaries',
-    measurements, checkpointCount: queue().length, qa: 'not requested; only secret scan executed', previewPreserved: true,
+    measurements, checkpointCount: queue().length, qa: 'automatic adaptive checks on both immutable checkpoints; no browser/build required for title edits', previewPreserved: true,
     formDraftPreserved: true, oldFailurePreserved: true }, null, 2))
 } finally {
   fs.writeFileSync(file, original)

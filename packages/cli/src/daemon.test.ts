@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFile
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CheckpointRecord } from './checkpoint'
 import { parseQueue, serializeQueue, QUEUE_FILE } from './checkpoint'
 import * as changesetModule from './changeset'
@@ -270,7 +270,9 @@ describe('daemon NUNCA fala com o GitHub nem manipula token (testes 1,13,19)', (
 })
 
 describe('processRestores — restore no próprio Supremo (v3.1 finalização)', () => {
-  const cfg = { projectId: 'proj-1', apiBaseUrl: 'https://x', cwd: '/tmp/x' }
+  const cfg = { projectId: 'proj-1', apiBaseUrl: 'https://x', cwd: '' }
+  beforeEach(() => { cfg.cwd = mkdtempSync(join(tmpdir(), 'supremo-restore-delivery-')) })
+  afterEach(() => { rmSync(cfg.cwd, { recursive: true, force: true }) })
 
   function fakeHttp(opts: {
     pending?: Array<{ restoreRequestId: string; targetCheckpointId: string; targetSummary: string }>
@@ -282,7 +284,7 @@ describe('processRestores — restore no próprio Supremo (v3.1 finalização)',
       publish: async () => ({ prNumber: 0 }),
       pollRestores: async () => {
         if (opts.pollThrows) throw new NetworkError('offline')
-        return opts.pending ?? []
+        return (opts.pending ?? []).map((r) => ({ ...r, claimToken: 'claim-test', leaseExpiresAt: new Date(Date.now() + 600_000).toISOString(), environment: 'development' as const }))
       },
       reportRestoreApplied: async (input) => {
         applied.push(input)
@@ -319,7 +321,7 @@ describe('processRestores — restore no próprio Supremo (v3.1 finalização)',
     http.pollRestores = async () => {
       mkdirSync(join(cwd, '.supremo/turns'), { recursive: true })
       writeFileSync(join(cwd, '.supremo/turns/state.json'), JSON.stringify({ turn: { status: 'active' } }))
-      return [{ restoreRequestId: 'req-race', targetCheckpointId: 'cpB', targetSummary: 'previous card' }]
+      return [{ restoreRequestId: 'req-race', targetCheckpointId: 'cpB', targetSummary: 'previous card', claimToken: 'claim-test', leaseExpiresAt: new Date(Date.now() + 600_000).toISOString(), environment: 'development' }]
     }
     try {
       expect(await processRestores({ ...cfg, cwd, getSecret: () => 'device-test' }, { http })).toBe(1)
@@ -619,7 +621,7 @@ describe('defaultDaemonHttp.syncStatus — timeout curto real (item 7: nunca tra
     SYNC_STATUS_TIMEOUT_MS + 5000,
   )
 
-  it('publish/pollRestores não recebem o timeout curto de sync e metadata', async () => {
+  it('poll e reports de restore possuem timeout curto; publicação usa seu próprio ciclo', async () => {
     const requests: Array<{ url: string; signal: AbortSignal | null | undefined }> = []
     vi.stubGlobal('fetch', vi.fn(async (url: string, options: RequestInit) => {
       requests.push({ url, signal: options.signal })
@@ -634,7 +636,7 @@ describe('defaultDaemonHttp.syncStatus — timeout curto real (item 7: nunca tra
       const outcome = await processCheckpoint(verifiedRecord(), { ...fakes({}).ctx, http: client })
       expect(outcome.result).toBe('done')
       expect(requests.map((request) => [request.url.split('/').at(-1), Boolean(request.signal)])).toEqual([
-        ['restore-poll', false], ['sync-status', true], ['local-report', true], ['publish', false],
+        ['restore-poll', true], ['sync-status', true], ['local-report', true], ['publish', false],
       ])
     } finally { vi.unstubAllGlobals() }
   })

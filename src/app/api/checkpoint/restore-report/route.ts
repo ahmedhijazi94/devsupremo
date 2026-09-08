@@ -1,72 +1,39 @@
-import { type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { createServiceClient } from '@/lib/supabase/admin'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
-import { authorizeRestoreReport } from '@/lib/checkpoint/restore'
-import {
-  supabaseCheckpointDeviceStore,
-  getRestoreRequestProjectOwner,
-  reportRestoreApplied,
-  reportRestoreFailed,
-} from '@/lib/checkpoint/store'
+import { readLocalReportBody } from '@/lib/checkpoint/local-report'
+import { sanitizeDiagnostic } from '@/lib/checkpoint/feedback'
+import { reportRestoreApplied, reportRestoreFailed, supabaseCheckpointDeviceStore } from '@/lib/checkpoint/store'
 
-/**
- * O daemon reporta o resultado de um restore que reivindicou. `applied` aponta
- * para o checkpoint NOVO ("E") que o restore criou (ou null se o alvo já era o
- * estado atual — nada a restaurar). O checkpoint E em si segue o fluxo NORMAL de
- * publish (mesma fila, mesmos gates) — esta rota só fecha o pedido de restore.
- *
- * `createServiceClient()` é service_role (ignora RLS) — autenticar o DEVICE não
- * basta; confirmamos que o restoreRequestId pertence a um projeto do MESMO
- * dono do device antes de qualquer escrita (authorizeRestoreReport, fail-
- * closed). Sem isto, um device autenticado de QUALQUER projeto conseguiria
- * fechar o pedido de restore de outro usuário — IDOR.
- */
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
+const headers = { 'Cache-Control': 'no-store' }
+const identity = {
+  deviceSecret: z.string().min(10).max(256), projectId: z.string().uuid(),
+  restoreRequestId: z.string().uuid(), claimToken: z.string().uuid(),
+}
 const bodySchema = z.discriminatedUnion('status', [
-  z.object({
-    deviceSecret: z.string().min(10),
-    restoreRequestId: z.string().uuid(),
-    status: z.literal('applied'),
-    resultCheckpointId: z.string().uuid().nullable(),
-  }),
-  z.object({
-    deviceSecret: z.string().min(10),
-    restoreRequestId: z.string().uuid(),
-    status: z.literal('failed'),
-    error: z.string().min(1).max(500),
-  }),
-])
+  z.object({ ...identity, status: z.literal('applied'), resultCheckpointId: z.string().uuid().nullable(),
+    resultCommitSha: z.string().regex(/^[a-f0-9]{40}$/).nullable() }).strict(),
+  z.object({ ...identity, status: z.literal('failed'), error: z.string().min(1).max(500) }).strict(),
+]).refine((body) => body.status !== 'applied' || (body.resultCheckpointId === null) === (body.resultCommitSha === null))
 
-export async function POST(request: NextRequest): Promise<Response> {
-  const parsed = bodySchema.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return Response.json({ error: 'payload inválido.' }, { status: 400 })
-  const body = parsed.data
-  const client = createServiceClient()
-
-  const auth = await authenticateDeviceSecret(
-    supabaseCheckpointDeviceStore(client),
-    body.deviceSecret,
-  )
-  if (!auth.ok) return Response.json({ error: 'device não autorizado.' }, { status: 401 })
-
-  // O restoreRequestId precisa ser de um projeto do MESMO dono do device —
-  // nunca de outro usuário. 404 (não 403) para não revelar se o id existe.
-  const restoreRequest = await getRestoreRequestProjectOwner(client, body.restoreRequestId)
-  const authz = authorizeRestoreReport({
-    device: { ownerUserId: auth.device.ownerUserId },
-    restoreRequest,
-  })
-  if (!authz.ok) {
-    return Response.json({ error: 'pedido de restore não encontrado.' }, { status: 404 })
+/** Atomic owner/device/claim checks, metadata registration and durable ACK. */
+export async function POST(request: Request): Promise<Response> {
+  const parsed = bodySchema.safeParse(await readLocalReportBody(request))
+  if (!parsed.success) return Response.json({ error: 'payload inválido.' }, { status: 400, headers })
+  try {
+    const body = parsed.data
+    const client = createServiceClient()
+    const auth = await authenticateDeviceSecret(supabaseCheckpointDeviceStore(client), body.deviceSecret)
+    if (!auth.ok) return Response.json({ error: 'device não autorizado.' }, { status: 401, headers })
+    const authority = { id: body.restoreRequestId, projectId: body.projectId, deviceId: auth.device.id, claimToken: body.claimToken }
+    const acknowledged = body.status === 'applied'
+      ? await reportRestoreApplied(client, authority, body.resultCheckpointId, body.resultCommitSha)
+      : await reportRestoreFailed(client, authority, sanitizeDiagnostic(body.error).slice(0,500))
+    if (!acknowledged) return Response.json({ error: 'Identidade ou resultado da restauração divergente.' }, { status: 409, headers })
+    return Response.json({ ok: true }, { headers })
+  } catch {
+    return Response.json({ error: 'Confirmação pendente; tente novamente.' }, { status: 503, headers })
   }
-
-  if (body.status === 'applied') {
-    await reportRestoreApplied(client, body.restoreRequestId, body.resultCheckpointId)
-  } else {
-    await reportRestoreFailed(client, body.restoreRequestId, body.error)
-  }
-  return Response.json({ ok: true })
 }

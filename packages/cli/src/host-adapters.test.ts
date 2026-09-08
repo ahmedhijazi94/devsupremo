@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CODEX_HOOK_PATH, CODEX_SETTINGS_PATH, CLAUDE_SETTINGS_PATH, TURN_HOOK_PATH, codexHookSettings, claudeHookSettings, inspectHostAdapters, installHostAdapters, lifecycleCliCompatible, mergeClaudeSettings, turnHookScript } from './host-adapters'
+import { CODEX_HOOK_PATH, CODEX_SETTINGS_PATH, CLAUDE_SETTINGS_PATH, TURN_HOOK_PATH, codexHookSettings, claudeHookSettings, hostIntegrationMode, inspectHostAdapters, installHostAdapters, lifecycleCliCompatible, mergeClaudeSettings, turnHookScript } from './host-adapters'
 import { validateLocalReadiness } from './bootstrap'
 
 const dirs: string[] = []
@@ -103,6 +103,8 @@ describe('Codex native lifecycle and executable receipts', () => {
       expect(response.status, response.stderr).toBe(0)
     }
     expect(inspectHostAdapters(root).adapters[host]).toMatchObject({ runtimeVerified: true, integrationMode: 'enforced' })
+    expect(hostIntegrationMode(root, host, 'session-one')).toBe('enforced')
+    expect(hostIntegrationMode(root, host, 'forged-new-session')).toBe('assisted')
     // A new host session must deliver a full cycle itself; old receipts cannot approve it.
     expect(dispatch(root, host, 'UserPromptSubmit', 'new-session').status).toBe(0)
     expect(inspectHostAdapters(root).adapters[host].integrationMode).toBe('assisted')

@@ -1,10 +1,11 @@
 import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { buildSync } from 'esbuild'
+import { build } from 'esbuild'
 import { expect, it } from 'vitest'
 import type { BackendTurnContext } from '../../../src/lib/checkpoint/turn-context'
 import { defaultCheckpointDeps } from './checkpoint'
@@ -69,6 +70,7 @@ it('cold start processes reconcile remote failure, revalidate repair and preserv
     fs.mkdirSync(path.join(root, 'tests'))
     fs.writeFileSync(path.join(root, '.gitignore'), '.supremo/turns/\n.supremo/validation/\n.supremo/checkpoints/\n.supremo/turn-context.json\n.supremo/validation-feedback.json\n')
     writeJson(path.join(root, '.supremo/project.json'), {projectId: PROJECT, supremoUrl: origin})
+    writeJson(path.join(root, '.supremo/lifecycle.json'), { validation_mode: 'on_request', auto_heal: { enabled: false } })
     fs.writeFileSync(path.join(root, 'scripts/verify.mjs'), verify)
     fs.writeFileSync(path.join(root, 'tests/tickets.test.mjs'), behaviorTests)
     const implementation = (broken = false, date = false): void => fs.writeFileSync(path.join(root, 'tickets.mjs'),
@@ -101,7 +103,18 @@ async function main() {
   console.log(JSON.stringify(result));
 }
 main().catch(e=>{console.error(e.message);process.exitCode=1});`)
-    buildSync({entryPoints:[entry],outfile:driver,bundle:true,platform:'node',target:'node18',logLevel:'silent'})
+    // This lifecycle integration uses a fixture authority with pinned verifier
+    // bytes, while test-generated-worker.mts covers the shipped scaffold policy.
+    // Domain assertions and child-process execution below remain real.
+    const verifierHash = createHash('sha256').update(verify).digest('hex')
+    await build({entryPoints:[entry],outfile:driver,bundle:true,platform:'node',target:'node18',logLevel:'silent', plugins: [{
+      name: 'fixture-validation-authority', setup(build) {
+        build.onResolve({ filter: /^\.\/trusted-validation$/ }, () => ({ path: 'fixture-authority', namespace: 'fixture-authority' }))
+        build.onLoad({ filter: /.*/, namespace: 'fixture-authority' }, () => ({ loader: 'js', contents:
+          `import {readFileSync} from 'node:fs'; import {createHash} from 'node:crypto';
+          export function verifyTrustedFiles(cwd) { if(createHash('sha256').update(readFileSync(cwd+'/scripts/verify.mjs')).digest('hex') !== ${JSON.stringify(verifierHash)}) throw new Error('Fixture validator modified'); }` }))
+      },
+    }]})
     const call = async (event: string, input: object = {}): Promise<TurnResult> => {
       const child = execFile(process.execPath, [driver, root, origin, event], {encoding:'utf8',timeout:20_000,maxBuffer:2*1024*1024})
       child.stdin?.end(JSON.stringify(input))

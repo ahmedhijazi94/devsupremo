@@ -55,4 +55,19 @@ describe('daemon feedback cache', () => {
     expect(await refreshLocalFeedback({ ...setup(), getSecret: () => null })).toBe(false)
     expect(fetch).not.toHaveBeenCalled()
   })
+  it('never permits a redirect to forward the device credential and preserves previous evidence', async () => {
+    const config = setup(); respond(snapshot); await refreshLocalFeedback(config)
+    const file = path.join(config.cwd, FEEDBACK_FILE), previous = fs.readFileSync(file, 'utf8')
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      expect(init.redirect).toBe('error')
+      throw new TypeError('fetch failed: unexpected redirect')
+    }))
+    expect(await refreshLocalFeedback(config)).toBe(false)
+    expect(fs.readFileSync(file, 'utf8')).toBe(previous)
+  })
+  it('keeps a missing issuer binding as unavailable without an unhandled worker rejection', async () => {
+    respond(snapshot)
+    expect(await refreshLocalFeedback({ ...setup(), getSecret: () => { throw new Error('Origem não comprovada') } })).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  })
 })

@@ -366,6 +366,17 @@ export async function createEmptyProject(
   /** Login do owner escolhido (pessoal ou organização). Ausente → pessoal. */
   owner?: string,
 ) {
+  const parsed = z.object({
+    name: z.string().trim().min(1).max(100),
+    description: z.string().trim().max(2000).optional(),
+    kind: z.enum(['public', 'solo', 'team']),
+    owner: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/).optional(),
+  }).safeParse({ name, description, kind, owner })
+  if (!parsed.success) return { error: 'Dados do projeto inválidos.' }
+  name = parsed.data.name
+  description = parsed.data.description
+  kind = parsed.data.kind
+  owner = parsed.data.owner
   const supabase = await createClient()
   const {
     data: { user },
@@ -431,6 +442,7 @@ export async function createEmptyProject(
       .from('projects')
       .update({ github_owner_login: ownerLogin, github_owner_type: ownerType })
       .eq('id', (data as { id: string }).id)
+      .eq('user_id', user.id)
   }
 
   revalidatePath('/', 'layout')

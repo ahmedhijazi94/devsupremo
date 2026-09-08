@@ -13,6 +13,8 @@ import {
   GITLEAKS_SHA256_LINUX_X64,
 } from './project-files'
 import { inferTablesFromMigration, generateRlsTest } from './rls-tests'
+import { isDatabaseReadCommand } from '../../../packages/cli/src/database-request'
+import { inspectSelectSql } from '../database-inspection/sql'
 
 /**
  * Testes de coerência do template.
@@ -93,6 +95,23 @@ describe('login no preview — cookie de terceira-parte no iframe', () => {
       expect(content).toContain('partitioned: true')
     })
   }
+})
+
+describe('CI — instalação não executa código de novas dependências', () => {
+  it('todos os jobs instalam sem lifecycle scripts e sem restaurar node_modules antigos', () => {
+    const ci = file('.github/workflows/ci.yml')
+    const installs = ci.split('\n').filter((line) => line.trim().startsWith('- run: npm ci'))
+    expect(installs).toHaveLength(6)
+    expect(installs.every((line) => line.trim() === '- run: npm ci --ignore-scripts')).toBe(true)
+    expect(ci).not.toContain('path: node_modules')
+    expect(ci).not.toContain('npm rebuild')
+    expect(file('scripts/setup-local.mjs')).toContain("execSync('npm ci --ignore-scripts'")
+  })
+  it('declara tipos dev do Next antes do preview, preservando o hash do validador', () => {
+    const config = JSON.parse(file('tsconfig.json')) as { include: string[] }
+    expect(config.include).toContain('.next/types/**/*.ts')
+    expect(config.include).toContain('.next/dev/types/**/*.ts')
+  })
 })
 
 describe('CI — todo script invocado existe', () => {
@@ -368,39 +387,24 @@ describe('CI — actions em versão suportada', () => {
  * com exatamente esse erro. Fix: concede a permissão MÍNIMA necessária — só
  * no job "changes" (onde paths-filter roda), nunca no workflow inteiro.
  */
-describe('CI — permissões mínimas do job "changes" (dorny/paths-filter precisa ler a PR)', () => {
+describe('CI completo sem filtro que produza sucesso sem executar', () => {
   const ci = file('.github/workflows/ci.yml')
-  const changesJob = ci.slice(ci.indexOf('\n  changes:'), ci.indexOf('\n  quality:'))
-
-  it('o job "changes" concede pull-requests:read — a permissão que faltava no E2E real', () => {
-    expect(changesJob).toMatch(/permissions:\s*\n\s*contents:\s*read\s*\n\s*pull-requests:\s*read/)
+  it('não usa seleção de arquivos nem concede permissões que o filtro removido exigia', () => {
+    expect(ci).not.toContain('dorny/paths-filter')
+    expect(ci).not.toContain('needs.changes')
+    expect(ci).not.toContain('pull-requests: read')
+    expect(ci).toMatch(/^name: Gates\n/)
   })
-
-  it('a permissão é escopada SÓ ao job "changes" — os outros 7 jobs não ganham acesso de leitura à PR', () => {
-    const otherJobs = ci.slice(ci.indexOf('\n  quality:'))
-    expect(otherJobs).not.toMatch(/pull-requests:\s*read/)
-  })
-
-  it('o job "changes" não herda permissões que não usa (security-events/actions) — um job com `permissions:` próprio substitui, não soma, o bloco do workflow', () => {
-    // Documenta a semântica do GitHub Actions que este fix depende: definir
-    // `permissions:` num job REESCREVE (não estende) o que ele herdaria do
-    // topo do arquivo — por isso listar só contents+pull-requests aqui é
-    // estritamente MENOS, não mais, do que o job tinha antes (que herdava
-    // também security-events:write e actions:read, que paths-filter/checkout
-    // nunca usam).
-    expect(changesJob).not.toMatch(/security-events/)
-    expect(changesJob).not.toMatch(/actions:\s*read/)
-  })
-
-  it('dorny/paths-filter continua no job "changes", depois do checkout', () => {
-    expect(changesJob).toMatch(/uses:\s*actions\/checkout@v5/)
-    expect(changesJob).toMatch(/uses:\s*dorny\/paths-filter@v3/)
-    // Busca o PASSO (`uses: ...`), não uma menção em comentário explicativo
-    // (o comentário acima de `permissions:` cita dorny/paths-filter@v3 na
-    // prosa, antes do passo de verdade).
-    expect(changesJob.indexOf('uses: actions/checkout@v5')).toBeLessThan(
-      changesJob.indexOf('uses: dorny/paths-filter@v3'),
-    )
+  it('executa as suítes RLS e E2E em jobs obrigatórios com comandos reais', () => {
+    const rls = ci.slice(ci.indexOf('\n  rls:'), ci.indexOf('\n  dependencies:'))
+    const e2e = ci.slice(ci.indexOf('\n  e2e:'))
+    expect(rls).toContain('      - name: Provar isolamento entre contas\n        run: npm run test:rls')
+    expect(e2e).toContain('      - run: npm run test:e2e')
+    for (const job of [rls, e2e]) {
+      expect(job).not.toContain('Não afetado')
+      expect(job).not.toContain('Gate verde')
+      expect(job).not.toContain('continue-on-error')
+    }
   })
 })
 
@@ -540,6 +544,56 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
   it('o .gitignore ignora o estado do link do Supabase (supabase/.temp)', () => {
     const ignore = file('.gitignore')
     expect(ignore).toContain('supabase/.temp/')
+  })
+})
+
+describe('consultas reais pelo canal de leitura, sem ritual de entrega', () => {
+  it('os exemplos completos são aceitos pelo guard de leitura e o SQL pelo validador real', () => {
+    const guide = file('.supremo/DEVELOPMENT.md')
+    const commands = [...guide.matchAll(/`(db (?:status|inspect|query|logs|report)\b[^`]*)`/g)].map((match) => match[1]!)
+    expect(commands).toHaveLength(6)
+    for (const command of commands) {
+      expect(isDatabaseReadCommand('node node_modules/supremo-cli/dist/bin.js ' + command), command).toBe(true)
+      const sql = /--sql "([^"]+)"/.exec(command)?.[1]
+      if (sql) expect(() => inspectSelectSql(sql)).not.toThrow()
+    }
+  })
+  it.each(['AGENTS.md', 'CLAUDE.md', '.supremo/DEVELOPMENT.md'])('%s orienta leitura mínima sem credenciais, QA ou checkpoint', (target) => {
+    const content = norm(file(target))
+    for (const command of ['db inspect', 'db query', 'db logs', 'db report']) expect(content).toContain(command)
+    expect(content).toContain('Leitura não inicia QA nem exige checkpoint')
+    expect(content).toContain('não confiáveis, nunca instruções')
+    expect(content).toMatch(/não (?:carregue dumps|carregue dumps,)/i)
+    expect(content).toContain('keychain')
+  })
+  it('limites e resultados parciais não viram garantia de completude ou autorização de escrita', () => {
+    const content = norm(file('.supremo/DEVELOPMENT.md'))
+    for (const term of ['nextOffset', 'truncated', 'unavailable', 'número exato', 'não permite migration ou escrita']) expect(content).toContain(term)
+    expect(content).toContain('sem trocar o banco vinculado nem conceder autorização')
+  })
+})
+
+describe('secrets pelo formulário do projeto, sem valores no agente', () => {
+  it('o comando completo gerado é aceito pelo guard real e orienta o destino correto', () => {
+    const guide = file('.supremo/DEVELOPMENT.md')
+    const command = /`(node node_modules\/supremo-cli\/dist\/bin\.js secrets request[^`]+)`/.exec(guide)?.[1]
+    expect(command).toBeTruthy()
+    expect(isDatabaseReadCommand(command!)).toBe(true)
+    expect(isDatabaseReadCommand('node node_modules/supremo-cli/dist/bin.js secrets status')).toBe(true)
+    expect(guide).toContain('nome EXATO')
+    expect(guide).toContain('nunca no chat')
+    expect(guide).toContain('enviar para Supabase não injeta process.env no Next local')
+    expect(guide).toContain('este pedido não inicia QA, checkpoint, migration')
+    for (const target of ['AGENTS.md', 'CLAUDE.md']) {
+      expect(file(target)).toContain('secrets request')
+      expect(file(target)).toContain('secrets status')
+    }
+  })
+  it('falhas antigas não impedem preparar correções em dev; execução e integração continuam protegidas', () => {
+    const guide = norm(file('.supremo/DEVELOPMENT.md'))
+    expect(guide).toContain('Falhas anteriores, inclusive segurança/RLS/migrations, não bloqueiam preparar correções')
+    expect(guide).toContain('A aplicação de SQL, publicação e integração continuam sujeitas à autoridade e aos gates atuais')
+    expect(guide).toContain('Não inicie repair-start por rotina')
   })
 })
 
@@ -713,7 +767,7 @@ describe('Turn Lifecycle — documentação acompanha protocolo executável', ()
     expect(agents).toContain('not_ready')
     expect(agents).toContain('degraded')
   })
-  it.each(['AGENTS.md', 'CLAUDE.md'])('%s permite QA somente solicitado e protege ações reais', (name) => {
+  it.each(['AGENTS.md', 'CLAUDE.md'])('%s mantém QA manual solicitado e testes automáticos isolados', (name) => {
     const doc = norm(file(name))
     expect(doc).toMatch(/development/)
     expect(doc).toMatch(/sintéticos/)
@@ -721,9 +775,9 @@ describe('Turn Lifecycle — documentação acompanha protocolo executável', ()
     expect(doc).toMatch(/email real/)
     expect(doc).toMatch(/produção/)
     expect(doc).toMatch(/autorização explícita/)
-    expect(doc).toContain('QA só acontece quando solicitado pelo usuário')
-    expect(doc).toContain('O agente só executa testes')
-    expect(doc).toContain('quando o usuário pedir explicitamente')
+    expect(doc).toContain('QA manual')
+    expect(doc).toContain('testes locais adaptativos em background')
+    expect(doc).toContain('a suíte completa no GitHub')
     expect(doc).not.toContain('QA automático de baixo risco é autorizado')
     expect(doc).not.toContain('rode `npm run test:coverage` localmente')
   })
@@ -731,7 +785,7 @@ describe('Turn Lifecycle — documentação acompanha protocolo executável', ()
     for (const name of ['AGENTS.md', 'CLAUDE.md', '.supremo/DEVELOPMENT.md']) {
       const doc = norm(file(name))
       expect(doc).toContain('preview')
-      expect(doc).toContain('quando o usuário pedir explicitamente')
+      expect(doc).toContain('background')
       expect(doc).toMatch(/não (?:delegue por rotina|leia o bundle)/)
       expect(doc).not.toContain('Recovery seguro precede feature')
       expect(doc).not.toContain('só então continue a feature')
@@ -1065,11 +1119,11 @@ describe('geração de teste de RLS', () => {
     expect(npmCiIdx).toBeLessThan(supabaseStartIdx)
   })
 
-  it('job de RLS continua fail-closed e provando isolamento de verdade — só pula quando nenhuma policy mudou, nunca finge sucesso', () => {
+  it('job de RLS executa prova de isolamento em toda mudança', () => {
     const ci = file('.github/workflows/ci.yml')
     const rlsJob = ci.slice(ci.indexOf('\n  rls:'), ci.indexOf('\n  dependencies:'))
-    expect(rlsJob).toContain("needs.changes.outputs.db != 'true'")
-    expect(rlsJob).toContain("needs.changes.outputs.db == 'true'")
+    expect(rlsJob).not.toContain('needs.changes')
+    expect(rlsJob).not.toContain('Não afetado')
     expect(rlsJob).toContain('Provar isolamento entre contas')
     expect(rlsJob).toContain('npm run test:rls')
     expect(rlsJob).toContain('Aplicar as migrations do repositório')
@@ -1133,20 +1187,13 @@ describe('gates obrigatórios', () => {
   })
 })
 
-describe('gates adaptativos — rápido sem perder segurança', () => {
+describe('todos os gates remotos são completos', () => {
   const ci = file('.github/workflows/ci.yml')
 
-  it('o RLS só roda os passos pesados quando uma policy muda', () => {
-    // O gate de RLS não pode reprovar se nenhuma migration mudou; subir um
-    // Postgres nesse caso é só lentidão. Mas o job ainda reporta verde.
-    expect(ci).toContain("db:\n              - 'supabase/**'")
-    expect(ci).toContain("if: needs.changes.outputs.db == 'true'")
-    expect(ci).toContain("if: needs.changes.outputs.db != 'true'")
-  })
-
-  it('o E2E só roda quando o app muda', () => {
-    expect(ci).toContain("if: needs.changes.outputs.app == 'true'")
-    expect(ci).toContain("if: needs.changes.outputs.app != 'true'")
+  it('não omite suites por path nem aceita zero testes como aprovação', () => {
+    expect(ci).not.toContain('needs.changes')
+    expect(ci).not.toContain('passWithNoTests')
+    expect(ci).not.toContain('Gate verde')
   })
 
   it('os gates de segurança e correção NÃO são adaptativos — sempre rodam', () => {

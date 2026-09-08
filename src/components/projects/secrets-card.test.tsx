@@ -1,0 +1,79 @@
+// @vitest-environment jsdom
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), dismiss: vi.fn(), error: vi.fn(), success: vi.fn() }))
+vi.mock('@/actions/secrets', () => ({ getSecretRequests: mocks.get, saveSecret: mocks.save, dismissSecretRequest: mocks.dismiss }))
+vi.mock('sonner', () => ({ toast: { error: mocks.error, success: mocks.success } }))
+import { SecretsCard } from './secrets-card'
+const projectId = '11111111-1111-4111-8111-111111111111'
+const request = { id: '22222222-2222-4222-8222-222222222222', name: 'PAYMENT_API_KEY', description: 'Cobrar no backend', target: 'supabase', environment: 'development', targetRef: 'projectref', status: 'pending' }
+beforeEach(() => { vi.resetAllMocks(); mocks.get.mockResolvedValue({ requests: [request] }); mocks.save.mockResolvedValue({ ok: true }); mocks.dismiss.mockResolvedValue({ ok: true }) })
+afterEach(() => { cleanup(); vi.useRealTimers() })
+describe('project secret form', () => {
+  it('shows an exact accessible name, a masked field, reason and the pinned target/environment', async () => {
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY') as HTMLInputElement
+    expect(field.getAttribute('type')).toBe('password')
+    expect(field.getAttribute('name')).toBe('PAYMENT_API_KEY')
+    expect(screen.getByText('Cobrar no backend')).toBeTruthy()
+    expect(screen.getByText('Supabase · Edge Functions · Desenvolvimento · projectref')).toBeTruthy()
+    expect(document.getElementById('secrets')).toBeTruthy()
+  })
+  it('submits the request ID only with the value, then clears the field after confirmed success', async () => {
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY') as HTMLInputElement
+    fireEvent.change(field, { target: { value: 'private-value' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'private-value' }))
+    await waitFor(() => expect(field.value).toBe(''))
+    expect(JSON.stringify(mocks.success.mock.calls)).not.toContain('private-value')
+  })
+  it('keeps the draft and re-enables saving after rejection or an unexpected transport error', async () => {
+    mocks.save.mockRejectedValue(new Error('transport'))
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY') as HTMLInputElement; fireEvent.change(field, { target: { value: 'private-value' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
+    await waitFor(() => expect(mocks.error).toHaveBeenCalled())
+    expect(field.value).toBe('private-value'); expect(field.disabled).toBe(false)
+    mocks.save.mockResolvedValue({ error: 'Conexão indisponível.' })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Conexão indisponível.'))
+    expect(field.value).toBe('private-value')
+  })
+  it('shows refresh failures and supports retry without discarding an existing draft', async () => {
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY') as HTMLInputElement; fireEvent.change(field, { target: { value: 'draft' } })
+    mocks.get.mockResolvedValueOnce({ error: 'Pedidos indisponíveis.' })
+    fireEvent(window, new Event('focus'))
+    expect((await screen.findByRole('alert')).textContent).toContain('Pedidos indisponíveis.')
+    expect(field.value).toBe('draft')
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(field.value).toBe('draft')
+  })
+  it('polls new requests into an already open page and preserves pending field content', async () => {
+    vi.useFakeTimers()
+    render(<SecretsCard projectId={projectId} />)
+    await act(async () => { await Promise.resolve() })
+    const field = screen.getByLabelText('PAYMENT_API_KEY') as HTMLInputElement; fireEvent.change(field, { target: { value: 'draft' } })
+    mocks.get.mockResolvedValue({ requests: [request, { ...request, id: 'another', name: 'MAIL_API_KEY', target: 'vercel', environment: 'preview' }] })
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(screen.getByLabelText('MAIL_API_KEY').getAttribute('type')).toBe('password')
+    expect(field.value).toBe('draft')
+    expect(screen.getByRole('button', { name: 'Salvar no Vercel' })).toBeTruthy()
+  })
+  it('does not offer a fillable field for an old request without a bound destination', async () => {
+    mocks.get.mockResolvedValue({ requests: [{ ...request, target: null, targetRef: null, environment: null }] })
+    render(<SecretsCard projectId={projectId} />)
+    expect(await screen.findByText(/Pedido antigo sem destino confirmado/)).toBeTruthy()
+    expect(screen.queryByPlaceholderText('Cole a chave')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Dispensar pedido PAYMENT_API_KEY' }))
+    await waitFor(() => expect(mocks.dismiss).toHaveBeenCalledWith({ projectId, requestId: request.id }))
+  })
+  it('shows fulfilled state and hides the previous value input', async () => {
+    mocks.get.mockResolvedValue({ requests: [{ ...request, status: 'fulfilled' }] })
+    render(<SecretsCard projectId={projectId} />)
+    expect(await screen.findByText('configurado')).toBeTruthy()
+    expect(screen.queryByPlaceholderText('Cole a chave')).toBeNull()
+  })
+})

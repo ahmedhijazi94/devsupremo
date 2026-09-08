@@ -8,13 +8,15 @@ import { buildProjectFiles } from './project-files'
 describe('CI infrastructure recovery', () => {
   for (const scenario of ['transient', 'persistent', 'migration'] as const) {
     it(`${scenario}: retries only transient startup failures and never bypasses the gate`, () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-recovery-'))
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-recovery-"$(not-a-command)-'))
       try {
         const ci = buildProjectFiles({ projectName: 'fixture', description: '' }).find((f) => f.path === '.github/workflows/ci.yml')!.content
         const block = ci.split('name: Preparar banco de testes com recuperação de rede')[1]!.split('\n      # O start')[0]!
         expect(block).toContain('SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io')
         const script = block.split('        run: |\n')[1]!.split('\n').map((line) => line.replace(/^          /, '')).join('\n')
-          .replaceAll('/tmp/supremo-supabase-start.log', path.join(dir, 'start.log'))
+          // Keep filesystem/environment data out of shell source. The fixed
+          // relative filename is resolved in the disposable child's cwd.
+          .replaceAll('/tmp/supremo-supabase-start.log', './start.log')
         fs.mkdirSync(path.join(dir, 'node_modules/.bin'), { recursive: true })
         fs.writeFileSync(path.join(dir, 'node_modules/.bin/supabase'), `#!/bin/sh
 count=0

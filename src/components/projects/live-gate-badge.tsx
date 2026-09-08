@@ -58,7 +58,7 @@ export function LiveGateBadge({ projectId }: { projectId: string }) {
 
   const text = {
     pending: 'Testes rodando',
-    passed: 'Tudo verde',
+    passed: 'Testes aprovados',
     failed: 'Gate vermelho',
   }[state]
 

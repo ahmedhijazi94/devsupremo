@@ -1,6 +1,6 @@
 {
   "name": "supremo-cli",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "CLI do Supremo: bootstrap, preview persistente e checkpoints em background.",
   "license": "MIT",
   "author": "Supremo",

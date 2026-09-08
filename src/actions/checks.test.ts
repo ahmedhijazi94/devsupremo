@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CI_JOB_NAMES } from '@/lib/templates/project-files'
 
-const mocks = vi.hoisted(() => ({ owner: vi.fn(), token: vi.fn(), pr: vi.fn(), checks: vi.fn(), merge: vi.fn(), history: vi.fn(), head: vi.fn(), open: vi.fn(), policy: vi.fn() }))
+const mocks = vi.hoisted(() => ({ owner: vi.fn(), token: vi.fn(), pr: vi.fn(), checks: vi.fn(), merge: vi.fn(), history: vi.fn(), head: vi.fn(), open: vi.fn(), policy: vi.fn(), checkpoint: vi.fn() }))
 vi.mock('@/lib/auth', () => ({ requireProjectOwner: mocks.owner, toActionError: (error: unknown) => String(error) }))
 vi.mock('@/lib/github-token', () => ({ freshGithubToken: mocks.token }))
 vi.mock('@/actions/checkpoints', () => ({ listProjectCheckpoints: mocks.history }))
@@ -23,13 +23,27 @@ const projectId = '11111111-1111-4111-8111-111111111111'
 const head = 'a'.repeat(40)
 const checks = () => CI_JOB_NAMES.map((name) => ({ name, status: 'completed', conclusion: 'success' }))
 const pr = (sha = head) => ({ headSha: sha, headRef: 'supremo/cp-one', nodeId: 'PR_one', state: 'open', merged: false })
+const blockedCheckpoint = { id: 'checkpoint-current', project_id: projectId, pr_number: 1, published_sha: head, push_status: 'published', integration_status: 'security_blocked' }
+
+function checkpointQuery() {
+  const filters: Array<[string, unknown]> = []
+  const query = {
+    select: () => query,
+    eq: (column: string, value: unknown) => { filters.push([column, value]); return query },
+    maybeSingle: async () => {
+      const row = mocks.checkpoint() as Record<string, unknown> | null
+      return { data: row && filters.every(([column, value]) => row[column] === value) ? row : null, error: null }
+    },
+  }
+  return query
+}
 
 describe('manual merge uses complete CI proof for the exact current HEAD', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     const account = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn(async () => ({ data: { access_token_encrypted: 'encrypted' } })) }
     account.select.mockReturnValue(account); account.eq.mockReturnValue(account)
-    mocks.owner.mockResolvedValue({ user: { id: 'owner' }, supabase: { from: vi.fn(() => account) }, project: {
+    mocks.owner.mockResolvedValue({ user: { id: 'owner' }, supabase: { from: vi.fn((table: string) => table === 'checkpoints' ? checkpointQuery() : account) }, project: {
       github_repo_full_name: 'owner/app', github_account_id: 'account', active_branch: 'supremo/cp-one', default_branch: 'main',
     } })
     mocks.token.mockResolvedValue('token-fixture')
@@ -41,6 +55,7 @@ describe('manual merge uses complete CI proof for the exact current HEAD', () =>
     mocks.history.mockResolvedValue({ items: [] })
     mocks.head.mockResolvedValue(head)
     mocks.open.mockResolvedValue([])
+    mocks.checkpoint.mockReturnValue(null)
   })
   it('passes the independently reread HEAD as GitHub expectedSha', async () => {
     expect(await mergeProjectPr(projectId, 1)).toEqual({ ok: true })
@@ -83,6 +98,50 @@ describe('manual merge uses complete CI proof for the exact current HEAD', () =>
     mocks.checks.mockResolvedValueOnce({ state: 'passed', headSha: head, checks: actual })
     expect((await getProjectChecks(projectId)).data?.state).toBe('failed')
     expect((await getProjectChecks(projectId)).data?.state).toBe('passed')
+  })
+  it.each(['Falhou', 'Integração bloqueada'])('same-revision %s integration status overrides the badge without hiding successful CI checks', async (status) => {
+    mocks.open.mockResolvedValue([{ ...pr(), number: 1, isAgentWork: true }])
+    mocks.history.mockResolvedValue({ items: [{ id: blockedCheckpoint.id, prNumber: 1, status }] })
+    mocks.checkpoint.mockReturnValue(blockedCheckpoint)
+    const result = await getProjectChecks(projectId)
+    expect(result.data).toMatchObject({ state: 'failed', badgeLabel: 'Integração bloqueada', prNumber: 1 })
+    expect(result.data?.summary).toContain('verificações obrigatórias do GitHub foram aprovadas')
+    expect(result.data?.summary).toContain('A integração desta versão está bloqueada')
+    expect(result.data?.checks).toHaveLength(CI_JOB_NAMES.length)
+    expect(result.data?.checks.every(check => check.conclusion === 'success')).toBe(true)
+    expect(mocks.merge).not.toHaveBeenCalled()
+  })
+  it.each([
+    { published_sha: 'b'.repeat(40) }, { id: 'another-checkpoint' },
+    { project_id: '22222222-2222-4222-8222-222222222222' }, { pr_number: 2 },
+    { integration_status: 'validated' },
+  ])('does not apply stale, unrelated or already cleared integration blocks (%j)', async (difference) => {
+    mocks.open.mockResolvedValue([{ ...pr(), number: 1, isAgentWork: true }])
+    mocks.history.mockResolvedValue({ items: [{ id: blockedCheckpoint.id, prNumber: 1, status: 'Falhou' }] })
+    mocks.checkpoint.mockReturnValue({ ...blockedCheckpoint, ...difference })
+    const result = await getProjectChecks(projectId)
+    expect(result.data).toMatchObject({ state: 'passed' })
+    expect(result.data?.badgeLabel).toBeUndefined()
+  })
+  it('ignores failures of older history items or another PR, and does not attach them to main after merge', async () => {
+    const old = { id: blockedCheckpoint.id, prNumber: 1, status: 'Falhou' }
+    mocks.open.mockResolvedValue([{ ...pr(), number: 1, isAgentWork: true }])
+    mocks.history.mockResolvedValue({ items: [{ id: 'new-checkpoint', prNumber: 1, status: 'Aguardando integração' }, old] })
+    expect((await getProjectChecks(projectId)).data?.state).toBe('passed')
+    mocks.history.mockResolvedValue({ items: [{ ...old, prNumber: 2 }] })
+    expect((await getProjectChecks(projectId)).data?.state).toBe('passed')
+    mocks.history.mockResolvedValue({ items: [old] })
+    mocks.open.mockResolvedValue([])
+    expect((await getProjectChecks(projectId)).data?.state).toBe('passed')
+    expect(mocks.checkpoint).not.toHaveBeenCalled()
+  })
+  it('does not fall back to a green badge when the current integration block cannot be confirmed', async () => {
+    mocks.open.mockResolvedValue([{ ...pr(), number: 1, isAgentWork: true }])
+    mocks.history.mockResolvedValue({ items: [{ id: blockedCheckpoint.id, prNumber: 1, status: 'Falhou' }] })
+    mocks.checkpoint.mockImplementation(() => { throw new Error('checkpoint unavailable') })
+    const result = await getProjectChecks(projectId)
+    expect(result.error).toBeTruthy()
+    expect(result.data).toBeUndefined()
   })
   it('the project badge detects a newer HEAD and preserves local-failure precedence', async () => {
     mocks.head.mockResolvedValueOnce(head).mockResolvedValueOnce('b'.repeat(40))

@@ -83,16 +83,18 @@ export type IntegrationStatusRow =
   | null
   | undefined
 
-export type HumanCheckpointStatus = 'Salvo localmente' | 'Salvando' | 'Publicando' | 'Testando' | 'Integrado' | 'Falhou'
+export type HumanCheckpointStatus = 'Salvo localmente' | 'Salvando' | 'Publicando' | 'Testando' | 'Aguardando integração' | 'Integração bloqueada' | 'Integrado' | 'Falhou'
 
 /**
  * Mapeia o estado técnico (push_status + integration_status) para o rótulo
  * humano do Histórico. Detalhes técnicos (SHA, PR, branch) ficam só na tela de
  * detalhe — o card principal nunca expõe jargão de Git.
  *
- * 'validated' e 'unmanaged_main_change' viram 'Testando' (existe/matched-PR
- * ainda não confirmado como mesclado — nunca declarar 'Integrado' sem
- * `merged`/`push_status='integrated'` de verdade). 'ci_failed' junta-se a
+ * Validação aprovada aguarda integração: não significa que os testes ainda
+ * estão rodando nem comprova merge. `validationPassed` só aceita evidência
+ * vinculada ao mesmo projeto, checkpoint e revisão pelo chamador.
+ * Nunca declarar 'Integrado' sem `merged`/`push_status='integrated'` de verdade.
+ * 'ci_failed' junta-se a
  * 'security_blocked' em 'Falhou' — bug real corrigido junto da reconciliação
  * do checkpoint: antes só 'ci_running' era gravado (nunca 'ci_failed'), então
  * esse ramo nunca era exercitado; agora que a reconciliação grava o estado
@@ -102,6 +104,7 @@ export type HumanCheckpointStatus = 'Salvo localmente' | 'Salvando' | 'Publicand
 export function humanCheckpointStatus(
   pushStatus: PushStatusRow,
   integrationStatus: IntegrationStatusRow,
+  validationPassed = false,
 ): HumanCheckpointStatus {
   if (pushStatus === 'local') return 'Salvo localmente'
   if (pushStatus === 'failed') return 'Falhou'
@@ -110,14 +113,15 @@ export function humanCheckpointStatus(
     return 'Falhou'
   }
   if (integrationStatus === 'merged' || pushStatus === 'integrated') return 'Integrado'
+  if (integrationStatus === 'unmanaged_main_change') return 'Integração bloqueada'
   if (
-    integrationStatus === 'ci_running' ||
     integrationStatus === 'merge_pending' ||
     integrationStatus === 'validated' ||
-    integrationStatus === 'unmanaged_main_change'
+    validationPassed
   ) {
-    return 'Testando'
+    return 'Aguardando integração'
   }
+  if (integrationStatus === 'ci_running') return 'Testando'
   // 'published' sem integration_status ainda conhecido (ou 'development'): PR
   // acabou de ser criada.
   return 'Publicando'

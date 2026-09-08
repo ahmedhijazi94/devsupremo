@@ -11,6 +11,7 @@ import { hostIntegrationMode } from './host-adapters'
 import { resolveKeychain } from './keychain'
 import { readDeviceSecret } from './device-identity'
 import { runRepairProposal, type RepairProposal, type RepairRunner } from './repair-runner'
+import { RepairRunnerUnavailableError, resolveRepairExecutable } from './repair-executable'
 import { fetchTurnContext } from './turn-context-client'
 import { canAutoRepairPaths } from './turn-model'
 import { evidenceFor, scanCheckpointForUpload, validateCheckpoint, type LocalEvidence } from './turn-validation'
@@ -23,6 +24,7 @@ const repairStateSchema = z.object({ checkpointId: z.string(), sha: z.string(), 
   updatedAt: z.number(), reason: z.string(), candidateSha: z.string().optional(), resultCheckpointId: z.string().optional() })
 export type RepairJob = z.infer<typeof repairStateSchema>
 export interface RepairDeps {
+  preflight?: (runner: RepairRunner) => void
   authorize: (cwd: string, record: CheckpointRecord) => Promise<void>
   propose: (runner: RepairRunner, dir: string, prompt: string, policy: EnginePolicy['auto_heal'], signal?: AbortSignal) => Promise<RepairProposal>
   validate: (cwd: string, record: CheckpointRecord, signal?: AbortSignal) => Promise<LocalEvidence>
@@ -40,7 +42,7 @@ async function authorize(cwd: string, record: CheckpointRecord): Promise<void> {
     throw new Error('Diagnóstico de segurança/ambiente requer recuperação específica antes da autocura comum.')
   }
 }
-const defaults: RepairDeps = { authorize, propose: runRepairProposal, validate: validateCheckpoint, trust: verifyTrustedFiles }
+const defaults: RepairDeps = { preflight: resolveRepairExecutable, authorize, propose: runRepairProposal, validate: validateCheckpoint, trust: verifyTrustedFiles }
 
 function hostRunner(cwd: string): RepairRunner | null {
   const parsed = z.object({ host: z.string().optional(), sessionId: z.string() }).safeParse(readJson(path.join(cwd, TURN_DIR, 'state.json')))
@@ -169,7 +171,12 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
   if (!policy.enabled || policy.paused) { update(policy.enabled ? 'paused' : 'disabled', 'Autocura controlada pela política do projeto.'); return 0 }
   const runner = policy.runner ?? hostRunner(cwd)
   if (!runner) { update('unavailable', 'Nenhum host compatível registrado; configure ou abra no agente escolhido.'); return 0 }
-  if (['applied', 'stale', 'exhausted'].includes(job.status)) return 0
+  if (['applied', 'stale', 'exhausted'].includes(job.status)) {
+    if (job.status === 'exhausted' && /^spawn (?:codex|claude) (?:ENOENT|EACCES)$/.test(job.reason)) {
+      update('exhausted', 'Executor indisponível na última tentativa registrada. Disponibilize a CLI ao daemon e revise o orçamento de reparação; tentativas anteriores preservadas, sem nova inferência automática.')
+    }
+    return 0
+  }
   if (job.attempts >= policy.max_attempts) { update('exhausted', 'Limite de tentativas atingido; diagnóstico preservado.'); return 0 }
   if (['failed', 'unavailable'].includes(job.status) && Date.now() - job.updatedAt < 30_000) return 0
   if (busy(cwd)) { update('waiting', 'Aguardando o turno de edição terminar.'); return 0 }
@@ -187,6 +194,7 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
   }
   let candidate: string | null = null
   let inference: string | null = null
+  let attemptStarted = false
   const controller = new AbortController()
   const abort = (): void => controller.abort()
   signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
@@ -207,12 +215,13 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
     catch { abort() }
   }, 500)
   try {
+    deps.preflight?.(runner)
     await deps.authorize(cwd, record)
     deps.trust(cwd)
     if (scanCheckpointForUpload(cwd, record).status === 'failed') throw new Error('Snapshot não autorizado para autocura.')
     const prompt = repairPrompt(cwd, record, evidence, policy)
     inference = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-repair-proposal-'))
-    job.attempts++; update('running', `Proposta isolada via ${runner}; orçamento limitado.`)
+    job.attempts++; attemptStarted = true; update('running', `Proposta isolada via ${runner}; orçamento limitado.`)
     const proposal = await deps.propose(runner, inference, prompt, { ...policy, max_budget_usd: policy.max_budget_usd / policy.max_attempts }, controller.signal)
     if (controller.signal.aborted) throw new Error('Autocura cancelada por atividade, pausa ou encerramento.')
     if (proposal.files.length > policy.max_changed_files || new Set(proposal.files.map(file => file.path)).size !== proposal.files.length || Buffer.byteLength(JSON.stringify(proposal)) > policy.max_output_bytes) throw new Error('Proposta excede limites ou duplica caminhos.')
@@ -258,9 +267,13 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
     })
     return 1
   } catch (error) {
+    const unavailable = error instanceof RepairRunnerUnavailableError
+    // A missing/replaced executable never started inference. Return only this
+    // invocation's attempt; earlier model failures keep their original budget.
+    if (unavailable && attemptStarted) job.attempts--
     const currentPolicy = readEnginePolicy(cwd).auto_heal
     const status = !currentPolicy.enabled ? 'disabled' : currentPolicy.paused ? 'paused'
-      : !current(cwd, record) ? 'stale' : job.attempts >= policy.max_attempts ? 'exhausted'
+      : !current(cwd, record) ? 'stale' : unavailable ? 'unavailable' : job.attempts >= policy.max_attempts ? 'exhausted'
         : controller.signal.aborted ? 'waiting' : 'failed'
     update(status, error instanceof Error ? error.message : String(error))
     return 0

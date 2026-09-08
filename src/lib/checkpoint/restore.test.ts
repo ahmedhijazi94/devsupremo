@@ -64,9 +64,11 @@ describe('humanCheckpointStatus — a UI nunca mostra jargão de Git', () => {
   it('published sem integration_status → Publicando', () => {
     expect(humanCheckpointStatus('published', null)).toBe('Publicando')
   })
-  it('ci_running/merge_pending → Testando', () => {
+  it('ci_running → Testando enquanto não existe validação aprovada', () => {
     expect(humanCheckpointStatus('published', 'ci_running')).toBe('Testando')
-    expect(humanCheckpointStatus('published', 'merge_pending')).toBe('Testando')
+  })
+  it('merge_pending → Aguardando integração', () => {
+    expect(humanCheckpointStatus('published', 'merge_pending')).toBe('Aguardando integração')
   })
   it('merged ou integrated → Integrado', () => {
     expect(humanCheckpointStatus('published', 'merged')).toBe('Integrado')
@@ -85,11 +87,18 @@ describe('humanCheckpointStatus — a UI nunca mostra jargão de Git', () => {
   it('ci_failed → Falhou (mesmo tratamento de security_blocked — CI vermelho é falha, não "ainda publicando")', () => {
     expect(humanCheckpointStatus('published', 'ci_failed')).toBe('Falhou')
   })
-  it('validated (tudo verde, ainda não mesclado) → Testando, NUNCA Integrado antes do merge de verdade', () => {
-    expect(humanCheckpointStatus('published', 'validated')).toBe('Testando')
+  it('validated → Aguardando integração, NUNCA Integrado antes do merge de verdade', () => {
+    expect(humanCheckpointStatus('published', 'validated')).toBe('Aguardando integração')
   })
-  it('unmanaged_main_change (anomalia — main mudou fora do Merge Controller) → Testando, nunca Integrado sem confirmação', () => {
-    expect(humanCheckpointStatus('published', 'unmanaged_main_change')).toBe('Testando')
+  it('evidência aprovada da revisão atual encerra Testando sem antecipar o merge', () => {
+    expect(humanCheckpointStatus('published', 'ci_running', true)).toBe('Aguardando integração')
+    expect(humanCheckpointStatus('published', null, true)).toBe('Aguardando integração')
+  })
+  it('aprovação de testes não esconde bloqueios da integração', () => {
+    expect(humanCheckpointStatus('published', 'security_blocked', true)).toBe('Falhou')
+    expect(humanCheckpointStatus('published', 'ci_failed', true)).toBe('Falhou')
+    expect(humanCheckpointStatus('failed', 'validated', true)).toBe('Falhou')
+    expect(humanCheckpointStatus('published', 'unmanaged_main_change', true)).toBe('Integração bloqueada')
   })
 })
 

@@ -17,6 +17,21 @@ const checkpoint: CheckpointHistoryItem = {
 }
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 describe('checkpoint history visible before publication', () => {
+  it('shows approved validation awaiting integration without announcing running tests or completed merge', async () => {
+    const published: CheckpointHistoryItem = {
+      id: 'published', parentCheckpointId: null, summary: 'Despesas', riskLevel: 'high',
+      status: 'Aguardando integração', migrations: [], prNumber: 1,
+      createdAt: '2026-09-08T20:01:00.000Z', restoredFromCheckpointId: null,
+      validationSummary: 'Validação aprovada. Aguardando integração.', canRestore: true,
+    }
+    mocks.list.mockResolvedValue({ items: [published] })
+    render(<CheckpointHistory projectId="project" items={[published]} />)
+    expect(await screen.findByText('Aguardando integração')).toBeTruthy()
+    expect(screen.getByText('Validação aprovada. Aguardando integração.')).toBeTruthy()
+    expect(screen.queryByText('Testando')).toBeNull()
+    expect(screen.queryByText('Integrado')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Restaurar' })).toBeTruthy()
+  })
   it('updates an initially empty history and gives local metadata no restore or risk approval', async () => {
     mocks.list.mockResolvedValue({ items: [checkpoint] })
     render(<CheckpointHistory projectId="project" items={[]} />)

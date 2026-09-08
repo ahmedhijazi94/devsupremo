@@ -68,6 +68,37 @@ describe('independent official CodeQL gate', () => {
       expect((await readCodeScanning(io, SHA)).status).toBe('unavailable')
     }
   })
+  it('accepts the current private repository response only with explicit disabled Code Security and its exact HTTP 403 refusal', async () => {
+    const io = port()
+    vi.mocked(io.listChecks).mockResolvedValue([])
+    vi.mocked(io.getRepository).mockResolvedValue({ private: true, security_and_analysis: { code_security: { status: 'disabled' } } })
+    vi.mocked(io.getDefaultSetup).mockRejectedValue({ status: 403, response: { data: {
+      message: 'Code Security must be enabled for this repository to use code scanning.',
+    } } })
+    const evidence = await readCodeScanning(io, SHA)
+    expect(evidence).toMatchObject({ headSha: SHA, status: 'not_required' })
+    expect(evidence.reasons.join(' ')).toContain('não é aprovação do CodeQL')
+    vi.mocked(io.listChecks).mockResolvedValue([official({ status: 'in_progress', conclusion: null })])
+    expect((await readCodeScanning(io, SHA)).status).toBe('pending')
+    vi.mocked(io.listChecks).mockResolvedValue([official({ conclusion: 'failure' })])
+    expect((await readCodeScanning(io, SHA)).status).toBe('failed')
+  })
+  it('never treats missing modern license fields, a generic refusal or contradictory enabled metadata as an exception', async () => {
+    const disabled = { private: true, security_and_analysis: { code_security: { status: 'disabled' } } }
+    const refusal = { status: 403, message: 'Code Security must be enabled for this repository to use code scanning.' }
+    for (const [error, repo] of [
+      [{ status: 403, message: 'Forbidden' }, disabled], [{ ...refusal, status: 404 }, disabled],
+      [refusal, { private: true }], [refusal, { ...disabled, private: false }],
+      [refusal, { private: true, security_and_analysis: { code_security: { status: 'enabled' } } }],
+      [refusal, { private: true, security_and_analysis: { code_security: { status: 'disabled' }, advanced_security: { status: 'enabled' } } }],
+    ] as const) {
+      const io = port()
+      vi.mocked(io.listChecks).mockResolvedValue([])
+      vi.mocked(io.getDefaultSetup).mockRejectedValue(error)
+      vi.mocked(io.getRepository).mockResolvedValue(repo)
+      expect((await readCodeScanning(io, SHA)).status).toBe('unavailable')
+    }
+  })
   it('reports checks, metadata, unknown configuration and network failures as unavailable', async () => {
     const io = port()
     vi.mocked(io.listChecks).mockRejectedValueOnce(new Error('offline'))

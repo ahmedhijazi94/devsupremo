@@ -6,6 +6,7 @@ import { defaultCheckpointDeps, type CheckpointRecord } from './checkpoint'
 import { readEnginePolicy } from './engine-policy'
 import { drainAutoHeal, type RepairDeps } from './engine-repair'
 import { runRepairProposal, type ProcessRunner } from './repair-runner'
+import { RepairRunnerUnavailableError } from './repair-executable'
 import { drainLocalValidation, evidenceFor, requestCheckpointValidation, validateCheckpoint } from './turn-validation'
 import * as processWorker from './worker-process'
 import { captureTurnCheckpoint, gitText, readJson, writeJson } from './turn-workspace'
@@ -201,6 +202,44 @@ describe('actual isolated repair executor with controlled inference boundary', (
     expect(propose).not.toHaveBeenCalled()
     expect(readJson(path.join(cwd, '.supremo/validation/repair/status.json'))).toMatchObject({ status: 'exhausted', attempts: 2 })
   })
+  it('waits for an available executable without consuming prior attempts, then resumes the same repair', async () => {
+    const record = await failingRecord()
+    const jobFile = path.join(cwd, '.supremo/validation/repair', `${record.checkpointId}.json`)
+    writeJson(jobFile, { checkpointId: record.checkpointId, sha: record.commitSha, attempts: 1,
+      status: 'failed', updatedAt: 0, reason: 'Earlier model failure' })
+    const deps = repairDeps()
+    const authorize = vi.fn(deps.authorize), propose = vi.fn(deps.propose)
+    const preflight = vi.fn(() => { throw new RepairRunnerUnavailableError('codex') })
+    expect(await drainAutoHeal(cwd, undefined, { ...deps, preflight, authorize, propose })).toBe(0)
+    expect(authorize).not.toHaveBeenCalled(); expect(propose).not.toHaveBeenCalled()
+    expect(readJson(jobFile)).toMatchObject({ status: 'unavailable', attempts: 1 })
+    await drainAutoHeal(cwd, undefined, { ...deps, preflight, authorize, propose })
+    expect(preflight).toHaveBeenCalledTimes(1)
+    writeJson(jobFile, { ...(readJson(jobFile) as object), updatedAt: 0 })
+    expect(await drainAutoHeal(cwd, undefined, { ...deps, preflight: () => {}, authorize, propose })).toBe(1)
+    expect(propose).toHaveBeenCalledTimes(1)
+    expect(readJson(jobFile)).toMatchObject({ status: 'applied', attempts: 2 })
+  })
+  it('returns only the current attempt when the executable disappears after preflight', async () => {
+    const record = await failingRecord()
+    const jobFile = path.join(cwd, '.supremo/validation/repair', `${record.checkpointId}.json`)
+    writeJson(jobFile, { checkpointId: record.checkpointId, sha: record.commitSha, attempts: 1,
+      status: 'failed', updatedAt: 0, reason: 'Earlier model failure' })
+    const deps = repairDeps(async () => { throw new RepairRunnerUnavailableError('codex') })
+    expect(await drainAutoHeal(cwd, undefined, { ...deps, preflight: () => {} })).toBe(0)
+    expect(readJson(jobFile)).toMatchObject({ status: 'unavailable', attempts: 1 })
+  })
+  it('preserves exhausted legacy attempts even when their last diagnostic was a missing executable', async () => {
+    const record = await failingRecord()
+    const jobFile = path.join(cwd, '.supremo/validation/repair', `${record.checkpointId}.json`)
+    writeJson(jobFile, { checkpointId: record.checkpointId, sha: record.commitSha, attempts: 2,
+      status: 'exhausted', updatedAt: 0, reason: 'spawn codex ENOENT' })
+    const deps = repairDeps(), preflight = vi.fn(), propose = vi.fn(deps.propose)
+    expect(await drainAutoHeal(cwd, undefined, { ...deps, preflight, propose })).toBe(0)
+    expect(preflight).not.toHaveBeenCalled(); expect(propose).not.toHaveBeenCalled()
+    expect(readJson(jobFile)).toMatchObject({ status: 'exhausted', attempts: 2,
+      reason: expect.stringContaining('sem nova inferência automática') })
+  })
 })
 
 describe('provider invocation permissions and budgets', () => {
@@ -223,7 +262,7 @@ describe('provider invocation permissions and budgets', () => {
       }
       return { stdout: '', stderr: '' }
     }
-    try { await expect(runRepairProposal('codex', cwd, 'Fixture', readEnginePolicy(cwd).auto_heal, undefined, fake)).rejects.toThrow() }
+    try { await expect(runRepairProposal('codex', cwd, 'Fixture', readEnginePolicy(cwd).auto_heal, undefined, fake, runner => runner)).rejects.toThrow() }
     finally { vi.restoreAllMocks() }
   })
   it('Codex narrows native tools and all configured MCP servers, uses read-only and schema output', async () => {
@@ -234,20 +273,31 @@ describe('provider invocation permissions and budgets', () => {
       fs.writeFileSync(args[args.indexOf('--output-last-message') + 1]!, JSON.stringify({ summary: 'fix', files: [{ path: 'src/card.ts', content: 'fixed' }] }))
       return { stdout: '', stderr: '' }
     }
-    const result = await runRepairProposal('codex', cwd, 'Fixture proposal only', readEnginePolicy(cwd).auto_heal, undefined, fake)
+    const result = await runRepairProposal('codex', cwd, 'Fixture proposal only', readEnginePolicy(cwd).auto_heal, undefined, fake, runner => runner)
     expect(result.files[0]?.path).toBe('src/card.ts')
     expect(calls[2]).toEqual(expect.arrayContaining(['read-only', 'approval_policy="never"', 'features.shell_tool=false', 'mcp_servers.github.enabled=false']))
     expect(calls.flat().join(' ')).not.toMatch(/dangerously|bypass|ignore-rules/)
   })
   it('Claude denies built-in and MCP tools and supplies its native spend cap', async () => {
     const fake = vi.fn<ProcessRunner>(async () => ({ stdout: JSON.stringify({ structured_output: { summary: 'fix', files: [{ path: 'src/card.ts', content: 'fixed' }] } }), stderr: '' }))
-    await runRepairProposal('claude', cwd, 'Fixture', readEnginePolicy(cwd).auto_heal, undefined, fake)
+    await runRepairProposal('claude', cwd, 'Fixture', readEnginePolicy(cwd).auto_heal, undefined, fake, runner => runner)
     expect(fake.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(['--restricted', '--tools', '', '--disallowedTools', 'mcp__*', '--max-budget-usd', '2']))
   })
   it('refuses inference when a provider leaves an external MCP enabled', async () => {
     const fake = vi.fn<ProcessRunner>(async () => ({ stdout: JSON.stringify([{ name: 'github', enabled: true, transport: { type: 'streamable_http' } }]), stderr: '' }))
-    await expect(runRepairProposal('codex', cwd, 'Fixture', readEnginePolicy(cwd).auto_heal, undefined, fake)).rejects.toThrow('todos os MCPs')
+    await expect(runRepairProposal('codex', cwd, 'Fixture', readEnginePolicy(cwd).auto_heal, undefined, fake, runner => runner)).rejects.toThrow('todos os MCPs')
     expect(fake.mock.calls).toHaveLength(2)
     expect(fake.mock.calls.every(call => !call[1].includes('exec'))).toBe(true)
+  })
+  it('uses the resolved binary for every step and classifies a launch race as unavailable', async () => {
+    const executable = '/fixture/Applications/ChatGPT.app/Contents/Resources/codex'
+    const fake = vi.fn<ProcessRunner>(async (_file, args) => {
+      if (args.includes('mcp')) return { stdout: '[]', stderr: '' }
+      throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT', syscall: 'spawn codex' })
+    })
+    await expect(runRepairProposal('codex', cwd, 'Fixture', readEnginePolicy(cwd).auto_heal, undefined, fake, () => executable))
+      .rejects.toBeInstanceOf(RepairRunnerUnavailableError)
+    expect(fake).toHaveBeenCalledTimes(3)
+    expect(fake.mock.calls.every(call => call[0] === executable)).toBe(true)
   })
 })

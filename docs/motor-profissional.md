@@ -31,10 +31,21 @@ nem concede acesso a outro ambiente.
   fluxo próprio do Supremo, preservando funcionalidades e dependências extras.
 - A aprovação consulta jobs do workflow correto e do SHA atual. Auto-merge legado
   é desarmado; ambos os modos integram com SHA esperado após revalidar a política.
+- CodeQL tem uma barreira adicional: exige o resultado da aplicação oficial do
+  GitHub para a revisão atual e revalida antes do merge. Quando configurado,
+  resultado ausente ou pendente aguarda; falha ou falta de permissão bloqueia
+  integração. Indisponibilidade de licença exige confirmação explícita de ambos
+  os produtos de segurança desativados em repositório privado. Os outros gates
+  continuam obrigatórios. A ativação usa o endpoint oficial de default setup.
 
 O auditor usa AST para operações reconhecíveis de autenticação, validação e acesso
 a dados. Também verifica contratos explícitos de RLS, foreign keys e índices.
 Isso complementa testes reais; não constitui prova universal de segurança.
+Arquivos usados em validação e propostas são abertos e conferidos pelo mesmo
+descritor, com limite de leitura e recusa de trocas, links ou alterações durante
+a leitura. Package e lock usam exatamente os bytes já verificados. A CLI usa
+Zod sem geração dinâmica de código; a prova e a interpretação dos alertas
+upstream estão em [codeql-zod-cli.md](./codeql-zod-cli.md).
 
 ## Checkpoints, restore e autocorreção
 
@@ -118,8 +129,8 @@ de Edge Functions não fazem parte desse contrato.
 
 ## Evidência da implementação
 
-Na validação final local, passaram 1.443 testes do motor e 552 da CLI. A cobertura
-do código de decisão medido foi de 94,82% em linhas, 94,61% em branches e 94,65%
+Na validação final local, passaram 1.475 testes do motor e 566 da CLI. A cobertura
+do código de decisão medido foi de 94,90% em linhas, 94,62% em branches e 94,78%
 em funções. Tipos e lint passaram; a auditoria estrita não encontrou CRITICAL/HIGH
 e manteve 13 MEDIUM de contexto de autorização para revisão. O build local de
 produção passou com Webpack; a CI mantém o build padrão com Turbopack.

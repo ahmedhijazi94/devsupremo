@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './zod-config'
 import { Command } from 'commander'
 // Fonte ÚNICA da versão: o próprio package.json (o esbuild inlina no bundle, e o
 // prepublishOnly reconstrói antes de publicar). Assim `--version` nunca diverge da

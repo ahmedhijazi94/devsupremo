@@ -1,4 +1,5 @@
 import type { ValidationAuthority } from './trusted-policy'
+import type { CodeScanningEvidence } from './code-scanning'
 import {
   evaluateMergeEligibility,
   type CheckRun,
@@ -35,6 +36,8 @@ export interface MergeGateway {
   }>
   /** Checks do ref dado + o SHA a que pertencem (headSha). */
   getChecks(ref: string): Promise<{ checks: CheckRun[]; headSha: string }>
+  /** Independent official CodeQL evidence and positively verified applicability. */
+  getCodeScanning?(headSha: string): Promise<CodeScanningEvidence>
   /** Independent policy at the immutable candidate SHA; absent proof fails closed. */
   verifyPolicy?(headSha: string): Promise<ValidationAuthority>
   /** Native execution is safe only while GitHub itself requires every gate. */
@@ -56,6 +59,21 @@ export interface ReconcileResult {
   decision: MergeDecision | 'noop'
   merged: boolean
   reasons: string[]
+}
+
+async function codeScanningBlock(gw: MergeGateway, headSha: string): Promise<ReconcileResult | null> {
+  let proof: CodeScanningEvidence | undefined
+  try { proof = await gw.getCodeScanning?.(headSha) } catch {
+    return { headSha, state: 'security_blocked', decision: 'blocked', merged: false,
+      reasons: ['Consulta do CodeQL indisponível; integração suspensa.'] }
+  }
+  if (!proof || proof.headSha !== headSha) {
+    return { headSha, state: 'security_blocked', decision: 'blocked', merged: false,
+      reasons: ['A evidência independente do CodeQL não foi comprovada para esta revisão.'] }
+  }
+  if (proof.status === 'passed' || proof.status === 'not_required') return null
+  return { headSha, state: proof.status === 'pending' ? 'ci_running' : 'security_blocked',
+    decision: proof.status === 'pending' ? 'wait' : 'blocked', merged: false, reasons: proof.reasons }
 }
 
 export async function reconcileMerge(
@@ -101,6 +119,9 @@ export async function reconcileMerge(
     }
   }
 
+  const scanning = await codeScanningBlock(gw, pr.headSha)
+  if (scanning) return scanning
+
   const authority = await gw.verifyPolicy?.(pr.headSha)
   if (!authority?.approved || authority.headSha !== pr.headSha) {
     return { headSha: pr.headSha, state: 'security_blocked', decision: 'blocked', merged: false,
@@ -127,6 +148,11 @@ export async function reconcileMerge(
       reasons: ['HEAD mudou logo antes do merge — reavaliar no novo HEAD.'],
     }
   }
+
+  // CodeQL may arrive or restart after all workflow jobs turn green, even when
+  // HEAD does not change. Re-read provider evidence next to the merge operation.
+  const freshScanning = await codeScanningBlock(gw, pr.headSha)
+  if (freshScanning) return freshScanning
 
   // Merge com o SHA esperado: se o HEAD andar entre isto e o GitHub aplicar, o
   // próprio GitHub recusa (409). Dupla trava.

@@ -3,10 +3,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   CI_JOB_NAMES,
   buildProjectFiles,
+  buildProjectMigrations,
   CI_INVOKED_SCRIPTS,
   TEMPLATE_VERSION,
   GITLEAKS_VERSION,
@@ -61,6 +62,18 @@ const packageJson = JSON.parse(file('package.json')) as {
 }
 
 describe('manifesto — integridade', () => {
+  it.each(['public', 'solo', 'team'] as const)('SQL de %s é idêntico ao scaffold e independente de arquivos locais', (kind) => {
+    const expected = buildProjectFiles({ projectName: 'migration-source', description: '', kind })
+      .filter((entry) => entry.path.startsWith('supabase/migrations/'))
+    const fileRead = vi.spyOn(fs, 'readFileSync').mockImplementation(() => { throw new Error('Leitura de arquivo proibida durante geração de SQL') })
+    try {
+      expect(buildProjectMigrations(kind)).toEqual(expected)
+      expect(fileRead).not.toHaveBeenCalled()
+    } finally {
+      fileRead.mockRestore()
+    }
+  })
+
   it('não gera caminhos duplicados', () => {
     const paths = files.map((f) => f.path)
     expect(new Set(paths).size).toBe(paths.length)

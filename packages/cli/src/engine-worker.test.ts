@@ -47,9 +47,10 @@ describe('bounded real OS workers', () => {
   it('kills the subprocess when aborted, including its descendant process group', async () => {
     const marker = path.join(cwd, 'survived')
     const controller = new AbortController()
-    const childCode = `process.on('SIGTERM',()=>{});setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'bad'),1200)`
-    const processCode = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:'ignore'});setInterval(()=>{},1000)`
-    const running = runWorkerProcess(process.execPath, ['-e', processCode], { cwd, timeoutMs: 4000, maxOutputBytes: 4096, signal: controller.signal })
+    const childScript = path.join(cwd, 'descendant.cjs')
+    fs.writeFileSync(childScript, "process.on('SIGTERM',()=>{});setTimeout(()=>require('node:fs').writeFileSync(process.argv[2],'bad'),1200)")
+    const processCode = "require('node:child_process').spawn(process.execPath,process.argv.slice(1),{stdio:'ignore'});setInterval(()=>{},1000)"
+    const running = runWorkerProcess(process.execPath, ['-e', processCode, childScript, marker], { cwd, timeoutMs: 4000, maxOutputBytes: 4096, signal: controller.signal })
     await wait(100); controller.abort()
     await expect(running).rejects.toBeInstanceOf(WorkerAbortedError)
     await wait(1300); expect(fs.existsSync(marker)).toBe(false)
@@ -203,6 +204,28 @@ describe('actual isolated repair executor with controlled inference boundary', (
 })
 
 describe('provider invocation permissions and budgets', () => {
+  it.each(['symlink', 'growing'])('Codex refuses %s proposal output before accepting JSON', async (kind) => {
+    const proposal = JSON.stringify({ summary: 'fix', files: [{ path: 'src/card.ts', content: 'fixed' }] })
+    const fake: ProcessRunner = async (_executable, args) => {
+      if (args.includes('mcp')) return { stdout: '[]', stderr: '' }
+      const output = args[args.indexOf('--output-last-message') + 1]!
+      if (kind === 'symlink') {
+        fs.writeFileSync(path.join(cwd, 'untrusted-proposal'), proposal)
+        fs.symlinkSync('untrusted-proposal', output)
+      } else {
+        fs.writeFileSync(output, proposal)
+        const fstat = fs.fstatSync
+        vi.spyOn(fs, 'fstatSync').mockImplementationOnce((fd) => {
+          const stat = fstat(fd)
+          fs.appendFileSync(output, ' '.repeat(readEnginePolicy(cwd).auto_heal.max_output_bytes))
+          return stat
+        })
+      }
+      return { stdout: '', stderr: '' }
+    }
+    try { await expect(runRepairProposal('codex', cwd, 'Fixture', readEnginePolicy(cwd).auto_heal, undefined, fake)).rejects.toThrow() }
+    finally { vi.restoreAllMocks() }
+  })
   it('Codex narrows native tools and all configured MCP servers, uses read-only and schema output', async () => {
     const calls: string[][] = []
     const fake: ProcessRunner = async (_executable, args) => {

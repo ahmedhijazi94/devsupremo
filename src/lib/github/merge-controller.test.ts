@@ -22,6 +22,7 @@ function gateway(over: Partial<MergeGateway> & { headSha?: string; checksHeadSha
       state: 'open',
     })),
     getChecks: vi.fn(async () => ({ checks: green, headSha: over.checksHeadSha ?? head })),
+    getCodeScanning: vi.fn(async (headSha: string) => ({ headSha, status: 'not_required' as const, reasons: ['Default setup confirmed not configured.'] })),
     verifyPolicy: vi.fn(async (headSha: string) => ({ approved: true, headSha, reasons: [] })),
     hasRequiredChecks: vi.fn(async () => true),
     allowAutoMerge: vi.fn(async () => true),
@@ -93,6 +94,37 @@ describe('reconcileMerge — modo NATIVE_GITHUB', () => {
 })
 
 describe('reconcileMerge — modo SUPREMO_MANAGED', () => {
+  it.each(['pending', 'failed', 'unavailable'] as const)('does not merge when official CodeQL is %s despite every CI job passing', async status => {
+    const gw = gateway({ getCodeScanning: vi.fn(async headSha => ({ headSha, status, reasons: ['CodeQL evidence'] })) })
+    const result = await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'supremo_managed' })
+    expect(result.decision).toBe(status === 'pending' ? 'wait' : 'blocked')
+    expect(gw.merge).not.toHaveBeenCalled()
+  })
+  it('fails closed for absent, stale or rejected CodeQL evidence in both merge modes', async () => {
+    for (const mode of ['native', 'supremo_managed'] as const) {
+      for (const getCodeScanning of [undefined, vi.fn(async () => ({ headSha: SHA2, status: 'passed' as const, reasons: [] })), vi.fn(async () => { throw new Error('GitHub unavailable') })]) {
+        const gw = gateway(getCodeScanning ? { getCodeScanning } : {})
+        if (!getCodeScanning) delete gw.getCodeScanning
+        expect((await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode })).state).toBe('security_blocked')
+        expect(gw.merge).not.toHaveBeenCalled()
+      }
+    }
+  })
+  it.each(['pending', 'failed', 'unavailable'] as const)('rechecks CodeQL next to merge and refuses a late %s result on the same HEAD', async status => {
+    const getCodeScanning = vi.fn().mockResolvedValueOnce({ headSha: SHA, status: 'passed', reasons: [] })
+      .mockResolvedValueOnce({ headSha: SHA, status, reasons: ['Late CodeQL result'] })
+    const gw = gateway({ getCodeScanning })
+    expect((await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'supremo_managed' })).merged).toBe(false)
+    expect(gw.verifyPolicy).toHaveBeenCalledWith(SHA)
+    expect(getCodeScanning).toHaveBeenCalledTimes(2)
+    expect(gw.merge).not.toHaveBeenCalled()
+  })
+  it('still requires all trusted CI jobs when official CodeQL passes', async () => {
+    const gw = gateway({ getChecks: vi.fn(async () => ({ headSha: SHA, checks: [] })),
+      getCodeScanning: vi.fn(async headSha => ({ headSha, status: 'passed' as const, reasons: [] })) })
+    expect((await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'supremo_managed' })).decision).toBe('wait')
+    expect(gw.merge).not.toHaveBeenCalled()
+  })
   it('disarms native merge before reading jobs and again if rearmed at a newer revision', async () => {
     const events: string[] = []
     const gw = gateway({

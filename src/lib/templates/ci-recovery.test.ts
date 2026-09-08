@@ -29,12 +29,15 @@ exit 1
         // Exercise the generated retry logic without starting npm on each
         // simulated attempt or letting the fixture consult a package registry.
         fs.writeFileSync(path.join(dir, 'node_modules/.bin/npx'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 })
-        const result = spawnSync('bash', ['-c', script], { cwd: dir, env: { ...process.env, PATH: `${dir}/node_modules/.bin:${process.env.PATH}` }, encoding: 'utf8', timeout: 20_000 })
+        // Only this fixture's stubs and fixed system tools may run. Inheriting
+        // PATH or BASH_ENV would let the invoking environment replace them.
+        const env = { PATH: `${path.join(dir, 'node_modules/.bin')}:/usr/bin:/bin`, LC_ALL: 'C', NODE_ENV: 'test' as const }
+        const result = spawnSync('/bin/bash', ['-c', script], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 })
         expect(result.error).toBeUndefined()
         expect(result.status).toBe(scenario === 'transient' ? 0 : 1)
         expect(fs.readFileSync(path.join(dir, 'count'), 'utf8').trim()).toBe(scenario === 'transient' ? '2' : scenario === 'persistent' ? '3' : '1')
         // Syntax checked independently of the stub's success path.
-        execFileSync('bash', ['-n'], { input: script })
+        execFileSync('/bin/bash', ['-n'], { input: script, env })
       } finally { fs.rmSync(dir, { recursive: true, force: true }) }
     }, 25_000)
   }

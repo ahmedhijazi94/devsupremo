@@ -13,6 +13,7 @@ vi.mock('@/lib/github/client', () => ({
 vi.mock('@/lib/github/gateway', () => ({ githubMergeGateway: (creds: unknown) => ({
   getPullRequest: (number: number) => mocks.pr(creds, number),
   getChecks: (sha: string) => mocks.checks(creds, sha),
+  getCodeScanning: async (headSha: string) => ({ headSha, status: 'not_required', reasons: ['Default setup confirmed not configured.'] }),
   verifyPolicy: mocks.policy,
   merge: (number: number, sha: string) => mocks.merge(creds, number, undefined, sha),
 }) }))

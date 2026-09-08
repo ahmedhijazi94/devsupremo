@@ -12,6 +12,7 @@ import type { GithubCredentials } from '@/lib/projects/repository'
 import type { MergeGateway } from './merge-controller'
 import { getProject, getProjectByRepoFullName } from '@/lib/projects/repository'
 import { selectTrustedWorkflow, verifyCandidatePolicy, workflowChecks } from './trusted-policy'
+import { readCodeScanning } from './code-scanning'
 
 /**
  * Liga o `MergeGateway` (consumido por reconcileMerge) às operações REAIS do
@@ -42,6 +43,19 @@ export function githubMergeGateway(creds: GithubCredentials): MergeGateway {
         owner: creds.owner, repo: creds.repo, run_id: run.id, filter: 'latest', per_page: 100,
       })
       return { checks: workflowChecks(run, jobs), headSha: run.head_sha }
+    },
+    getCodeScanning: async (headSha) => {
+      const gh = octokitFor(creds)
+      const repository = { owner: creds.owner, repo: creds.repo }
+      return readCodeScanning({
+        listChecks: async (ref) => (await gh.paginate(gh.checks.listForRef, { ...repository, ref, filter: 'all', per_page: 100 })).map(check => ({
+          id: check.id, name: check.name, head_sha: check.head_sha, status: check.status, conclusion: check.conclusion,
+          app: check.app ? { id: check.app.id, slug: check.app.slug ?? '', owner: check.app.owner && 'login' in check.app.owner
+            ? { login: check.app.owner.login } : null } : null,
+        })),
+        getDefaultSetup: async () => (await gh.codeScanning.getDefaultSetup(repository)).data,
+        getRepository: async () => (await gh.repos.get(repository)).data,
+      }, headSha)
     },
     verifyPolicy: async (headSha) => {
       const workerProject = await getProjectByRepoFullName(creds.repoFullName)

@@ -6,6 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { decryptToken, encryptToken } from '@/lib/crypto'
 import {
   buildProjectFiles,
+  buildProjectMigrations,
   CI_JOB_NAMES,
   type ProjectKind,
   TEMPLATE_VERSION,
@@ -306,7 +307,7 @@ export async function provisionProject(params: {
           userId,
           supabaseAccountId,
           name,
-          files,
+          kind,
           {
             existingRef: ctx.supabaseProjectRef as string | undefined,
             verifyDevelopment: async (ref) => {
@@ -549,7 +550,7 @@ export async function provisionSupabase(
   userId: string,
   supabaseAccountId: string,
   name: string,
-  files: FileEntry[],
+  kind: ProjectKind,
   opts: {
     /** Ref de um projeto Supabase já criado (retry) — reutiliza, não recria. */
     existingRef?: string | undefined
@@ -563,6 +564,9 @@ export async function provisionSupabase(
   } = {},
 ): Promise<SupabaseProvisionResult> {
   const warnings: string[] = []
+  // Provisioning has no file-content input. Only the release-owned SQL for this
+  // project kind may reach the database; assets and workspace files cannot.
+  const migrations = buildProjectMigrations(kind)
   if (opts.existingRef && !opts.verifyDevelopment) throw new Error('Retry exige classificação development verificada antes de escrever no banco existente.')
 
   const { data: account } = await supabase
@@ -634,8 +638,6 @@ export async function provisionSupabase(
 
   if (!ready) throw new Error('Banco ainda em preparação. Retome o provisionamento; o banco criado será reutilizado.')
 
-  const migrations = files.filter((file) => /^supabase\/migrations\/[^/]+\.sql$/.test(file.path))
-    .sort((a, b) => a.path.localeCompare(b.path))
   for (const migration of migrations) {
     if (opts.verifyDevelopment) await opts.verifyDevelopment(ref)
     const response = await fetch(`${SUPABASE_API}/v1/projects/${ref}/database/query`, {
@@ -770,7 +772,7 @@ async function protectBranch(
  * não um job vermelho em todo pull request. Gate que falha por motivo de
  * plano ensina a equipe a ignorar vermelho.
  */
-async function enableCodeScanning(
+export async function enableCodeScanning(
   repoFullName: string,
   token: string,
 ): Promise<string | null> {
@@ -778,7 +780,7 @@ async function enableCodeScanning(
     `/repos/${repoFullName}/code-scanning/default-setup`,
     token,
     {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify({ state: 'configured', query_suite: 'extended' }),
     },
   )

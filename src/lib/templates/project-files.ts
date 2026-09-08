@@ -232,6 +232,20 @@ export const CI_INVOKED_SCRIPTS = [
 
 // ─────────────────────────────────────────────────────────────
 
+/** Initial SQL comes only from release-owned generators, never arbitrary files. */
+export function buildProjectMigrations(kind: ProjectKind): [FileEntry, ...FileEntry[]] {
+  if (kind !== 'public' && kind !== 'solo' && kind !== 'team') throw new Error('Tipo de projeto inválido.')
+  const initial = kind === 'public' ? publicMigration() : kind === 'team' ? teamMigration() : initialMigration()
+  return [
+    { path: 'supabase/migrations/00000000000000_initial_schema.sql', content: initial },
+    ...(kind === 'team' ? [{
+      path: 'supabase/migrations/20260905000000_membership_authorization.sql',
+      content: '-- Adesão a organizações exige convite/administração autorizada no servidor.\n' +
+        'DROP POLICY IF EXISTS "memberships_insert_own" ON public.memberships;\n',
+    }] : []),
+  ]
+}
+
 export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
   const { projectName, description } = options
   const summary = description || `${projectName} — criado com Supremo`
@@ -245,12 +259,8 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
 
   // A migration segue o tipo de app: público não tem tabela de dono; solo tem
   // dados por usuário; team tem organizações, sócios e recursos de tenant.
-  const migration =
-    kind === 'public'
-      ? publicMigration()
-      : kind === 'team'
-        ? teamMigration()
-        : initialMigration()
+  const migrations = buildProjectMigrations(kind)
+  const migration = migrations[0].content
 
   const files: FileEntry[] = [
     // ── Manifesto e configuração ──────────────────────────────
@@ -296,10 +306,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
 
     // ── Banco ─────────────────────────────────────────────────
     { path: 'supabase/config.toml', content: supabaseConfig(projectName) },
-    {
-      path: 'supabase/migrations/00000000000000_initial_schema.sql',
-      content: migration,
-    },
+    ...migrations,
 
     // ── Testes ────────────────────────────────────────────────
     ...isolationGateFiles(),
@@ -374,12 +381,6 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
   }
 
   if (kind === 'team') {
-    // Correção forward-only: sync adiciona a migration sem reescrever histórico.
-    files.push({
-      path: 'supabase/migrations/20260905000000_membership_authorization.sql',
-      content: '-- Adesão a organizações exige convite/administração autorizada no servidor.\n' +
-        'DROP POLICY IF EXISTS "memberships_insert_own" ON public.memberships;\n',
-    })
     files.push({
       path: 'supabase/membership-authorization.rls.test.ts',
       content: generateRlsTest(inferTablesFromMigration(migration).filter((table) => table.tenant?.isSelf)),

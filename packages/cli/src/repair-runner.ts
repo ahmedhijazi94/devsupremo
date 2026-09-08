@@ -3,6 +3,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import type { EnginePolicy } from './engine-policy'
 import { runWorkerProcess, type WorkerProcessOptions } from './worker-process'
+import { readStableFile } from './stable-file'
 
 export const repairProposalSchema = z.object({
   summary: z.string().min(1).max(500),
@@ -53,8 +54,7 @@ export async function runRepairProposal(runner: RepairRunner, inferenceDir: stri
     await processRunner('codex', ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral',
       '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', ...restrictions, ...mcp,
       '--output-schema', schema, '--output-last-message', output, ...(policy.model ? ['--model', policy.model] : []), '-'], { ...options, timeoutMs: Math.max(1, deadline - Date.now()) })
-    if (fs.statSync(output).size > policy.max_output_bytes) throw new Error('Proposta excede o orçamento de saída.')
-    raw = JSON.parse(fs.readFileSync(output, 'utf8')) as unknown
+    raw = JSON.parse(readStableFile(output, policy.max_output_bytes, inferenceDir).content) as unknown
   } else {
     const result = await processRunner('claude', ['--print', '--restricted', '--tools', '', '--disallowedTools', 'mcp__*',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence',

@@ -136,6 +136,7 @@ describe('reconcileProjectPr — caminho único, re-lê pelo gateway', () => {
         state: 'open',
       })),
       getChecks: vi.fn(async () => ({ checks: green, headSha: SHA })),
+      getCodeScanning: async (headSha) => ({ headSha, status: 'not_required', reasons: ['Default setup confirmed not configured.'] }),
       verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
@@ -208,6 +209,7 @@ describe('cleanup preserves refs without atomic compare-and-swap', () => {
         return { headSha: 'a'.repeat(40), headRef: ref, nodeId: 'A', merged: true, state: 'closed' }
       }),
       getChecks: vi.fn(async () => ({ checks: [], headSha: liveSha })),
+      getCodeScanning: async (headSha) => ({ headSha, status: 'not_required', reasons: ['Default setup confirmed not configured.'] }),
       verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       hasRequiredChecks: vi.fn(async () => true), allowAutoMerge: vi.fn(async () => true),
       enableNativeAutoMerge: vi.fn(async () => true), merge: vi.fn(async () => ({ sha: liveSha })),
@@ -397,6 +399,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
         rows.push(newer!)
         return { headSha: observedSha, checks: [{ name: gate, status: 'completed', conclusion: 'failure' }] }
       },
+      getCodeScanning: async (headSha) => ({ headSha, status: 'not_required', reasons: ['Default setup confirmed not configured.'] }),
       verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true), enableNativeAutoMerge: vi.fn(async () => true),
@@ -437,6 +440,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
         state: 'open',
       }),
       getChecks: async () => ({ checks: green, headSha: FINAL_HEAD_SHA }),
+      getCodeScanning: async (headSha) => ({ headSha, status: 'not_required', reasons: ['Default setup confirmed not configured.'] }),
       verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       hasRequiredChecks: vi.fn(async () => true),
       allowAutoMerge: vi.fn(async () => true),
@@ -477,6 +481,7 @@ describe('regressão: 2 checkpoints na MESMA PR → synchronize → merge → AM
         state: merged ? 'closed' : 'open',
       }),
       getChecks: async () => ({ checks: green, headSha: FINAL_HEAD_SHA }),
+      getCodeScanning: async (headSha) => ({ headSha, status: 'not_required', reasons: ['Default setup confirmed not configured.'] }),
       verifyPolicy: async (headSha) => ({ approved: true, headSha, reasons: [] }),
       allowAutoMerge: async () => true,
       enableNativeAutoMerge: async () => true,

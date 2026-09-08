@@ -49,7 +49,12 @@ export async function listProjectCheckpoints(
       .limit(50)
     if (error) return { error: error.message }
     return {
-      items: (data ?? []).map((r, index, rows) => ({
+      items: (data ?? []).map((r, index, rows) => {
+        const parsedFeedback = validationFeedbackSchema.safeParse(r.validation_feedback)
+        const feedback = parsedFeedback.success && parsedFeedback.data.projectId === projectId &&
+          parsedFeedback.data.checkpointId === r.id && parsedFeedback.data.commitSha === r.commit_sha &&
+          parsedFeedback.data.publishedSha === r.published_sha ? parsedFeedback.data : null
+        return {
         id: r.id as string,
         parentCheckpointId: (r.parent_checkpoint_id as string | null) ?? null,
         summary: r.summary as string,
@@ -57,6 +62,7 @@ export async function listProjectCheckpoints(
         status: humanCheckpointStatus(
           r.push_status as Parameters<typeof humanCheckpointStatus>[0],
           r.integration_status as Parameters<typeof humanCheckpointStatus>[1],
+          feedback?.state === 'passed' || feedback?.state === 'integrated',
         ),
         migrations: Array.isArray(r.migrations) ? (r.migrations as string[]) : [],
         prNumber: (r.pr_number as number | null) ?? null,
@@ -76,9 +82,9 @@ export async function listProjectCheckpoints(
           : '',
         validationSummary: r.push_status === 'local'
           ? localCheckpointPresentation(r.local_validation_status, r.local_upload_status).summary
-          : validationFeedbackSchema.safeParse(r.validation_feedback).success
-          ? validationFeedbackSchema.parse(r.validation_feedback).summary : '',
-      })),
+          : feedback?.summary ?? '',
+        }
+      }),
     }
   } catch (error) {
     return { error: toActionError(error) }

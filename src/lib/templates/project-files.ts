@@ -77,7 +77,7 @@ export {
 // padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
 // nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
 // próprio Supremo (migration 017, NÃO aplicada).
-export const TEMPLATE_VERSION = '4.0.2'
+export const TEMPLATE_VERSION = '4.0.3'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '3.0.0'
@@ -515,10 +515,10 @@ const isFramable =
  */
 
 const securityHeaders = [
-  {
+  ...(isDev ? [] : [{
     key: 'Strict-Transport-Security',
     value: 'max-age=63072000; includeSubDomains; preload',
-  },
+  }]),
   // Omitido quando enquadrável: o header não tem valor que signifique
   // "permita", e mantê-lo anularia o frame-ancestors da CSP.
   ...(isFramable ? [] : [{ key: 'X-Frame-Options', value: 'DENY' }]),
@@ -535,6 +535,11 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  // Um boolean público mantém browser, Server Actions e proxy no mesmo modo.
+  // Development usa HTTP local mesmo quando preserva flags de um preview remoto.
+  env: {
+    NEXT_PUBLIC_SUPREMO_HOSTED_PREVIEW: !isDev && isFramable ? '1' : '0',
+  },
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }]
   },
@@ -1298,7 +1303,12 @@ import { Card } from '@/components/ui/card'
 
 export const metadata = { title: 'Entrar — ${escapeJs(projectName)}' }
 
-export default function LoginPage() {
+export default async function LoginPage({ searchParams }: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const params = await searchParams ?? {}
+  const confirmationError = params.auth === 'confirmation-error'
+
   return (
     <main className="relative isolate flex min-h-dvh items-center justify-center overflow-hidden px-6 py-16">
       <div
@@ -1310,7 +1320,7 @@ export default function LoginPage() {
         <p className="text-muted mt-1 mb-6 text-sm">
           Acesse a sua conta ou crie uma nova.
         </p>
-        <LoginForm />
+        <LoginForm confirmationError={confirmationError} />
       </Card>
     </main>
   )
@@ -1335,35 +1345,50 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input, Label } from '@/components/ui/input'
 
-export function LoginForm() {
+export function LoginForm({ confirmationError = false }: { confirmationError?: boolean } = {}) {
   const router = useRouter()
-  const supabase = createClient()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(confirmationError
+    ? 'Não foi possível concluir a sessão pelo link. Se já confirmou seu email, entre com sua senha. Você também pode tentar novamente no navegador em que iniciou o cadastro.'
+    : null)
+  const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault()
     setBusy(true)
     setError(null)
+    setMessage(null)
 
-    const fn =
-      mode === 'signin'
-        ? supabase.auth.signInWithPassword({ email, password })
-        : supabase.auth.signUp({
+    try {
+      const supabase = createClient()
+      const { data, error } = mode === 'signin'
+        ? await supabase.auth.signInWithPassword({ email, password })
+        : await supabase.auth.signUp({
             email,
             password,
             options: { emailRedirectTo: \`\${location.origin}/auth/callback\` },
           })
 
-    const { error } = await fn
-    setBusy(false)
-
-    if (error) {
-      setError(error.message)
+      if (error) {
+        setError(error.message)
+        return
+      }
+      if (!data.session) {
+        if (mode === 'signup') {
+          setMessage('Confira seu email para confirmar o cadastro. Depois, entre com sua senha.')
+        } else {
+          setError('Não foi possível iniciar a sessão. Tente entrar novamente.')
+        }
+        return
+      }
+    } catch {
+      setError('Não foi possível conectar. Tente novamente; seus dados continuam no formulário.')
       return
+    } finally {
+      setBusy(false)
     }
     // Server Component decide o acesso; aqui só levamos para a área logada.
     router.push('/app')
@@ -1395,7 +1420,8 @@ export function LoginForm() {
         />
       </div>
 
-      {error && <p className="text-danger-foreground text-sm">{error}</p>}
+      {error && <p role="alert" className="text-danger-foreground text-sm">{error}</p>}
+      {message && <p role="status" className="text-muted text-sm">{message}</p>}
 
       <Button type="submit" disabled={busy} className="w-full">
         {busy ? '...' : mode === 'signin' ? 'Entrar' : 'Criar conta'}
@@ -1403,7 +1429,12 @@ export function LoginForm() {
 
       <button
         type="button"
-        onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
+        disabled={busy}
+        onClick={() => {
+          setMode(mode === 'signin' ? 'signup' : 'signin')
+          setError(null)
+          setMessage(null)
+        }}
         className="text-muted hover:text-foreground w-full text-center text-sm"
       >
         {mode === 'signin'
@@ -1424,18 +1455,24 @@ export function LoginForm() {
  */
 function authCallbackRoute(): string {
   return `import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 
-export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url)
-  const code = searchParams.get('code')
+export async function GET(request: Request): Promise<NextResponse> {
+  const url = new URL(request.url)
+  const code = z.string().min(1).max(2048).safeParse(url.searchParams.get('code'))
+  const failed = () => NextResponse.redirect(new URL('/login?auth=confirmation-error', url.origin))
 
-  if (code) {
+  if (!code.success || url.searchParams.has('error')) return failed()
+  try {
     const supabase = await createClient()
-    await supabase.auth.exchangeCodeForSession(code)
+    const { error } = await supabase.auth.exchangeCodeForSession(code.data)
+    if (error) return failed()
+  } catch {
+    return failed()
   }
 
-  return NextResponse.redirect(\`\${origin}/app\`)
+  return NextResponse.redirect(new URL('/app', url.origin))
 }
 `
 }
@@ -1722,33 +1759,36 @@ function proxyFile(auth: boolean): string {
   // O import e a renovação de sessão só entram quando há login. App público
   // não carrega o cliente Supabase no proxy.
   const authImport = auth
-    ? `import { createServerClient } from '@supabase/ssr'\n`
+    ? `import { createServerClient, type CookieOptions } from '@supabase/ssr'\n`
     : ''
 
   const renew = auth
     ? `
+  const responseCookies: { name: string; value: string; options: CookieOptions }[] = []
+  const authHeaders: Record<string, string> = {}
   // Renova a sessão a cada requisição, mantendo o token válido. Sem isto, o
   // usuário é deslogado quando o access token expira. NÃO decide acesso a
   // rota — quem decide é o Server Component chamando supabase.auth.getUser().
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   if (supabaseUrl && supabaseKey) {
+    const cookieOptions = process.env.NEXT_PUBLIC_SUPREMO_HOSTED_PREVIEW === '1'
+      ? { sameSite: 'none' as const, secure: true, partitioned: true }
+      : { sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', partitioned: false }
     const supabase = createServerClient(supabaseUrl, supabaseKey, {
+      cookieOptions,
       cookies: {
         getAll() {
           return request.cookies.getAll()
         },
-        setAll(cookiesToSet) {
-          // No preview (iframe de outro domínio) o cookie precisa de
-          // SameSite=None; Secure para valer, E Partitioned (CHIPS) — sem ele
-          // o Chrome moderno descarta cookie de terceira-parte mesmo com
-          // SameSite=None, e o login não persiste.
-          const cookieFix = isFramable
-            ? { sameSite: 'none' as const, secure: true, partitioned: true }
-            : {}
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, { ...options, ...cookieFix }),
-          )
+        setAll(cookiesToSet, headersToSet) {
+          // O render desta mesma requisição precisa receber a sessão renovada.
+          // Guardamos também todas as partes para o browser e os headers anticache.
+          cookiesToSet.forEach(({ name, value, options }) => {
+            request.cookies.set(name, value)
+            responseCookies.push({ name, value, options: { ...options, ...cookieOptions } })
+          })
+          Object.assign(authHeaders, headersToSet)
         },
       },
     })
@@ -1797,9 +1837,9 @@ ${signature}
     "base-uri 'self'",
     "form-action 'self'",
     "object-src 'none'",
-    'upgrade-insecure-requests',
+    ...(isDev ? [] : ['upgrade-insecure-requests']),
   ].join('; ')
-
+${renew}
   // O Next lê o nonce do cabeçalho da REQUISIÇÃO e o aplica nos próprios
   // scripts. Sem repassar aqui, a página carregaria sem nonce e a política
   // bloquearia o hidrate.
@@ -1809,7 +1849,9 @@ ${signature}
 
   const response = NextResponse.next({ request: { headers } })
   response.headers.set('Content-Security-Policy', csp)
-${renew}
+${auth ? `  responseCookies.forEach(({ name, value, options }) => response.cookies.set(name, value, options))
+  Object.entries(authHeaders).forEach(([name, value]) => response.headers.set(name, value))
+` : ''}
   return response
 }
 
@@ -1868,18 +1910,13 @@ export function createClient() {
     )
   }
 
-  // No preview do Supremo o app roda num iframe de outro domínio, e o cookie
-  // de sessão vira "terceira-parte" — o navegador o bloqueia, e o login não
-  // persiste (volta para /login). SameSite=None; Secure faz o cookie valer no
-  // iframe; Partitioned (CHIPS) é o que falta no Chrome moderno, que descarta
-  // cookie de terceira-parte mesmo com SameSite=None. Fora do iframe, nada muda.
-  const inIframe = typeof window !== 'undefined' && window.self !== window.top
+  // next.config define o mesmo modo para browser, servidor e proxy.
+  // Só o preview hospedado usa cookies de iframe; development usa HTTP local.
+  const cookieOptions = process.env.NEXT_PUBLIC_SUPREMO_HOSTED_PREVIEW === '1'
+    ? { sameSite: 'none' as const, secure: true, partitioned: true }
+    : { sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', partitioned: false }
 
-  return createBrowserClient(url, key, {
-    ...(inIframe
-      ? { cookieOptions: { sameSite: 'none', secure: true, partitioned: true } }
-      : {}),
-  })
+  return createBrowserClient(url, key, { cookieOptions })
 }
 `
 }
@@ -1904,20 +1941,16 @@ export async function createClient() {
     )
   }
 
-  // No preview (iframe de outro domínio) o cookie precisa de SameSite=None;
-  // Secure, e Partitioned (CHIPS), senão o Chrome o trata como terceira-parte
-  // e o descarta mesmo com SameSite=None.
-  const preview =
-    process.env.SUPREMO_PREVIEW === '1' ||
-    process.env.VERCEL_ENV === 'preview'
-  const cookieOptions = preview
+  // O mesmo modo publicado por next.config é usado no browser e no proxy.
+  const cookieOptions = process.env.NEXT_PUBLIC_SUPREMO_HOSTED_PREVIEW === '1'
     ? { sameSite: 'none' as const, secure: true, partitioned: true }
-    : {}
+    : { sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', partitioned: false }
 
   return createServerClient(
     url,
     key,
     {
+      cookieOptions,
       cookies: {
         getAll() {
           return cookieStore.getAll()

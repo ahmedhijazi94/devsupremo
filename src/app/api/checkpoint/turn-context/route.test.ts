@@ -279,9 +279,17 @@ describe('turn preflight backend reconciliation', () => {
     const row = checkpoint()
     row.integration_status = integrationStatus
     database.tables.checkpoints!.push(row)
-    expect((await POST(request())).status).toBe(503)
-    await saveCheckpointFeedback(database.client, feedback(row, 'pending'))
-    expect((await POST(request())).status).toBe(503)
+    for (const state of [null, 'pending', 'passed'] as const) {
+      if (state) await saveCheckpointFeedback(database.client, feedback(row, state, `2026-09-06T02:${state === 'passed' ? '01' : '00'}:00.000Z`))
+      const observed = await context()
+      expect(observed.databaseAuthority.automaticMigrations).toBe(true)
+      expect(observed.feedback.current).toMatchObject({ checkpointId: row.id, commitSha: row.commit_sha,
+        publishedSha: row.published_sha, state: 'failed', failures: [{ category: integrationStatus === 'security_blocked' ? 'security' : 'code' }] })
+      expect(observed.latestCheckpoint?.integrationStatus).toBe(integrationStatus)
+      // A read never alters the checkpoint, grants a merge or erases detailed evidence.
+      expect(row.integration_status).toBe(integrationStatus)
+      expect(row.push_status).toBe('published')
+    }
     await saveCheckpointFeedback(database.client, feedback(row, 'failed', '2026-09-06T03:00:00.000Z'))
     expect((await context()).feedback.current).toMatchObject({ checkpointId: row.id, state: 'failed' })
   })

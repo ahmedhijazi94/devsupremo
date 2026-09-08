@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { EnginePolicy } from './engine-policy'
 import { runWorkerProcess, type WorkerProcessOptions } from './worker-process'
 import { readStableFile } from './stable-file'
+import { isRunnerLaunchUnavailable, RepairRunnerUnavailableError, resolveRepairExecutable } from './repair-executable'
 
 export const repairProposalSchema = z.object({
   summary: z.string().min(1).max(500),
@@ -20,8 +21,17 @@ export type ProcessRunner = (executable: string, args: readonly string[], option
 /** CLI permissions are tightened, never bypassed. The provider only proposes JSON;
  * Supremo, not the model, owns every candidate and live-workspace write. */
 export async function runRepairProposal(runner: RepairRunner, inferenceDir: string, prompt: string,
-  policy: EnginePolicy['auto_heal'], signal?: AbortSignal, processRunner: ProcessRunner = runWorkerProcess): Promise<RepairProposal> {
+  policy: EnginePolicy['auto_heal'], signal?: AbortSignal, processRunner: ProcessRunner = runWorkerProcess,
+  resolveExecutable: (runner: RepairRunner) => string = resolveRepairExecutable): Promise<RepairProposal> {
   if (Buffer.byteLength(prompt) > policy.max_input_bytes) throw new Error('Contexto de autocura excede o orçamento de entrada.')
+  const executable = resolveExecutable(runner)
+  const execute = async (args: readonly string[], options: WorkerProcessOptions): ReturnType<ProcessRunner> => {
+    try { return await processRunner(executable, args, options) }
+    catch (error) {
+      if (isRunnerLaunchUnavailable(error)) throw new RepairRunnerUnavailableError(runner)
+      throw error
+    }
+  }
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
     ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
     SUPREMO_REPAIR: '1' }
@@ -32,7 +42,7 @@ export async function runRepairProposal(runner: RepairRunner, inferenceDir: stri
   if (runner === 'codex') {
     // Enumerate effective server names without emitting their configuration. An
     // unsupported CLI fails closed instead of inheriting writable external tools.
-    const inventory = await processRunner('codex', ['mcp', 'list', '--json'], { ...options, input: undefined, timeoutMs: Math.min(policy.timeout_ms, 10_000) })
+    const inventory = await execute(['mcp', 'list', '--json'], { ...options, input: undefined, timeoutMs: Math.min(policy.timeout_ms, 10_000) })
     const serverSchema = z.array(z.object({ name: z.string().max(200), enabled: z.boolean(), transport: z.object({ type: z.enum(['stdio', 'streamable_http']) }) }))
     const servers = serverSchema.parse(JSON.parse(inventory.stdout))
     const schema = path.join(inferenceDir, 'output-schema.json')
@@ -47,16 +57,16 @@ export async function runRepairProposal(runner: RepairRunner, inferenceDir: stri
       ...(server.transport.type === 'stdio' ? ['-c', `mcp_servers.${server.name}.command=${JSON.stringify(process.execPath)}`,
         '-c', `mcp_servers.${server.name}.args=["-e","process.exit(0)"]`]
         : ['-c', `mcp_servers.${server.name}.url="http://127.0.0.1:9"`])])
-    const inspected = await processRunner('codex', [...restrictions, ...mcp, 'mcp', 'list', '--json'], {
+    const inspected = await execute([...restrictions, ...mcp, 'mcp', 'list', '--json'], {
       ...options, input: undefined, timeoutMs: Math.max(1, Math.min(deadline - Date.now(), 10_000)),
     })
     if (serverSchema.parse(JSON.parse(inspected.stdout)).some(server => server.enabled)) throw new Error('Não foi possível desativar todos os MCPs para a proposta isolada.')
-    await processRunner('codex', ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral',
+    await execute(['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral',
       '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', ...restrictions, ...mcp,
       '--output-schema', schema, '--output-last-message', output, ...(policy.model ? ['--model', policy.model] : []), '-'], { ...options, timeoutMs: Math.max(1, deadline - Date.now()) })
     raw = JSON.parse(readStableFile(output, policy.max_output_bytes, inferenceDir).content) as unknown
   } else {
-    const result = await processRunner('claude', ['--print', '--restricted', '--tools', '', '--disallowedTools', 'mcp__*',
+    const result = await execute(['--print', '--restricted', '--tools', '', '--disallowedTools', 'mcp__*',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence',
       '--output-format', 'json', '--json-schema', JSON.stringify(outputSchema), '--max-budget-usd', String(policy.max_budget_usd),
       ...(policy.model ? ['--model', policy.model] : [])], options)

@@ -53,8 +53,22 @@ export function evaluateCodeScanning(
     return { headSha, status: 'pending', reasons: ['CodeQL está configurado, mas ainda não publicou o resultado desta revisão.'] }
   }
   return { headSha, status: 'not_required', reasons: [setup === 'unlicensed'
-    ? 'CodeQL indisponível: o GitHub confirmou Code Security e Advanced Security desativados neste repositório privado.'
+    ? 'CodeQL não aplicável: o GitHub confirmou Code Security desativado neste repositório privado. Os gates obrigatórios do projeto continuam exigidos; isto não é aprovação do CodeQL.'
     : 'O GitHub confirmou que o default setup do CodeQL não está configurado.'] }
+}
+
+/** Modern personal/private repositories can omit the legacy Advanced Security
+ * field. A missing field alone is never a license exception: require the exact
+ * provider refusal as well as explicit disabled Code Security metadata. */
+function confirmsDisabledCodeSecurity(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('status' in error) || error.status !== 403) return false
+  let message: unknown = 'message' in error ? error.message : undefined
+  if ('response' in error && typeof error.response === 'object' && error.response !== null && 'data' in error.response) {
+    const data: unknown = error.response.data
+    if (typeof data === 'object' && data !== null && 'message' in data) message = data.message
+  }
+  return message === 'Code Security must be enabled for this repository to use code scanning.'
+    || message === 'GitHub Code Security or GitHub Advanced Security must be enabled for this repository to use code scanning.'
 }
 
 export async function readCodeScanning(port: CodeScanningPort, headSha: string): Promise<CodeScanningEvidence> {
@@ -73,8 +87,11 @@ export async function readCodeScanning(port: CodeScanningPort, headSha: string):
       // optional. Only positive repository feature metadata permits this case.
       try {
         const repo = await port.getRepository()
-        if (repo.private && repo.security_and_analysis?.code_security?.status === 'disabled'
-          && repo.security_and_analysis.advanced_security?.status === 'disabled') setup = 'unlicensed'
+        const features = repo.security_and_analysis
+        const legacyDisabled = features?.advanced_security?.status === 'disabled'
+        const modernDisabled = features?.advanced_security === undefined && confirmsDisabledCodeSecurity(error)
+        if (repo.private && features?.code_security?.status === 'disabled'
+          && (legacyDisabled || modernDisabled)) setup = 'unlicensed'
       } catch { setup = 'unavailable' }
     }
   }

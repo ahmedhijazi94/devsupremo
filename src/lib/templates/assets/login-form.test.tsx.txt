@@ -11,8 +11,8 @@ vi.mock('next/navigation', () => ({ useRouter: () => auth }))
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
-  auth.signInWithPassword.mockResolvedValue({ error: null })
-  auth.signUp.mockResolvedValue({ error: null })
+  auth.signInWithPassword.mockResolvedValue({ data: { session: {} }, error: null })
+  auth.signUp.mockResolvedValue({ data: { session: null }, error: null })
 })
 function credentials() {
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.invalid' } })
@@ -37,7 +37,7 @@ describe('login e cadastro', () => {
     expect(auth.push).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'Entrar' })).toBeEnabled()
   })
-  it('permite cadastro com retorno à origem atual e alternância de modo', async () => {
+  it('aguarda confirmação sem abrir a área privada e mantém as credenciais', async () => {
     render(<LoginForm />)
     credentials()
     fireEvent.click(screen.getByRole('button', { name: 'Não tem conta? Criar uma' }))
@@ -46,17 +46,56 @@ describe('login e cadastro', () => {
       email: 'ana@example.invalid', password: 'development-password',
       options: { emailRedirectTo: `${location.origin}/auth/callback` },
     }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Confira seu email')
+    expect(auth.push).not.toHaveBeenCalled()
+    expect(auth.refresh).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Email')).toHaveValue('ana@example.invalid')
+    expect(screen.getByLabelText('Senha')).toHaveValue('development-password')
     fireEvent.click(screen.getByRole('button', { name: 'Já tem conta? Entrar' }))
     expect(screen.getByRole('button', { name: 'Entrar' })).toBeVisible()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+  it('abre a área privada quando o cadastro já retorna uma sessão', async () => {
+    auth.signUp.mockResolvedValue({ data: { session: {} }, error: null })
+    render(<LoginForm />)
+    credentials()
+    fireEvent.click(screen.getByRole('button', { name: 'Não tem conta? Criar uma' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Criar conta' }))
+    await waitFor(() => expect(auth.push).toHaveBeenCalledWith('/app'))
+    expect(auth.refresh).toHaveBeenCalledOnce()
+  })
+  it('oferece recuperação quando a confirmação não cria sessão neste navegador', () => {
+    render(<LoginForm confirmationError />)
+    expect(screen.getByRole('alert')).toHaveTextContent('entre com sua senha')
+    expect(screen.getByRole('button', { name: 'Entrar' })).toBeEnabled()
+  })
+  it('permite nova tentativa após uma falha de conexão', async () => {
+    auth.signInWithPassword.mockRejectedValueOnce(new Error('offline'))
+    render(<LoginForm />)
+    credentials()
+    fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Tente novamente')
+    expect(auth.push).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Email')).toHaveValue('ana@example.invalid')
+    fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    await waitFor(() => expect(auth.push).toHaveBeenCalledWith('/app'))
+  })
+  it('não avança quando o login não retorna sessão', async () => {
+    auth.signInWithPassword.mockResolvedValue({ data: { session: null }, error: null })
+    render(<LoginForm />)
+    credentials()
+    fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('iniciar a sessão')
+    expect(auth.push).not.toHaveBeenCalled()
   })
   it('bloqueia o botão enquanto a autenticação está pendente', async () => {
-    let complete: (value: { error: null }) => void = () => undefined
+    let complete: (value: { data: { session: object }; error: null }) => void = () => undefined
     auth.signInWithPassword.mockImplementation(() => new Promise(resolve => { complete = resolve }))
     render(<LoginForm />)
     credentials()
     fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
     expect(screen.getByRole('button', { name: '...' })).toBeDisabled()
-    complete({ error: null })
+    complete({ data: { session: {} }, error: null })
     await waitFor(() => expect(auth.push).toHaveBeenCalledWith('/app'))
     expect(auth.signInWithPassword).toHaveBeenCalledOnce()
   })

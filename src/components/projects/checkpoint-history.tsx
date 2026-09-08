@@ -27,6 +27,8 @@ const STATUS_TONE: Record<CheckpointHistoryItem['status'], PillTone> = {
   Salvando: 'neutral',
   Publicando: 'info',
   Testando: 'wait',
+  'Aguardando integração': 'info',
+  'Integração bloqueada': 'down',
   Integrado: 'up',
   Falhou: 'down',
 }

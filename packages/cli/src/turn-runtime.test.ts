@@ -349,12 +349,26 @@ describe('fast development from the real E2E regressions', () => {
     defaultCheckpointDeps(cwd).appendQueue(legacy)
     expect(await drainLocalValidation(cwd)).toBe(0)
     const offline = { ...deps, reconcile: async (): Promise<BackendTurnContext> => { throw new Error('offline') } }
-    expect((await runTurnEvent('preflight', cwd, hook, 'codex', offline)).allowed).toBe(false)
+    const offlineResult = await runTurnEvent('preflight', cwd, hook, 'codex', offline)
+    expect(offlineResult.allowed).toBe(false)
+    expect(offlineResult.reason).toContain('offline')
     expect(defaultCheckpointDeps(cwd).readQueue()[0]?.environment).toBeUndefined()
     expect((await runTurnEvent('preflight', cwd, hook, 'codex', deps)).allowed).toBe(true)
     expect(defaultCheckpointDeps(cwd).readQueue()[0]).toMatchObject({ environment: 'development', validationStatus: 'pending' })
     expect(await drainLocalValidation(cwd)).toBe(1)
     expect(defaultCheckpointDeps(cwd).readQueue()[0]?.validationStatus).toBe('deferred')
+  })
+
+  it('explains reconciliation failure without exposing credentials or granting cached editing authority', async () => {
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    const unavailable = { ...deps, reconcile: async (): Promise<BackendTurnContext> => {
+      throw new Error('Reconciliation HTTP 503\ntoken=private-token')
+    } }
+    const result = await runTurnEvent('preflight', cwd, hook, 'codex', unavailable)
+    expect(result.allowed).toBe(false)
+    expect(result.reason).toContain('Reconciliation HTTP 503')
+    expect(result.reason).not.toContain('private-token')
+    expect((await runTurnEvent('before-mutation', cwd, hook, 'codex', unavailable)).allowed).toBe(false)
   })
 
   it('never rewrites a production checkpoint environment during development preflight', async () => {

@@ -46,6 +46,23 @@ export async function POST(request: Request): Promise<Response> {
         latest = fresh
         continue
       }
+      // A gate can block integration after the CI receipt says "passed". Return
+      // that known block as failure evidence, not a 503 that locks development.
+      // Authorization above and every publication/merge gate remain unchanged.
+      if (fresh?.publishedSha && ['ci_failed', 'security_blocked'].includes(fresh.integrationStatus ?? '') &&
+        feedback.current?.state !== 'failed') {
+        const security = fresh.integrationStatus === 'security_blocked'
+        feedback.current = {
+          projectId: project.id, checkpointId: fresh.id, commitSha: fresh.commitSha,
+          publishedSha: fresh.publishedSha, observedAt: new Date().toISOString(), state: 'failed',
+          failures: [{ name: security ? 'Controle de segurança da integração' : 'Validação da integração',
+            category: security ? 'security' : 'code' }],
+          summary: security
+            ? 'A integração está bloqueada pelo controle de segurança. Os checks da CI não substituem essa decisão.'
+            : 'A integração registrou falha na validação. O diagnóstico detalhado ainda está sendo atualizado.',
+          evidence: `Estado registrado da integração: ${fresh.integrationStatus}. Corrigir em desenvolvimento não autoriza publicar ou integrar.`,
+        }
+      }
       const result = backendTurnContextSchema.parse({
         version: 1,
         projectId: project.id,

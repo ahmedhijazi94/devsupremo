@@ -1,6 +1,7 @@
 'use server'
 
 import { z } from 'zod'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
 import { freshGithubToken } from '@/lib/github-token'
 import {
@@ -35,7 +36,7 @@ const PROJECT_COLUMNS =
 async function resolveGithub(
   projectId: string,
 ): Promise<
-  { ok: true; creds: GithubCredentials } | { ok: false; error: string }
+  { ok: true; creds: GithubCredentials; supabase: SupabaseClient } | { ok: false; error: string }
 > {
   const { user, supabase, project } = await requireProjectOwner(
     projectId,
@@ -73,6 +74,7 @@ async function resolveGithub(
   const defaultBranch = (project.default_branch as string | null) ?? 'main'
   return {
     ok: true,
+    supabase,
     creds: {
       token,
       repoFullName,
@@ -122,7 +124,7 @@ export async function getProjectChecks(
     } }
     const resolved = await resolveGithub(projectId)
     if (!resolved.ok) return { error: resolved.error }
-    const { creds } = resolved
+    const { creds, supabase } = resolved
 
     // O PR de agente mais recente é o que interessa; sem nenhum, olhamos a
     // branch principal (os checks do último merge).
@@ -143,10 +145,24 @@ export async function getProjectChecks(
     })
     const state = evaluation.decision === 'merge' ? 'passed' : evaluation.decision === 'blocked' ? 'failed' : 'pending'
     const summary = state === 'passed'
-      ? `Todos os ${required.length} gates obrigatórios aprovados para esta versão.`
+      ? `As ${required.length} verificações obrigatórias do GitHub foram aprovadas para esta versão.`
       : currentHead !== checks.headSha ? 'A versão mudou; aguardando os checks da alteração atual.'
         : state === 'failed' ? `Validação bloqueada: ${evaluation.failing.join(', ') || 'gates obrigatórios não definidos'}.`
           : `Aguardando validação: ${evaluation.missing.length} gate(s) ainda não recebido(s), ${evaluation.pending.length} em andamento.`
+
+    // Green CI is not an independent integration approval. Only a current,
+    // same-PR and same-revision checkpoint may add a known integration block.
+    let integrationBlocked = false
+    if (agentPr && latest?.prNumber === agentPr.number &&
+      (latest.status === 'Falhou' || latest.status === 'Integração bloqueada')) {
+      const { data: checkpoint, error } = await supabase.from('checkpoints')
+        .select('id, push_status, integration_status')
+        .eq('project_id', projectId).eq('id', latest.id)
+        .eq('pr_number', agentPr.number).eq('published_sha', currentHead).maybeSingle()
+      if (error) return { error: 'Não foi possível confirmar o estado da integração desta versão.' }
+      integrationBlocked = checkpoint != null && (checkpoint.push_status === 'failed' ||
+        ['ci_failed', 'security_blocked', 'unmanaged_main_change'].includes(checkpoint.integration_status as string))
+    }
 
     return {
       data: {
@@ -155,8 +171,10 @@ export async function getProjectChecks(
           : `branch ${creds.defaultBranch}`,
         prNumber: agentPr?.number ?? null,
         ref,
-        state,
-        summary,
+        state: integrationBlocked ? 'failed' : state,
+        summary: integrationBlocked
+          ? `${summary} A integração desta versão está bloqueada. Consulte o diagnóstico no histórico.` : summary,
+        ...(integrationBlocked ? { badgeLabel: 'Integração bloqueada' } : {}),
         checks: checks.checks.map((check) => ({
           name: check.name,
           status: check.status,

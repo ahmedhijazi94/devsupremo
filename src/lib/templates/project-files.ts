@@ -2259,7 +2259,7 @@ export const GITLEAKS_VERSION = '8.21.2'
 export const GITLEAKS_SHA256_LINUX_X64 =
   '5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba'
 
-function ciWorkflow(_projectName: string): string {
+export function ciWorkflow(_projectName: string): string {
   void _projectName
   return `name: Gates
 

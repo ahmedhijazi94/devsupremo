@@ -3,14 +3,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { buildProjectFiles } from './project-files'
+import { ciWorkflow } from './project-files'
 
 describe('CI infrastructure recovery', () => {
   for (const scenario of ['transient', 'persistent', 'migration'] as const) {
     it(`${scenario}: retries only transient startup failures and never bypasses the gate`, () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-recovery-"$(not-a-command)-'))
       try {
-        const ci = buildProjectFiles({ projectName: 'fixture', description: '' }).find((f) => f.path === '.github/workflows/ci.yml')!.content
+        // Consume the release-owned workflow generator directly. Other scaffold
+        // assets include environment configuration and are not shell programs.
+        const ci = ciWorkflow('fixture')
         const block = ci.split('name: Preparar banco de testes com recuperação de rede')[1]!.split('\n      # O start')[0]!
         expect(block).toContain('SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io')
         const script = block.split('        run: |\n')[1]!.split('\n').map((line) => line.replace(/^          /, '')).join('\n')

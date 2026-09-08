@@ -143,6 +143,8 @@ jobs:
         run: ./scripts/dev/verify-template.sh /tmp/generated
       - name: Instalar navegador para a validação isolada
         run: npx playwright install --with-deps chromium webkit
+      - name: Verificar formulário de login gerado e rejeição de controles inválidos
+        run: node --import tsx scripts/test-login-smoke.mts
       - name: Verificar worker real com o app gerado
         run: node --import tsx scripts/test-generated-worker.mts /tmp/generated
       - name: Verificar edição rápida, continuidade e rascunho no preview real

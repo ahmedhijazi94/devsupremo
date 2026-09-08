@@ -77,7 +77,7 @@ export {
 // padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
 // nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
 // próprio Supremo (migration 017, NÃO aplicada).
-export const TEMPLATE_VERSION = '4.0.1'
+export const TEMPLATE_VERSION = '4.0.2'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '3.0.0'
@@ -2142,11 +2142,29 @@ function e2eSmoke(auth: boolean): string {
     ? `
   test('a tela de login carrega e mostra o formulário', async ({ page }) => {
     await page.goto('/login')
-    await expect(page.getByLabel('Email')).toBeVisible()
-    await expect(page.getByLabel('Senha')).toBeVisible()
-    await expect(
-      page.getByRole('button', { name: 'Entrar' }),
-    ).toBeVisible()
+    // Tabs and submit copy may change. Require both credentials and one usable
+    // submit in the same form, never an unrelated button elsewhere on the page.
+    const form = page.locator('form:visible')
+      .filter({ has: page.locator('input[type="email"]:visible') })
+      .filter({ has: page.locator('input[type="password"]:visible') })
+    await expect(form).toHaveCount(1)
+    const email = form.locator('input[type="email"]:visible')
+    const password = form.locator('input[type="password"]:visible')
+    for (const field of [email, password]) {
+      await expect(field).toHaveCount(1)
+      await expect(field).toBeVisible()
+      await expect(field).toBeEditable()
+      await expect(field).toHaveAccessibleName(/\\S/)
+    }
+    // Some forms enable submission only after both credentials are filled.
+    // Synthetic values stay in the browser: this smoke never submits them.
+    await email.fill('smoke@example.invalid')
+    await password.fill('Supremo-smoke-only-123!')
+    const submit = form.locator('button[type="submit"], input[type="submit"], button:not([type])')
+    await expect(submit).toHaveCount(1)
+    await expect(submit).toBeVisible()
+    await expect(submit).toBeEnabled()
+    await expect(submit).toHaveAccessibleName(/\\S/)
   })
 
   test('a rota protegida redireciona quem não está logado', async ({

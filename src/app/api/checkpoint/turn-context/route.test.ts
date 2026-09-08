@@ -67,8 +67,17 @@ function memoryDatabase() {
         limit(value: number) { maximum = value; return chain },
         update(value: Row) { patch = value; return chain },
         or(value: string) {
-          const timestamp = value.replace('validation_feedback.is.null,validation_feedback->>observedAt.lt.', '')
-          filters.push((row) => row.validation_feedback == null || String((row.validation_feedback as Row).observedAt) < timestamp)
+          const alternatives = value.split(',').map((clause): ((row: Row) => boolean) => {
+            if (clause === 'validation_feedback.is.null') return (row) => row.validation_feedback == null
+            if (clause === 'validation_feedback->>source.eq.local') return (row) => (row.validation_feedback as Row | null)?.source === 'local'
+            const observation = /^validation_feedback->>observedAt\.lt\.(\d{4}-\d{2}-\d{2}T[\d:.]+Z)$/.exec(clause)
+            if (observation) return (row) => {
+              const observedAt = (row.validation_feedback as Row | null)?.observedAt
+              return typeof observedAt === 'string' && observedAt < observation[1]!
+            }
+            throw new Error(`Unsupported test OR filter: ${clause}`)
+          })
+          filters.push((row) => alternatives.some((matches) => matches(row)))
           return chain
         },
         maybeSingle: async () => execute(),
@@ -205,6 +214,18 @@ describe('turn preflight backend reconciliation', () => {
     await saveCheckpointFeedback(database.client, feedback(newer, 'failed', '2026-09-06T02:00:00.000Z'))
     await saveCheckpointFeedback(database.client, feedback(older, 'failed', '2026-09-06T04:00:00.000Z'))
     expect((await context()).feedback).toMatchObject({ current: { checkpointId: newer.id, publishedSha: newer.published_sha, state: 'passed' }, previousFailure: null })
+  })
+
+  it('replaces local metadata with real CI evidence and then rejects an older remote failure', async () => {
+    const row = checkpoint()
+    row.validation_feedback = { source: 'local', version: 1, projectId,
+      checkpointId: row.id, commitSha: row.commit_sha, revision: 2, code: 'acceptance_test_path' }
+    database.tables.checkpoints!.push(row)
+    expect((await context()).feedback).toEqual({ current: null, previousFailure: null })
+    await saveCheckpointFeedback(database.client, feedback(row, 'passed', '2026-09-06T03:00:00.000Z'))
+    await saveCheckpointFeedback(database.client, feedback(row, 'failed', '2026-09-06T02:00:00.000Z'))
+    expect((await context()).feedback).toMatchObject({ current: { state: 'passed', observedAt: '2026-09-06T03:00:00.000Z' }, previousFailure: null })
+    expect(row.validation_failure).toBeNull()
   })
 
   it('rereads the checkpoint after a concurrent publication instead of mixing A feedback with B identity', async () => {

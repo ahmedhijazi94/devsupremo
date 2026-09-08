@@ -2,13 +2,13 @@
 import type { ValidationManifest } from '../validation-integrity'
 export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
   {
-    "version": "4.0.0",
+    "version": "4.0.1",
     "kind": "public",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
       "scripts/security-audit.js": "4b7a368ef7a8726dab9af6ac8b34562ea0cd865b",
       "scripts/verify.mjs": "3fef150381c494a8db95e0703deb380602eee283",
-      "scripts/acceptance-rls.mjs": "c0f7e4f2fc10609c8ebeabbd0bbce5205cd1483c",
+      "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
       "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
       "scripts/rls-isolation-reporter.mjs": "661e6292d8b3161f3490324604a3fe27f220bcbf",
       "scripts/rls-isolation-gate.mjs": "47ab4659fcd79d6cd587623eb4631bed4b6477b5",
@@ -2918,18 +2918,18 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "6924c7e5cf7c2a01e4f2424ea01f87bd3da49049edf9aca62834fead7bdc8472"
+        "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
       ]
     ]
   },
   {
-    "version": "4.0.0",
+    "version": "4.0.1",
     "kind": "solo",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
       "scripts/security-audit.js": "4b7a368ef7a8726dab9af6ac8b34562ea0cd865b",
       "scripts/verify.mjs": "3fef150381c494a8db95e0703deb380602eee283",
-      "scripts/acceptance-rls.mjs": "c0f7e4f2fc10609c8ebeabbd0bbce5205cd1483c",
+      "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
       "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
       "scripts/rls-isolation-reporter.mjs": "661e6292d8b3161f3490324604a3fe27f220bcbf",
       "scripts/rls-isolation-gate.mjs": "47ab4659fcd79d6cd587623eb4631bed4b6477b5",
@@ -5839,18 +5839,18 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "6924c7e5cf7c2a01e4f2424ea01f87bd3da49049edf9aca62834fead7bdc8472"
+        "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
       ]
     ]
   },
   {
-    "version": "4.0.0",
+    "version": "4.0.1",
     "kind": "team",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
       "scripts/security-audit.js": "4b7a368ef7a8726dab9af6ac8b34562ea0cd865b",
       "scripts/verify.mjs": "3fef150381c494a8db95e0703deb380602eee283",
-      "scripts/acceptance-rls.mjs": "c0f7e4f2fc10609c8ebeabbd0bbce5205cd1483c",
+      "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
       "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
       "scripts/rls-isolation-reporter.mjs": "661e6292d8b3161f3490324604a3fe27f220bcbf",
       "scripts/rls-isolation-gate.mjs": "47ab4659fcd79d6cd587623eb4631bed4b6477b5",
@@ -8760,7 +8760,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "6924c7e5cf7c2a01e4f2424ea01f87bd3da49049edf9aca62834fead7bdc8472"
+        "5d1176e8c21af641629e08ba953a95e29cb1b477820b9ef781dd70ed64e45ec3"
       ]
     ]
   }

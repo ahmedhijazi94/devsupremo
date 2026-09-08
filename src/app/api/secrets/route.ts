@@ -2,7 +2,7 @@ import { createServiceClient } from '@/lib/supabase/admin'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import { supabaseCheckpointDeviceStore } from '@/lib/checkpoint/store'
 import { boundedJson, InspectionError } from '@/lib/database-inspection/provider'
-import { safeSecretError, secretsRequestSchema } from '@/lib/secret-requests/policy'
+import { safeSecretFailure, secretsRequestSchema } from '@/lib/secret-requests/policy'
 import { secretRequestStore } from '@/lib/secret-requests/store'
 import { listSecretRequests, requestSecrets } from '@/lib/secret-requests/service'
 
@@ -25,5 +25,5 @@ export async function POST(request: Request): Promise<Response> {
     const port = secretRequestStore(client, auth.device.ownerUserId, projectId)
     const requests = parsed.data.operation === 'request' ? await requestSecrets(port, parsed.data.requests) : await listSecretRequests(port)
     return Response.json({ projectId, requests: requests.filter((entry) => entry.target && entry.environment && entry.targetRef), formPath: `/projects/${projectId}#secrets` }, { headers })
-  } catch (error) { return Response.json({ error: safeSecretError(error) }, { status: 409, headers }) }
+  } catch (error) { return Response.json(safeSecretFailure(error), { status: 409, headers }) }
 }

@@ -79,6 +79,22 @@ export async function reportLocalCheckpoint(
   if (error || !['recorded', 'ignored', 'conflict'].includes(data as string)) {
     throw new Error('Falha ao registrar o checkpoint local.')
   }
+  if (data !== 'conflict') {
+    // A second write allows older servers/devices to keep the status RPC contract.
+    // Exact revision/identity guards make retries safe and prevent stale local
+    // diagnostics from overwriting newer validation or published CI evidence.
+    const { error: diagnosticError } = await client.from('checkpoints').update({
+      validation_feedback: report.diagnosticCode ? {
+        source: 'local', version: 1, commitSha: report.commitSha,
+        projectId: report.projectId, checkpointId: report.checkpointId,
+        revision: report.revision, code: report.diagnosticCode,
+      } : null,
+    }).eq('id', report.checkpointId).eq('project_id', report.projectId)
+      .eq('device_id', deviceId).eq('commit_sha', report.commitSha)
+      .eq('push_status', 'local').eq('local_report_revision', report.revision)
+      .eq('local_validation_status', report.validationStatus)
+    if (diagnosticError) throw new Error('Falha ao registrar o diagnóstico do checkpoint local.')
+  }
   return data as 'recorded' | 'ignored' | 'conflict'
 }
 

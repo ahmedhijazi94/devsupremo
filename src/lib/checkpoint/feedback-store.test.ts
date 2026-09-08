@@ -31,8 +31,17 @@ describe('persisted recovery memory', () => {
     const store = db([])
     await saveCheckpointFeedback(store.client, failure)
     expect(store.query.eq.mock.calls).toEqual([['project_id', projectId], ['id', checkpointId], ['commit_sha', failure.commitSha], ['published_sha', failure.publishedSha]])
-    expect(store.query.or).toHaveBeenCalledWith(`validation_feedback.is.null,validation_feedback->>observedAt.lt.${failure.observedAt}`)
+    expect(store.query.or).toHaveBeenCalledWith(`validation_feedback.is.null,validation_feedback->>source.eq.local,validation_feedback->>observedAt.lt.${failure.observedAt}`)
     expect(store.query.update).toHaveBeenCalledWith({ validation_feedback: failure, validation_failure: failure })
+  })
+  it('local diagnostic metadata is not remote evidence and can be superseded by real CI feedback', async () => {
+    const local = { source: 'local', version: 1, projectId, checkpointId, commitSha: failure.commitSha, revision: 2, code: 'acceptance_contract' }
+    const store = db([{ ...identity, validation_feedback: local }])
+    expect(await readCheckpointFeedback(store.client, projectId, checkpointId)).toBeNull()
+    await saveCheckpointFeedback(store.client, failure)
+    expect(store.query.update).toHaveBeenCalledWith({ validation_feedback: failure, validation_failure: failure })
+    const invalid = db([{ ...identity, validation_feedback: { ...local, checkpointId: '33333333-3333-4333-8333-333333333333' } }])
+    await expect(readCheckpointFeedback(invalid.client, projectId, checkpointId)).rejects.toThrow(/SHA/)
   })
   it.each([
     { projectId: '33333333-3333-4333-8333-333333333333' },

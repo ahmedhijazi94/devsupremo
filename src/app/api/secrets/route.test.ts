@@ -6,6 +6,7 @@ vi.mock('@/lib/checkpoint/store', () => ({ supabaseCheckpointDeviceStore: () => 
 vi.mock('@/lib/secret-requests/store', () => ({ secretRequestStore: mocks.store }))
 import { POST } from './route'
 import { SecretRequestError } from '@/lib/secret-requests/policy'
+import { secretRequestStorageError } from '@/lib/secret-requests/storage-errors'
 const projectId = '11111111-1111-4111-8111-111111111111'
 const row = { id: '22222222-2222-4222-8222-222222222222', name: 'PAYMENT_API_KEY', description: 'Backend', target: 'supabase', environment: 'development', targetRef: 'projectref', accountId: 'private-account', status: 'pending' }
 const entry = { name: row.name, description: row.description, target: row.target, environment: row.environment }
@@ -57,5 +58,14 @@ describe('secret requests device endpoint', () => {
   it('sanitizes infrastructure failures instead of returning provider credentials', async () => {
     mocks.list.mockRejectedValue(new Error('token=private-value'))
     const response = await POST(request()); expect(response.status).toBe(409); expect(await response.text()).not.toContain('private-value')
+  })
+  it('exposes the safe failure category to the device without disguising access denial as migration failure', async () => {
+    mocks.list.mockRejectedValue(secretRequestStorageError({ code: '42501', message: 'private-value' }))
+    const response = await POST(request())
+    expect(response.status).toBe(409)
+    const output = await response.json()
+    expect(output.errorCode).toBe('access_denied')
+    expect(JSON.stringify(output)).not.toMatch(/private-value|migration/)
+    expect(mocks.insert).not.toHaveBeenCalled()
   })
 })

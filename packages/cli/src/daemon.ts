@@ -28,6 +28,7 @@ import { startDatabaseWorker } from './database-queue'
 import { runDatabaseDirect } from './database'
 import { startFeedbackWorker } from './feedback'
 import { evidenceFor, startLocalValidationWorker } from './turn-validation'
+import { inferLocalDiagnostic, type LocalDiagnosticCode } from '../../../src/lib/checkpoint/local-diagnostic'
 import { gitText, readJson, TURN_DIR, withTurnLock } from './turn-workspace'
 import {
   applyRestore,
@@ -164,6 +165,7 @@ export interface LocalCheckpointReportInput {
   validationStatus: NonNullable<CheckpointRecord['validationStatus']>
   validatedSha: string | null
   uploadStatus: 'local' | 'upload_pending' | 'push_failed'
+  diagnosticCode?: LocalDiagnosticCode
 }
 
 /** No arbitrary text leaves the computer before the source safety check passes. */
@@ -549,6 +551,14 @@ export async function reportLocalCheckpoints(config: DaemonConfig, http = defaul
     if (record.projectId !== config.projectId) continue
     const input = localReportFor(record, revisions.get(record.checkpointId) ?? 1)
     if (!input) continue
+    if (input.validationStatus === 'failed' && input.validatedSha === input.commitSha) {
+      // Only a fixed diagnostic code leaves the machine, after matching the
+      // evidence to this project/checkpoint/SHA/base/tree. Never upload logs.
+      try {
+        const evidence = evidenceFor(config.cwd, record)
+        if (evidence?.status === 'failed') input.diagnosticCode = inferLocalDiagnostic(evidence)
+      } catch { /* Status remains reportable when local evidence is unavailable. */ }
+    }
     const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex')
     if (receipts[record.checkpointId] === fingerprint) continue
     try {

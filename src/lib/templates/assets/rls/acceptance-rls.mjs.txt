@@ -11,9 +11,7 @@ import { z } from 'zod'
 const root = fs.realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'))
 const destination = path.join(root, '.supremo/acceptance-result/acceptance.json')
 const contractFile = path.join(root, '.supremo/acceptance.json')
-const testPath = z.string().min(1).max(300).refine((file) => !file.startsWith('/') &&
-  !file.split(/[\\/]/).includes('..') &&
-  (/^(?:tests?|e2e|src)\//.test(file) && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file) || /^supabase\/.+\.rls\.test\.[cm]?[jt]sx?$/.test(file)))
+const testPath = z.string().min(1).max(300).regex(new RegExp(__SUPREMO_ACCEPTANCE_TEST_PATH_SOURCE__))
 const contractSchema = z.object({
   version: z.literal(1),
   criteria: z.array(z.object({ id: z.string().min(1).max(100), description: z.string().min(1).max(2000),

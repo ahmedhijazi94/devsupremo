@@ -139,6 +139,16 @@ export function CheckpointHistory({ projectId, items: initialItems }: Checkpoint
                 {item.validationSummary && (
                   <p className="text-muted mt-2 text-xs">{item.validationSummary}</p>
                 )}
+                {item.validationDiagnostic && (
+                  <div className="border-line bg-surface mt-2 rounded-md border p-2.5 text-xs">
+                    <p className="text-ink font-medium">Etapa: {item.validationDiagnostic.stage}</p>
+                    <p className="text-muted mt-1">{item.validationDiagnostic.cause}</p>
+                    <p className="text-muted mt-1">{item.validationDiagnostic.nextStep}</p>
+                  </div>
+                )}
+                {item.localState === 'failed' && !item.validationDiagnostic && (
+                  <p className="text-muted mt-1 text-xs">O motivo detalhado ainda não foi recebido. O agente pode consultar os registros locais deste checkpoint.</p>
+                )}
                 {item.validationLabel && !item.localState && (
                   <p className="text-muted mt-1 text-xs">Código salvo. O diagnóstico fica disponível ao agente no próximo pedido; a integração aguarda validação.</p>
                 )}

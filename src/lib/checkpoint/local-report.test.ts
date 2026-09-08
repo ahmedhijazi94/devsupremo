@@ -20,8 +20,14 @@ describe('checkpoint status reporting contract', () => {
     { validationStatus: 'deferred', validatedSha: null },
     { uploadStatus: 'integrated' }, { projectId: 'not-a-uuid' }, { revision: 0 },
     { deviceSecret: 'x'.repeat(257) },
+    { diagnosticCode: 'private log' },
+    { diagnosticCode: 'acceptance_test_path', validationStatus: 'passed' },
+    { diagnosticCode: 'acceptance_test_path', validatedSha: null },
   ])('rejects unbounded data, credentials, foreign evidence or a forged approval: %j', (patch) => {
     expect(localCheckpointReportSchema.safeParse({ ...payload, ...patch }).success).toBe(false)
+  })
+  it('accepts only an allowlisted diagnostic attached to failed validation for the exact commit', () => {
+    expect(localCheckpointReportSchema.parse({ ...payload, diagnosticCode: 'acceptance_test_path' })).toMatchObject({ diagnosticCode: 'acceptance_test_path' })
   })
   it('never presents local success/deferred QA as a passed CI gate', () => {
     expect(localCheckpointPresentation('passed', 'local').state).toBe('pending')

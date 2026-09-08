@@ -87,6 +87,38 @@ describe('metadata independente da publicação', () => {
       expect(await reportLocalCheckpoints({ ...config, projectId: 'other' }, http)).toBe(0)
     } finally { rmSync(cwd, { recursive: true, force: true }) }
   })
+  it('reports an allowlisted diagnosis from matching evidence, re-reports upgraded metadata, and rejects foreign evidence', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'supremo-local-diagnostic-'))
+    const checkpoint = record({ checkpointId: '22222222-2222-4222-8222-222222222222',
+      projectId: '11111111-1111-4111-8111-111111111111', commitSha: 'a'.repeat(40),
+      changesetBaseSha: 'b'.repeat(40), treeSha: 'c'.repeat(40), environment: 'development',
+      validationId: '33333333-3333-4333-8333-333333333333', validatedSha: 'a'.repeat(40), validationStatus: 'failed' })
+    const queuePath = join(cwd, QUEUE_FILE)
+    const evidencePath = join(cwd, '.supremo/validation', `${checkpoint.validationId}.json`)
+    mkdirSync(dirname(queuePath), { recursive: true }); mkdirSync(dirname(evidencePath), { recursive: true })
+    const evidence: LocalEvidence = { id: checkpoint.validationId!, projectId: checkpoint.projectId,
+      checkpointId: checkpoint.checkpointId, sha: checkpoint.commitSha, baseSha: checkpoint.changesetBaseSha!,
+      fingerprint: checkpoint.treeSha!, environment: 'development', status: 'failed',
+      startedAt: '2026-09-08T00:00:00.000Z', finishedAt: '2026-09-08T00:00:01.000Z',
+      summary: 'private summary', logs: 'private token=credential\nTest path must name a project test: lib/private.test.ts',
+      checks: [{ name: 'validation infrastructure', type: 'external_dependency', status: 'failed' }], criterionIds: [], acceptanceCriteria: [] }
+    writeFileSync(queuePath, serializeQueue([checkpoint]))
+    const report = vi.fn(async () => undefined)
+    const http = { ...fakes({}).ctx.http, reportLocalCheckpoint: report }
+    const config = { cwd, projectId: checkpoint.projectId, apiBaseUrl: 'https://supremo.test', getSecret: () => 'device-example' }
+    try {
+      expect(await reportLocalCheckpoints(config, http)).toBe(1)
+      expect(report).toHaveBeenLastCalledWith(expect.not.objectContaining({ diagnosticCode: expect.anything() }))
+      writeFileSync(evidencePath, JSON.stringify(evidence))
+      expect(await reportLocalCheckpoints(config, http)).toBe(1)
+      expect(report).toHaveBeenLastCalledWith(expect.objectContaining({ diagnosticCode: 'acceptance_test_path', revision: 1 }))
+      expect(JSON.stringify(report.mock.calls)).not.toMatch(/private|credential|\.test\.ts/)
+      expect(await reportLocalCheckpoints(config, http)).toBe(0)
+      writeFileSync(evidencePath, JSON.stringify({ ...evidence, sha: 'd'.repeat(40) }))
+      expect(await reportLocalCheckpoints(config, http)).toBe(1)
+      expect(report).toHaveBeenLastCalledWith(expect.not.objectContaining({ diagnosticCode: expect.anything() }))
+    } finally { rmSync(cwd, { recursive: true, force: true }) }
+  })
 })
 
 // Leitor fake com um binário, uma modificação, uma deleção e um rename.

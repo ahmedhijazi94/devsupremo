@@ -15,6 +15,7 @@ import { automaticValidation, readEnginePolicy } from './engine-policy'
 import { runWorkerProcess, WorkerAbortedError } from './worker-process'
 import { verifyTrustedFiles } from './trusted-validation'
 import { TRUSTED_VALIDATION_POLICIES } from './generated/validation-policy'
+import { readStableFile } from './stable-file'
 async function availableBrowserPort(): Promise<number> {
   const listener = net.createServer()
   return new Promise((resolve, reject) => {
@@ -155,6 +156,7 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
   let logs = ''
   let status: LocalEvidence['status'] = 'failed'
   let checks: LocalEvidence['checks'] = []
+  let failedStage: LocalEvidence['checks'][number] = { name: 'validation infrastructure', type: 'external_dependency', status: 'failed' }
   let criterionIds: string[] = []
   let acceptanceCriteria: LocalEvidence['acceptanceCriteria'] = []
   const fingerprint = gitText(cwd, ['rev-parse', `${record.commitSha}^{tree}`])
@@ -166,7 +168,9 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
     added = true
     // Dependencies are reused, build/test outputs remain isolated. Never copy .env or device identity.
     if (fs.existsSync(path.join(cwd, 'node_modules'))) fs.symlinkSync(path.join(cwd, 'node_modules'), path.join(scratch, 'node_modules'), 'dir')
+    failedStage = { name: 'validation integrity', type: 'security', status: 'failed' }
     verifyTrustedFiles(scratch)
+    failedStage = { name: 'validation infrastructure', type: 'external_dependency', status: 'failed' }
     const script = path.join(scratch, 'scripts/verify.mjs')
     if (!fs.existsSync(script)) throw new Error('Worker indisponível: scripts/verify.mjs ausente.')
     const env: NodeJS.ProcessEnv = {
@@ -178,9 +182,21 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
       NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:9',
       NEXT_PUBLIC_SUPABASE_ANON_KEY: 'supremo-synthetic-smoke-key',
     }
-    const acceptanceRaw = readJson(path.join(scratch, '.supremo/acceptance.json'))
-    const acceptance = acceptanceRaw === null ? null : acceptanceContractSchema.parse(acceptanceRaw)
+    failedStage = { name: 'acceptance contract', type: 'code', status: 'failed' }
+    const acceptancePath = path.join(scratch, '.supremo/acceptance.json')
+    const acceptance = fs.lstatSync(acceptancePath, { throwIfNoEntry: false }) ? acceptanceContractSchema.parse(JSON.parse(
+      readStableFile(acceptancePath, 256 * 1024, scratch).content,
+    )) : null
+    // Validate proof files before executing a worker. A path accepted by the
+    // contract must also be a regular file inside this immutable checkout.
+    for (const check of acceptance?.checks ?? []) {
+      for (const file of check.files) {
+        try { readStableFile(path.join(scratch, file), 16 * 1024 * 1024, scratch) }
+        catch { throw new Error(`Critério sem arquivo de prova regular no snapshot: ${file}`) }
+      }
+    }
     acceptanceCriteria = acceptance?.criteria ?? []
+    failedStage = { name: 'validation infrastructure', type: 'external_dependency', status: 'failed' }
     if (fs.existsSync(path.join(scratch, 'e2e/smoke.spec.ts')) || acceptance?.checks.some((check) => check.type === 'e2e')) {
       env.PLAYWRIGHT_PORT = String(await availableBrowserPort())
     }
@@ -207,7 +223,6 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
     if (acceptance !== null) {
       const contract = acceptance
       for (const check of contract.checks) {
-        if (check.files.some((file) => !fs.existsSync(path.join(scratch, file)))) throw new Error('Critério sem arquivo de prova executável.')
         if (check.type === 'rls') {
           checks.push({ name: check.name, type: check.type, status: 'deferred' }); status = 'deferred'; continue
         }
@@ -237,7 +252,7 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
     const failure = error as Error & { stdout?: string; stderr?: string }
     logs += `\n${failure.stdout ?? ''}\n${failure.stderr ?? ''}\n${failure.message}`
     status = 'failed'
-    if (checks.length === 0) checks = [{ name: 'validation infrastructure', type: 'external_dependency', status: 'failed' }]
+    if (checks.length === 0) checks = [failedStage]
   } finally {
     if (added) {
       try { execFileSync('git', ['worktree', 'remove', '--force', scratch], { cwd, stdio: 'pipe' }) }

@@ -1,9 +1,9 @@
 import { z } from 'zod'
 import { acceptanceCriterionSchema } from './turn-model'
+import { ACCEPTANCE_TEST_PATH_SOURCE } from '../../../src/lib/checkpoint/acceptance-path'
 
-const testPath = z.string().min(1).max(300).refine((file) => !file.startsWith('/') &&
-  !file.split(/[\\/]/).includes('..') &&
-  (/^(?:tests?|e2e|src)\//.test(file) && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file) || /^supabase\/.+\.rls\.test\.[cm]?[jt]sx?$/.test(file)), 'Test path must name a project test')
+const testPath = z.string().min(1).max(300).regex(new RegExp(ACCEPTANCE_TEST_PATH_SOURCE),
+  'Test path must name a project test using a canonical relative path')
 /** Explicit behavior→named proof contract; no guessed acceptance or arbitrary shell commands. */
 export const acceptanceContractSchema = z.object({
   version: z.literal(1), criteria: z.array(acceptanceCriterionSchema).min(1).max(100),

@@ -8,6 +8,21 @@ import {
 const readOnly = { allowDdl: false }
 const migration = { allowDdl: true }
 
+describe('cron passa apenas pelo canal tipado', () => {
+  it.each([
+    "SELECT cron.schedule('job','* * * * *','DELETE FROM public.tickets')",
+    'SELECT "cron"."unschedule"(1)',
+    'CREATE EXTENSION pg_cron',
+    'CREATE FUNCTION public.schedule() RETURNS void LANGUAGE sql AS $$ SELECT cron.schedule(\'job\',\'* * * * *\',\'SELECT 1\') $$',
+    "UPDATE public.settings SET value = cron.schedule('job','* * * * *','SELECT 1') WHERE id=1",
+    'SELECT supremo_jobs.run_job()',
+  ])('recusa %s em leitura, DDL e alteração de dados', (sql) => {
+    expect(() => assertSafeSql(sql, readOnly)).toThrow('canal tipado')
+    expect(() => assertSafeSql(sql, migration)).toThrow('canal tipado')
+    expect(() => assertSafeDataChange(sql)).toThrow('canal tipado')
+  })
+})
+
 describe('assertSafeSql — leitura (consulta de leitura)', () => {
   it('permite SELECT', () => {
     expect(() =>

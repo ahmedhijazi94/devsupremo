@@ -1,6 +1,6 @@
 /** Real disposable PostgreSQL: no hosted account, credentials or app data. */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { execFileSync, spawn } from 'node:child_process'
 
 const target = process.env.SUPREMO_TEST_DATABASE_URL
@@ -11,22 +11,22 @@ const run = (sql: string) => execFileSync(psql, args, { input: sql, encoding: 'u
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const sha = 'a'.repeat(40)
 const migration = (name: string) => readFileSync(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')
+const history = readdirSync(new URL('../supabase/migrations/', import.meta.url)).filter((name) => /^\d{3}_.*\.sql$/.test(name) && Number(name.slice(0,3)) <= 21).sort()
 
 // Fail before touching an existing application schema.
 assert.equal(run("select to_regclass('public.projects') is null and to_regnamespace('auth') is null;"), 't')
 run(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
 create schema auth; create table auth.users(id uuid primary key);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
-create table public.projects(id uuid primary key,user_id uuid references auth.users(id) on delete cascade);
-create function public.update_updated_at() returns trigger language plpgsql as $$ begin new.updated_at=now(); return new; end $$;
-${migration('016_checkpoint_daemon.sql')}
-${migration('017_checkpoint_history_restore.sql')}
-${migration('020_checkpoint_local_reports.sql')}
-${migration('021_checkpoint_publication_order.sql')}
+create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims',true),''),'{}')::jsonb $$;
+create schema realtime; create table realtime.messages(id bigint generated always as identity primary key, payload jsonb);
+alter table realtime.messages enable row level security;
+create function realtime.topic() returns text language sql stable as $$ select current_setting('realtime.topic',true) $$;
+${history.map(migration).join('\n')}
 grant usage on schema public, auth to authenticated, anon, service_role;
 grant select, insert, update, delete on all tables in schema public to authenticated, anon, service_role;
 insert into auth.users values('${id(1)}'),('${id(2)}');
-insert into projects(id,user_id) values('${id(11)}','${id(1)}'),('${id(22)}','${id(2)}');
+insert into projects(id,user_id,name) values('${id(11)}','${id(1)}','Scratch A'),('${id(22)}','${id(2)}','Scratch B');
 insert into checkpoint_devices(id,owner_user_id,secret_hash) values('${id(31)}','${id(1)}','not-a-secret-hash-a'),('${id(32)}','${id(2)}','not-a-secret-hash-b');`)
 
 const reportSql = (over: { checkpoint?: number; project?: number; device?: number; revision?: number; commit?: string; validation?: string; validated?: string | null; createdAt?: string } = {}) => {

@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { defaultAuthIO, ensureAuthorized, openBrowser } from './auth'
 import { validationWorkerHealthy } from './turn-validation'
+import { deviceIssuer, saveDeviceIdentity } from './device-identity'
+import { resolveKeychain } from './keychain'
 import { preCommitHook, prePushHook } from './git-hooks'
 import { inspectHostAdapters, type IntegrationMode } from './host-adapters'
 
@@ -180,7 +182,7 @@ async function startDeviceFlow(
   projectId: string,
 ): Promise<StartResponse> {
   const res = await fetch(`${baseUrl}/api/bootstrap/device/start`, {
-    method: 'POST',
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15_000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ projectId }),
   })
@@ -188,7 +190,9 @@ async function startDeviceFlow(
     const data = (await res.json().catch(() => ({}))) as { error?: string }
     throw new Error(data.error ?? `Não iniciou o bootstrap (${res.status}).`)
   }
-  return (await res.json()) as StartResponse
+  const flow = (await res.json()) as StartResponse
+  if (new URL(flow.verificationUriComplete).origin !== new URL(baseUrl).origin) throw new Error('Origem da autorização divergente.')
+  return flow
 }
 
 async function pollForConfig(
@@ -201,7 +205,7 @@ async function pollForConfig(
   while (Date.now() < deadline) {
     await sleep(intervalSec * 1000)
     const res = await fetch(`${baseUrl}/api/bootstrap/device/token`, {
-      method: 'POST',
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15_000),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deviceCode }),
     })
@@ -604,28 +608,8 @@ function readLinkedRef(dest: string): string | null {
   }
 }
 
-export async function runBootstrap(opts: {
-  projectId: string
-  url: string
-  dir?: string
-  host?: 'claude-code' | 'codex'
-  /**
-   * APOSENTADO (v3.1 finalização): preview e daemon agora sobem SEMPRE, sem
-   * flag — zero-config significa não ter uma opção pra "ligar" o básico.
-   * Aceito só para não quebrar quem ainda passa `--start`; sem efeito.
-   */
-  start?: boolean
-}): Promise<void> {
-  const baseUrl = opts.url.replace(/\/$/, '')
-  console.log('\nSupremo Bootstrap\n')
-
-  // Aviso de runtime ANTES de instalar qualquer coisa (seção 8) — nunca
-  // bloqueia (confirmado não-fatal), mas nunca fica silencioso também.
-  const nodeCheck = checkNodeVersion(process.version)
-  if (nodeCheck.status === 'warn') {
-    console.log(`⚠ ${nodeCheck.message}\n`)
-  }
-
+export async function authorizeDevice(projectId: string, url: string): Promise<BootstrapConfig> {
+  const baseUrl = deviceIssuer(url)
   // Device flow do Supremo pelo padrão único do Auth Orchestrator: ENTER → abre o
   // browser no fluxo oficial → aguarda → detecta. URL/código só como fallback.
   // (holder para o config, que o passo authorize preenche.)
@@ -635,7 +619,7 @@ export async function runBootstrap(opts: {
     prompt: 'Supremo precisa autorizar esta máquina. Pressione ENTER para continuar…',
     isAuthorized: () => held.config !== null,
     authorize: async () => {
-      const flow = await startDeviceFlow(baseUrl, opts.projectId)
+      const flow = await startDeviceFlow(baseUrl, projectId)
       const opened = await openBrowser(flow.verificationUriComplete)
       if (!opened) {
         console.log('\n  Não consegui abrir o navegador. Abra manualmente:')
@@ -655,6 +639,33 @@ export async function runBootstrap(opts: {
   if (!supremoOk || !config) {
     throw new Error('Supremo não autorizado — rode o bootstrap de novo.')
   }
+  if (config.project.id !== projectId) throw new Error('Projeto autorizado diverge do pedido.')
+  return config
+}
+
+export async function runBootstrap(opts: {
+  projectId: string
+  url: string
+  dir?: string
+  host?: 'claude-code' | 'codex'
+  /**
+   * APOSENTADO (v3.1 finalização): preview e daemon agora sobem SEMPRE, sem
+   * flag — zero-config significa não ter uma opção pra "ligar" o básico.
+   * Aceito só para não quebrar quem ainda passa `--start`; sem efeito.
+   */
+  start?: boolean
+}): Promise<void> {
+  const baseUrl = deviceIssuer(opts.url)
+  console.log('\nSupremo Bootstrap\n')
+
+  // Aviso de runtime ANTES de instalar qualquer coisa (seção 8) — nunca
+  // bloqueia (confirmado não-fatal), mas nunca fica silencioso também.
+  const nodeCheck = checkNodeVersion(process.version)
+  if (nodeCheck.status === 'warn') {
+    console.log(`⚠ ${nodeCheck.message}\n`)
+  }
+
+  const config = await authorizeDevice(opts.projectId, baseUrl)
   console.log(`  Projeto: ${config.project.name}`)
 
   const dest = targetDir(config.repo.fullName, opts.dir)
@@ -709,15 +720,7 @@ export async function runBootstrap(opts: {
   let npmScriptsCompatible: boolean | null = null
   if (config.daemon) {
     try {
-      const keychainModule = await import('./keychain')
-      const keychain = keychainModule.resolveKeychain()
-      keychain.save(config.project.id, config.daemon.deviceSecret)
-      // Confirma que o secret está de fato recuperável ANTES de subir o
-      // daemon (sem isto, um keychain "salvou" mas não persistiu — silencioso
-      // até o daemon falhar autenticação bem mais tarde).
-      if (keychain.get(config.project.id) !== config.daemon.deviceSecret) {
-        throw new Error('Secret não confirmado no keychain após salvar.')
-      }
+      saveDeviceIdentity(resolveKeychain(), config.project.id, baseUrl, config.daemon.deviceSecret)
       ok('Máquina autorizada (checkpoint daemon) — identidade no keychain')
       const { ensureDaemon, daemonStatus } = await import('./daemon')
       ensureDaemon(dest)

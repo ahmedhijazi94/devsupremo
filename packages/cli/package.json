@@ -1,6 +1,6 @@
 {
   "name": "supremo-cli",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "CLI do Supremo: bootstrap, preview persistente e checkpoints em background.",
   "license": "MIT",
   "author": "Supremo",
@@ -31,7 +31,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "esbuild src/bin.ts --bundle --platform=node --target=node18 --outfile=dist/bin.js",
+    "build": "esbuild src/bin.ts --bundle --platform=node --target=node18 --supported:template-literal=false --alias:zod=./node_modules/zod/index.js --outfile=dist/bin.js",
     "prepublishOnly": "npm run build",
     "start": "node dist/bin.js",
     "test": "vitest run",

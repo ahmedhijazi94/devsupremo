@@ -8,7 +8,7 @@ import {
   ArrowRight,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
-import { Card, CardTitle, CardNote } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 
 export const metadata = {
   title: 'Configurações — Supremo',

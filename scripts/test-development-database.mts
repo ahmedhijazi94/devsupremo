@@ -31,7 +31,7 @@ const management = async (ref: string, suffix: string, method: string, body?: un
 }
 try {
   const files = buildProjectFiles({ projectName: `supremo-e2e-dev-${Date.now()}`, description: 'Banco descartável do teste de ambiente', kind: 'public' })
-  await provisionSupabase(control, ownerId, accountId, `supremo-e2e-dev-${Date.now()}`, files, {
+  await provisionSupabase(control, ownerId, accountId, `supremo-e2e-dev-${Date.now()}`, 'public', {
     onProjectCreated: async (ref) => {
       createdRef = ref
       record = { project_ref: ref, environment: 'development', source: 'supremo_provisioned' }

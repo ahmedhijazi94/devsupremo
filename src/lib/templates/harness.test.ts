@@ -338,6 +338,14 @@ describe('classifyRisk', () => {
 
   it('server action → security', () => {
     expect(classifyRisk(['actions/orders.ts']).level).toBe('security')
+    expect(classifyRisk(['app/app/actions.ts']).level).toBe('security')
+    expect(classifyRisk(['app/items/route.ts']).level).toBe('security')
+  })
+
+  it('conteúdo sensível eleva arquivo comum, formato de data mantém quick', () => {
+    expect(classifyRisk(['lib/work.ts'], [], [], { 'lib/work.ts': "'use server'; export async function save() {}" }).level).toBe('security')
+    expect(classifyRisk(['lib/work.ts'], [], [], { 'lib/work.ts': "client.from('tickets').delete()" }).level).toBe('security')
+    expect(classifyRisk(['lib/date.ts'], [], [], { 'lib/date.ts': 'export const date = new Intl.DateTimeFormat()' }).level).toBe('quick')
   })
 
   it('arquivo de arquitetura/build → full', () => {
@@ -692,7 +700,7 @@ describe('verify.mjs — execução real: build ambiental defere, erro real bloq
     }
   }
 
-  it('uma falha conhecida de cobertura é revalidada até em um próximo pedido cosmético', () => {
+  it('uma edição cosmética mantém testes relacionados sem repetir cobertura por falha antiga', () => {
     const { dir, env } = setupProject(0, '')
     mkdirSync(join(dir, '.supremo'), { recursive: true })
     writeFileSync(join(dir, '.supremo/project.json'), JSON.stringify({ projectId: 'project' }))
@@ -707,7 +715,39 @@ describe('verify.mjs — execução real: build ambiental defere, erro real bloq
     // Only a predetermined check may execute; log text never becomes a command.
     writeFileSync(join(dir, 'bin/vitest'), '#!/bin/sh\necho "$@" > vitest-arguments\nexit 0\n')
     execFileSync(process.execPath, [join(dir, 'verify.mjs'), 'quick'], { cwd: dir, env, stdio: 'pipe' })
-    expect(readFileSync(join(dir, 'vitest-arguments'), 'utf8')).toContain('--coverage')
+    expect(readFileSync(join(dir, 'vitest-arguments'), 'utf8')).toContain('--changed')
+    expect(readFileSync(join(dir, 'vitest-arguments'), 'utf8')).not.toContain('--coverage')
+  }, 15000)
+
+  it('mudança de data/cor não inicia browser nem cobertura completa após o turno', () => {
+    const { dir, env } = setupProject(0, '')
+    mkdirSync(join(dir, 'app'))
+    mkdirSync(join(dir, 'e2e'))
+    writeFileSync(join(dir, 'app/page.tsx'), 'export default function Page() { return <p>Data</p> }')
+    writeFileSync(join(dir, 'e2e/smoke.spec.ts'), 'export {}')
+    writeFileSync(join(dir, 'bin/vitest'), '#!/bin/sh\necho "$@" > vitest-arguments\nexit 0\n')
+    writeFileSync(join(dir, 'bin/playwright'), '#!/bin/sh\ntouch browser-started\nexit 0\n', { mode: 0o755 })
+    execFileSync('git', ['add', '.'], { cwd: dir })
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'baseline'], { cwd: dir })
+    writeFileSync(join(dir, 'app/page.tsx'), 'export default function Page() { return <p style={{color:"green"}}>{new Intl.DateTimeFormat().format(new Date())}</p> }')
+    execFileSync(process.execPath, [join(dir, 'verify.mjs'), '--background'], { cwd: dir, env, stdio: 'pipe' })
+    const evidence = JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8')) as { level: string }
+    expect(evidence.level).toBe('quick')
+    expect(readFileSync(join(dir, 'vitest-arguments'), 'utf8')).toContain('--changed')
+    expect(readFileSync(join(dir, 'vitest-arguments'), 'utf8')).not.toContain('--coverage')
+    expect(existsSync(join(dir, 'browser-started'))).toBe(false)
+  }, 15000)
+
+  it('ausência de testes relacionados é pendente explícita, nunca aprovação falsa', () => {
+    const { dir, env } = setupProject(0, '')
+    writeFileSync(join(dir, 'bin/vitest'), '#!/bin/sh\necho "No test files found, exiting with code 1"\nexit 1\n')
+    execFileSync(process.execPath, [join(dir, 'verify.mjs'), 'quick', '--background'], { cwd: dir, env, stdio: 'pipe' })
+    const evidence = JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8')) as {
+      status: string; checks: Array<{ name: string; status: string }>
+    }
+    expect(evidence.status).toBe('deferred')
+    expect(evidence.checks).toContainEqual({ name: 'testes afetados', status: 'deferred' })
+    expect(verifyScript()).not.toContain('--passWithNoTests')
   }, 15000)
 
   it('executa checks simultaneamente e só inicia build após todos terminarem', () => {

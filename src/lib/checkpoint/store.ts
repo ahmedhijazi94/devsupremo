@@ -355,6 +355,21 @@ export async function listPendingIntegrationBranchCleanups(
   return out
 }
 
+/** Checkpoints are the durable discovery source, even if the first webhook was lost. */
+export async function listPendingCheckpointReconciliations(client: SupabaseClient, limit = 200): Promise<Array<{ projectId: string; prNumber: number }>> {
+  const { data, error } = await client.from('checkpoints').select('project_id, pr_number')
+    .eq('push_status', 'published').not('pr_number', 'is', null)
+    .order('updated_at', { ascending: true }).limit(limit)
+  if (error) throw new Error('Não foi possível consultar checkpoints pendentes.')
+  const seen = new Set<string>()
+  return ((data ?? []) as Array<{ project_id: string; pr_number: number }>).flatMap((row) => {
+    const key = `${row.project_id}:${row.pr_number}`
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [{ projectId: row.project_id, prNumber: row.pr_number }]
+  })
+}
+
 // ── Restore (v3.1 finalização) ───────────────────────────────────────────────
 
 export interface RestoreRequestRow {
@@ -362,6 +377,8 @@ export interface RestoreRequestRow {
   projectId: string
   targetCheckpointId: string
   status: 'pending' | 'claimed' | 'applied' | 'failed'
+  claimToken: string
+  leaseExpiresAt: string
 }
 
 /** Checkpoint mínimo para autorizar/aplicar o restore (commit local + resumo). */
@@ -410,57 +427,51 @@ export async function getRestoreRequestProjectOwner(
   return { projectOwnerUserId: proj.user_id as string }
 }
 
-/**
- * Reivindica (poll-and-claim atômico) os pedidos PENDENTES de um projeto para
- * este device — evita dois daemons aplicarem o mesmo restore. `pending → claimed`
- * só se ainda pending (condição no UPDATE); devolve só os que este device pegou.
- */
+/** Database transaction owns the lease and revalidates device/project authority. */
 export async function claimPendingRestoreRequests(
   client: SupabaseClient,
   input: { projectId: string; deviceId: string },
 ): Promise<RestoreRequestRow[]> {
-  const { data: pending } = await client
-    .from('checkpoint_restore_requests')
-    .select('id')
-    .eq('project_id', input.projectId)
-    .eq('status', 'pending')
-  const ids = (pending ?? []).map((r) => r.id as string)
-  if (ids.length === 0) return []
-
-  const { data: claimed } = await client
-    .from('checkpoint_restore_requests')
-    .update({ status: 'claimed', device_id: input.deviceId })
-    .in('id', ids)
-    .eq('status', 'pending') // corrida: só quem ainda está pending é reivindicado
-    .select('id, project_id, target_checkpoint_id, status')
-  return (claimed ?? []).map((r) => ({
-    id: r.id as string,
-    projectId: r.project_id as string,
-    targetCheckpointId: r.target_checkpoint_id as string,
-    status: r.status as RestoreRequestRow['status'],
+  const { data, error } = await client.rpc('claim_checkpoint_restore', {
+    p_project_id: input.projectId, p_device_id: input.deviceId,
+  })
+  if (error) throw new Error('Não foi possível reivindicar a restauração.')
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    id: r.id as string, projectId: r.project_id as string,
+    targetCheckpointId: r.target_checkpoint_id as string, status: r.status as RestoreRequestRow['status'],
+    claimToken: r.claim_token as string, leaseExpiresAt: r.lease_expires_at as string,
   }))
 }
 
-export async function reportRestoreApplied(
-  client: SupabaseClient,
-  id: string,
-  resultCheckpointId: string | null,
-): Promise<void> {
-  await client
-    .from('checkpoint_restore_requests')
-    .update({ status: 'applied', result_checkpoint_id: resultCheckpointId, error: null })
-    .eq('id', id)
+export interface RestoreReportAuthority {
+  id: string
+  projectId: string
+  deviceId: string
+  claimToken: string
 }
 
-export async function reportRestoreFailed(
-  client: SupabaseClient,
-  id: string,
-  error: string,
-): Promise<void> {
-  await client
-    .from('checkpoint_restore_requests')
-    .update({ status: 'failed', error })
-    .eq('id', id)
+async function finishRestore(client: SupabaseClient, authority: RestoreReportAuthority,
+  status: 'applied' | 'failed', resultId: string | null, resultSha: string | null, message: string | null,
+): Promise<boolean> {
+  const { data, error } = await client.rpc('finish_checkpoint_restore', {
+    p_id: authority.id, p_project_id: authority.projectId, p_device_id: authority.deviceId,
+    p_claim_token: authority.claimToken, p_status: status, p_result_id: resultId,
+    p_result_sha: resultSha, p_error: message,
+  })
+  if (error) throw new Error('Confirmação da restauração indisponível; tente novamente.')
+  return data === 'acknowledged'
+}
+
+export async function reportRestoreApplied(client: SupabaseClient, authority: RestoreReportAuthority,
+  resultCheckpointId: string | null, resultCommitSha: string | null,
+): Promise<boolean> {
+  return finishRestore(client, authority, 'applied', resultCheckpointId, resultCommitSha, null)
+}
+
+export async function reportRestoreFailed(client: SupabaseClient, authority: RestoreReportAuthority,
+  message: string,
+): Promise<boolean> {
+  return finishRestore(client, authority, 'failed', null, null, message)
 }
 
 /** repository_id do projeto (backfill lazy quando resolvido no primeiro grant). */

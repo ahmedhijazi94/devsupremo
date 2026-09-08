@@ -57,8 +57,9 @@ describe('inventário genérico de provas de isolamento', () => {
     expect(ci).toContain('    needs: rls')
     expect(ci).toContain('    if: ${{ always() }}')
     expect(ci).toContain("if: needs.rls.result != 'success'")
-    expect(ci).toContain("'**/*.rls.test.ts'")
-    expect(ci).toContain("'scripts/rls-isolation-*'")
+    expect(ci).toContain("run: npm run test:rls")
+    expect(ci).not.toContain("needs.changes")
+    expect(ci).not.toContain("dorny/paths-filter")
   })
 })
 

@@ -47,6 +47,7 @@ export async function connectGithubAccount(projectId?: string) {
 export async function disconnectGithubAccount(
   accountId: string,
 ): Promise<{ error?: string }> {
+  if (!z.string().uuid().safeParse(accountId).success) return { error: 'ID de conta inválido.' }
   const supabase = await createClient()
 
   const {
@@ -161,6 +162,7 @@ export async function addSupabaseAccount(
       .from('projects')
       .update({ supabase_account_id: upsertData.id })
       .eq('id', parsed.data.projectId)
+      .eq('user_id', user.id)
     revalidatePath(`/projects/${parsed.data.projectId}`)
   }
 
@@ -181,6 +183,7 @@ export async function addSupabaseAccount(
 export async function disconnectSupabaseAccount(
   accountId: string,
 ): Promise<{ error?: string }> {
+  if (!z.string().uuid().safeParse(accountId).success) return { error: 'ID de conta inválido.' }
   const supabase = await createClient()
 
   const {

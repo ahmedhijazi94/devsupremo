@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CI_JOB_NAMES } from '@/lib/templates/project-files'
 
-const mocks = vi.hoisted(() => ({ owner: vi.fn(), token: vi.fn(), pr: vi.fn(), checks: vi.fn(), merge: vi.fn(), history: vi.fn(), head: vi.fn(), open: vi.fn() }))
+const mocks = vi.hoisted(() => ({ owner: vi.fn(), token: vi.fn(), pr: vi.fn(), checks: vi.fn(), merge: vi.fn(), history: vi.fn(), head: vi.fn(), open: vi.fn(), policy: vi.fn() }))
 vi.mock('@/lib/auth', () => ({ requireProjectOwner: mocks.owner, toActionError: (error: unknown) => String(error) }))
 vi.mock('@/lib/github-token', () => ({ freshGithubToken: mocks.token }))
 vi.mock('@/actions/checkpoints', () => ({ listProjectCheckpoints: mocks.history }))
@@ -10,6 +10,13 @@ vi.mock('@/lib/github/client', () => ({
   closePullRequest: vi.fn(), deleteBranch: vi.fn(), getHeadSha: mocks.head, getFailedJobLogs: vi.fn(), listOpenPullRequests: mocks.open,
   allowAutoMerge: vi.fn(), enableNativeAutoMerge: vi.fn(), disableNativeAutoMerge: vi.fn(), octokitFor: vi.fn(),
 }))
+vi.mock('@/lib/github/gateway', () => ({ githubMergeGateway: (creds: unknown) => ({
+  getPullRequest: (number: number) => mocks.pr(creds, number),
+  getChecks: (sha: string) => mocks.checks(creds, sha),
+  getCodeScanning: async (headSha: string) => ({ headSha, status: 'not_required', reasons: ['Default setup confirmed not configured.'] }),
+  verifyPolicy: mocks.policy,
+  merge: (number: number, sha: string) => mocks.merge(creds, number, undefined, sha),
+}) }))
 import { getProjectChecks, mergeProjectPr } from './checks'
 
 const projectId = '11111111-1111-4111-8111-111111111111'
@@ -30,6 +37,7 @@ describe('manual merge uses complete CI proof for the exact current HEAD', () =>
     // A green generic summary cannot replace required-check validation.
     mocks.checks.mockResolvedValue({ state: 'passed', headSha: head, checks: checks() })
     mocks.merge.mockResolvedValue({ sha: head })
+    mocks.policy.mockResolvedValue({ approved: true, headSha: head, reasons: [] })
     mocks.history.mockResolvedValue({ items: [] })
     mocks.head.mockResolvedValue(head)
     mocks.open.mockResolvedValue([])
@@ -38,6 +46,11 @@ describe('manual merge uses complete CI proof for the exact current HEAD', () =>
     expect(await mergeProjectPr(projectId, 1)).toEqual({ ok: true })
     expect(mocks.pr).toHaveBeenCalledTimes(2)
     expect(mocks.merge).toHaveBeenCalledWith(expect.anything(), 1, undefined, head)
+  })
+  it('refuses altered validation policy even when every check is green', async () => {
+    mocks.policy.mockResolvedValue({ approved: false, headSha: head, reasons: ['Validador alterado.'] })
+    expect((await mergeProjectPr(projectId, 1)).error).toContain('Validador alterado')
+    expect(mocks.merge).not.toHaveBeenCalled()
   })
   it.each(['missing', 'skipped', 'neutral', 'failure', 'queued'])('refuses %s required checks despite a green summary', async (state) => {
     const actual = checks()

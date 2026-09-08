@@ -1,22 +1,19 @@
 import { appTokenForRepo, installationCreds } from '@/lib/github/app'
 import { githubMergeGateway } from '@/lib/github/gateway'
 import {
-  RECONCILABLE_STATES,
   checkpointStatusFromReconcile,
   cleanupIntegrationBranchIfMerged,
   reconcileProjectPr,
   resolveRequiredChecks,
   type ReconcileLogger,
 } from '@/lib/github/reconcile'
-import { getOpenPullRequestNumber } from '@/lib/github/client'
 import {
   getProjectById,
-  listProjectsForReconcile,
   readIntegrationMeta,
   writeIntegrationMeta,
 } from '@/lib/projects/repository'
 import { createServiceClient } from '@/lib/supabase/admin'
-import { listPendingIntegrationBranchCleanups, reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
+import { listPendingCheckpointReconciliations, getLatestKnownCheckpoint, reconcileCheckpointsForPr } from '@/lib/checkpoint/store'
 import { capturePrFeedback } from '@/lib/checkpoint/feedback-capture'
 
 /**
@@ -28,8 +25,8 @@ import { capturePrFeedback } from '@/lib/checkpoint/feedback-capture'
  * Roda 1x/dia (`0 3 * * *` no vercel.json) — frequência compatível com o Vercel
  * Hobby (que só permite cron >= diário). Como é apenas rede de segurança e o
  * webhook resolve em segundos, uma varredura diária basta. Roda SEM sessão de
- * agente. NÃO varre tudo: só projetos em estado relevante (ci_running/
- * merge_pending/validated). Reusa EXATAMENTE o mesmo `reconcileProjectPr`.
+ * agente. Descobre PRs pelos checkpoints publicados, inclusive fechadas e
+ * projetos cujo primeiro webhook nunca chegou. Reusa `reconcileProjectPr`.
  */
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -50,17 +47,18 @@ function authorized(req: Request): boolean {
 export async function GET(req: Request): Promise<Response> {
   if (!authorized(req)) return new Response('não autorizado', { status: 401 })
 
-  const projects = await listProjectsForReconcile(RECONCILABLE_STATES)
+  const client = createServiceClient()
+  const projects = await listPendingCheckpointReconciliations(client)
   logger.event('reconciliation_sweep', { candidates: projects.length })
 
   let reconciled = 0
-  for (const project of projects) {
+  for (const candidate of projects) {
     try {
+      const project = await getProjectById(candidate.projectId)
+      if (!project) continue
       const token = await appTokenForRepo(project.repoFullName)
       const creds = installationCreds(token, project.repoFullName, project.defaultBranch)
-      // Acha a PR de desenvolvimento aberta SEM criar nada.
-      const prNumber = await getOpenPullRequestNumber(creds, project.activeBranch)
-      if (prNumber == null) continue
+      const prNumber = candidate.prNumber
 
       const meta = await readIntegrationMeta(project.id)
       const gateway = githubMergeGateway(creds)
@@ -71,7 +69,8 @@ export async function GET(req: Request): Promise<Response> {
         mode: meta.mergeMode ?? 'supremo_managed',
         log: logger,
       })
-      await writeIntegrationMeta(project.id, { integration_state: result.state })
+      const latest = await getLatestKnownCheckpoint(client, project.id)
+      if (latest?.prNumber === prNumber) await writeIntegrationMeta(project.id, { integration_state: result.state })
       // Reconcilia TAMBÉM o checkpoint (Histórico) — não só o projeto. Bug
       // real: só o projeto era atualizado (integration_state), o card do
       // checkpoint ficava preso em "Testando" mesmo após um merge válido.
@@ -100,57 +99,11 @@ export async function GET(req: Request): Promise<Response> {
       reconciled += 1
     } catch (error) {
       logger.event('reconciliation_error', {
-        repo: project.repoFullName,
+        projectId: candidate.projectId,
         message: error instanceof Error ? error.message : 'erro',
       })
     }
   }
 
-  // Retry de cleanup pendente (v3-14) — SEGUNDA varredura, deste MESMO ciclo
-  // do fallback. Necessário porque, uma vez que a PR mergeou de verdade
-  // (push_status='integrated'), o projeto sai de RECONCILABLE_STATES e a PR,
-  // já fechada, não aparece mais via getOpenPullRequestNumber — sem isto,
-  // nada no fallback voltava a visitar uma PR já integrada pra retentar um
-  // cleanup que falhou (rede/rate-limit do GitHub), mesmo com o projeto
-  // parado, sem nenhuma alteração nova. `listPendingIntegrationBranchCleanups`
-  // reaproveita dados que o reconcile normal já grava (nenhuma coluna nova).
-  // Chama `cleanupIntegrationBranchIfMerged` DIRETO (sem reconcileProjectPr —
-  // já sabemos que mergeou pelo checkpoint; a função em si já confirma de
-  // novo no GitHub antes de apagar) — mesmo caminho único, nunca lança.
-  const pendingCleanups = await listPendingIntegrationBranchCleanups(createServiceClient())
-  logger.event('cleanup_retry_sweep', { candidates: pendingCleanups.length })
-  let cleanedUp = 0
-  for (const pending of pendingCleanups) {
-    try {
-      const project = await getProjectById(pending.projectId)
-      if (!project) continue
-      const token = await appTokenForRepo(project.repoFullName)
-      const creds = installationCreds(token, project.repoFullName, project.defaultBranch)
-      const gateway = githubMergeGateway(creds)
-      const cleanup = await cleanupIntegrationBranchIfMerged(
-        gateway,
-        { prNumber: pending.prNumber, defaultBranch: project.defaultBranch },
-        logger,
-      )
-      logger.event('integration_branch_cleanup_outcome', { ...cleanup, retry: true })
-      if (cleanup.deleted) cleanedUp += 1
-    } catch (error) {
-      // Best-effort: idêntico à varredura principal — nunca deixa um erro
-      // aqui derrubar o resto do sweep nem afetar merge/checkpoint (já
-      // persistidos há muito, em outro ciclo).
-      logger.event('cleanup_retry_error', {
-        projectId: pending.projectId,
-        prNumber: pending.prNumber,
-        message: error instanceof Error ? error.message : 'erro',
-      })
-    }
-  }
-
-  return Response.json({
-    ok: true,
-    candidates: projects.length,
-    reconciled,
-    cleanupCandidates: pendingCleanups.length,
-    cleanedUp,
-  })
+  return Response.json({ ok: true, candidates: projects.length, reconciled })
 }

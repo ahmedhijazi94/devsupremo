@@ -113,11 +113,11 @@ describe('named RLS acceptance executes actual Vitest proofs', () => {
 })
 
 describe('acceptance evidence is part of the mandatory RLS job', () => {
-  it('current contracts activate database checks and artifacts use the exact PR head', () => {
+  it('database checks always run and acceptance artifacts use the exact PR head', () => {
     const files = buildProjectFiles({ projectName: 'acceptance', description: '', projectId })
     const workflow = files.find((file) => file.path === '.github/workflows/ci.yml')!.content
-    expect(workflow).toContain("steps.acceptance.outputs.rls == 'true'")
-    expect(workflow).toContain("- '.supremo/acceptance.json'")
+    expect(workflow).not.toContain('steps.acceptance.outputs')
+    expect(workflow).not.toContain('needs.changes')
     const job = workflow.slice(workflow.indexOf('  rls:'), workflow.indexOf('  dependencies:'))
     expect(job).toContain('run: node scripts/acceptance-rls.mjs')
     expect(job).toContain('ref: ${{ github.event.pull_request.head.sha || github.sha }}')

@@ -1,10 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { DatabaseOperation } from './database'
+import { databaseOperationSchema, parseDatabaseOptions, type DatabaseOperation, type DatabaseOptions } from './database-request'
+import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
+import { z } from 'zod'
 
 const directory = (cwd: string): string => path.join(cwd, '.supremo/database-queue')
-const operations: readonly string[] = ['status', 'migrate', 'anonymous-auth']
+const maxRequestBytes = 32 * 1024
 const timeoutMs = 90_000
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -14,31 +16,36 @@ function writeAtomic(file: string, value: unknown): void {
   fs.renameSync(temporary, file)
 }
 
-function readRequest(file: string): unknown {
+function readRequest(file: string, maximumBytes = maxRequestBytes): unknown {
   // Não seguir symlinks nem bloquear ao abrir um FIFO. fstat e read usam o
   // mesmo descritor: renomear/trocar o caminho não troca o arquivo inspecionado.
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
   try {
     const stat = fs.fstatSync(fd)
-    if (!stat.isFile() || stat.size > 1024) throw new Error('Pedido de banco inválido.')
+    if (!stat.isFile() || stat.size > maximumBytes) throw new Error('Pedido de banco inválido.')
     // Limite também na leitura: o inode pode crescer depois do fstat.
-    const buffer = Buffer.alloc(1025)
+    const buffer = Buffer.alloc(maximumBytes + 1)
     let length = 0
     while (length < buffer.length) {
       const count = fs.readSync(fd, buffer, length, buffer.length - length, length)
       if (count === 0) break
       length += count
     }
-    if (length > 1024) throw new Error('Pedido de banco inválido.')
-    return JSON.parse(buffer.toString('utf8', 0, length)) as unknown
+    if (length > maximumBytes) throw new Error('Pedido de banco inválido.')
+    const parsed = JSON.parse(buffer.toString('utf8', 0, length)) as unknown
+    if (length > 1024 && parsed && typeof parsed === 'object' && ['status', 'migrate', 'anonymous-auth'].includes(String((parsed as Record<string, unknown>).operation))) throw new Error('Pedido de banco inválido.')
+    return parsed
   } finally {
     fs.closeSync(fd)
   }
 }
 
-// A fila transporta apenas operações conhecidas. Não contém credenciais, URLs,
-// refs, comandos de shell ou caminhos escolhidos pelo solicitante.
-export async function requestDatabase(cwd: string, operation: DatabaseOperation): Promise<unknown> {
+// A fila transporta somente operações e opções tipadas. SQL de leitura é dado
+// não confiável: o servidor aplica sua própria restrição, escopo e limites.
+// Credenciais, URLs, refs e comandos shell nunca são aceitos neste canal.
+export async function requestDatabase(cwd: string, operation: DatabaseOperation, options: DatabaseOptions = {}): Promise<unknown> {
+  const selected = databaseOperationSchema.parse(operation)
+  const checkedOptions = parseDatabaseOptions(selected, options)
   const dir = directory(cwd)
   let heartbeat = 0
   try { heartbeat = Number(fs.readFileSync(path.join(dir, 'heartbeat'), 'utf8')) } catch { /* daemon antigo/ausente */ }
@@ -49,11 +56,11 @@ export async function requestDatabase(cwd: string, operation: DatabaseOperation)
   const request = path.join(dir, `${id}.request.json`)
   const response = path.join(dir, `${id}.response.json`)
   const expiresAt = Date.now() + timeoutMs
-  writeAtomic(request, { operation, expiresAt })
+  writeAtomic(request, { operation: selected, expiresAt, ...(Object.keys(checkedOptions).length ? { options: checkedOptions } : {}) })
   try {
     while (Date.now() < expiresAt) {
       if (fs.existsSync(response)) {
-        const result = JSON.parse(fs.readFileSync(response, 'utf8')) as { ok: boolean; data?: unknown; error?: string }
+        const result = z.object({ ok: z.boolean(), data: z.unknown().optional(), error: z.string().max(16_000).optional() }).strict().parse(readRequest(response, 2 * 1024 * 1024))
         if (!result.ok) throw new Error(result.error ?? 'Operação de banco recusada.')
         return result.data
       }
@@ -68,7 +75,7 @@ export async function requestDatabase(cwd: string, operation: DatabaseOperation)
 
 export async function drainDatabaseRequests(
   cwd: string,
-  execute: (operation: DatabaseOperation) => Promise<unknown>,
+  execute: (operation: DatabaseOperation, options?: DatabaseOptions) => Promise<unknown>,
 ): Promise<void> {
   const dir = directory(cwd)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -80,22 +87,16 @@ export async function drainDatabaseRequests(
     let result: { ok: boolean; data?: unknown; error?: string }
     let expiresAt = 0
     try {
-      const body = readRequest(request)
-      if (!body || typeof body !== 'object') throw new Error('Pedido de banco inválido.')
-      const input = body as Record<string, unknown>
-      if (Object.keys(input).sort().join(',') !== 'expiresAt,operation' ||
-        typeof input.operation !== 'string' || !operations.includes(input.operation) ||
-        typeof input.expiresAt !== 'number' || !Number.isFinite(input.expiresAt)) {
-        throw new Error('Pedido de banco inválido.')
-      }
+      const input = z.object({ operation: databaseOperationSchema, expiresAt: z.number().finite(), options: z.unknown().optional() }).strict().parse(readRequest(request))
+      const options = parseDatabaseOptions(input.operation, input.options ?? {})
       expiresAt = input.expiresAt
       if (expiresAt <= Date.now() || expiresAt > Date.now() + timeoutMs) {
         fs.rmSync(request, { force: true })
         continue
       }
-      result = { ok: true, data: await execute(input.operation as DatabaseOperation) }
+      result = { ok: true, data: Object.keys(options).length ? await execute(input.operation, options) : await execute(input.operation) }
     } catch (error) {
-      result = { ok: false, error: error instanceof Error ? error.message : 'Falha no canal de banco.' }
+      result = { ok: false, error: sanitizeDiagnostic(error instanceof Error ? error.message : 'Falha no canal de banco.') }
     }
     // Cliente que desistiu não recebe resposta tardia. Escritas já enviadas
     // permanecem reconciliáveis pelo histórico transacional no servidor.
@@ -103,7 +104,7 @@ export async function drainDatabaseRequests(
   }
 }
 
-export function startDatabaseWorker(cwd: string, execute: (operation: DatabaseOperation) => Promise<unknown>): () => void {
+export function startDatabaseWorker(cwd: string, execute: (operation: DatabaseOperation, options?: DatabaseOptions) => Promise<unknown>): () => void {
   const dir = directory(cwd)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   let running = false

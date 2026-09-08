@@ -42,6 +42,10 @@ export const PLATFORM_MANAGED_PATHS = [
   'e2e/smoke.spec.ts',
   'scripts/security-audit.js',
   'scripts/acceptance-rls.mjs',
+  'scripts/rls-isolation-inventory.mjs',
+  'scripts/rls-isolation-reporter.mjs',
+  'scripts/rls-isolation-gate.mjs',
+  'supabase/isolation.ts',
   // Local dev harness (base infra do Supremo)
   'scripts/verify.mjs',
   'scripts/supremo-status.mjs',

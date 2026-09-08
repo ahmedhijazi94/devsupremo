@@ -134,9 +134,8 @@ try {
       `https://api.vercel.com/v9/projects/${link.projectId}/env/${entry.id}?teamId=${link.orgId}`,
       { method: 'DELETE', headers: { Authorization: `Bearer ${vercelToken}` } }
     )
-    removed.ok
-      ? ok('SUPREMO_API_KEY removida (era a chave global insegura)')
-      : bad('remover SUPREMO_API_KEY', `HTTP ${removed.status}`)
+    if (removed.ok) ok('SUPREMO_API_KEY removida (era a chave global insegura)')
+    else bad('remover SUPREMO_API_KEY', `HTTP ${removed.status}`)
   }
 } catch (error) {
   bad('limpeza', String(error))
@@ -181,9 +180,8 @@ if (!projectRef) {
       }
     )
 
-    response.ok
-      ? ok('Site URL e Redirect URLs atualizadas')
-      : bad('atualizar o Supabase', `HTTP ${response.status} — ajuste à mão`)
+    if (response.ok) ok('Site URL e Redirect URLs atualizadas')
+    else bad('atualizar o Supabase', `HTTP ${response.status} — ajuste à mão`)
   }
 }
 

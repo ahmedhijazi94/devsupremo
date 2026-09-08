@@ -177,7 +177,7 @@ export function lifecycleCliCompatible(output: string | null): boolean {
   } catch { return false }
 }
 
-function runtimeReceiptsVerified(root: string, host: SupportedHost): boolean {
+function runtimeReceiptsVerified(root: string, host: SupportedHost, expectedSession?: string): boolean {
   try {
     const config = host === 'claude-code' ? CLAUDE_SETTINGS_PATH : CODEX_SETTINGS_PATH
     const wrapper = host === 'claude-code' ? TURN_HOOK_PATH : CODEX_HOOK_PATH
@@ -188,7 +188,7 @@ function runtimeReceiptsVerified(root: string, host: SupportedHost): boolean {
     let session: string | null = null
     return events.every((event) => {
       const receipt: unknown = JSON.parse(fs.readFileSync(path.join(root, '.supremo/host-receipts', host, event + '.json'), 'utf8'))
-      if (!object(receipt) || receipt.signature !== signature || typeof receipt.sessionId !== 'string') return false
+      if (!object(receipt) || receipt.signature !== signature || typeof receipt.sessionId !== 'string' || (expectedSession !== undefined && receipt.sessionId !== expectedSession)) return false
       session ??= receipt.sessionId
       return receipt.sessionId === session
     })
@@ -246,6 +246,16 @@ function inspectAdapter(root: string, host: SupportedHost, cliCompatible: boolea
     ? 'Hooks instalados; revisão/confiança no host e recibos do ciclo completo ainda necessários. Use /hooks no Codex.'
     : 'Hooks instalados; carregamento pelo host e recibos do ciclo completo ainda não comprovados.')
   return { host, integrationMode: !verified ? 'unsupported' : runtimeVerified ? 'enforced' : 'assisted', installed, verified, runtimeVerified, issues }
+}
+
+/** In-process check avoids recursive CLI probes while the lifecycle lock is held.
+ * Payload fields alone never upgrade a host's integration guarantee. */
+export function hostIntegrationMode(root: string, host: string, sessionId: string): IntegrationMode {
+  if (host === 'assisted') return 'assisted'
+  if (host !== 'codex' && host !== 'claude-code') return 'unsupported'
+  const inspected = inspectAdapter(root, host, true)
+  if (!inspected.verified) return 'unsupported'
+  return runtimeReceiptsVerified(root, host, sessionId) ? 'enforced' : 'assisted'
 }
 
 export function inspectHostAdapters(root: string): HostAdaptersStatus {

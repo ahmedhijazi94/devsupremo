@@ -1,5 +1,7 @@
 'use server'
 
+import { z } from 'zod'
+
 import { revalidatePath } from 'next/cache'
 import { requireUser, toActionError } from '@/lib/auth'
 import { provisionProject } from '@/lib/provisioning/provision'
@@ -12,6 +14,7 @@ import { provisionProject } from '@/lib/provisioning/provision'
 export async function scaffoldProject(
   projectId: string,
 ): Promise<{ error?: string; warnings?: string[] }> {
+  if (!z.string().uuid().safeParse(projectId).success) return { error: 'ID de projeto inválido.' }
   try {
     const { user, supabase } = await requireUser()
     const result = await provisionProject({

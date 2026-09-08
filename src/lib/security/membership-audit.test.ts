@@ -1,6 +1,6 @@
 import { harnessFiles } from '../templates/harness'
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -10,6 +10,7 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 function fixture(condition: string) {
   const dir = mkdtempSync(join(tmpdir(), 'supremo-policy-audit-'))
   dirs.push(dir)
+  symlinkSync(resolve('node_modules'), join(dir, 'node_modules'), 'dir')
   writeFileSync(join(dir, '.gitignore'), '.env*\n')
   mkdirSync(join(dir, 'scripts'))
   mkdirSync(join(dir, 'supabase/migrations'), { recursive: true })
@@ -78,7 +79,7 @@ describe('verify rápido bloqueia achados graves', () => {
     expect(result.status).toBe(1)
     expect(result.stdout + result.stderr).toContain('RLS_MEMBERSHIP')
     expect(result.stdout + result.stderr).toContain('falhou em: secret scan')
-  })
+  }, 15_000)
 })
 
 describe('auditoria de envio público sem identidade', () => {

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { feedbackEnvelopeSchema, type FeedbackEnvelope } from '../../../src/lib/checkpoint/feedback'
+import { deviceIssuer } from './device-identity'
 
 export const FEEDBACK_FILE = '.supremo/validation-feedback.json'
 export interface FeedbackWorkerConfig {
@@ -21,11 +22,12 @@ export async function refreshLocalFeedback(config: FeedbackWorkerConfig): Promis
     // Missing or invalid cache is unknown, never a passing validation.
     previous = null
   }
-  const secret = config.getSecret()
-  if (!secret) return false
   try {
-    const response = await fetch(`${config.apiBaseUrl.replace(/\/$/, '')}/api/checkpoint/feedback`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const issuer = deviceIssuer(config.apiBaseUrl)
+    const secret = config.getSecret()
+    if (!secret) return false
+    const response = await fetch(`${issuer}/api/checkpoint/feedback`, {
+      method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId }),
       signal: AbortSignal.timeout(55_000),
     })

@@ -1,5 +1,23 @@
-import { describe, expect, it } from 'vitest'
-import { buildInitialMigrationQuery } from './provision'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { buildInitialMigrationQuery, enableCodeScanning } from './provision'
+
+afterEach(() => { vi.unstubAllGlobals() })
+
+describe('ativação do CodeQL gerenciado', () => {
+  it('usa o PATCH oficial e aceita a ativação assíncrona confirmada', async () => {
+    const request = vi.fn(async () => new Response('', { status: 202 }))
+    vi.stubGlobal('fetch', request)
+    expect(await enableCodeScanning('owner/repo', 'fixture-token')).toBeNull()
+    expect(request).toHaveBeenCalledWith('https://api.github.com/repos/owner/repo/code-scanning/default-setup', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ state: 'configured', query_suite: 'extended' }),
+    }))
+  })
+  it.each([403, 404, 500])('não anuncia ativação quando o GitHub responde HTTP %s', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status })))
+    expect(await enableCodeScanning('owner/repo', 'fixture-token')).toMatch(/não pôde|Não foi possível/)
+  })
+})
 
 /**
  * O provisioning aplicava a migration inicial no remoto SEM registrá-la em

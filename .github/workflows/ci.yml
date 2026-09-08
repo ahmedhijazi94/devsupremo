@@ -29,6 +29,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - name: Conferir política embarcada de validação
+        run: node --import tsx scripts/generate-validation-policy.mts --check
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run audit:security -- --strict
@@ -89,12 +91,37 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - name: Preparar pg_cron oficial no PostgreSQL descartável
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec -i --user root -e SUPREMO_DISPOSABLE_PG_CRON=1 -e SUPREMO_TEST_CRON_DATABASE=supremo_jobs_ci "$POSTGRES_CONTAINER" bash -s < scripts/dev/install-test-pg-cron.sh
+          docker restart "$POSTGRES_CONTAINER"
+          ready=0
+          for attempt in $(seq 1 30); do
+            if docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -d postgres; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
       - run: |
           npx tsx scripts/test-template-rls.mts
           npx tsx scripts/test-provisioning-migrations.mts
-          npx tsx scripts/test-checkpoint-report.mts
+          npx tsx scripts/test-restore-recovery.mts
+          npx tsx scripts/test-secret-requests.mts
+          npx tsx scripts/test-database-inspection.mts
         env:
           SUPREMO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+
+      - name: Verificar tarefas com scheduler pg_cron real
+        run: npx tsx scripts/test-database-jobs.mts
+        env:
+          SUPREMO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          SUPREMO_TEST_REAL_CRON: '1'
+          SUPREMO_TEST_CRON_DATABASE: supremo_jobs_ci
 
   template:
     name: O template gerado compila
@@ -121,7 +148,7 @@ jobs:
       - name: Verificar edição rápida, continuidade e rascunho no preview real
         run: |
           node --import tsx scripts/dev/generate-sample-project.ts /tmp/supremo-fast-dev
-          npm ci --prefix /tmp/supremo-fast-dev --no-audit --no-fund
+          npm ci --prefix /tmp/supremo-fast-dev --ignore-scripts --no-audit --no-fund
           cd /tmp/supremo-fast-dev
           trap 'npm --prefix /tmp/supremo-fast-dev run preview:stop' EXIT
           node scripts/preview.mjs ensure

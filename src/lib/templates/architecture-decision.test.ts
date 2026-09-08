@@ -20,7 +20,7 @@ describe('decisão de identidade por requisito, não por persistência', () => {
     expect(agents).toContain('Autenticação normal + ownership + RLS')
     expect(agents).toContain('Não encadeie SELECT/returning')
     expect(agents).toContain('O CI mantém cobertura mínima de 80%')
-    expect(agents).toContain('quando o usuário pedir explicitamente')
+    expect(agents).toContain('testes locais adaptativos em background')
     const thresholds = content('vitest.config.ts').match(/thresholds:\s*{([^}]+)}/)?.[1]
     expect(thresholds).toBeDefined()
     for (const metric of ['lines', 'functions', 'branches', 'statements']) {

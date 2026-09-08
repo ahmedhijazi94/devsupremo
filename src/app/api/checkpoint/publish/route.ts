@@ -19,6 +19,7 @@ import {
 } from '@/lib/checkpoint/integration'
 import { validateChangeset, type Changeset } from '@/lib/checkpoint/changeset'
 import { applyChangeset } from '@/lib/checkpoint/publish'
+import { verifyPolicyChanges } from '@/lib/github/trusted-policy'
 import {
   appTokenForRepo,
   installationCreds,
@@ -99,7 +100,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const { data: proj } = await client
     .from('projects')
     .select(
-      'id, user_id, github_repo_full_name, github_owner_login, github_owner_type, default_branch, github_repo_id',
+      'id, user_id, github_repo_full_name, github_owner_login, github_owner_type, default_branch, github_repo_id, kind',
     )
     .eq('id', body.projectId)
     .eq('user_id', auth.device.ownerUserId)
@@ -137,6 +138,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     const status = valid.reason === 'too_large' ? 413 : 422
     return Response.json({ error: `changeset inválido: ${valid.reason}` }, { status })
   }
+
+  const policyFailures = verifyPolicyChanges((proj.kind as string | null) ?? null, changeset.files)
+  if (policyFailures.length) return Response.json({ error: policyFailures.join('; ') }, { status: 422 })
 
   // 5. Idempotência: se este checkpoint já foi publicado, devolve a PR existente.
   const existing = await getCheckpointState(client, changeset.checkpointId, body.projectId)

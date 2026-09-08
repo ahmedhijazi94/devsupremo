@@ -3,6 +3,7 @@ import type { GithubCredentials } from '@/lib/projects/repository'
 import type { FileChange } from '@/lib/github/client'
 import { listTree, readFile } from '@/lib/github/client'
 import { withDevelopmentPolicy } from './development-policy'
+import { upgradeValidationPackages } from './sync-validation'
 import {
   buildProjectFiles,
   isManagedPath,
@@ -139,7 +140,7 @@ export async function planTemplateSync(
 
   // Agent instructions contain user-owned additions. Read only these two files
   // when needed and update the platform block, never replace the whole document.
-  const instructionPaths = ['AGENTS.md', 'CLAUDE.md'].filter((file) => existingPaths.has(file))
+  const instructionPaths = ['AGENTS.md', 'CLAUDE.md', 'package.json', 'package-lock.json'].filter((file) => existingPaths.has(file))
   const instructions = await Promise.allSettled(instructionPaths.map(async (file) => {
     const content = await readFile(creds, file, ref)
     // The tree and content must describe the same revision, even if main moved.
@@ -151,5 +152,20 @@ export async function planTemplateSync(
     if (result.status === 'rejected') throw result.reason
     existingInstructions.set(...result.value)
   }
-  return computePlan(templateFiles, existingPaths, managedUpToDate, existingInstructions)
+  const plan = computePlan(templateFiles, existingPaths, managedUpToDate, existingInstructions)
+  const currentPackage = existingInstructions.get('package.json')
+  const currentLock = existingInstructions.get('package-lock.json')
+  if (currentPackage && currentLock) {
+    const targetPackage = templateFiles.find(file => file.path === 'package.json')!.content
+    const targetLock = templateFiles.find(file => file.path === 'package-lock.json')!.content
+    const upgrade = upgradeValidationPackages(currentPackage, currentLock, targetPackage, targetLock)
+    for (const [path, content, current] of [
+      ['package.json', upgrade.packageContent, currentPackage],
+      ['package-lock.json', upgrade.lockContent, currentLock],
+    ] as const) if (content !== current) {
+      plan.updates.push({ path, action: 'update', content })
+      plan.skipped = plan.skipped.filter(file => file !== path)
+    }
+  }
+  return plan
 }

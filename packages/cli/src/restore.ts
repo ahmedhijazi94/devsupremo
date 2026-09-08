@@ -267,6 +267,7 @@ export function applyRestore(
   targetSummary: string,
   projectId: string,
   deps: RestoreDeps,
+  delivery?: { resultCheckpointId: string; environment: 'development'; requestId: string },
 ): RestoreOutcome {
   let queue = deps.readQueue()
   const targetSha = findLocalCommitForCheckpoint(queue, targetCheckpointId)
@@ -311,6 +312,7 @@ export function applyRestore(
       summary: 'Salvaguarda automática antes do restore',
       changedPaths,
     })
+    if (delivery) autoRecord.environment = delivery.environment
     deps.appendQueue(autoRecord)
     queue = [...queue, autoRecord]
   }
@@ -361,11 +363,12 @@ export function applyRestore(
 
   deps.applyPatch(patch)
   // --no-verify: ver comentário acima (salvaguarda) — mesma razão, mesmo hook.
-  deps.git(['commit', '--no-verify', '-m', restoreCommitMessage(targetSummary)])
+  deps.git(['commit', '--no-verify', '-m', restoreCommitMessage(targetSummary) +
+    (delivery ? `\n\nSupremo-Restore-Request: ${delivery.requestId}` : '')])
   const newSha = deps.git(['rev-parse', 'HEAD']).trim()
 
   const record = buildCheckpointRecord({
-    checkpointId: deps.uuid(),
+    checkpointId: delivery?.resultCheckpointId ?? deps.uuid(),
     projectId,
     commitSha: newSha,
     parentCheckpointId: nextParentId(queue),
@@ -374,6 +377,7 @@ export function applyRestore(
     changedPaths: parseChangedPathsFromDiff(patch),
     restoredFromCheckpointId: targetCheckpointId,
   })
+  if (delivery) record.environment = delivery.environment
   deps.appendQueue(record)
   deps.notifyDaemon()
   return { applied: true, record, preservedMigrations, migrationConflicts }
@@ -396,10 +400,15 @@ function parseChangedPathsFromDiff(patch: string): string[] {
 export function defaultRestoreDeps(base: CheckpointDeps, cwd: string): RestoreDeps {
   return {
     ...base,
+    git: (args) => execFileSync('git', args, {
+      cwd, encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }),
     applyPatch: (patch: string) => {
       execFileSync('git', ['apply', '--index', '--whitespace=nowarn'], {
         cwd,
         input: patch,
+        timeout: 30_000,
         stdio: ['pipe', 'ignore', 'pipe'],
       })
     },

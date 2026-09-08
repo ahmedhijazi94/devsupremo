@@ -17,7 +17,7 @@ export NEXT_PUBLIC_SUPABASE_URL="https://placeholder.supabase.co"
 export NEXT_PUBLIC_SUPABASE_ANON_KEY="placeholder"
 
 echo "── npm ci ──"
-npm ci --silent
+npm ci --silent --ignore-scripts
 
 fail=0
 for gate in typecheck lint test test:coverage build; do

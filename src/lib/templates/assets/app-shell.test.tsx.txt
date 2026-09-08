@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { AppShell } from './app-shell'
+
+describe('navegação acessível', () => {
+  it('identifica a página atual e permite pular até o conteúdo principal', () => {
+    render(<AppShell name="Equipe" navigation={[
+      { href: '/app', label: 'Meus itens', active: true },
+      { href: '/settings', label: 'Configurações' },
+    ]} actions={<button>Sair</button>}><h1>Conteúdo</h1></AppShell>)
+    expect(screen.getByRole('navigation', { name: 'Principal' })).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Meus itens' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Configurações' })).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('link', { name: 'Pular para conteúdo' })).toHaveAttribute('href', '#main-content')
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
+    expect(screen.getByRole('button', { name: 'Sair' })).toBeVisible()
+    cleanup()
+  })
+  it('aceita uma área sem navegação nem ações opcionais', () => {
+    render(<AppShell name="Página" navigation={[]}>Olá</AppShell>)
+    expect(screen.getByRole('main')).toHaveTextContent('Olá')
+    expect(screen.queryByRole('button')).toBeNull()
+    cleanup()
+  })
+})

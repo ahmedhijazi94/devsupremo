@@ -137,23 +137,9 @@ export function isManagedIntegrationBranch(branch: string, defaultBranch: string
 }
 
 /**
- * Cleanup da integration_branch de uma PR — SÓ depois de uma reconciliação
- * que já confirmou `merged: true` (quem chama decide isso; ver
- * `result.merged` em `reconcileProjectPr`). Regras (v3-13, E2E v3-12: PRs
- * antigas já integradas deixavam `supremo/cp-*` pra trás no repositório):
- *
- *   - CONFIRMA DE NOVO direto no GitHub antes de apagar — nunca reaproveita
- *     o resultado da reconciliação que já aconteceu pra uma operação
- *     destrutiva; se por qualquer motivo a PR não estiver mais `merged` numa
- *     releitura fresca, a branch é preservada;
- *   - só toca branch no namespace gerenciado (`isManagedIntegrationBranch`) —
- *     nunca `main`, nunca uma branch arbitrária/de terceiro;
- *   - NUNCA lança: falha aqui (rede, rate limit, permissão) não pode desfazer
- *     o merge nem marcar o checkpoint como falho — quem chama já persistiu
- *     merge/checkpoint ANTES disto rodar, e este cleanup é sempre best-effort;
- *   - idempotente: `deleteBranch` (github/client.ts) já é silencioso se a branch
- *     não existe mais — chamar de novo (o próximo webhook ou o fallback
- *     periódico) é sempre seguro, sem estado especial de "já tentei".
+ * GitHub ref deletion has no compare-and-swap precondition. Even a fresh PR
+ * and ref read can race a checkpoint publication, so preserve managed refs.
+ * A future garbage collector requires an atomic publication/deletion protocol.
  */
 export async function cleanupIntegrationBranchIfMerged(
   gateway: MergeGateway,
@@ -178,13 +164,12 @@ export async function cleanupIntegrationBranchIfMerged(
         reason: 'Fora do namespace supremo/ (ou é a branch padrão) — nunca tocada.',
       }
     }
-    await gateway.deleteBranch(pr.headRef)
-    log?.event('integration_branch_cleanup', { prNumber: input.prNumber, branch: pr.headRef })
+    log?.event('integration_branch_preserved', { prNumber: input.prNumber, branch: pr.headRef })
     return {
       attempted: true,
-      deleted: true,
+      deleted: false,
       branch: pr.headRef,
-      reason: 'PR confirmada mesclada — branch de integração removida.',
+      reason: 'Branch preservada: exclusão remota não permite proteger publicações concorrentes.',
     }
   } catch (error) {
     log?.event('integration_branch_cleanup_error', {

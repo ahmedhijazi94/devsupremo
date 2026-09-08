@@ -792,11 +792,10 @@ server.listen(0, '127.0.0.1', () => {
  * comando, rodado poucos segundos depois sem nenhuma intervenção, já
  * mostrava `healthy=true`. Não é falha de restart — é corrida de timing.
  *
- * Este shim reproduz o sintoma exato: `ensure` grava pid/porta e sobe um
- * processo real IMEDIATAMENTE (`running=true` na hora), mas o servidor HTTP
- * só começa a escutar depois de `HEALTH_DELAY_MS` (simula o Next
- * compilando) — `healthy` só vira `true` quando o probe HTTP de verdade
- * (mesmo `health()` do supervisor real) alcançar a porta já escutando.
+ * O servidor filho recebe uma porta do sistema e confirma a própria identidade
+ * por IPC. O aquecimento começa no primeiro probe HTTP real: a fixture responde
+ * indisponível antes de ficar saudável. A prova é a transição observada pelo
+ * preflight no mesmo processo, sem depender do tempo de preparação do teste.
  */
 describe('supremo:resume — janela curta de polling depois do ensure (v3.4.2, teste-v3-14)', () => {
   let dir: string
@@ -825,26 +824,47 @@ import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 
 const PID_FILE = '.supremo/preview.pid'
 const PORT_FILE = '.supremo/preview.port'
-const PORT = Number(process.env.PORT || 3000)
-const DELAY_MS = Number(process.env.HEALTH_DELAY_MS || 800)
+const INSTANCE_FILE = '.supremo/preview.fixture-instance'
 
 function alive(pid) {
   if (!pid) return false
   try { process.kill(pid, 0); return true } catch { return false }
 }
 function readState() {
-  let pid = null
+  let pid = null, port = null, instance = null
   try { pid = Number(fs.readFileSync(PID_FILE, 'utf8').trim()) } catch {}
-  return { pid: Number.isFinite(pid) && pid > 0 ? pid : null }
+  try { port = Number(fs.readFileSync(PORT_FILE, 'utf8').trim()) } catch {}
+  try { instance = fs.readFileSync(INSTANCE_FILE, 'utf8').trim() } catch {}
+  return { pid: Number.isFinite(pid) && pid > 0 ? pid : null, port, instance }
 }
-function health(port, timeoutMs) {
+function health(port, instance, timeoutMs) {
   return new Promise((resolve) => {
-    const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: timeoutMs }, (res) => { res.resume(); resolve((res.statusCode || 0) > 0) })
+    const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: timeoutMs }, (res) => {
+      res.resume()
+      resolve(res.statusCode === 200 && res.headers['x-preview-fixture'] === instance)
+    })
     req.on('error', () => resolve(false))
     req.on('timeout', () => { req.destroy(); resolve(false) })
+  })
+}
+function waitListening(child, instance) {
+  return new Promise((resolve) => {
+    const finish = (port) => {
+      clearTimeout(timer)
+      child.removeAllListeners('message')
+      child.removeAllListeners('exit')
+      resolve(port)
+    }
+    const timer = setTimeout(() => finish(null), 5000)
+    child.once('exit', () => finish(null))
+    child.on('message', (ready) => {
+      if (ready?.pid !== child.pid || ready?.instance !== instance || !Number.isInteger(ready?.port) || ready.port < 1) return
+      finish(ready.port)
+    })
   })
 }
 
@@ -856,35 +876,60 @@ if (cmd === 'ensure') {
   fs.writeFileSync(process.env.PREVIEW_ENSURE_CALL_LOG, String(n + 1))
 
   fs.mkdirSync(path.dirname(PID_FILE), { recursive: true })
-  // Processo real sobe NA HORA (running=true imediato) — só o LISTEN do
-  // servidor HTTP é adiado, exatamente o sintoma do E2E real (Next ainda
-  // compilando a 1ª rota: o processo já existe, a porta ainda não responde).
-  const child = spawn(
-    process.execPath,
-    ['-e', \`setTimeout(() => { require('http').createServer((_, res) => res.end('ok')).listen(\${PORT}, '127.0.0.1') }, \${DELAY_MS})\`],
-    { detached: true, stdio: 'ignore' },
-  )
-  child.unref()
+  const instance = randomUUID()
+  const child = spawn(process.execPath, ['scripts/timing-http-server.cjs'], {
+    detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    env: { ...process.env, PREVIEW_FIXTURE_INSTANCE: instance },
+  })
   fs.writeFileSync(PID_FILE, String(child.pid))
-  fs.writeFileSync(PORT_FILE, String(PORT))
+  const port = await waitListening(child, instance)
+  if (port === null) {
+    child.kill()
+    if (child.connected) child.disconnect()
+    child.unref()
+    process.exit(1)
+  }
+  fs.writeFileSync(PORT_FILE, String(port))
+  fs.writeFileSync(INSTANCE_FILE, instance)
+  if (child.connected) child.disconnect()
+  child.unref()
 }
 
 if (cmd === 'status') {
-  const { pid } = readState()
+  const { pid, port, instance } = readState()
   const running = alive(pid)
-  const healthy = running && (await health(PORT, 1500))
-  console.log(JSON.stringify({ running, healthy, url: healthy ? \`http://localhost:\${PORT}\` : null }))
+  const healthy = running && (await health(port, instance, 1500))
+  fs.appendFileSync(process.env.PREVIEW_STATUS_LOG, JSON.stringify({ pid, running, healthy }) + '\\n')
+  console.log(JSON.stringify({ running, healthy, url: healthy ? \`http://localhost:\${port}\` : null }))
 }
 `
   }
 
-  function setup(
-    port: number,
-    healthDelayMs: number,
-  ): { env: NodeJS.ProcessEnv; callLogFile: string } {
+  function setup(healthDelayMs: number): { env: NodeJS.ProcessEnv; callLogFile: string } {
     dir = mkdtempSync(join(tmpdir(), 'supremo-resume-timing-'))
     mkdirSync(join(dir, 'scripts'), { recursive: true })
 
+    writeFileSync(join(dir, 'scripts/timing-http-server.cjs'), `
+const http = require('node:http')
+const instance = process.env.PREVIEW_FIXTURE_INSTANCE
+const delayMs = Number(process.env.HEALTH_DELAY_MS)
+let healthy = delayMs === 0
+let warming = false
+const server = http.createServer((_, res) => {
+  // The first actual status probe observes failure before warming starts.
+  // No compilation/process-start time can consume this interval beforehand.
+  if (!healthy && !warming) {
+    warming = true
+    setTimeout(() => { healthy = true }, delayMs)
+  }
+  res.setHeader('x-preview-fixture', instance)
+  res.statusCode = healthy ? 200 : 503
+  res.end(healthy ? 'ready' : 'compiling')
+})
+server.listen(0, '127.0.0.1', () => {
+  process.send({ pid: process.pid, port: server.address().port, instance })
+})
+`, 'utf8')
     writeFileSync(join(dir, 'scripts/preview.mjs'), slowToHealthyPreviewShim(), 'utf8')
     writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'resume-timing-fixture', scripts: {} }))
@@ -893,14 +938,10 @@ if (cmd === 'status') {
     const callLogFile = join(dir, 'preview-ensure-call-count.txt')
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
       PREVIEW_ENSURE_CALL_LOG: callLogFile,
+      PREVIEW_STATUS_LOG: join(dir, 'preview-status.jsonl'),
       HEALTH_DELAY_MS: String(healthDelayMs),
-      // Janela de polling real (não instantânea) — precisa ser MAIOR que
-      // healthDelayMs pra dar tempo do servidor terminar de subir, e o
-      // intervalo precisa ser menor que a folga entre eles pra provar que é
-      // um POLLING (várias leituras), não uma segunda leitura só por sorte.
       SUPREMO_PREFLIGHT_POLL_INTERVAL_MS: '150',
       SUPREMO_PREFLIGHT_POLL_TIMEOUT_MS: '3000',
     }
@@ -915,8 +956,12 @@ if (cmd === 'status') {
     })
   }
 
-  function runResume(env: NodeJS.ProcessEnv): { status: number; result: ResumeJson | null; elapsedMs: number } {
-    const start = Date.now()
+  function statusLog(): Array<{ pid: number | null; running: boolean; healthy: boolean }> {
+    return readFileSync(join(dir, 'preview-status.jsonl'), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as { pid: number | null; running: boolean; healthy: boolean })
+  }
+
+  function runResume(env: NodeJS.ProcessEnv): { status: number; result: ResumeJson | null } {
     try {
       const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {
         cwd: dir,
@@ -924,63 +969,59 @@ if (cmd === 'status') {
         encoding: 'utf8',
         timeout: 20_000,
       })
-      return { status: 0, result: JSON.parse(out) as ResumeJson, elapsedMs: Date.now() - start }
+      return { status: 0, result: JSON.parse(out) as ResumeJson }
     } catch (err) {
       const e = err as { status: number | null; stdout: string }
       return {
         status: e.status ?? 1,
         result: e.stdout ? (JSON.parse(e.stdout) as ResumeJson) : null,
-        elapsedMs: Date.now() - start,
       }
     }
   }
 
   it(
-    'processo inicia imediatamente (running=true) mas health só vira true ~800ms depois → preflight ESPERA e conclui com sucesso, sem falso negativo',
+    'processo inicia running/unhealthy e aquece após o primeiro probe → preflight espera health real sem reiniciar',
     () => {
-      const port = 21000 + Math.floor(Math.random() * 4000)
-      const { env, callLogFile } = setup(port, 800)
+      const { env, callLogFile } = setup(800)
       preWarmDaemon(env)
 
-      const { status, result, elapsedMs } = runResume(env)
+      const { status, result } = runResume(env)
 
-      expect(status).toBe(0)
+      expect(status, JSON.stringify(result)).toBe(0)
       expect(result?.preview.healthy).toBe(true)
       expect(result?.daemon.healthy).toBe(true)
-      // Prova que ESPEROU de verdade (não passou batido antes do processo
-      // ficar pronto) — mas sem estourar a janela de 3s configurada.
-      expect(elapsedMs).toBeGreaterThanOrEqual(750)
-      expect(elapsedMs).toBeLessThan(3_000)
-      // Ficou saudável dentro da 1ª janela — a 2ª tentativa de ensure NUNCA
-      // precisou rodar.
+      const observations = statusLog()
+      const running = observations.filter((entry) => entry.running)
+      // A single early read would fail: the real HTTP probe first gets 503,
+      // then succeeds after polling the same process. Startup CPU time cannot
+      // turn an unrelated listener or an unobserved warmup into a passing test.
+      expect(running.length).toBeGreaterThanOrEqual(2)
+      expect(running[0]?.healthy).toBe(false)
+      expect(running.at(-1)?.healthy).toBe(true)
+      const pid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8'))
+      expect(running.every((entry) => entry.pid === pid)).toBe(true)
       expect(readFileSync(callLogFile, 'utf8').trim()).toBe('1')
     },
     30_000,
   )
 
   it(
-    'caminho saudável (já healthy antes do ensure) continua imediato — nenhum polling, nenhuma chamada de ensure',
+    'caminho já saudável faz uma leitura — nenhum polling, nenhuma chamada adicional de ensure',
     () => {
-      const port = 21000 + Math.floor(Math.random() * 4000)
-      const { env, callLogFile } = setup(port, 0)
+      const { env, callLogFile } = setup(0)
       preWarmDaemon(env)
-      // Sobe o preview de propósito ANTES do resume, já saudável.
       execFileSync(process.execPath, [join(dir, 'scripts/preview.mjs'), 'ensure'], {
         cwd: dir,
         env,
         stdio: 'ignore',
       })
 
-      const start = Date.now()
       const { status, result } = runResume(env)
-      const elapsedMs = Date.now() - start
 
-      expect(status).toBe(0)
+      expect(status, JSON.stringify(result)).toBe(0)
       expect(result?.preview.healthy).toBe(true)
-      // Já saudável: o bloco de ensure/polling inteiro é pulado — rápido de
-      // verdade, nunca perto da janela de 3s configurada.
-      expect(elapsedMs).toBeLessThan(1_000)
-      // Nenhuma chamada NOVA de ensure — só a que o teste fez pra pré-aquecer.
+      const pid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8'))
+      expect(statusLog()).toEqual([{ pid, running: true, healthy: true }])
       expect(readFileSync(callLogFile, 'utf8').trim()).toBe('1')
     },
     30_000,

@@ -1,9 +1,8 @@
-import { execFile, execFileSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
-import { promisify } from 'node:util'
 import { z } from 'zod'
 import { acceptanceContractSchema } from './turn-acceptance'
 import { FAILURE_TYPES, acceptanceCriterionSchema, classifyFailure } from './turn-model'
@@ -12,7 +11,10 @@ import { defaultCheckpointDeps, type CheckpointRecord } from './checkpoint'
 import { isKnownNextTsconfigNoise } from './restore'
 import { captureTurnCheckpoint, gitText, readJson, TURN_DIR, withTurnLock, writeJson } from './turn-workspace'
 
-const execute = promisify(execFile)
+import { automaticValidation, readEnginePolicy } from './engine-policy'
+import { runWorkerProcess, WorkerAbortedError } from './worker-process'
+import { verifyTrustedFiles } from './trusted-validation'
+import { TRUSTED_VALIDATION_POLICIES } from './generated/validation-policy'
 async function availableBrowserPort(): Promise<number> {
   const listener = net.createServer()
   return new Promise((resolve, reject) => {
@@ -47,10 +49,9 @@ export function evidenceFor(cwd: string, record: CheckpointRecord): LocalEvidenc
     && item.fingerprint === (record.treeSha ?? gitText(cwd, ['rev-parse', `${record.commitSha}^{tree}`])) ? item : null
 }
 
-/** Opt-in local QA. Secret transport checks are always enforced separately. */
-export function localValidationMode(cwd: string): 'on_request' | 'background' {
-  return z.object({ validation_mode: z.enum(['on_request', 'background']).default('on_request') })
-    .parse(readJson(path.join(cwd, '.supremo/lifecycle.json')) ?? {}).validation_mode
+/** Background checks are the default; an explicit on_request policy opts out. */
+export function localValidationMode(cwd: string): 'on_request' | 'background_adaptive' {
+  return automaticValidation(cwd) ? 'background_adaptive' : 'on_request'
 }
 
 function validationRequestFile(cwd: string, record: CheckpointRecord): string {
@@ -142,7 +143,10 @@ const verifyReportSchema = z.object({
 })
 
 /** I/O adapter: exact immutable Git worktree, private output and independent .next. */
-export async function validateCheckpoint(cwd: string, record: CheckpointRecord): Promise<LocalEvidence> {
+export async function validateCheckpoint(cwd: string, record: CheckpointRecord, signal?: AbortSignal): Promise<LocalEvidence> {
+  const limits = readEnginePolicy(cwd).validation
+  const deadline = Date.now() + limits.timeout_ms
+  const remaining = (): number => Math.max(1, deadline - Date.now())
   const startedAt = new Date().toISOString()
   const id = crypto.randomUUID()
   const scratch = path.join(cwd, VALIDATION_DIR, `work-${id}`)
@@ -156,11 +160,13 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord):
   const fingerprint = gitText(cwd, ['rev-parse', `${record.commitSha}^{tree}`])
   const baseSha = record.changesetBaseSha ?? gitText(cwd, ['rev-parse', `${record.commitSha}^`])
   try {
-    if (record.environment === 'production') throw new Error('Validação automática de produção bloqueada.')
+    if (record.environment !== 'development') throw new Error('Validação requer ambiente de desenvolvimento autorizado.')
+    if (signal?.aborted) throw new WorkerAbortedError()
     execFileSync('git', ['worktree', 'add', '--detach', scratch, record.commitSha], { cwd, stdio: 'pipe' })
     added = true
     // Dependencies are reused, build/test outputs remain isolated. Never copy .env or device identity.
     if (fs.existsSync(path.join(cwd, 'node_modules'))) fs.symlinkSync(path.join(cwd, 'node_modules'), path.join(scratch, 'node_modules'), 'dir')
+    verifyTrustedFiles(scratch)
     const script = path.join(scratch, 'scripts/verify.mjs')
     if (!fs.existsSync(script)) throw new Error('Worker indisponível: scripts/verify.mjs ausente.')
     const env: NodeJS.ProcessEnv = {
@@ -181,11 +187,12 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord):
     const parent = baseSha
     let executionFailed = false
     try {
-      const result = await execute(process.execPath, [script, '--base', parent, '--background', ...(record.draft ? ['--draft'] : [])], {
-        cwd: scratch, env, timeout: 10 * 60_000, maxBuffer: 4 * 1024 * 1024,
+      const result = await runWorkerProcess(process.execPath, [script, '--base', parent, '--background', ...(record.draft ? ['--draft'] : [])], {
+        cwd: scratch, env, timeoutMs: remaining(), maxOutputBytes: limits.max_output_bytes, signal,
       })
       logs = `${result.stdout}\n${result.stderr}`
     } catch (error) {
+      if (error instanceof WorkerAbortedError) throw error
       const failure = error as Error & { stdout?: string; stderr?: string }
       logs = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}\n${failure.message}`
       executionFailed = true
@@ -206,8 +213,8 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord):
         }
         const bin = path.join(cwd, 'node_modules/.bin', check.type === 'unit' ? 'vitest' : 'playwright')
         try {
-          const selected = await execute(bin, [check.type === 'unit' ? 'run' : 'test', ...check.files], {
-            cwd: scratch, env, timeout: 5 * 60_000, maxBuffer: 4 * 1024 * 1024,
+          const selected = await runWorkerProcess(bin, [check.type === 'unit' ? 'run' : 'test', ...check.files], {
+            cwd: scratch, env, timeoutMs: remaining(), maxOutputBytes: limits.max_output_bytes, signal,
           })
           logs += '\n' + selected.stdout + '\n' + selected.stderr
           checks.push({ name: check.name, type: check.type, status: 'passed' })
@@ -226,9 +233,11 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord):
       status = 'failed'; logs += '\nValidação alterou arquivos versionados.'
     }
   } catch (error) {
+    if (error instanceof WorkerAbortedError) throw error
     const failure = error as Error & { stdout?: string; stderr?: string }
     logs += `\n${failure.stdout ?? ''}\n${failure.stderr ?? ''}\n${failure.message}`
     status = 'failed'
+    if (checks.length === 0) checks = [{ name: 'validation infrastructure', type: 'external_dependency', status: 'failed' }]
   } finally {
     if (added) {
       try { execFileSync('git', ['worktree', 'remove', '--force', scratch], { cwd, stdio: 'pipe' }) }
@@ -245,8 +254,52 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord):
   return evidence
 }
 
+export type ValidationJobStatus = 'running' | 'passed' | 'failed' | 'deferred' | 'superseded' | 'cancelled'
+function writeJob(cwd: string, record: CheckpointRecord, status: ValidationJobStatus): void {
+  writeJson(path.join(cwd, VALIDATION_DIR, 'jobs', `${record.checkpointId}.json`), {
+    checkpointId: record.checkpointId, sha: record.commitSha, base: record.changesetBaseSha ?? gitText(cwd, ['rev-parse', `${record.commitSha}^`]),
+    status, updatedAt: new Date().toISOString(), draft: record.draft === true,
+  })
+}
+
+/** Cache reuse requires the same immutable commit, diff base, environment and validation plan. */
+async function executeScheduledValidation(cwd: string, record: CheckpointRecord, transport: LocalEvidence, signal?: AbortSignal, requested = false): Promise<LocalEvidence> {
+  const key = crypto.createHash('sha256').update(JSON.stringify({ sha: record.commitSha, base: transport.baseSha,
+    environment: record.environment, draft: record.draft === true, trustedPolicy: TRUSTED_VALIDATION_POLICIES, validation: readEnginePolicy(cwd).validation })).digest('hex')
+  const cacheFile = path.join(cwd, VALIDATION_DIR, 'cache', `${key}.json`)
+  const cached = localEvidenceSchema.safeParse(readJson(cacheFile))
+  if (cached.success && cached.data.checkpointId === record.checkpointId && cached.data.sha === record.commitSha && cached.data.baseSha === transport.baseSha) {
+    writeJob(cwd, record, cached.data.status); return cached.data
+  }
+  const controller = new AbortController()
+  const abort = (): void => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
+  let superseded = false
+  const poll = setInterval(() => {
+    try {
+      const newest = defaultCheckpointDeps(cwd).readQueue().at(-1)
+      const saving = readJson(path.join(cwd, TURN_DIR, 'validation-request.json')) !== null
+      if (!requested && (!automaticValidation(cwd) || (newest && newest.checkpointId !== record.checkpointId && Date.parse(newest.createdAt) >= Date.parse(record.createdAt)) || (record.draft && saving))) {
+        superseded = true; controller.abort()
+      }
+    } catch { controller.abort() }
+  }, 250)
+  writeJob(cwd, record, 'running')
+  try {
+    const evidence = await validateCheckpoint(cwd, record, controller.signal)
+    writeJob(cwd, record, evidence.status)
+    writeJson(cacheFile, evidence)
+    return evidence
+  } catch (error) {
+    if (!(error instanceof WorkerAbortedError)) throw error
+    writeJob(cwd, record, superseded ? 'superseded' : 'cancelled')
+    return transport
+  } finally { clearInterval(poll); signal?.removeEventListener('abort', abort) }
+}
+
 /** One owner across daemon restarts. An interrupted running check is revalidated. */
-export async function drainLocalValidation(cwd: string): Promise<number> {
+export async function drainLocalValidation(cwd: string, signal?: AbortSignal): Promise<number> {
   const lock = path.join(cwd, VALIDATION_DIR, 'worker.json')
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 })
   try { fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }), { flag: 'wx', mode: 0o600 }) }
@@ -258,30 +311,39 @@ export async function drainLocalValidation(cwd: string): Promise<number> {
     catch (probe) {
       if ((probe as NodeJS.ErrnoException).code !== 'ESRCH') return 0
       fs.unlinkSync(lock)
-      return drainLocalValidation(cwd)
+      return drainLocalValidation(cwd, signal)
     }
   }
   try {
     const deps = defaultCheckpointDeps(cwd)
-    // Pending legacy records stay visible until preflight confirms their environment.
-    // Missing authority is not evidence of a code/secret failure.
-    const record = deps.readQueue().find((item) => item.environment !== undefined && item.environment !== 'unknown' &&
+    const queue = deps.readQueue()
+    const eligible = queue.filter((item) => item.environment !== undefined && item.environment !== 'unknown' &&
       (item.validationStatus === 'pending' || item.validationStatus === 'running' || hasValidationRequest(cwd, item)))
-    if (!record) return localValidationMode(cwd) === 'background' ? await validateDraft(cwd) : 0
-    deps.appendQueue({ ...record, validationStatus: 'running' })
+    const record = eligible.at(-1)
+    // Older snapshots remain transport-checked and visible; costly QA prioritizes current work.
+    for (const older of eligible.slice(0, -1)) {
+      const transport = scanCheckpointForUpload(cwd, older)
+      deps.appendQueue({ ...older, validationStatus: transport.status, validationId: transport.id, validatedSha: transport.sha })
+      writeJob(cwd, older, 'superseded')
+    }
+    if (!record) return automaticValidation(cwd) ? await validateDraft(cwd, signal) : 0
     const requested = hasValidationRequest(cwd, record)
+    if (!requested && automaticValidation(cwd) && Date.parse(record.createdAt) + readEnginePolicy(cwd).validation.debounce_ms > Date.now()) return 0
+    deps.appendQueue({ ...record, validationStatus: 'running' })
     const transport = scanCheckpointForUpload(cwd, record)
-    const evidence = transport.status === 'failed' || !(requested || localValidationMode(cwd) === 'background')
-      ? transport : await validateCheckpoint(cwd, record)
-    if (requested) fs.rmSync(validationRequestFile(cwd, record), { force: true })
+    let evidence = transport
+    if (transport.status !== 'failed' && (requested || automaticValidation(cwd))) {
+      evidence = await executeScheduledValidation(cwd, record, transport, signal, requested)
+    }
+    if (requested && !signal?.aborted) fs.rmSync(validationRequestFile(cwd, record), { force: true })
     const latest = deps.readQueue().find((item) => item.checkpointId === record.checkpointId) ?? record
-    deps.appendQueue({ ...latest, validationStatus: evidence.status, validationId: evidence.id, validatedSha: evidence.sha })
+    deps.appendQueue({ ...latest, validationStatus: signal?.aborted ? 'pending' : evidence.status, validationId: evidence.id, validatedSha: evidence.sha })
     return 1
   } finally { fs.unlinkSync(lock) }
 }
 
 /** Debounced saves are validated without publishing intermediate work or touching HEAD. */
-async function validateDraft(cwd: string): Promise<number> {
+async function validateDraft(cwd: string, signal?: AbortSignal): Promise<number> {
   const requestFile = path.join(cwd, TURN_DIR, 'validation-request.json')
   const request = z.object({ turnId: z.string(), dueAt: z.number() }).safeParse(readJson(requestFile))
   if (!request.success || request.data.dueAt > Date.now()) return 0
@@ -302,7 +364,8 @@ async function validateDraft(cwd: string): Promise<number> {
   const previous = readJson(path.join(cwd, VALIDATION_DIR, 'draft.json')) as CheckpointRecord | null
   if (previous && previous.treeSha === draft.treeSha && previous.validationStatus !== 'running') return 0
   writeJson(path.join(cwd, VALIDATION_DIR, 'draft.json'), { ...draft, validationStatus: 'running' })
-  const evidence = await validateCheckpoint(cwd, draft)
+  const transport = scanCheckpointForUpload(cwd, draft)
+  const evidence = transport.status === 'failed' ? transport : await executeScheduledValidation(cwd, draft, transport, signal)
   writeJson(path.join(cwd, VALIDATION_DIR, 'draft.json'), { ...draft,
     validationStatus: evidence.status, validationId: evidence.id, validatedSha: evidence.sha })
   return 1
@@ -318,15 +381,18 @@ export function validationWorkerHealthy(cwd: string): boolean {
 
 export function startLocalValidationWorker(cwd: string): () => void {
   let stopped = false
+  const controller = new AbortController()
   const heartbeat = (): void => writeJson(path.join(cwd, VALIDATION_DIR, 'worker-health.json'), { protocolVersion: 1, pid: process.pid, checkedAt: Date.now() })
   heartbeat()
   const heartbeatTimer = setInterval(heartbeat, 5000)
   let timer: ReturnType<typeof setTimeout> | undefined
   const tick = async (): Promise<void> => {
-    try { await drainLocalValidation(cwd) }
+    try { await drainLocalValidation(cwd, controller.signal)
+      if (!stopped) { const { drainAutoHeal } = await import('./engine-repair'); await drainAutoHeal(cwd, controller.signal) }
+    }
     catch (error) { console.error('[validation]', sanitizeDiagnostic(error instanceof Error ? error.message : String(error))) }
     if (!stopped) timer = setTimeout(() => { void tick() }, 1200)
   }
   void tick()
-  return () => { stopped = true; clearInterval(heartbeatTimer); if (timer) clearTimeout(timer) }
+  return () => { stopped = true; controller.abort(); clearInterval(heartbeatTimer); if (timer) clearTimeout(timer) }
 }

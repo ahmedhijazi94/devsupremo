@@ -127,6 +127,27 @@ async function context(): Promise<BackendTurnContext> {
 }
 
 describe('turn preflight backend reconciliation', () => {
+  it.each([
+    ['2026-09-08T20:02:33.123456+00:00', '2026-09-08T20:02:33.123Z'],
+    ['2026-09-08T16:02:33.123456-04:00', '2026-09-08T20:02:33.123Z'],
+    ['2026-09-08T20:02:33.123Z', '2026-09-08T20:02:33.123Z'],
+  ])('normalizes stored checkpoint timestamp %s for existing strict clients', async (stored, expected) => {
+    const row: Row = { ...checkpoint(), created_at: stored }
+    database.tables.checkpoints!.push(row)
+    await saveCheckpointFeedback(database.client, feedback(row, 'passed'))
+    const result = await context()
+    expect(result.latestCheckpoint).toMatchObject({ id: row.id, localSha: row.commit_sha,
+      publishedSha: row.published_sha, createdAt: expected })
+    expect(result.environment).toBe('development')
+    expect(result.feedback.current?.state).toBe('passed')
+    expect(row.created_at).toBe(stored)
+  })
+
+  it.each(['invalid', '2026-02-30T20:02:33+00:00', '2026-09-08T25:02:33+00:00', '2026-09-08T20:02:33'])('rejects corrupt or ambiguous stored timestamp %s', async created_at => {
+    database.tables.checkpoints!.push({ ...checkpoint(), created_at })
+    expect((await POST(request())).status).toBe(503)
+  })
+
   it('rejects malformed input, unknown fields and oversized credentials before database access', async () => {
     for (const payload of [{ projectId: 'bad' }, { projectId, deviceSecret: secret, environment: 'development' }, { projectId, deviceSecret: 'x'.repeat(257) }]) {
       expect((await POST(request(payload))).status).toBe(400)

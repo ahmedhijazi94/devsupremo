@@ -370,8 +370,9 @@ export interface IntegrationMeta {
   integrationState: string | null
 }
 
-/** Lê o modo/estado de integração (best-effort; null se a migration não rodou). */
-export async function readIntegrationMeta(projectId: string): Promise<IntegrationMeta> {
+/** Lê o modo/estado de integração. Strict impede que workers tomem uma falha
+ * de leitura por configuração legada; os callers existentes são best-effort. */
+export async function readIntegrationMeta(projectId: string, options?: { strict: boolean }): Promise<IntegrationMeta> {
   const empty: IntegrationMeta = {
     mergeMode: null,
     protectionLevel: null,
@@ -387,18 +388,23 @@ export async function readIntegrationMeta(projectId: string): Promise<Integratio
         protection_level: IntegrationMeta['protectionLevel']
         integration_state: string | null
       }>()
-    if (error || !data) return empty
+    if (error || !data) {
+      if (options?.strict) throw new Error('Configuração de integração indisponível.')
+      return empty
+    }
     return {
       mergeMode: data.github_merge_mode ?? null,
       protectionLevel: data.protection_level ?? null,
       integrationState: data.integration_state ?? null,
     }
   } catch {
+    if (options?.strict) throw new Error('Configuração de integração indisponível.')
     return empty
   }
 }
 
-/** Grava modo/estado de integração (best-effort; ignora se a coluna não existe). */
+/** Grava modo/estado de integração (best-effort; ignora se a coluna não existe).
+ * Workers concorrentes podem fixar o estado observado no próprio UPDATE. */
 export async function writeIntegrationMeta(
   projectId: string,
   patch: Partial<{
@@ -406,9 +412,16 @@ export async function writeIntegrationMeta(
     protection_level: string
     integration_state: string
   }>,
+  condition?: { expectedState: string | null },
 ): Promise<void> {
   try {
-    await db().from('projects').update(patch).eq('id', projectId)
+    let query = db().from('projects').update(patch).eq('id', projectId)
+    if (condition) {
+      query = condition.expectedState === null
+        ? query.is('integration_state', null)
+        : query.eq('integration_state', condition.expectedState)
+    }
+    await query
   } catch {
     // migration 014 ainda não aplicada — segue sem persistir (fail-safe).
   }

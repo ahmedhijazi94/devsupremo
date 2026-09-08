@@ -13,6 +13,8 @@ vi.mock('@/lib/projects/repository', () => ({ getProject: mocks.project, getGith
 vi.mock('@/lib/github/client', () => ({ getChecks: mocks.checks, getFailedJobLogs: mocks.logs }))
 vi.mock('@/lib/github/reconcile', () => ({ resolveRequiredChecks: () => ['coverage'] }))
 vi.mock('@/lib/github/acceptance', () => ({ getAcceptanceEvidence: mocks.acceptance }))
+vi.mock('@/lib/github/app', () => ({ appTokenForRepo: vi.fn(), installationCreds: vi.fn() }))
+vi.mock('@/lib/github/gateway', () => ({ githubMergeGateway: vi.fn() }))
 import { POST } from './route'
 import { NotFoundError } from '@/lib/projects/repository'
 
@@ -23,7 +25,7 @@ const request = (body: unknown = { projectId, deviceSecret: 'sup_dev_ckpt_test' 
 beforeEach(() => {
   vi.resetAllMocks()
   mocks.auth.mockResolvedValue({ ok: true, device: { ownerUserId: 'owner' } })
-  mocks.project.mockResolvedValue({ id: projectId })
+  mocks.project.mockResolvedValue({ id: projectId, user_id: 'owner' })
   mocks.latest.mockResolvedValue(latest)
   mocks.cached.mockResolvedValue(null)
   mocks.credentials.mockResolvedValue({ token: 'private-credential' })
@@ -34,6 +36,7 @@ beforeEach(() => {
 describe('device feedback endpoint', () => {
   it('rejects invalid input and revoked devices before accessing project data', async () => {
     expect((await POST(request({ projectId: 'invalid' }))).status).toBe(400)
+    expect((await POST(request({ projectId, deviceSecret: 'sup_dev_ckpt_test', prNumber: 99, publishedSha: 'f'.repeat(40) }))).status).toBe(400)
     expect(mocks.auth).not.toHaveBeenCalled()
     mocks.auth.mockResolvedValue({ ok: false })
     expect((await POST(request())).status).toBe(401)

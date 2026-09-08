@@ -6,12 +6,17 @@ import { describeEnvironment } from '@/lib/database-environment/policy'
 import { readEnvironment } from '@/lib/database-environment/store'
 import { getProject, NotFoundError } from '@/lib/projects/repository'
 import { createServiceClient } from '@/lib/supabase/admin'
+import { z } from 'zod'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 10
 
 const headers = { 'Cache-Control': 'no-store' }
+// PostgREST returns timestamptz with an explicit offset (often +00:00) and
+// microseconds. Normalize at the server boundary for already installed clients,
+// which require UTC ISO timestamps; malformed or timezone-less values still fail.
+const checkpointTimestamp = z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString())
 
 /**
  * One bounded reconciliation at turn start. Never waits for GitHub or CI:
@@ -81,7 +86,7 @@ export async function POST(request: Request): Promise<Response> {
         latestCheckpoint: fresh ? {
           id: fresh.id, localSha: fresh.commitSha, publishedSha: fresh.publishedSha,
           pushStatus: fresh.pushStatus, integrationStatus: fresh.integrationStatus,
-          integrationBranch: fresh.integrationBranch, createdAt: fresh.createdAt,
+          integrationBranch: fresh.integrationBranch, createdAt: checkpointTimestamp.parse(fresh.createdAt),
         } : null,
         feedback,
         observedAt: new Date().toISOString(),

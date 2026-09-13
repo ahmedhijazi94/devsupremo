@@ -9,11 +9,14 @@ Este bloco atualiza somente os padrões de workflow gerados pelo Supremo, inclus
 quando há instruções antigas de testes/QA/recovery neste arquivo. Instruções explícitas
 do usuário continuam tendo precedência; preserve as regras de arquitetura e segurança.
 
-- Padrão: implemente o pedido, mantenha o preview disponível e deixe o usuário avaliar.
+- Padrão: no início de cada pedido de alteração, trate o diagnóstico anterior entregue
+  pelo Supremo. Confira se a falha ainda existe no código atual e corrija as causas
+  confirmadas antes do pedido novo, sem esperar o usuário avisar. Depois implemente
+  o pedido, mantenha o preview disponível e deixe o usuário avaliar.
   O motor executa testes locais adaptativos em background e a suíte completa no GitHub.
   Não espere esses testes nem abra uma sessão de QA manual por rotina. Testes explícitos
   pedidos pelo usuário continuam disponíveis. Dados de teste ficam em ambiente isolado.
-- Leia o contexto compacto do turno e apenas os arquivos necessários à alteração.
+- Leia o contexto compacto do turno e os arquivos necessários ao diagnóstico e à alteração.
   Não examine o bundle da CLI, releia o repositório inteiro nem investigue o banco remoto
   para exibir um campo que já está presente no modelo e na consulta do app.
 - Para perguntas sobre dados reais, schema ou logs, use a CLI local autorizada:
@@ -28,12 +31,21 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   (Supabase Edge Functions ou Vercel) e o ambiente explícito. Nunca peça o valor no chat,
   não leia nem imprima secrets. O usuário preenche o formulário; \`secrets status\` confirma
   somente o estado. Pedidos de chaves não iniciam QA nem exigem checkpoint.
-- Falhas anteriores continuam registradas, inclusive segurança/RLS/migrations; não
-  bloqueiam preparar correções, testes, nova migration ou checkpoint em desenvolvimento. O auto-heal autorizado trabalha isoladamente, com limite de
-  tentativas, e só resolve a falha com prova atual. Siga o guard atual
+- Siga \`developmentPolicy.previousFailures=repair_before_request\`: o próprio agente
+  de desenvolvimento corrige as falhas anteriores, inclusive segurança/RLS/migrations.
+  Evidência antiga não prova falha atual: confira os arquivos e preserve trabalho novo.
+  Pode corrigir testes defeituosos preservando assertions, comportamento e requisitos;
+  nunca remova provas, diminua cobertura ou enfraqueça gates para obter aprovação.
+  Confirme a correção com \`node node_modules/supremo-cli/dist/bin.js turn recovery-check\`,
+  que verifica tipos, lint e testes locais em snapshot isolado. As demais provas,
+  a suíte completa e a CI continuam em
+  background; não faça polling nem espere CI. Só declare a falha resolvida com prova atual.
+  Pedidos explicitamente só de leitura ou para não alterar o app não iniciam correções.
+  Se houver bloqueio real fora da autoridade disponível, explique a causa concreta e
+  a ação necessária; não repita apenas que há uma pendência. Siga o guard atual
   nas operações protegidas: aplicar SQL, publicar código e integrar continuam exigindo
   autorização e suas verificações. Não inicie repair-start por rotina nem contorne gates.
-- Ao alterar o app, conclua o turno e registre o checkpoint mesmo com diagnóstico comum pendente.
+- Ao alterar o app, conclua o turno e registre o checkpoint, preservando o estado real das provas.
   O daemon sincroniza o registro, verifica segredos antes de enviar código e encaminha
   a validação à CI. Mantenha provas de comportamento da feature para a execução em
   background; não use testes vazios nem reduza cobertura. Capturado, publicado e aprovado

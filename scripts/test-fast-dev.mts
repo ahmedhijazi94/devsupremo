@@ -100,7 +100,7 @@ try {
   const cold = await call('preflight', 'new-conversation', 'Mostre a data e a hora de criação no título.')
   assert.equal(cold.allowed, true)
   assert.equal(cold.state?.turn.phase, 'work')
-  assert.equal(cold.state?.context.developmentPolicy?.previousFailures, 'advisory')
+  assert.equal(cold.state?.context.developmentPolicy?.previousFailures, 'repair_before_request')
   assert.equal(cold.state?.turn.recovery?.required, true, 'Unresolved evidence must remain visible')
   const dateTitle = 'Central de chamados · 06/09/2026 20:30'
   fs.writeFileSync(file, firstSource.replace('>Central de chamados</h1>', `>${dateTitle}</h1>`))

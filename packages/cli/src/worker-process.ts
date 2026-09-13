@@ -48,7 +48,7 @@ export function runWorkerProcess(executable: string, args: readonly string[], op
       const stdout = Buffer.concat(stdoutChunks).toString('utf8'), stderr = Buffer.concat(stderrChunks).toString('utf8')
       clearTimeout(timeout); if (force && !failure) clearTimeout(force)
       options.signal?.removeEventListener('abort', abort)
-      if (failure) { reject(failure); return }
+      if (failure) { reject(Object.assign(failure, { stdout, stderr })); return }
       if (code !== 0) { reject(Object.assign(new Error(`Worker terminou com código ${code ?? 'sinal'}.`), { stdout, stderr })); return }
       resolve({ stdout, stderr })
     })

@@ -602,9 +602,10 @@ describe('secrets pelo formulário do projeto, sem valores no agente', () => {
       expect(file(target)).toContain('secrets status')
     }
   })
-  it('falhas antigas não impedem preparar correções em dev; execução e integração continuam protegidas', () => {
+  it('falhas confirmadas são corrigidas pelo agente antes do pedido; execução e integração continuam protegidas', () => {
     const guide = norm(file('.supremo/DEVELOPMENT.md'))
-    expect(guide).toContain('Falhas anteriores, inclusive segurança/RLS/migrations, não bloqueiam preparar correções')
+    expect(guide).toContain('developmentPolicy.previousFailures=repair_before_request')
+    expect(guide).toContain('corrige as causas confirmadas antes do pedido novo')
     expect(guide).toContain('A aplicação de SQL, publicação e integração continuam sujeitas à autoridade e aos gates atuais')
     expect(guide).toContain('Não inicie repair-start por rotina')
   })
@@ -761,7 +762,7 @@ describe('Turn Lifecycle — documentação acompanha protocolo executável', ()
     expect(doc).toMatch(/background/)
     expect(doc).toMatch(/nunca espere a CI/i)
     expect(doc).toMatch(/preview.*URL real|URL real.*preview/i)
-    expect(doc).toMatch(/revalidação|revalidar/)
+    expect(doc).toContain('turn recovery-check')
     expect(doc).toMatch(/SHA/)
     expect(doc).toMatch(/threshold/)
     expect(doc).toMatch(/RLS/)
@@ -794,14 +795,21 @@ describe('Turn Lifecycle — documentação acompanha protocolo executável', ()
     expect(doc).not.toContain('QA automático de baixo risco é autorizado')
     expect(doc).not.toContain('rode `npm run test:coverage` localmente')
   })
-  it('provides current policy without encouraging routine CLI bundle inspection or broad repair', () => {
+  it('delivers the same repair-before-request contract in every generated agent entry point', () => {
     for (const name of ['AGENTS.md', 'CLAUDE.md', '.supremo/DEVELOPMENT.md']) {
       const doc = norm(file(name))
       expect(doc).toContain('preview')
       expect(doc).toContain('background')
-      expect(doc).toMatch(/não (?:delegue por rotina|leia o bundle)/)
-      expect(doc).not.toContain('Recovery seguro precede feature')
-      expect(doc).not.toContain('só então continue a feature')
+      expect(doc).toMatch(/não delegue .*por rotina|não leia o bundle|nem leia o bundle/i)
+      expect(doc).toContain('developmentPolicy.previousFailures=repair_before_request')
+      expect(doc).toContain('antes do pedido novo')
+      expect(doc).toContain('turn recovery-check')
+      expect(doc).toContain('snapshot isolado')
+      expect(doc).toContain('preservando assertions')
+      expect(doc).toContain('só de leitura ou para não alterar o app')
+      expect(doc).toContain('causa concreta e')
+      expect(doc).not.toContain('não obrigam o agente a consertar testes')
+      expect(doc).not.toContain('O auto-heal autorizado')
     }
   })
   it('contexto reconcilia backend, freshness, checkpoint e versão; recovery é estado', () => {

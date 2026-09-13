@@ -7,6 +7,7 @@ import { blobHash, lockEntryHash } from '../../../packages/cli/src/validation-in
 import { selectTrustedWorkflow, verifyCandidatePolicy, verifyPolicyChanges, workflowChecks, type WorkflowEvidence } from './trusted-policy'
 import { TRUSTED_VALIDATION_POLICIES_4_0_2 } from './validation-policy-releases/4.0.2'
 import { TRUSTED_VALIDATION_POLICIES_4_0_4 } from './validation-policy-releases/4.0.4'
+import { TRUSTED_VALIDATION_POLICIES_4_0_5 } from './validation-policy-releases/4.0.5'
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'
@@ -20,6 +21,7 @@ interface ReleasedFixture {
 }
 const releasedFixture = JSON.parse(gunzipSync(readFileSync(new URL('./fixtures/validation-policy-4.0.2.json.gz', import.meta.url))).toString('utf8')) as ReleasedFixture
 const releasedFixture404 = JSON.parse(gunzipSync(readFileSync(new URL('./fixtures/validation-policy-4.0.4.json.gz', import.meta.url))).toString('utf8')) as ReleasedFixture
+const releasedFixture405 = JSON.parse(gunzipSync(readFileSync(new URL('./fixtures/validation-policy-4.0.5.json.gz', import.meta.url))).toString('utf8')) as ReleasedFixture
 function previousCandidate(kind: Kind = 'solo'): Candidate {
   return { ...releasedFixture.common, headSha: SHA, kind, truncated: false,
     tree: releasedFixture.kinds[kind].tree.map(entry => ({ ...entry })) }
@@ -27,6 +29,10 @@ function previousCandidate(kind: Kind = 'solo'): Candidate {
 function previous404Candidate(kind: Kind = 'solo'): Candidate {
   return { ...releasedFixture404.common, headSha: SHA, kind, truncated: false,
     tree: releasedFixture404.kinds[kind].tree.map(entry => ({ ...entry })) }
+}
+function previous405Candidate(kind: Kind = 'solo'): Candidate {
+  return { ...releasedFixture405.common, headSha: SHA, kind, truncated: false,
+    tree: releasedFixture405.kinds[kind].tree.map(entry => ({ ...entry })) }
 }
 function replaceMetadata(input: Candidate, path: 'package.json' | 'package-lock.json', content: string): Candidate {
   return { ...input, ...(path === 'package.json' ? { packageContent: content } : { lockContent: content }),
@@ -59,6 +65,8 @@ describe('independent engine policy over actual generated candidates', () => {
       .toBe('ac8079a1684751bcac5bbba1bdd6d4dea09d6f19a27691f58f6cd518090b11aa')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_4)).digest('hex'))
       .toBe('861344ab9f225ebe667002a61194f65ae7df144cefdf2210d1c4321925e23904')
+    expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_5)).digest('hex'))
+      .toBe('43c6b61a351ca0c4b6f0f76e9bbeb660a5165f52863da722f37b68007c564be5')
   })
   it('refuses altered CI rails before publish and allows exact engine base upgrades', () => {
     const ci = buildProjectFiles({ projectName: 'app', description: '' }).find(file => file.path === '.github/workflows/ci.yml')!
@@ -74,18 +82,18 @@ describe('independent engine policy over actual generated candidates', () => {
   it.each(['public', 'solo', 'team'] as const)('accepts intact released %s validators', kind => {
     expect(verifyCandidatePolicy(candidate(kind))).toMatchObject({ approved: true, reasons: [] })
   })
-  it.each(['public', 'solo', 'team'] as const)('keeps the actual archived 4.0.2 %s scaffold authorized after release 4.0.5', kind => {
+  it.each(['public', 'solo', 'team'] as const)('keeps the actual archived 4.0.2 %s scaffold authorized after release 4.0.6', kind => {
     expect(releasedFixture).toMatchObject({ schemaVersion: 1, templateVersion: '4.0.2',
       sourceCommit: 'ae3285a13b91d7b3931d8a80a7f0647dc4cb1c92' })
     const previous = previousCandidate(kind)
     const current = candidate(kind)
     const cliVersion = (input: Candidate): string => (JSON.parse(input.lockContent) as { packages: Record<string, { version?: string }> }).packages['tools/supremo-cli']!.version!
     expect(cliVersion(previous)).toBe('1.7.2')
-    expect(cliVersion(current)).toBe('1.7.4')
+    expect(cliVersion(current)).toBe('1.7.5')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     expect(verifyCandidatePolicy(current)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })
-  it.each(['public', 'solo', 'team'] as const)('keeps the actual archived 4.0.4 %s scaffold authorized after release 4.0.5', kind => {
+  it.each(['public', 'solo', 'team'] as const)('keeps the actual archived 4.0.4 %s scaffold authorized after release 4.0.6', kind => {
     expect(releasedFixture404).toMatchObject({ schemaVersion: 1, templateVersion: '4.0.4',
       sourceCommit: 'baf34b78cef2975ad89b43137fa01fa934d148ee' })
     const previous = previous404Candidate(kind)
@@ -93,7 +101,15 @@ describe('independent engine policy over actual generated candidates', () => {
     expect(lock.packages['tools/supremo-cli']?.version).toBe('1.7.3')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })
-  it.each([previousCandidate, previous404Candidate, candidate])('preserves full integrity for each release: versions, paths, dependencies, validators and immutable metadata', build => {
+  it.each(['public', 'solo', 'team'] as const)('keeps the actual archived 4.0.5 %s scaffold authorized after release 4.0.6', kind => {
+    expect(releasedFixture405).toMatchObject({ schemaVersion: 1, templateVersion: '4.0.5',
+      sourceCommit: 'f4acc40aa55bee2371cfc4b9a3e8aa8c9c8504cc' })
+    const previous = previous405Candidate(kind)
+    const lock = JSON.parse(previous.lockContent) as { packages: Record<string, { version?: string }> }
+    expect(lock.packages['tools/supremo-cli']?.version).toBe('1.7.4')
+    expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
+  })
+  it.each([previousCandidate, previous404Candidate, previous405Candidate, candidate])('preserves full integrity for each release: versions, paths, dependencies, validators and immutable metadata', build => {
     const input = build('solo')
     for (const edit of [
       (packages: Record<string, Record<string, unknown>>) => { packages['tools/supremo-cli']!.version = '999.0.0' },

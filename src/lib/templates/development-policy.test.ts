@@ -32,14 +32,18 @@ describe('upgrade of mixed user/platform instructions', () => {
     expect(updated).toContain('Ao alterar o app, conclua o turno')
   })
 
-  it('directs secret requests to the project form and keeps old failures out of the foreground edit loop', () => {
+  it('directs secret requests to the project form and assigns confirmed failures to the development agent', () => {
     const updated = withDevelopmentPolicy('# App\n')
     expect(updated).toContain('secrets request NOME --reason "finalidade" --target supabase --environment development')
     expect(updated).toContain('Nunca peça o valor no chat')
     expect(updated).toContain('secrets status')
     expect(updated).toContain('não iniciam QA nem exigem checkpoint')
     expect(updated).toContain('inclusive segurança/RLS/migrations')
-    expect(updated).toContain('bloqueiam preparar correções, testes, nova migration ou checkpoint em desenvolvimento')
+    expect(updated).toContain('developmentPolicy.previousFailures=repair_before_request')
+    expect(updated).toContain('corrija as causas\n  confirmadas antes do pedido novo')
+    expect(updated).toContain('turn recovery-check')
+    expect(updated).toContain('preservando assertions, comportamento e requisitos')
+    expect(updated).toContain('Pedidos explicitamente só de leitura ou para não alterar o app não iniciam correções')
     expect(updated).toContain('Não inicie repair-start por rotina nem contorne gates')
   })
 

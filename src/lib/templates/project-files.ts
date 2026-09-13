@@ -84,7 +84,8 @@ export {
 // 4.0.6: o agente resolve falhas anteriores no próximo pedido e confere a
 // correção local em cópia isolada, preservando preview e gates de publicação.
 // 4.0.7: continuação explícita da correção e diagnóstico compacto para o agente.
-export const TEMPLATE_VERSION = '4.0.7'
+// 4.0.8: títulos descritivos, diagnóstico atualizado e administração de autenticação.
+export const TEMPLATE_VERSION = '4.0.8'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '3.0.0'
@@ -2837,7 +2838,7 @@ Os wrappers em \`scripts/supremo-*-hook.mjs\` usam somente a CLI local instalada
   nas definições exigem nova confiança. Nunca altere o registro de confiança nem use
   bypass de confiança. O bootstrap não declara a instalação sozinha como automação.
   Enquanto o host não dispara hooks, o agente opera \`supremo turn preflight --host codex\`,
-  \`supremo turn mutation --host codex\` e \`supremo turn complete --host codex\`.
+  \`supremo turn mutation --host codex\` e \`supremo turn complete --host codex --summary "Descrição da alteração feita"\`.
   Esse fallback depende do agente; o usuário não opera comandos a cada pedido.
 - \`unsupported\`: adapter ausente/inválido; bootstrap declara \`not_ready\`.
 

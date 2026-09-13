@@ -25,6 +25,12 @@ const checkpoint = {
 beforeEach(() => { vi.clearAllMocks() })
 
 describe('histórico diferencia testes aprovados de integração confirmada', () => {
+  it.each(['failed', 'pending'])('does not present an old %s receipt as a current integrated-version problem', async state => {
+    mocks.limit.mockResolvedValue({ data: [{ ...checkpoint, push_status: 'integrated', integration_status: 'merged',
+      validation_feedback: { ...feedback, state, checks: [{ name: 'E2E', status: state }], summary: 'Aguardando ou falhando.' } }], error: null })
+    expect((await listProjectCheckpoints(projectId)).items?.[0]).toMatchObject({ status: 'Integrado', validationLabel: '',
+      validationSummary: 'Alteração incluída na integração do conjunto. A validação foi concluída na versão final.' })
+  })
   it('a revisão publicada aprovada aguarda integração, mesmo com status antigo ci_running', async () => {
     mocks.limit.mockResolvedValue({ data: [checkpoint], error: null })
     const result = await listProjectCheckpoints(projectId)

@@ -36,6 +36,22 @@ beforeEach(() => {
 afterEach(() => { stop?.(); stop = undefined; vi.unstubAllGlobals(); fs.rmSync(cwd, { recursive: true, force: true }) })
 
 describe('authorized database reads through the daemon', () => {
+  it('routes auth reads and explicit administration through the daemon without a local secret', async () => {
+    await runDatabaseDirect('auth-count', cwd)
+    expect(calls.at(-1)).toMatchObject({ operation: 'auth-count', expectedRef: 'owned-ref', environment: 'production' })
+    await expect(runDatabaseDirect('auth-configure', cwd, { config: { emailConfirmation: false } })).rejects.toThrow()
+    const before = calls.length
+    await expect(runDatabaseDirect('auth-configure', cwd, { environment: 'development', config: { emailConfirmation: false } })).rejects.toThrow(/diverge/)
+    expect(calls.slice(before).map(call => call.operation)).toEqual(['status'])
+    await runDatabaseDirect('auth-configure', cwd, { environment: 'production', config: { emailConfirmation: false } })
+    expect(calls.at(-1)).toMatchObject({ operation: 'auth-configure', expectedRef: 'owned-ref', environment: 'production', config: { emailConfirmation: false } })
+    expect(isDatabaseReadCommand('node node_modules/supremo-cli/dist/bin.js auth count')).toBe(true)
+    expect(isDatabaseReadCommand('supremo auth users --limit 20 --offset 40')).toBe(true)
+    expect(isDatabaseReadCommand('supremo auth config --environment development')).toBe(true)
+    expect(isDatabaseReadCommand('supremo auth delete --user-id x')).toBe(false)
+    expect(isDatabaseReadCommand('supremo auth count; echo unsafe')).toBe(false)
+    expect(() => parseDatabaseOptions('auth-count', { sql: 'SELECT 1' })).toThrow()
+  })
   it.each(['development', 'production', 'unknown'])('reads %s only with fresh status and exact target, without local .env', async target => {
     environment = target
     const result = await runDatabaseDirect('query', cwd, { sql: 'select title from public.tickets', limit: 20, offset: 40 })

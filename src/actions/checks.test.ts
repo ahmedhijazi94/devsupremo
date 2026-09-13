@@ -62,6 +62,13 @@ describe('manual merge uses complete CI proof for the exact current HEAD', () =>
     expect(mocks.pr).toHaveBeenCalledTimes(2)
     expect(mocks.merge).toHaveBeenCalledWith(expect.anything(), 1, undefined, head)
   })
+  it('distinguishes post-merge checks from checks still blocking a new PR', async () => {
+    mocks.history.mockResolvedValue({ items: [{ id: 'integrated', status: 'Integrado', prNumber: 1 }] })
+    mocks.checks.mockResolvedValue({ state: 'pending', headSha: head, checks: [] })
+    expect((await getProjectChecks(projectId)).data).toMatchObject({ state: 'pending', badgeLabel: 'Integrado — verificações finais em andamento' })
+    mocks.open.mockResolvedValue([{ ...pr(), number: 2, isAgentWork: true }])
+    expect((await getProjectChecks(projectId)).data?.badgeLabel).toBeUndefined()
+  })
   it('refuses altered validation policy even when every check is green', async () => {
     mocks.policy.mockResolvedValue({ approved: false, headSha: head, reasons: ['Validador alterado.'] })
     expect((await mergeProjectPr(projectId, 1)).error).toContain('Validador alterado')

@@ -36,13 +36,16 @@ program
   .description('Protocolo executável de turnos e validação em background')
   .option('--host <name>', 'Host que entregou o evento', 'assisted')
   .option('--full-state', 'Inclui o estado completo para diagnóstico interno')
-  .action(async (event: string, options: { host: string; fullState?: boolean }) => {
+  .option('--summary <text>', 'Descrição curta da alteração para identificar a versão no histórico')
+  .action(async (event: string, options: { host: string; fullState?: boolean; summary?: string }) => {
     const { runTurnEvent } = await import('./turn-runtime')
     const { turnAgentResponse } = await import('./turn-response')
     const fs = await import('node:fs')
     try {
       const raw = process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8')
-      const output = await runTurnEvent(event, process.cwd(), raw.trim() ? JSON.parse(raw) as unknown : {}, options.host)
+      const { hookInputSchema } = await import('./turn-runtime')
+      const input = hookInputSchema.parse(raw.trim() ? JSON.parse(raw) as unknown : {})
+      const output = await runTurnEvent(event, process.cwd(), { ...input, ...(options.summary !== undefined ? { summary: options.summary } : {}) }, options.host)
       console.log(JSON.stringify(options.fullState ? output : turnAgentResponse(output)))
     } catch (error) {
       const { sanitizeDiagnostic } = await import('../../../src/lib/checkpoint/feedback')
@@ -329,7 +332,7 @@ program
     try {
       const { databaseOperationSchema, parseDatabaseOptions } = await import('./database-request')
       const selected = databaseOperationSchema.parse(operation)
-      if (selected.startsWith('cron-') || selected.startsWith('secrets-')) throw new Error('Use os comandos jobs ou secrets para esta operação.')
+      if (selected.startsWith('cron-') || selected.startsWith('secrets-') || selected.startsWith('auth-')) throw new Error('Use os comandos jobs, secrets ou auth para esta operação.')
       if (sql !== undefined && options.sql !== undefined) throw new Error('Forneça SQL por argumento ou --sql, uma única vez.')
       const args: Record<string, unknown> = { ...options, ...(sql !== undefined ? { sql } : {}) }
       for (const key of ['limit', 'offset', 'minutes']) if (args[key] !== undefined) args[key] = Number(args[key])
@@ -340,6 +343,27 @@ program
       console.error(error instanceof Error ? error.message : 'Falha ao acessar o banco.')
       process.exitCode = 1
     }
+  })
+
+program
+  .command('auth <operation>')
+  .description('Administração do Supabase: count, users, config, configure, create, update, delete')
+  .option('--environment <environment>', 'Ambiente esperado; obrigatório para alterações: development ou production')
+  .option('--limit <number>', 'Quantidade de usuários por página (1–200)')
+  .option('--offset <number>', 'Deslocamento da página (0–10000)')
+  .option('--user-id <uuid>', 'Usuário específico a alterar ou excluir')
+  .option('--email <email>', 'Email do usuário a criar')
+  .option('--email-confirmed', 'Criar usuário com email confirmado, somente quando solicitado')
+  .option('--config <json>', 'Ajuste de login: emailConfirmation, signupsEnabled, anonymousSignIns, siteUrl')
+  .option('--user <json>', 'Ajuste do usuário: email, emailConfirmed:true, banHours (0 desbloqueia)')
+  .action(async (operation: string, options: Record<string, unknown>) => {
+    const { authOperationSchema } = await import('../../../src/lib/database-admin/options')
+    const { parseDatabaseOptions } = await import('./database-request')
+    const { runDatabase } = await import('./database')
+    const selected = authOperationSchema.parse(`auth-${operation}`)
+    for (const key of ['limit', 'offset']) if (options[key] !== undefined) options[key] = Number(options[key])
+    for (const key of ['config', 'user']) if (typeof options[key] === 'string') options[key] = JSON.parse(options[key]) as unknown
+    console.log(JSON.stringify(await runDatabase(selected, process.cwd(), parseDatabaseOptions(selected, options))))
   })
 
 guardUnknownCommand(process.argv.slice(2))

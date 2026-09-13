@@ -15,17 +15,21 @@ import { UnsafeSqlError } from '@/lib/database/sql-guard'
 import { jobsRequestSchema, jobOperationSchema, isReadJobOperation, type JobsRequest } from '@/lib/database-jobs/policy'
 import { JobsError, supabaseJobsProvider } from '@/lib/database-jobs/provider'
 import { requireJobTarget, runJobs } from '@/lib/database-jobs/service'
+import { authRequestSchema, authOperationSchema, authOptionsSchema, isAuthRead, type AuthRequest } from '@/lib/database-admin/options'
+import { requireAuthTarget, runAuthAdmin } from '@/lib/database-admin/service'
+import { supabaseAuthAdminProvider } from '@/lib/database-admin/provider'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 const isJobsRequest = (body: { operation: string }): body is JobsRequest => jobOperationSchema.safeParse(body.operation).success
+const isAuthRequest = (body: { operation: string }): body is AuthRequest => authOperationSchema.safeParse(body.operation).success
 
 export async function POST(request: NextRequest): Promise<Response> {
   const headers = { 'Cache-Control': 'no-store' }
   let json: unknown
   try { json = await boundedJson(request, 1_000_000) }
   catch (error) { return Response.json({ error: error instanceof InspectionError && error.status === 413 ? 'Payload excede o limite.' : 'JSON inválido.' }, { status: error instanceof InspectionError && error.status === 413 ? 413 : 400, headers }) }
-  const parsed = z.union([databaseRequestSchema, inspectionRequestSchema, jobsRequestSchema]).safeParse(json)
+  const parsed = z.union([databaseRequestSchema, inspectionRequestSchema, jobsRequestSchema, authRequestSchema]).safeParse(json)
   if (!parsed.success) return Response.json({ error: 'Payload inválido.' }, { status: 400 })
   const body = parsed.data
   const client = createServiceClient()
@@ -40,6 +44,35 @@ export async function POST(request: NextRequest): Promise<Response> {
     const state = await verify()
     if (body.operation === 'status') {
       return Response.json(describeEnvironment(state.record, state.linkedRef), { headers: { 'Cache-Control': 'no-store' } })
+    }
+    if (isAuthRequest(body)) {
+      const { deviceSecret, projectId, expectedRef, ...rawOptions } = body
+      const options = authOptionsSchema.parse(rawOptions)
+      const identity = requireAuthTarget(state.record, state.linkedRef, body)
+      const secrets = [deviceSecret]
+      const authorize = async () => {
+        const fresh = await authenticateDeviceSecret(supabaseCheckpointDeviceStore(client), deviceSecret)
+        if (!fresh.ok || fresh.device.ownerUserId !== ownerId) throw new InspectionError('Dispositivo não autorizado.', 401)
+        const project = await getProject(ownerId, projectId)
+        requireAuthTarget(await readEnvironment(client, project.id), project.supabase_project_ref, { ...body, expectedRef })
+        return project
+      }
+      const initialProject = await authorize()
+      const provider = supabaseAuthAdminProvider(async () => {
+        const project = await authorize()
+        if (project.supabase_account_id !== initialProject.supabase_account_id) throw new InspectionError('Conta do banco mudou.', 409)
+        const credentials = await getSupabaseCredentials(ownerId, project)
+        const current = await authorize()
+        if (credentials.projectRef !== identity.projectRef || current.supabase_account_id !== initialProject.supabase_account_id)
+          throw new InspectionError('Vínculo do banco mudou.', 409)
+        return credentials
+      }, secrets)
+      const result = await runAuthAdmin(provider, options)
+      const evidence = redactInspection(result, secrets)
+      return Response.json({ projectId, projectRef: identity.projectRef, environment: identity.environment,
+        operation: body.operation, readOnly: isAuthRead(body.operation), observedAt: new Date().toISOString(),
+        untrustedData: true, data: evidence.value, redacted: evidence.redacted, truncated: evidence.truncated,
+      }, { headers })
     }
     if (isJobsRequest(body)) {
       const identity = requireJobTarget(state.record, state.linkedRef, body)
@@ -128,6 +161,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     }, body.expectedRef, body.operation, body.migrations)
     return Response.json(result)
   } catch (error) {
+    if (isAuthRequest(body)) return Response.json({ error: error instanceof InspectionError ? error.message : 'Administração de autenticação não confirmada. Verifique o vínculo, o ambiente e as permissões do projeto.' }, { status: error instanceof InspectionError ? error.status : 409, headers })
     if (isJobsRequest(body)) return Response.json({ error: error instanceof JobsError ? error.message : 'Operação de jobs não autorizada ou vínculo/ambiente alterado. Consulte db status e verifique as permissões do projeto.' }, { status: error instanceof JobsError ? error.status : 409, headers })
     if ('environment' in body) return Response.json({ error: error instanceof InspectionError || error instanceof UnsafeSqlError ? error.message : 'Leitura não autorizada ou vínculo/ambiente alterado. Consulte db status e verifique as permissões do projeto.' }, { status: error instanceof InspectionError ? error.status : 409, headers })
     return Response.json({ error: error instanceof Error ? error.message : 'Falha ao preparar o banco.' }, { status: 409 })

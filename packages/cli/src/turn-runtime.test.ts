@@ -66,6 +66,22 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); fs.rmSync(cwd, { force: true, recursive: true }) })
 
 describe('validation evidence is bound to the executed isolated snapshot', () => {
+  it('records the actual change title in assisted mode and lets hook-wrapped complete finish without a mutation lease', async () => {
+    await runTurnEvent('preflight', cwd, {}, 'assisted', deps)
+    change()
+    const input = { tool_name: 'Bash', tool_use_id: 'title-command', tool_input: { command: 'node node_modules/supremo-cli/dist/bin.js turn complete --summary "Botões em azul"' } }
+    expect((await runTurnEvent('before-mutation', cwd, input, 'assisted', deps)).allowed).toBe(true)
+    expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toBeNull()
+    expect((await runTurnEvent('complete', cwd, { summary: 'Botões em azul' }, 'assisted', deps)).allowed).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)?.summary).toBe('Botões em azul')
+    expect((await runTurnEvent('mutation', cwd, input, 'assisted', deps)).allowed).toBe(true)
+  })
+  it('uses changed paths instead of a generic title when the host supplied neither prompt nor summary', async () => {
+    await runTurnEvent('preflight', cwd, {}, 'assisted', deps)
+    change()
+    await runTurnEvent('complete', cwd, {}, 'assisted', deps)
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)?.summary).toBe('Alterações em src/card.ts')
+  })
   it.each(['passed', 'failed'] as const)('executes the real E2E acceptance paths outside src/ and records %s proofs', async (expected) => {
     fs.appendFileSync(path.join(cwd, '.gitignore'), 'node_modules\n')
     fs.symlinkSync(path.resolve('../../node_modules'), path.join(cwd, 'node_modules'), 'dir')

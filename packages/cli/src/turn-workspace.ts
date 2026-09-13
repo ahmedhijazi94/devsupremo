@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { checkpointTitle } from '../../../src/lib/checkpoint/presentation'
 import { readSyncedRemoteState, resolveParentCheckpointId } from './sync'
 import { buildCheckpointRecord, defaultCheckpointDeps, type CheckpointRecord } from './checkpoint'
 
@@ -102,12 +103,13 @@ export function captureTurnCheckpoint(cwd: string, input: {
     try { gitText(cwd, ['merge-base', '--is-ancestor', previous.workspaceHeadSha, snapshot.headSha]) }
     catch { throw new Error('Histórico local divergente; sincronização necessária antes do checkpoint.') }
   }
-  const sha = gitText(cwd, ['commit-tree', snapshot.treeSha, '-p', parent, '-m', `checkpoint: ${input.summary}`])
-  const changedPaths = gitText(cwd, ['diff', '--name-only', '-z', parent, sha]).split('\0').filter(Boolean)
+  const changedPaths = gitText(cwd, ['diff', '--name-only', '-z', parent, snapshot.treeSha]).split('\0').filter(Boolean)
+  const summary = checkpointTitle(input.summary, changedPaths)
+  const sha = gitText(cwd, ['commit-tree', snapshot.treeSha, '-p', parent, '-m', `checkpoint: ${summary}`])
   const record: CheckpointRecord = { ...buildCheckpointRecord({
     checkpointId: crypto.randomUUID(), projectId: input.projectId, commitSha: sha,
     parentCheckpointId: resolveParentCheckpointId(queue, readSyncedRemoteState(cwd)), createdAt: new Date().toISOString(),
-    summary: input.summary, changedPaths,
+    summary, changedPaths,
   }), turnId: input.turnId, environment: input.environment, treeSha: snapshot.treeSha,
     workspaceHeadSha: snapshot.headSha, validationStatus: 'pending', ...(input.draft ? { draft: true } : {}) }
   // Keep detached snapshots reachable through Git GC, before durable queue append.

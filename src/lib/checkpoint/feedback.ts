@@ -34,6 +34,7 @@ export type ValidationFeedback = z.infer<typeof validationFeedbackSchema>
 export const feedbackEnvelopeSchema = z.object({
   current: validationFeedbackSchema.nullable(),
   previousFailure: validationFeedbackSchema.nullable(),
+  lastSuccess: validationFeedbackSchema.nullable().optional(),
 })
 export type FeedbackEnvelope = z.infer<typeof feedbackEnvelopeSchema>
 

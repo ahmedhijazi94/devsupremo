@@ -24,6 +24,7 @@ import { evidenceFor, localEvidenceSchema, localValidationMode, requestCheckpoin
 export const hookInputSchema = z.object({
   session_id: z.string().max(200).optional(), hook_event_name: z.string().max(100).optional(),
   cwd: z.string().optional(), prompt: z.string().max(100_000).optional(),
+  summary: z.string().trim().min(1).max(180).optional(),
   tool_name: z.string().max(200).optional(), tool_input: z.record(z.string(), z.unknown()).optional(),
   tool_use_id: z.string().max(200).optional(), agent_id: z.string().max(200).optional(),
   stop_hook_active: z.boolean().optional(), supremo_host_pid: z.number().int().positive().optional(),
@@ -77,7 +78,7 @@ function save(cwd: string, state: RuntimeState, event: string): void {
 
 function link(record: CheckpointRecord): CheckpointLink {
   return { projectId: record.projectId, checkpointId: record.checkpointId, commitSha: record.commitSha,
-    publishedSha: null, environment: record.environment ?? 'unknown', createdAt: record.createdAt,
+    publishedSha: null, environment: record.environment ?? 'unknown', createdAt: record.createdAt, parentCheckpointId: record.parentCheckpointId,
     ...(record.treeSha ? { fingerprint: record.treeSha } : {}) }
 }
 function snapshot(cwd: string, projectId: string, environment: WorkspaceSnapshot['environment']): WorkspaceSnapshot {
@@ -163,7 +164,7 @@ function localFeedback(cwd: string, queue: CheckpointRecord[], remote: FeedbackE
   if (!failure.failures.length) failure.failures.push({ name: /falhou em: ([^\n]+)/.exec(evidence.logs)?.[1] ?? 'local validation', category: 'code' })
   // A newer remote result for this checkpoint supersedes the older local receipt.
   if (remote?.current?.checkpointId === latest.checkpointId && remote.current.observedAt >= evidence.finishedAt) return remote
-  return { current: remote?.current ?? failure, previousFailure: [failure, remote?.previousFailure]
+  return { ...remote, current: remote?.current ?? failure, previousFailure: [failure, remote?.previousFailure]
     .filter((item): item is typeof failure => item?.state === 'failed').sort((a, b) => b.observedAt.localeCompare(a.observedAt))[0] ?? null }
 }
 
@@ -254,7 +255,7 @@ async function preflight(cwd: string, input: HookInput, host: string, deps: Runt
   const editAllowed = freshness === 'fresh' && environment === 'development'
   const allowed = freshness === 'fresh'
   const state: RuntimeState = { readOnly: !editAllowed, diagnosticRead: false, mutationAttempted: false, initialWorkspace: { headSha: workspace.headSha, fingerprint: workspace.fingerprint }, host, sessionId: input.session_id ?? 'assisted', hostPid: input.supremo_host_pid ?? null, context,
-    managedRepair: false, repairCheckpointId: previous?.repairCheckpointId ?? null, summary: sanitizeDiagnostic(input.prompt ?? 'Unidade de trabalho').replace(/\s+/g, ' ').slice(0, 180),
+    managedRepair: false, repairCheckpointId: previous?.repairCheckpointId ?? null, summary: sanitizeDiagnostic(input.summary ?? input.prompt ?? 'Unidade de trabalho').replace(/\s+/g, ' ').slice(0, 180),
     turn: { version: 1, turnId, projectId: cfg.projectId, environment, phase: 'work',
       startedAt: now, updatedAt: now, workspace, recovery, acceptanceCriteria: [], validations: [], checkpointId: null,
       integrationMode: context.integrationMode, status: editAllowed ? 'active' : 'blocked' } }
@@ -432,6 +433,7 @@ function settleRepair(cwd: string, state: RuntimeState): void {
 function isLifecycleCommand(input: HookInput): boolean {
   const raw = input.tool_input?.command ?? input.tool_input?.cmd
   const command = typeof raw === 'string' ? raw.trim() : ''
+  if (/^(?:node (?:[^\s]+\/)?supremo-cli\/dist\/bin\.js|supremo) turn complete(?: --host (?:codex|claude-code|assisted))? --summary (?:"[^"$`\\\r\n]+"|'[^'\\\r\n]+')$/.test(command)) return true
   return /^(?:node (?:[^\s]+\/)?(?:supremo-cli\/dist\/bin\.js|supremo)|supremo) turn (?:status|validate|recovery-check|repair-start|repair-complete)(?: --host (?:codex|claude-code|assisted))?$/.test(command)
 }
 function isDiagnosticTool(input: HookInput): boolean {
@@ -550,6 +552,7 @@ export async function runTurnEvent(event: string, cwd: string, raw: unknown = {}
       return result(decision.allowed, state, decision.reason ?? undefined)
     }
     if (event === 'mutation') {
+      if (isLifecycleCommand(input)) return result(true, state)
       if (isDiagnosticTool(input)) {
         state.turn.updatedAt = new Date().toISOString()
         state.diagnosticRead = true
@@ -617,7 +620,7 @@ export async function runTurnEvent(event: string, cwd: string, raw: unknown = {}
       if (contractRaw !== null) state.turn.acceptanceCriteria = acceptanceContractSchema.parse(contractRaw).criteria
     }
     const record = captureTurnCheckpoint(cwd, { projectId: state.turn.projectId, turnId: state.turn.turnId,
-      environment: state.turn.environment, summary: event === 'repair-complete' ? 'Correção de validação pendente' : state.summary })
+      environment: state.turn.environment, summary: input.summary ?? (event === 'repair-complete' ? 'Correção de validação pendente' : state.summary) })
     if (event === 'repair-complete') {
       if (!record) return result(false, state, 'Reparo sem alteração verificável.')
       requestCheckpointValidation(cwd, record)

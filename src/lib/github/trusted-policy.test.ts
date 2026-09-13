@@ -9,6 +9,7 @@ import { TRUSTED_VALIDATION_POLICIES_4_0_2 } from './validation-policy-releases/
 import { TRUSTED_VALIDATION_POLICIES_4_0_4 } from './validation-policy-releases/4.0.4'
 import { TRUSTED_VALIDATION_POLICIES_4_0_5 } from './validation-policy-releases/4.0.5'
 import { TRUSTED_VALIDATION_POLICIES_4_0_6 } from './validation-policy-releases/4.0.6'
+import { TRUSTED_VALIDATION_POLICIES_4_0_7 } from './validation-policy-releases/4.0.7'
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'
@@ -62,6 +63,7 @@ describe('independent engine policy over actual generated candidates', () => {
       .toBe('73a1698a206c284dd66eaf835edf855e574a16abba9eea9774de8a1e73cba161')
   })
   it('pins the complete historical authority to its recorded immutable release contents', () => {
+    expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_7)).digest('hex')).toBe('3b4a199e3b414ee51691026d0b1db3db96e3f6b17a240ad69e06ed752494d4cf')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_6)).digest('hex'))
       .toBe('4342233dc49919270c2c33093b0f7afcda7a952333e240136b4c5c72b0591ae8')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_2)).digest('hex'))
@@ -82,6 +84,13 @@ describe('independent engine policy over actual generated candidates', () => {
     expect(verifyPolicyChanges(null, [{ path: 'app/page.tsx', op: 'modify', contentBase64: '' }])).toEqual([])
     expect(verifyPolicyChanges('unknown', [])).not.toEqual([])
   })
+  it.each(['public', 'solo', 'team'] as const)('preserves the actual 4.0.7 %s project and refuses a modified old validator', kind => {
+    const fixture = JSON.parse(gunzipSync(readFileSync(new URL('./fixtures/validation-policy-4.0.7.json.gz', import.meta.url))).toString('utf8')) as ReleasedFixture
+    expect(fixture.sourceCommit).toBe('ec851c7fa6461a1ccafae210b06f580c1b902071')
+    const input = { ...fixture.common, headSha: SHA, kind, truncated: false, tree: fixture.kinds[kind].tree }
+    expect(verifyCandidatePolicy(input)).toMatchObject({ approved: true, reasons: [] })
+    expect(verifyCandidatePolicy({ ...input, tree: input.tree.map(entry => entry.path === 'e2e/smoke.spec.ts' ? { ...entry, sha: '0'.repeat(40) } : entry) }).approved).toBe(false)
+  })
   it.each(['public', 'solo', 'team'] as const)('accepts intact released %s validators', kind => {
     expect(verifyCandidatePolicy(candidate(kind))).toMatchObject({ approved: true, reasons: [] })
   })
@@ -92,7 +101,7 @@ describe('independent engine policy over actual generated candidates', () => {
     const current = candidate(kind)
     const cliVersion = (input: Candidate): string => (JSON.parse(input.lockContent) as { packages: Record<string, { version?: string }> }).packages['tools/supremo-cli']!.version!
     expect(cliVersion(previous)).toBe('1.7.2')
-    expect(cliVersion(current)).toBe('1.7.6')
+    expect(cliVersion(current)).toBe('1.7.7')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     expect(verifyCandidatePolicy(current)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })

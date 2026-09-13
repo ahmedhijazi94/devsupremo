@@ -77,7 +77,9 @@ export {
 // padrão (sem enxurrada de PR). Webhook ignora PR fora do namespace supremo/ (bot
 // nunca contamina integration_state nem é auto-mergeada). Histórico + Restore no
 // próprio Supremo (migration 017, NÃO aplicada).
-export const TEMPLATE_VERSION = '4.0.3'
+// 4.0.4: preview tolera cookies compartilhados entre projetos locais e recupera
+// overflow de headers em navegações seguras, sem reiniciar nem limpar sessões.
+export const TEMPLATE_VERSION = '4.0.4'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '3.0.0'
@@ -749,6 +751,7 @@ supabase/.branches/
 .supremo/preview.health.json
 .supremo/preview.health.json.*.tmp
 .supremo/preview.instance
+.supremo/preview-http/
 
 # Supremo v3.1: estado por-máquina do checkpoint daemon — fila de checkpoints,
 # pid/log do daemon e worktree efêmera de integração. NUNCA guarda secret (o

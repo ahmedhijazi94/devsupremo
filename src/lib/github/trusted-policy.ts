@@ -10,7 +10,9 @@ export interface ValidationAuthority { approved: boolean; headSha: string; reaso
 // policy by declaring a version, and future generator output is not implicitly
 // approved here. The archived release has no dependency on the current manifest.
 const releasedPolicies: readonly ValidationManifest[] = [
-  ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.3'),
+  // 4.0.4 altera apenas o supervisor local. Os hashes dos validadores, scripts
+  // e dependências são idênticos aos de 4.0.3, preservando os projetos existentes.
+  ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.4'),
   ...TRUSTED_VALIDATION_POLICIES_4_0_2,
 ]
 function policiesForKind(kind: string | null): readonly ValidationManifest[] {

@@ -1,5 +1,6 @@
 import { preCommitHook, prePushHook } from '../../../packages/cli/src/git-hooks'
 import { recoveryContextScript } from './recovery-context'
+import { previewHttpRecoveryScript } from './preview-http-recovery'
 import { claudeHookSettings, codexHookSettings, turnHookScript } from '../../../packages/cli/src/host-adapters'
 import {
   BROAD_FILE_COUNT,
@@ -566,12 +567,33 @@ function decide(pidAlive, healthy) {
 function startDetached(port) {
   mkdirSync(DIR, { recursive: true })
   const out = openSync(LOG, 'a')
+  // Browsers compartilham cookies de localhost entre projetos/portas. O limite
+  // padrão de 16 KiB rejeita a navegação com HTTP 431 antes de chegar ao app.
+  // Só o processo de desenvolvimento recebe 64 KiB; uma opção explícita vence.
+  const nodeOptions = process.env.NODE_OPTIONS || ''
+  const hasHeaderLimit = /(?:^|\\s)"?--max[-_]http[-_]header[-_]size(?:=|\\s|"|$)/.test(nodeOptions)
+  const development = !process.env.NODE_ENV || process.env.NODE_ENV === 'development'
+  const recovery = development && !hasHeaderLimit
+  let previewOptions = nodeOptions
+  if (recovery) {
+    const recoveryDir = join(DIR, 'preview-http')
+    mkdirSync(recoveryDir, { recursive: true })
+    const preload = join(recoveryDir, 'recovery.cjs')
+    writeFileSync(preload, ${JSON.stringify(previewHttpRecoveryScript())}, { mode: 0o600 })
+    previewOptions = [nodeOptions, '--max-http-header-size=65536', '--require=' + JSON.stringify(preload)].filter(Boolean).join(' ')
+  }
   // DESACOPLADO do pai: sobrevive ao fim do turno/comando do agente.
   const child = spawn('npm', ['run', 'dev', '--', '--port', String(port)], {
     cwd: ROOT,
     detached: true,
     stdio: ['ignore', out, out],
-    env: { ...process.env, PORT: String(port) },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: process.env.NODE_ENV || 'development',
+      SUPREMO_PREVIEW_HTTP_RECOVERY: recovery ? '1' : '0',
+      NODE_OPTIONS: previewOptions,
+    },
   })
   child.unref()
   // NÃO grava PIDFILE/PORTFILE aqui — só depois que ensure() confirmar via

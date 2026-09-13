@@ -101,7 +101,7 @@ export interface TurnContext {
   securityState: 'safe' | 'unsafe' | 'unknown'
   integrationMode: IntegrationMode
   reconciliation: { status: 'fresh' | 'offline' | 'invalid'; observedAt: string }
-  developmentPolicy?: { validation: 'on_request' | 'background_adaptive'; previousFailures: 'none' | 'advisory' | 'blocking' }
+  developmentPolicy?: { validation: 'on_request' | 'background_adaptive'; previousFailures: 'none' | 'advisory' | 'blocking' | 'repair_before_request' }
 }
 
 export const turnStateSchema = z.object({

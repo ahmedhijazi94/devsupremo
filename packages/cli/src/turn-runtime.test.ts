@@ -270,7 +270,7 @@ describe('fast development from the real E2E regressions', () => {
     await runTurnEvent('preflight', cwd, hook, 'codex', deps); change(); await runTurnEvent('complete', cwd); failRemote()
     remote.feedback.current!.failures = [{ name: category, category: 'security' }]
     const opened = await runTurnEvent('preflight', cwd, { ...hook, prompt: 'Corrija a vulnerabilidade e adicione a migration e a regressão.' }, 'codex', deps)
-    expect(opened.context).toMatchObject({ permissions: { editing: true }, developmentPolicy: { previousFailures: 'advisory' } })
+    expect(opened.context).toMatchObject({ permissions: { editing: true }, developmentPolicy: { previousFailures: 'repair_before_request' } })
     expect(opened.state?.turn.phase).toBe('work')
     expect(opened.projectHealth).toBe('developing')
     for (const file of ['src/authorization.ts', 'supabase/migrations/20260907010000_fix_owner.sql', 'tests/owner-regression.test.ts']) {
@@ -397,19 +397,19 @@ describe('fast development from the real E2E regressions', () => {
     expect(fs.readFileSync(path.join(cwd, '.git/index'))).toEqual(index)
   })
 
-  it('delivers and checkpoints date changes across a fresh conversation despite old typecheck and E2E failures', async () => {
+  it('requires the previous local correction during a normal request while remote E2E stays independent', async () => {
     await runTurnEvent('preflight', cwd, hook, 'codex', deps)
     change(); await runTurnEvent('complete', cwd); failRemote()
     remote.feedback.current!.failures = [{ name: 'typecheck', category: 'code' }, { name: 'browser E2E', category: 'code' }]
     const cold = await runTurnEvent('preflight', cwd, { ...hook, session_id: 'new-conversation', prompt: 'Mostre a data e hora.' }, 'codex', deps)
     expect(cold.allowed).toBe(true)
-    expect(cold.state?.context.developmentPolicy).toEqual({ validation: 'on_request', previousFailures: 'advisory' })
+    expect(cold.state?.context.developmentPolicy).toEqual({ validation: 'on_request', previousFailures: 'repair_before_request' })
     expect(cold.state?.turn.recovery).toMatchObject({ required: true, attempts: 0 })
     expect((await runTurnEvent('before-mutation', cwd, { tool_name: 'Write', tool_input: { file_path: 'src/card.ts' } })).allowed).toBe(true)
     fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const createdAt = "2026-09-07T00:00:00Z";')
-    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
-    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(2)
-    expect((await runTurnEvent('status', cwd)).projectHealth).toBe('needs_attention')
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(false)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
+    expect((await runTurnEvent('status', cwd)).state?.turn.recovery?.required).toBe(true)
   })
 
   it('does not launch QA or parse obsolete acceptance contracts during normal saves/completion; explicit validate runs QA', async () => {
@@ -442,5 +442,130 @@ describe('fast development from the real E2E regressions', () => {
     expect(proof.checks).toEqual([{ name: 'secret scan', type: 'security', status: 'failed' }])
     expect(JSON.stringify(proof)).not.toContain(secret)
     expect(blocked.pushStatus).toBe('local')
+  })
+})
+
+describe('foreground recovery before the next ordinary request', () => {
+  async function pending() {
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    change(); await runTurnEvent('complete', cwd); failRemote()
+    remote.feedback.current!.failures = [{ name: 'typecheck', category: 'code' }]
+    return runTurnEvent('preflight', cwd, { ...hook, prompt: 'Mude apenas os botões para azul.' }, 'codex', deps)
+  }
+  const proof: NonNullable<RuntimeDeps['verifyRecovery']> = async (root, record, types) => ({
+    id: crypto.randomUUID(), projectId: record.projectId, checkpointId: record.checkpointId,
+    sha: record.commitSha, fingerprint: record.treeSha!, baseSha: gitText(root, ['rev-parse', `${record.commitSha}^`]),
+    environment: 'development', status: 'passed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    summary: 'Conferência parcial', logs: '', checks: types.map(type => ({ name: type, type, status: 'passed' })),
+    criterionIds: [], acceptanceCriteria: [],
+  })
+  it('rejects cosmetic-only completion, accepts verified test corrections, and neither publishes partial proof nor replays the old failure', async () => {
+    const opened = await pending()
+    expect(opened.context).toMatchObject({ developmentPolicy: { previousFailures: 'repair_before_request' } })
+    fs.writeFileSync(path.join(cwd, 'src/colors.css'), 'button { background: blue }')
+    const denied = await runTurnEvent('complete', cwd)
+    expect(denied.allowed).toBe(false); expect(denied.reason).toContain('recovery-check')
+    expect(denied.state?.turn.status).toBe('active')
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
+    expect((await runTurnEvent('before-mutation', cwd, { tool_name: 'Write', tool_input: { file_path: 'tests/gate.test.ts' } })).allowed).toBe(true)
+    fs.writeFileSync(path.join(cwd, 'tests/gate.test.ts'), 'export const gate: boolean = true;\n')
+    const verifier = vi.fn(proof)
+    const command = { tool_name: 'exec_command', tool_input: { cmd: 'node node_modules/supremo-cli/dist/bin.js turn recovery-check --host codex' }, tool_use_id: 'verify-recovery' }
+    expect((await runTurnEvent('before-mutation', cwd, command)).allowed).toBe(true)
+    expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toBeNull()
+    const checked = await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery: verifier })
+    expect(checked.allowed).toBe(true); expect(verifier).toHaveBeenCalledOnce()
+    await runTurnEvent('mutation', cwd, command)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
+    expect((await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery: verifier })).allowed).toBe(true)
+    expect(verifier).toHaveBeenCalledOnce()
+    const completed = await runTurnEvent('complete', cwd)
+    expect(completed.allowed).toBe(true)
+    expect(completed.state?.turn.recovery).toMatchObject({ required: false, status: 'resolved' })
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)).toMatchObject({ validationStatus: 'pending', pushStatus: 'local' })
+    expect((await runTurnEvent('preflight', cwd, hook, 'codex', deps)).state?.turn.recovery?.required).toBe(false)
+  })
+  it.each(['failed', 'wrong-sha', 'changed-workspace', 'missing-check', 'deferred'] as const)('never accepts %s as recovery proof', async scenario => {
+    await pending(); fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const card = 3;\n')
+    const checked = await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery: async (...args) => {
+      const result = await proof(...args)
+      if (scenario === 'failed' || scenario === 'deferred') result.status = scenario
+      if (scenario === 'wrong-sha') result.sha = 'a'.repeat(40)
+      if (scenario === 'missing-check') result.checks = []
+      if (scenario === 'changed-workspace') fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const card = 4;\n')
+      return result
+    } })
+    expect(checked.allowed).toBe(false)
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(false)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
+  })
+  it('invalidates a scoped proof after another edit before completion', async () => {
+    await pending(); fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const card = 3;\n')
+    expect((await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery: proof })).allowed).toBe(true)
+    fs.writeFileSync(path.join(cwd, 'src/colors.css'), 'button { background: blue }')
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(false)
+  })
+  it('does not repair, validate or capture a read-only question, or a production workspace', async () => {
+    await pending(); const verifyRecovery = vi.fn(proof)
+    const query = { tool_name: 'exec_command', tool_input: { cmd: 'git status --short' }, tool_use_id: 'query' }
+    await runTurnEvent('before-mutation', cwd, query)
+    await runTurnEvent('mutation', cwd, query)
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
+    remote.environment = 'production'; await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    expect((await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery })).allowed).toBe(false)
+    expect(verifyRecovery).not.toHaveBeenCalled()
+  })
+  it('ends with a concrete infrastructure blocker without resolving the failure or approving upload', async () => {
+    await pending(); fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const card = 3;\n')
+    const checked = await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery: async (...args) => ({
+      ...await proof(...args), status: 'failed', logs: 'typescript executable unavailable',
+      checks: [{ name: 'missing executable', type: 'external_dependency', status: 'failed' }],
+    }) })
+    expect(checked.allowed).toBe(false)
+    const ended = await runTurnEvent('complete', cwd)
+    expect(ended.allowed).toBe(true); expect(ended.reason).toContain('não concluída')
+    expect(ended.state?.turn.recovery?.required).toBe(true)
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)).toMatchObject({ validationStatus: 'pending', pushStatus: 'local' })
+  })
+
+  it('settles an older failure from later full evidence for the exact current workspace', async () => {
+    await pending(); fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const card = 3;\n')
+    const record = capture(); const evidence = await proof(cwd, record, ['typecheck'])
+    writeJson(path.join(cwd, '.supremo/validation', `${evidence.id}.json`), evidence)
+    defaultCheckpointDeps(cwd).appendQueue({ ...record, validationStatus: 'passed', validationId: evidence.id })
+    expect((await runTurnEvent('status', cwd)).state?.turn.recovery).toMatchObject({ required: false, status: 'resolved' })
+    expect((await runTurnEvent('complete', cwd)).allowed).toBe(true)
+  })
+
+  it('does not resolve an authorization audit from a passing secret scan of the current workspace', async () => {
+    await pending()
+    remote.feedback.current!.failures = [{ name: 'Authorization audit', category: 'security' }]
+    await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const card = 3;\n')
+    const record = capture()
+    const evidence = { ...await proof(cwd, record, ['security']),
+      checks: [{ name: 'secret scan', type: 'security' as const, status: 'passed' as const }] }
+    writeJson(path.join(cwd, '.supremo/validation', `${evidence.id}.json`), evidence)
+    defaultCheckpointDeps(cwd).appendQueue({ ...record, validationStatus: 'passed', validationId: evidence.id })
+    const result = await runTurnEvent('status', cwd)
+    expect(result.state?.turn.recovery).toMatchObject({ required: true,
+      failures: [{ name: 'Authorization audit', type: 'security' }] })
+    expect(result.state?.turn.recovery?.status).not.toBe('resolved')
+    expect(result.state?.context.securityState).toBe('unsafe')
+  })
+
+  it('keeps a verified recovery resolved when no tracked change was needed', async () => {
+    await pending()
+    const checked = await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery: proof })
+    expect(checked.allowed).toBe(true)
+    const completed = await runTurnEvent('complete', cwd)
+    expect(completed.allowed).toBe(true)
+    expect(completed.state?.turn.recovery).toMatchObject({ required: false, status: 'resolved' })
+    expect(completed.state?.context.developmentPolicy?.previousFailures).toBe('none')
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
+    expect(defaultCheckpointDeps(cwd).readQueue()[0]?.validationStatus).toBe('pending')
+    const reopened = await runTurnEvent('preflight', cwd, hook, 'codex', deps)
+    expect(reopened.state?.turn.recovery?.required).toBe(false)
   })
 })

@@ -1,14 +1,18 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { TRUSTED_VALIDATION_POLICIES } from './generated/validation-policy'
+import { TRUSTED_VALIDATION_POLICIES_4_0_5 } from '../../../src/lib/github/validation-policy-releases/4.0.5'
 import { blobHash, inspectValidationIntegrity, type PolicyTreeEntry } from './validation-integrity'
 import { readStableFile } from './stable-file'
+
+// Published project rails remain verifiable when only their engine is upgraded.
+const localPolicies = [...TRUSTED_VALIDATION_POLICIES, ...TRUSTED_VALIDATION_POLICIES_4_0_5]
 
 /** No network on the editing path. Server approval also verifies its own copy. */
 export function verifyTrustedFiles(cwd: string): void {
   const tree: PolicyTreeEntry[] = []
   const contents = new Map<string, string>()
-  const paths = new Set(TRUSTED_VALIDATION_POLICIES.flatMap(p => Object.keys(p.files)))
+  const paths = new Set(localPolicies.flatMap(p => Object.keys(p.files)))
   for (const path of ['package.json', 'package-lock.json', '.npmrc']) paths.add(path)
   try {
     for (const path of readdirSync(join(cwd, '.github/workflows'))) paths.add(`.github/workflows/${path}`)
@@ -26,7 +30,7 @@ export function verifyTrustedFiles(cwd: string): void {
   }
   const pkg = contents.get('package.json'), lock = contents.get('package-lock.json')
   if (pkg === undefined || lock === undefined) throw new Error('Package ou lockfile obrigatório ausente da base de validação.')
-  const results = TRUSTED_VALIDATION_POLICIES.map(manifest => inspectValidationIntegrity(manifest, tree, pkg, lock))
+  const results = localPolicies.map(manifest => inspectValidationIntegrity(manifest, tree, pkg, lock))
   if (results.some(result => result.length === 0)) return
   const closest = results.sort((a, b) => a.length - b.length)[0] ?? ['Política indisponível.']
   throw new Error(`A base de validação precisa ser atualizada pelo Supremo: ${closest.slice(0, 4).join('; ')}`)

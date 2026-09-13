@@ -49,7 +49,7 @@ export function withIntegrationFeedback(feedback: ValidationFeedback, result: Re
 }
 
 /** Logs are evidence, never instructions. Remove credentials before persistence. */
-export function sanitizeDiagnostic(raw: string): string {
+export function sanitizeDiagnostic(raw: string, maxLength = 8000): string {
   return raw
     .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, '[REDACTED]')
@@ -64,7 +64,7 @@ export function sanitizeDiagnostic(raw: string): string {
         return '[URL removida]'
       }
     })
-    .slice(0, 8000)
+    .slice(0, maxLength)
 }
 
 export function buildValidationFeedback(input: {

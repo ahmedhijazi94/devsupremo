@@ -95,6 +95,7 @@ describe('login e cadastro', () => {
     credentials()
     fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
     expect(screen.getByRole('button', { name: '...' })).toBeDisabled()
+    await waitFor(() => expect(auth.signInWithPassword).toHaveBeenCalledOnce())
     complete({ data: { session: {} }, error: null })
     await waitFor(() => expect(auth.push).toHaveBeenCalledWith('/app'))
     expect(auth.signInWithPassword).toHaveBeenCalledOnce()

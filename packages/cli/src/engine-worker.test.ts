@@ -106,7 +106,7 @@ describe('adaptive scheduling on immutable snapshots', () => {
 })
 
 async function failingRecord(): Promise<CheckpointRecord> {
-  writeJson(path.join(cwd, '.supremo/lifecycle.json'), { validation_mode: 'on_request', auto_heal: { runner: 'codex' } })
+  writeJson(path.join(cwd, '.supremo/lifecycle.json'), { validation_mode: 'on_request', auto_heal: { enabled: true, runner: 'codex' } })
   const record = capture(1)
   const proof = await validateCheckpoint(cwd, record)
   expect(proof.status).toBe('failed')
@@ -125,7 +125,7 @@ function repairJob(record: CheckpointRecord): RepairJob {
 }
 async function deferredCandidate(): Promise<{ record: CheckpointRecord; propose: ReturnType<typeof vi.fn<RepairDeps['propose']>>; validate: ReturnType<typeof vi.fn<RepairDeps['validate']>> }> {
   const record = await failingRecord()
-  writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+  writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
   const propose = vi.fn<RepairDeps['propose']>(async () => {
     setTurnStatus('active')
     return { summary: 'Fix value', files: [{ path: 'src/card.ts', content: 'export const value = 2;\n' }] }
@@ -136,11 +136,20 @@ async function deferredCandidate(): Promise<{ record: CheckpointRecord; propose:
   return { record, propose, validate }
 }
 describe('actual isolated repair executor with controlled inference boundary', () => {
+  it('leaves repair to the foreground agent unless unattended inference is explicitly enabled', async () => {
+    const record = await failingRecord()
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex' } })
+    const propose = vi.fn<RepairDeps['propose']>()
+    expect(await drainAutoHeal(cwd, undefined, repairDeps(propose))).toBe(0)
+    expect(propose).not.toHaveBeenCalled()
+    expect(repairJob(record).status).toBe('disabled')
+  })
+
   it('repairs the app/ layout used by generated Supremo projects', async () => {
     fs.renameSync(path.join(cwd, 'src'), path.join(cwd, 'app'))
     fs.writeFileSync(path.join(cwd, 'scripts/verify.mjs'), verify.replace('src/card.ts', 'app/card.ts'))
     gitText(cwd, ['add', '-A']); gitText(cwd, ['commit', '-m', 'generated app layout'])
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex' } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex' } })
     fs.writeFileSync(path.join(cwd, 'app/card.ts'), 'export const value = 1;\n')
     const record = captureTurnCheckpoint(cwd, { projectId: PROJECT, turnId: crypto.randomUUID(), summary: 'App fixture', environment: 'development' })!
     const proof = await validateCheckpoint(cwd, record)
@@ -199,10 +208,10 @@ describe('actual isolated repair executor with controlled inference boundary', (
   })
   it('never invokes inference while paused and stops retrying at the attempt budget', async () => {
     await failingRecord()
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', paused: true, max_attempts: 1 } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', paused: true, max_attempts: 1 } })
     const propose = vi.fn(async () => { throw new Error('model failure') })
     await drainAutoHeal(cwd, undefined, repairDeps(propose)); expect(propose).not.toHaveBeenCalled()
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
     await drainAutoHeal(cwd, undefined, repairDeps(propose)); await drainAutoHeal(cwd, undefined, repairDeps(propose))
     expect(propose).toHaveBeenCalledTimes(1)
     expect(readJson(path.join(cwd, '.supremo/validation/repair/status.json'))).toMatchObject({ status: 'exhausted', attempts: 1 })
@@ -274,7 +283,7 @@ describe('actual isolated repair executor with controlled inference boundary', (
   })
   it('keeps inference alive during a new turn and automatically applies its validated candidate after the turn ends', async () => {
     const record = await failingRecord()
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
     const head = gitText(cwd, ['rev-parse', 'HEAD']), index = fs.readFileSync(path.join(cwd, '.git/index'))
     const propose = vi.fn<RepairDeps['propose']>(async (_runner, _dir, _prompt, _policy, signal) => {
       setTurnStatus('active')
@@ -319,7 +328,7 @@ describe('actual isolated repair executor with controlled inference boundary', (
   })
   it('revalidates a durable candidate after its worker is interrupted instead of spending another proposal', async () => {
     const record = await failingRecord()
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
     const interrupted = new AbortController()
     const propose = vi.fn<RepairDeps['propose']>(repairDeps().propose)
     const validate = vi.fn<RepairDeps['validate']>(async (root, candidate, signal) => {
@@ -337,7 +346,7 @@ describe('actual isolated repair executor with controlled inference boundary', (
   })
   it('defers a validated candidate when another lifecycle process holds the lock, then resumes it once', async () => {
     const record = await failingRecord()
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
     const propose = vi.fn<RepairDeps['propose']>(repairDeps().propose)
     const lock = path.join(cwd, '.supremo/turns/lock')
     const validate = vi.fn<RepairDeps['validate']>(async (root, candidate, signal) => {
@@ -377,12 +386,12 @@ describe('actual isolated repair executor with controlled inference boundary', (
   it('holds a candidate through a pause and requires authorization again before its application', async () => {
     const { record, propose, validate } = await deferredCandidate()
     setTurnStatus('completed')
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', paused: true, max_attempts: 1 } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', paused: true, max_attempts: 1 } })
     const authorize = vi.fn<RepairDeps['authorize']>(async () => {})
     expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate, authorize })).toBe(0)
     expect(repairJob(record)).toMatchObject({ status: 'paused', candidateSha: expect.any(String) })
     expect(authorize).not.toHaveBeenCalled()
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
     authorize.mockRejectedValue(new Error('Development authorization revoked'))
     expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate, authorize })).toBe(0)
     expect(authorize).toHaveBeenCalledTimes(1)
@@ -393,19 +402,19 @@ describe('actual isolated repair executor with controlled inference boundary', (
   it('retains a validated candidate when pause arrives just before application and resumes without another inference', async () => {
     const record = await failingRecord()
     const policyFile = path.join(cwd, '.supremo/lifecycle.json')
-    writeJson(policyFile, { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    writeJson(policyFile, { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
     const propose = vi.fn<RepairDeps['propose']>(repairDeps().propose)
     const validate = vi.fn<RepairDeps['validate']>(validateCheckpoint)
     let authorizations = 0
     const authorize = vi.fn<RepairDeps['authorize']>(async () => {
       authorizations++
-      if (authorizations === 2) writeJson(policyFile, { auto_heal: { runner: 'codex', max_attempts: 1, paused: true } })
+      if (authorizations === 2) writeJson(policyFile, { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1, paused: true } })
     })
     const deps = { ...repairDeps(propose), validate, authorize }
     expect(await drainAutoHeal(cwd, undefined, deps)).toBe(0)
     expect(repairJob(record)).toMatchObject({ status: 'paused', candidateSha: expect.any(String), attempts: 1, starts: 1 })
     expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 1')
-    writeJson(policyFile, { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    writeJson(policyFile, { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
     expect(await drainAutoHeal(cwd, undefined, deps)).toBe(1)
     expect(propose).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(2)
     expect(authorize).toHaveBeenCalledTimes(4)
@@ -423,7 +432,7 @@ describe('actual isolated repair executor with controlled inference boundary', (
   })
   it('bounds repeated interrupted launches separately from unsuccessful repair attempts', async () => {
     const record = await failingRecord()
-    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { enabled: true, runner: 'codex', max_attempts: 1 } })
     let interruption = new AbortController()
     const propose = vi.fn<RepairDeps['propose']>(async () => {
       interruption.abort()

@@ -2,6 +2,39 @@
 export const DEVELOPMENT_POLICY_START = '<!-- BEGIN:supremo-development-policy -->'
 export const DEVELOPMENT_POLICY_END = '<!-- END:supremo-development-policy -->'
 
+// Exact paragraphs shipped by older Supremo templates. Do not pattern-match or
+// replace user-written sections: only these byte-identical defaults are migrated.
+const LEGACY_WORKFLOW: readonly (readonly [string, string])[] = [
+  [`Falhas de testes ficam visíveis e bloqueiam integração quando exigido pelos gates,
+mas não obrigam o agente a consertar testes antes de uma edição comum no preview.`,
+  `Falhas anteriores confirmadas são corrigidas pelo próprio agente no próximo pedido,
+antes da alteração solicitada. A conferência dessas falhas usa recovery-check;
+a suíte completa e a integração continuam em background.`],
+  [`Siga \`developmentPolicy.previousFailures\` do contexto. Em desenvolvimento, falhas
+anteriores inclusive segurança/RLS/migrations são diagnóstico: preserve a pendência
+e prepare a correção, os testes, a nova migration ou o checkpoint solicitado. O auto-heal autorizado trata a falha em background com contexto limitado,
+limite de tentativas e integração segura de uma correção comprovada.`,
+  `Siga \`developmentPolicy.previousFailures=repair_before_request\` do contexto:
+confira as falhas anteriores no código atual, corrija as causas confirmadas neste
+mesmo turno e execute recovery-check antes de concluir a nova alteração.
+O agente que atende o usuário faz isso sem outro prompt; não delegue ao daemon.
+Segurança, RLS, migrations e gates mantêm sua autoridade e provas independentes.`],
+  [`O fechamento do turno captura o estado e enfileira a publicação sem exigir testes locais.`,
+  `O fechamento do turno captura o estado e enfileira a publicação. Se houver falhas
+locais anteriores, corrija e confira com recovery-check antes de concluir;
+as demais validações seguem em background.`],
+]
+
+function migrateLegacyWorkflow(content: string): string {
+  for (const [before, after] of LEGACY_WORKFLOW) {
+    for (const newline of ['\n', '\r\n']) {
+      const exact = before.replaceAll('\n', newline)
+      if (content.split(exact).length === 2) content = content.replace(exact, after.replaceAll('\n', newline))
+    }
+  }
+  return content
+}
+
 const POLICY = `${DEVELOPMENT_POLICY_START}
 ## Fluxo de desenvolvimento atual do Supremo
 
@@ -46,6 +79,12 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   nas operações protegidas: aplicar SQL, publicar código e integrar continuam exigindo
   autorização e suas verificações. Não inicie repair-start por rotina nem contorne gates.
 - Ao alterar o app, conclua o turno e registre o checkpoint, preservando o estado real das provas.
+  Se a resposta trouxer \`nextAction.kind=repair_previous_failure\`, continue no mesmo
+  turno: confira o diagnóstico, corrija, execute o comando indicado e tente concluir
+  novamente. \`allowed:false\` nessa situação recusa o encerramento, não a correção.
+  Não repita complete sem uma ação e não encerre só dizendo que o protocolo bloqueou.
+  Um pedido para mudar apenas uma cor ou preservar a interface não dispensa tratar
+  falhas anteriores; uma proibição explícita de corrigir ou editar arquivos prevalece.
   O daemon sincroniza o registro, verifica segredos antes de enviar código e encaminha
   a validação à CI. Mantenha provas de comportamento da feature para a execução em
   background; não use testes vazios nem reduza cobertura. Capturado, publicado e aprovado
@@ -61,11 +100,12 @@ export function withDevelopmentPolicy(content: string): string {
   const starts = content.split(DEVELOPMENT_POLICY_START).length - 1
   const ends = content.split(DEVELOPMENT_POLICY_END).length - 1
   if (starts === 0 && ends === 0) {
+    content = migrateLegacyWorkflow(content)
     return content + (content.endsWith('\n') ? '\n' : '\n\n') + POLICY + '\n'
   }
   if (starts !== 1 || ends !== 1) throw new Error('Bloco de política Supremo ambíguo; preserve as instruções e revise os marcadores.')
   const start = content.indexOf(DEVELOPMENT_POLICY_START)
   const end = content.indexOf(DEVELOPMENT_POLICY_END)
   if (end < start) throw new Error('Marcadores da política Supremo fora de ordem.')
-  return content.slice(0, start) + POLICY + content.slice(end + DEVELOPMENT_POLICY_END.length)
+  return migrateLegacyWorkflow(content.slice(0, start)) + POLICY + migrateLegacyWorkflow(content.slice(end + DEVELOPMENT_POLICY_END.length))
 }

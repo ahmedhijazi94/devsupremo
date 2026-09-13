@@ -83,7 +83,8 @@ export {
 // outra proposta; diagnóstico mantém interrupções e falhas de integração.
 // 4.0.6: o agente resolve falhas anteriores no próximo pedido e confere a
 // correção local em cópia isolada, preservando preview e gates de publicação.
-export const TEMPLATE_VERSION = '4.0.6'
+// 4.0.7: continuação explícita da correção e diagnóstico compacto para o agente.
+export const TEMPLATE_VERSION = '4.0.7'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '3.0.0'
@@ -2690,6 +2691,11 @@ explícitas do usuário, regras de segurança do host nem os gates de integraç�
   ou remontagem dos formulários. Disponibilizar a URL não autoriza testar o app.
 - Em alterações do app, conclua com o que foi corrigido, o pedido entregue e a URL real.
   Declare o resultado do recovery-check e eventuais bloqueios concretos; não espere CI.
+  Se preflight ou complete trouxer \`nextAction.kind=repair_previous_failure\`,
+  continue neste mesmo turno: confira o diagnóstico, corrija as causas, execute
+  o comando indicado e tente complete novamente. A recusa de encerramento não
+  proíbe corrigir. Não repita complete sem ação nem devolva só a mensagem de bloqueio.
+  A resposta da CLI é compacta; \`turn status --full-state\` dá o diagnóstico completo.
 
 ## Chaves de integrações
 

@@ -3,6 +3,19 @@ import { DEVELOPMENT_POLICY_END, DEVELOPMENT_POLICY_START, withDevelopmentPolicy
 import { computePlan } from './sync'
 
 describe('upgrade of mixed user/platform instructions', () => {
+  it.each(['\n', '\r\n'])('migrates exact legacy defaults while preserving custom preferences (%j)', newline => {
+    const legacy = 'Falhas de testes ficam visíveis e bloqueiam integração quando exigido pelos gates,\nmas não obrigam o agente a consertar testes antes de uma edição comum no preview.'.replaceAll('\n', newline)
+    const custom = '# Minhas regras\nNão mude minhas cores.\n'
+    const updated = withDevelopmentPolicy(custom + legacy + '\n## Meu rodapé\n')
+    expect(updated).not.toContain(legacy)
+    expect(updated).toContain('Falhas anteriores confirmadas são corrigidas pelo próprio agente')
+    expect(updated).toContain(custom)
+    expect(updated).toContain('## Meu rodapé\n')
+    expect(withDevelopmentPolicy(updated)).toBe(updated)
+    // Similar user prose is not owned by the platform.
+    const personal = 'No meu projeto, falhas não obrigam o agente a consertar testes antes de editar.'
+    expect(withDevelopmentPolicy(personal)).toContain(personal)
+  })
   it('preserves legacy architecture and user preferences byte for byte', () => {
     const original = '# Meu app\r\n\r\nRLS obrigatório.\r\n\n## Preferências pessoais\nUse roxo; só teste quando eu pedir.\n'
     const updated = withDevelopmentPolicy(original)

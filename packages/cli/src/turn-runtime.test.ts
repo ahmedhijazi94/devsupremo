@@ -6,6 +6,7 @@ import type { BackendTurnContext } from '../../../src/lib/checkpoint/turn-contex
 import { defaultCheckpointDeps } from './checkpoint'
 import { drainOnce } from './daemon'
 import { runTurnEvent, type RuntimeDeps } from './turn-runtime'
+import { turnAgentResponse } from './turn-response'
 import { drainLocalValidation, evidenceFor, validateCheckpoint } from './turn-validation'
 import { captureTree, captureTurnCheckpoint, gitText, readJson, TURN_DIR, writeJson } from './turn-workspace'
 
@@ -462,10 +463,19 @@ describe('foreground recovery before the next ordinary request', () => {
   it('rejects cosmetic-only completion, accepts verified test corrections, and neither publishes partial proof nor replays the old failure', async () => {
     const opened = await pending()
     expect(opened.context).toMatchObject({ developmentPolicy: { previousFailures: 'repair_before_request' } })
+    expect(opened.nextAction?.kind).toBe('repair_previous_failure')
     fs.writeFileSync(path.join(cwd, 'src/colors.css'), 'button { background: blue }')
     const denied = await runTurnEvent('complete', cwd)
     expect(denied.allowed).toBe(false); expect(denied.reason).toContain('recovery-check')
     expect(denied.state?.turn.status).toBe('active')
+    expect(denied.nextAction).toEqual(opened.nextAction)
+    const response = turnAgentResponse(denied)
+    const wire = JSON.stringify(response)
+    expect(wire.indexOf('nextAction')).toBeLessThan(wire.indexOf('pendingRecovery'))
+    expect(response.nextAction?.instruction).toContain('Continue neste mesmo turno')
+    expect(response.nextAction?.command).toContain('turn recovery-check')
+    expect(wire).not.toContain('"validations"')
+    expect(wire.length).toBeLessThan(8000)
     expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
     expect((await runTurnEvent('before-mutation', cwd, { tool_name: 'Write', tool_input: { file_path: 'tests/gate.test.ts' } })).allowed).toBe(true)
     fs.writeFileSync(path.join(cwd, 'tests/gate.test.ts'), 'export const gate: boolean = true;\n')
@@ -475,6 +485,7 @@ describe('foreground recovery before the next ordinary request', () => {
     expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toBeNull()
     const checked = await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery: verifier })
     expect(checked.allowed).toBe(true); expect(verifier).toHaveBeenCalledOnce()
+    expect(checked.nextAction).toBeUndefined()
     await runTurnEvent('mutation', cwd, command)
     expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
     expect((await runTurnEvent('recovery-check', cwd, {}, 'codex', { ...deps, verifyRecovery: verifier })).allowed).toBe(true)

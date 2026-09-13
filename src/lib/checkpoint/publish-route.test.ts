@@ -12,6 +12,13 @@ const apiDir = join(__dirname, '../../app/api/checkpoint')
 const publishRoute = readFileSync(join(apiDir, 'publish/route.ts'), 'utf8')
 
 describe('endpoint de publish — nenhum token sai do backend (testes 1, 2, 15, 16)', () => {
+  it('encerra a execução no servidor antes do prazo de reenvio da CLI', () => {
+    const daemon = readFileSync(join(__dirname, '../../../packages/cli/src/daemon.ts'), 'utf8')
+    const serverSeconds = Number(publishRoute.match(/export const maxDuration = (\d+)/)?.[1])
+    const clientMs = Number(daemon.match(/export const PUBLISH_TIMEOUT_MS = ([\d_]+)/)?.[1]?.replaceAll('_', ''))
+    expect(serverSeconds).toBeGreaterThan(0)
+    expect(clientMs - serverSeconds * 1000).toBeGreaterThanOrEqual(60_000)
+  })
   it('as rotas que ENTREGAVAM token foram removidas', () => {
     // push-grant devolvia { token } ao daemon; ensure-pr também usava fluxo antigo.
     expect(existsSync(join(apiDir, 'push-grant/route.ts'))).toBe(false)

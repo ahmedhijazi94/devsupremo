@@ -668,7 +668,7 @@ describe('defaultDaemonHttp.syncStatus — timeout curto real (item 7: nunca tra
       const outcome = await processCheckpoint(verifiedRecord(), { ...fakes({}).ctx, http: client })
       expect(outcome.result).toBe('done')
       expect(requests.map((request) => [request.url.split('/').at(-1), Boolean(request.signal)])).toEqual([
-        ['restore-poll', true], ['sync-status', true], ['local-report', true], ['publish', false],
+        ['restore-poll', true], ['sync-status', true], ['local-report', true], ['publish', true],
       ])
     } finally { vi.unstubAllGlobals() }
   })

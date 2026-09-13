@@ -45,6 +45,8 @@ import {
  */
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// Bound server execution below the CLI publication deadline (360s).
+export const maxDuration = 300
 
 const fileOpSchema = z.object({
   path: z.string().min(1),

@@ -113,6 +113,7 @@ jobs:
           npx tsx scripts/test-restore-recovery.mts
           npx tsx scripts/test-secret-requests.mts
           npx tsx scripts/test-database-inspection.mts
+          npx tsx scripts/test-trigger-migrations.mts
         env:
           SUPREMO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 

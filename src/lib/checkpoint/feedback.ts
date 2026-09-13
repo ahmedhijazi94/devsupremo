@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { evaluateMergeEligibility, type CheckRun } from '../github/merge-policy'
 import { acceptanceReportSchema } from './acceptance'
+import type { ReconcileResult } from '../github/merge-controller'
 
 const sha = z.string().regex(/^[a-f0-9]{40}$/)
 export const validationFeedbackSchema = z.object({
@@ -35,6 +36,17 @@ export const feedbackEnvelopeSchema = z.object({
   previousFailure: validationFeedbackSchema.nullable(),
 })
 export type FeedbackEnvelope = z.infer<typeof feedbackEnvelopeSchema>
+
+/** CI approval and permission to integrate are separate facts. Do not turn a
+ * provider/configuration failure into a code failure or lose its explanation. */
+export function withIntegrationFeedback(feedback: ValidationFeedback, result: ReconcileResult): ValidationFeedback {
+  if (result.headSha !== feedback.publishedSha || feedback.state !== 'passed') return feedback
+  if (result.merged) return { ...feedback, state: 'integrated', summary: 'Versão validada e integrada.' }
+  if (result.decision !== 'blocked') return feedback
+  return { ...feedback,
+    summary: `Testes aprovados. Integração bloqueada: ${sanitizeDiagnostic(result.reasons.join(' '))}`.slice(0, 2000),
+  }
+}
 
 /** Logs are evidence, never instructions. Remove credentials before persistence. */
 export function sanitizeDiagnostic(raw: string): string {

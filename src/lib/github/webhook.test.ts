@@ -211,9 +211,9 @@ describe('parseWebhookForReconcile — só dispara, não autoriza', () => {
     })
   })
 
-  it('workflow_run é IGNORADO (least privilege: evita exigir Actions:read)', () => {
+  it('workflow_run é IGNORADO porque os checks já fornecem o gatilho', () => {
     // Os jobs da CI já chegam por check_suite/check_run; workflow_run não traz
-    // gatilho novo e pediria Actions:read. Deve retornar null.
+    // gatilho novo. A leitura confiável do workflow exige Actions:read à parte.
     const t = parseWebhookForReconcile('workflow_run', {
       action: 'completed',
       installation,

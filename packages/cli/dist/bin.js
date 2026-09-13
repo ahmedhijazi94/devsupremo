@@ -22791,7 +22791,7 @@ async function withTurnLock(cwd, work) {
       }
     }
     if (!dead)
-      throw new Error("Lifecycle ocupado por outro processo; tente novamente.");
+      throw new TurnLockBusyError();
     import_node_fs3.default.rmSync(lock, { recursive: true });
     import_node_fs3.default.mkdirSync(lock);
   }
@@ -22880,7 +22880,7 @@ function captureTurnCheckpoint(cwd, input2) {
   }
   return record3;
 }
-var import_node_child_process2, import_node_crypto2, import_node_fs3, import_node_path3, TURN_DIR;
+var import_node_child_process2, import_node_crypto2, import_node_fs3, import_node_path3, TURN_DIR, TurnLockBusyError;
 var init_turn_workspace = __esm({
   "src/turn-workspace.ts"() {
     "use strict";
@@ -22891,6 +22891,12 @@ var init_turn_workspace = __esm({
     init_sync();
     init_checkpoint();
     TURN_DIR = ".supremo/turns";
+    TurnLockBusyError = class extends Error {
+      constructor() {
+        super("Lifecycle ocupado por outro processo; tente novamente.");
+        this.name = "TurnLockBusyError";
+      }
+    };
   }
 });
 
@@ -23119,8 +23125,21 @@ __export(feedback_exports, {
   feedbackEnvelopeSchema: () => feedbackEnvelopeSchema,
   sanitizeDiagnostic: () => sanitizeDiagnostic,
   validationFeedbackSchema: () => validationFeedbackSchema,
-  withFeedbackEvidence: () => withFeedbackEvidence
+  withFeedbackEvidence: () => withFeedbackEvidence,
+  withIntegrationFeedback: () => withIntegrationFeedback
 });
+function withIntegrationFeedback(feedback, result2) {
+  if (result2.headSha !== feedback.publishedSha || feedback.state !== "passed")
+    return feedback;
+  if (result2.merged)
+    return { ...feedback, state: "integrated", summary: "Vers\xE3o validada e integrada." };
+  if (result2.decision !== "blocked")
+    return feedback;
+  return {
+    ...feedback,
+    summary: "Testes aprovados. Integra\xE7\xE3o bloqueada: ".concat(sanitizeDiagnostic(result2.reasons.join(" "))).slice(0, 2e3)
+  };
+}
 function sanitizeDiagnostic(raw) {
   return raw.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, "[REDACTED]").replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sup_dev_ckpt_[A-Za-z0-9_-]+|sb_secret_[A-Za-z0-9_-]+)\b/g, "[REDACTED]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]").replace(/((?:authorization|(?:set[-_])?cookie|password|secret|token|api[_-]?key|service[_-]?role[_-]?key)["']?\s*[=:]\s*)[^\r\n]+/gi, "$1[REDACTED]").replace(/(?:https?|postgres(?:ql)?|mysql|rediss?):\/\/[^\s]+/gi, (value) => {
     try {
@@ -25467,7 +25486,7 @@ var init_validation_policy = __esm({
     "use strict";
     TRUSTED_VALIDATION_POLICIES = [
       {
-        "version": "4.0.4",
+        "version": "4.0.5",
         "kind": "public",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -28383,12 +28402,12 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c4601c854357e311f2ea166f3e808145ea54b8afb5be3146281089ebf06ff325"
+            "da39cd54314bd86a31f70a9d6a4b9c95f0656da71eac2d057713ef4e185fb086"
           ]
         ]
       },
       {
-        "version": "4.0.4",
+        "version": "4.0.5",
         "kind": "solo",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -31304,12 +31323,12 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c4601c854357e311f2ea166f3e808145ea54b8afb5be3146281089ebf06ff325"
+            "da39cd54314bd86a31f70a9d6a4b9c95f0656da71eac2d057713ef4e185fb086"
           ]
         ]
       },
       {
-        "version": "4.0.4",
+        "version": "4.0.5",
         "kind": "team",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -34225,7 +34244,7 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c4601c854357e311f2ea166f3e808145ea54b8afb5be3146281089ebf06ff325"
+            "da39cd54314bd86a31f70a9d6a4b9c95f0656da71eac2d057713ef4e185fb086"
           ]
         ]
       }
@@ -34724,9 +34743,24 @@ function current(cwd, record3) {
   const sourceUnchanged = tree.treeSha === expected || gitText(cwd, ["diff", "--name-only", "-z", expected, tree.treeSha]).split("\0").filter(Boolean).every((file2) => file2 === ".supremo/lifecycle.json");
   return sourceUnchanged && (!record3.workspaceHeadSha || tree.headSha === record3.workspaceHeadSha) && defaultCheckpointDeps(cwd).readQueue().at(-1)?.checkpointId === record3.checkpointId;
 }
+function candidateRef(job) {
+  return "refs/supremo/repairs/".concat(external_exports.string().uuid().parse(job.checkpointId));
+}
+function releaseCandidate(cwd, job) {
+  if (job.candidateSha && /^[a-f0-9]{40}$/.test(job.candidateSha)) {
+    gitText(cwd, ["update-ref", "-d", candidateRef(job), job.candidateSha]);
+  }
+}
 function saveJob(cwd, job) {
+  const previous = repairStateSchema.safeParse(readJson(import_node_path18.default.join(cwd, DIR, "".concat(job.checkpointId, ".json"))));
   writeJson(import_node_path18.default.join(cwd, DIR, "".concat(job.checkpointId, ".json")), job);
   writeJson(import_node_path18.default.join(cwd, DIR, "status.json"), job);
+  const transition = (state) => JSON.stringify({ ...state, updatedAt: 0 });
+  if (!previous.success || transition(previous.data) !== transition(job)) {
+    import_node_fs16.default.appendFileSync(import_node_path18.default.join(cwd, DIR, "events.jsonl"), JSON.stringify(job) + "\n", { mode: 384 });
+  }
+  if (["applied", "stale", "exhausted", "failed"].includes(job.status))
+    releaseCandidate(cwd, job);
 }
 function safeFile(cwd, file2) {
   if (!canAutoRepairPaths([file2]) || !/^(?:src|app|components|lib)\/[a-zA-Z0-9_@()[\]./ -]+\.(?:[cm]?[jt]sx?|css|json)$/.test(file2) || file2.includes("\\")) {
@@ -34834,6 +34868,10 @@ async function drainAutoHeal(cwd, signal, deps = defaults) {
   if (recovered !== null)
     return recovered;
   const record3 = defaultCheckpointDeps(cwd).readQueue().at(-1);
+  const previous = repairStateSchema.safeParse(readJson(import_node_path18.default.join(cwd, DIR, "status.json")));
+  if (record3 && previous.success && previous.data.checkpointId !== record3.checkpointId && ["waiting", "paused", "disabled", "running", "validating"].includes(previous.data.status)) {
+    saveJob(cwd, { ...previous.data, status: "stale", updatedAt: Date.now(), reason: "Novo checkpoint assumiu a valida\xE7\xE3o; reparo anterior substitu\xEDdo." });
+  }
   if (!record3 || record3.validationStatus !== "failed" || record3.environment !== "development")
     return 0;
   const evidence = evidenceFor(cwd, record3);
@@ -34842,14 +34880,18 @@ async function drainAutoHeal(cwd, signal, deps = defaults) {
   const policy = readEnginePolicy(cwd).auto_heal;
   const old = repairStateSchema.safeParse(readJson(import_node_path18.default.join(cwd, DIR, "".concat(record3.checkpointId, ".json"))));
   let inheritedAttempts = 0;
+  let inheritedStarts = 0;
   if (!old.success && import_node_fs16.default.existsSync(import_node_path18.default.join(cwd, DIR))) {
     for (const file2 of import_node_fs16.default.readdirSync(import_node_path18.default.join(cwd, DIR)).filter((file3) => /^[a-f0-9-]{36}\.json$/.test(file3))) {
       const prior = repairStateSchema.safeParse(readJson(import_node_path18.default.join(cwd, DIR, file2)));
-      if (prior.success && prior.data.resultCheckpointId === record3.checkpointId)
+      if (prior.success && prior.data.resultCheckpointId === record3.checkpointId) {
         inheritedAttempts = Math.max(inheritedAttempts, prior.data.attempts);
+        inheritedStarts = Math.max(inheritedStarts, prior.data.starts ?? prior.data.attempts);
+      }
     }
   }
-  const job = old.success ? old.data : { checkpointId: record3.checkpointId, sha: record3.commitSha, attempts: inheritedAttempts, status: "waiting", updatedAt: 0, reason: "" };
+  const job = old.success ? old.data : { checkpointId: record3.checkpointId, sha: record3.commitSha, attempts: inheritedAttempts, starts: inheritedStarts, status: "waiting", updatedAt: 0, reason: "" };
+  job.starts ??= job.attempts;
   const update = (status, reason) => {
     Object.assign(job, { status, reason: sanitizeDiagnostic(reason), updatedAt: Date.now() });
     saveJob(cwd, job);
@@ -34869,8 +34911,12 @@ async function drainAutoHeal(cwd, signal, deps = defaults) {
     }
     return 0;
   }
-  if (job.attempts >= policy.max_attempts) {
+  if (!job.candidateSha && job.attempts >= policy.max_attempts) {
     update("exhausted", "Limite de tentativas atingido; diagn\xF3stico preservado.");
+    return 0;
+  }
+  if (!job.candidateSha && job.starts >= policy.max_attempts * 2) {
+    update("exhausted", "Limite de execu\xE7\xF5es interrompidas atingido; diagn\xF3stico preservado.");
     return 0;
   }
   if (["failed", "unavailable"].includes(job.status) && Date.now() - job.updatedAt < 3e4)
@@ -34927,49 +34973,62 @@ async function drainAutoHeal(cwd, signal, deps = defaults) {
     try {
       const latest = readEnginePolicy(cwd).auto_heal;
       const newest = defaultCheckpointDeps(cwd).readQueue().at(-1);
-      if (!latest.enabled || latest.paused || busy(cwd) || newest?.checkpointId !== record3.checkpointId || stamp() !== initialStamp)
+      if (!latest.enabled || latest.paused || newest?.checkpointId !== record3.checkpointId || stamp() !== initialStamp)
         abort();
     } catch {
       abort();
     }
   }, 500);
   try {
-    deps.preflight?.(runner);
+    if (!job.candidateSha)
+      deps.preflight?.(runner);
     await deps.authorize(cwd, record3);
     deps.trust(cwd);
     if (scanCheckpointForUpload(cwd, record3).status === "failed")
       throw new Error("Snapshot n\xE3o autorizado para autocura.");
-    const prompt = repairPrompt(cwd, record3, evidence, policy);
-    inference = import_node_fs16.default.mkdtempSync(import_node_path18.default.join(import_node_os2.default.tmpdir(), "supremo-repair-proposal-"));
-    job.attempts++;
-    attemptStarted = true;
-    update("running", "Proposta isolada via ".concat(runner, "; or\xE7amento limitado."));
-    const proposal = await deps.propose(runner, inference, prompt, { ...policy, max_budget_usd: policy.max_budget_usd / policy.max_attempts }, controller.signal);
     if (controller.signal.aborted)
-      throw new Error("Autocura cancelada por atividade, pausa ou encerramento.");
-    if (proposal.files.length > policy.max_changed_files || new Set(proposal.files.map((file2) => file2.path)).size !== proposal.files.length || Buffer.byteLength(JSON.stringify(proposal)) > policy.max_output_bytes)
-      throw new Error("Proposta excede limites ou duplica caminhos.");
-    candidate = import_node_path18.default.join(cwd, DIR, "candidate-".concat(import_node_crypto8.default.randomUUID()));
-    (0, import_node_child_process8.execFileSync)("git", ["worktree", "add", "--detach", candidate, record3.commitSha], { cwd, stdio: "pipe" });
-    for (const file2 of proposal.files) {
-      safeFile(candidate, file2.path);
-      import_node_fs16.default.mkdirSync(import_node_path18.default.dirname(import_node_path18.default.join(candidate, file2.path)), { recursive: true });
-      import_node_fs16.default.writeFileSync(import_node_path18.default.join(candidate, file2.path), file2.content);
+      throw new Error("Autocura interrompida antes da proposta.");
+    let sha2 = job.candidateSha;
+    if (!sha2) {
+      const prompt = repairPrompt(cwd, record3, evidence, policy);
+      inference = import_node_fs16.default.mkdtempSync(import_node_path18.default.join(import_node_os2.default.tmpdir(), "supremo-repair-proposal-"));
+      job.attempts++;
+      job.starts++;
+      attemptStarted = true;
+      update("running", "Proposta isolada via ".concat(runner, "; or\xE7amento limitado."));
+      const proposal = await deps.propose(runner, inference, prompt, { ...policy, max_budget_usd: policy.max_budget_usd / (policy.max_attempts * 2) }, controller.signal);
+      if (controller.signal.aborted)
+        throw new Error("Autocura cancelada por atividade, pausa ou encerramento.");
+      if (proposal.files.length > policy.max_changed_files || new Set(proposal.files.map((file2) => file2.path)).size !== proposal.files.length || Buffer.byteLength(JSON.stringify(proposal)) > policy.max_output_bytes)
+        throw new Error("Proposta excede limites ou duplica caminhos.");
+      candidate = import_node_path18.default.join(cwd, DIR, "candidate-".concat(import_node_crypto8.default.randomUUID()));
+      (0, import_node_child_process8.execFileSync)("git", ["worktree", "add", "--detach", candidate, record3.commitSha], { cwd, stdio: "pipe" });
+      for (const file2 of proposal.files) {
+        safeFile(candidate, file2.path);
+        import_node_fs16.default.mkdirSync(import_node_path18.default.dirname(import_node_path18.default.join(candidate, file2.path)), { recursive: true });
+        import_node_fs16.default.writeFileSync(import_node_path18.default.join(candidate, file2.path), file2.content);
+      }
+      deps.trust(candidate);
+      const captured = captureTree(candidate);
+      if (!captured.dirty)
+        throw new Error("Proposta n\xE3o alterou a implementa\xE7\xE3o.");
+      sha2 = gitText(candidate, ["commit-tree", captured.treeSha, "-p", record3.commitSha, "-m", "Autocura isolada"]);
     }
-    deps.trust(candidate);
-    const captured = captureTree(candidate);
-    if (!captured.dirty)
-      throw new Error("Proposta n\xE3o alterou a implementa\xE7\xE3o.");
-    const sha2 = gitText(candidate, ["commit-tree", captured.treeSha, "-p", record3.commitSha, "-m", "Autocura isolada"]);
-    const paths = gitText(candidate, ["diff", "--name-only", "-z", record3.commitSha, sha2]).split("\0").filter(Boolean);
-    paths.forEach((file2) => safeFile(candidate, file2));
+    if (!/^[a-f0-9]{40}$/.test(sha2) || gitText(cwd, ["rev-parse", "".concat(sha2, "^")]) !== record3.commitSha)
+      throw new Error("Candidato n\xE3o pertence ao checkpoint em repara\xE7\xE3o.");
+    const treeSha = gitText(cwd, ["rev-parse", "".concat(sha2, "^{tree}")]);
+    const paths = gitText(cwd, ["diff", "--name-only", "-z", record3.commitSha, sha2]).split("\0").filter(Boolean);
+    if (!paths.length || paths.length > policy.max_changed_files)
+      throw new Error("Candidato excede limites de arquivos.");
+    paths.forEach((file2) => safeFile(cwd, file2));
     job.candidateSha = sha2;
+    gitText(cwd, ["update-ref", candidateRef(job), sha2]);
     update("validating", "Validando candidato isolado com os gates protegidos.");
     const candidateRecord = {
       ...record3,
       checkpointId: import_node_crypto8.default.randomUUID(),
       commitSha: sha2,
-      treeSha: captured.treeSha,
+      treeSha,
       changesetBaseSha: evidence.baseSha,
       changedPaths: paths,
       validationStatus: "pending"
@@ -34978,13 +35037,17 @@ async function drainAutoHeal(cwd, signal, deps = defaults) {
       throw new Error("Candidato cont\xE9m risco de segredo.");
     const proof = await deps.validate(cwd, candidateRecord, controller.signal);
     const repairedChecks = evidence.checks.filter((check2) => check2.status === "failed").every((failed) => proof.checks.some((check2) => check2.status === "passed" && (check2.name === failed.name || failed.type && check2.type === failed.type)));
-    if (proof.sha !== sha2 || proof.fingerprint !== captured.treeSha || proof.status === "failed" || !repairedChecks || !proof.checks.length)
+    if (proof.sha !== sha2 || proof.fingerprint !== treeSha || proof.status === "failed" || !repairedChecks || !proof.checks.length)
       throw new Error("Candidato n\xE3o comprovou a corre\xE7\xE3o; workspace preservado.");
     await deps.authorize(cwd, record3);
-    await withTurnLock(cwd, () => {
+    const applied = await withTurnLock(cwd, () => {
       const latestPolicy = readEnginePolicy(cwd).auto_heal;
-      if (controller.signal.aborted || !latestPolicy.enabled || latestPolicy.paused || busy(cwd) || !current(cwd, record3))
+      if (controller.signal.aborted || !latestPolicy.enabled || latestPolicy.paused || !current(cwd, record3))
         throw new Error("Workspace avan\xE7ou ou autocura pausada; candidato n\xE3o aplicado.");
+      if (busy(cwd)) {
+        update("waiting", "Candidato preservado; aplica\xE7\xE3o aguarda o turno de edi\xE7\xE3o terminar.");
+        return false;
+      }
       paths.forEach((file2) => safeFile(cwd, file2));
       deps.trust(cwd);
       const patch = (0, import_node_child_process8.execFileSync)("git", ["diff", "--binary", record3.commitSha, sha2, "--", ...paths], { cwd, maxBuffer: policy.max_output_bytes });
@@ -35008,14 +35071,23 @@ async function drainAutoHeal(cwd, signal, deps = defaults) {
       job.resultCheckpointId = result2.checkpointId;
       update("applied", "Corre\xE7\xE3o aplicada sem mover HEAD/index; novo checkpoint aguarda valida\xE7\xE3o/CI pr\xF3prios.");
       import_node_fs16.default.rmSync(import_node_path18.default.join(cwd, DIR, "apply-journal.json"), { force: true });
+      return true;
     });
-    return 1;
+    return applied ? 1 : 0;
   } catch (error61) {
     const unavailable = error61 instanceof RepairRunnerUnavailableError;
-    if (unavailable && attemptStarted)
+    const lockBusy = error61 instanceof TurnLockBusyError;
+    if (unavailable && attemptStarted) {
+      job.attempts--;
+      job.starts--;
+    } else if (controller.signal.aborted && attemptStarted && !job.candidateSha)
       job.attempts--;
     const currentPolicy = readEnginePolicy(cwd).auto_heal;
-    const status = !currentPolicy.enabled ? "disabled" : currentPolicy.paused ? "paused" : !current(cwd, record3) ? "stale" : unavailable ? "unavailable" : job.attempts >= policy.max_attempts ? "exhausted" : controller.signal.aborted ? "waiting" : "failed";
+    if (!controller.signal.aborted && !unavailable && !lockBusy && currentPolicy.enabled && !currentPolicy.paused) {
+      releaseCandidate(cwd, job);
+      delete job.candidateSha;
+    }
+    const status = !currentPolicy.enabled ? "disabled" : currentPolicy.paused ? "paused" : !current(cwd, record3) ? "stale" : unavailable ? "unavailable" : controller.signal.aborted || lockBusy ? "waiting" : job.attempts >= policy.max_attempts ? "exhausted" : "failed";
     update(status, error61 instanceof Error ? error61.message : String(error61));
     return 0;
   } finally {
@@ -35061,6 +35133,7 @@ var init_engine_repair = __esm({
       checkpointId: external_exports.string(),
       sha: external_exports.string(),
       attempts: external_exports.number().int().nonnegative(),
+      starts: external_exports.number().int().nonnegative().optional(),
       status: external_exports.enum(["disabled", "paused", "unavailable", "waiting", "running", "validating", "applied", "stale", "failed", "exhausted"]),
       updatedAt: external_exports.number(),
       reason: external_exports.string(),
@@ -37594,7 +37667,7 @@ var {
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.7.3",
+  version: "1.7.4",
   description: "CLI do Supremo: bootstrap, preview persistente e checkpoints em background.",
   license: "MIT",
   author: "Supremo",

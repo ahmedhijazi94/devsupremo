@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { acceptsFeedback, buildValidationFeedback, sanitizeDiagnostic, validationFeedbackSchema, withFeedbackEvidence } from './feedback'
+import { acceptsFeedback, buildValidationFeedback, sanitizeDiagnostic, validationFeedbackSchema, withFeedbackEvidence, withIntegrationFeedback } from './feedback'
 
 const base = {
   projectId: '11111111-1111-4111-8111-111111111111', checkpointId: '22222222-2222-4222-8222-222222222222',
@@ -8,6 +8,20 @@ const base = {
   required: ['Testes e cobertura'], evidence: 'Coverage for functions (70%) does not meet global threshold (80%)',
 }
 describe('validation feedback', () => {
+  it('retains a sanitized integration blocker without falsely failing the approved tests', () => {
+    const feedback = buildValidationFeedback({ ...base, checks: [{ name: base.required[0]!, status: 'completed', conclusion: 'success' }] })
+    const result = withIntegrationFeedback(feedback, { headSha: base.publishedSha, state: 'security_blocked', decision: 'blocked', merged: false,
+      reasons: ['Actions: leitura indisponível ghp_private'] })
+    expect(result).toMatchObject({ state: 'passed', failures: [], checks: feedback.checks,
+      summary: 'Testes aprovados. Integração bloqueada: Actions: leitura indisponível [REDACTED]' })
+    expect(validationFeedbackSchema.safeParse(result).success).toBe(true)
+    expect(withIntegrationFeedback(feedback, { headSha: 'c'.repeat(40), state: 'merged', decision: 'merge', merged: true, reasons: [] })).toBe(feedback)
+    expect(withIntegrationFeedback(feedback, { headSha: base.publishedSha, state: 'ci_running', decision: 'wait', merged: false, reasons: [] })).toBe(feedback)
+    expect(withIntegrationFeedback(feedback, { headSha: base.publishedSha, state: 'merged', decision: 'merge', merged: true, reasons: [] }))
+      .toMatchObject({ state: 'integrated', summary: 'Versão validada e integrada.' })
+    const failed = { ...feedback, state: 'failed' as const }
+    expect(withIntegrationFeedback(failed, { headSha: base.publishedSha, state: 'merged', decision: 'merge', merged: true, reasons: [] })).toBe(failed)
+  })
   it('classifies a registry outage per job without reclassifying an unrelated code failure', () => {
     const feedback = buildValidationFeedback({ ...base, required: ['Políticas RLS', 'coverage'], checks: [
       { name: 'Políticas RLS', status: 'completed', conclusion: 'failure' },

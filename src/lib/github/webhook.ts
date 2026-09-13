@@ -110,8 +110,9 @@ function prNumbersFrom(list: unknown): number[] {
  * reconciliar, e tentar mesclar uma PR fechada só geraria um erro inútil.
  *
  * NÃO usamos `workflow_run`: os jobs da CI aparecem como check-runs, então o fim da
- * CI já chega por check_suite/check_run — e `workflow_run` exigiria `Actions: read`
- * sem trazer gatilho novo. Least privilege: só `Checks: read` + `Pull requests`.
+ * CI já chega por check_suite/check_run, sem necessidade de outro evento.
+ * O reconciliador precisa de `Actions: read` para conferir a execução confiável
+ * do workflow, independentemente dos eventos assinados pela GitHub App.
  * Não confia em nada além dos IDENTIFICADORES (repo/installation/prNumber); o
  * SHA/conclusão do payload é só dica de auditoria — `merged` decide só se este
  * evento CONTA como gatilho, nunca se o merge é AUTORIZADO (isso é sempre
@@ -165,7 +166,6 @@ export function parseWebhookForReconcile(
     return { ...base, prNumbers, headShaHint: str(suite?.head_sha) }
   }
 
-  // workflow_run NÃO é tratado de propósito (exigiria Actions:read sem trazer
-  // gatilho novo — ver comentário acima).
+  // workflow_run NÃO é tratado de propósito: os checks já fornecem o gatilho.
   return null
 }

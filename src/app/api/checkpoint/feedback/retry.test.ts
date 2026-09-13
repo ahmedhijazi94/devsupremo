@@ -54,6 +54,20 @@ beforeEach(() => {
 })
 
 describe('daemon feedback retry uses the full integration controller', () => {
+  it('reports the App Actions permission refusal separately from green CI and recovers on the next heartbeat', async () => {
+    mocks.trustedChecks.mockRejectedValueOnce({ status: 403, message: 'Resource not accessible by integration' })
+    expect((await POST(request())).status).toBe(200)
+    expect(mocks.merge).not.toHaveBeenCalled()
+    expect(mocks.reconcileRows).toHaveBeenCalledWith({}, { projectId, prNumber: 1, publishedSha: sha },
+      { pushStatus: null, integrationStatus: 'security_blocked' })
+    expect(mocks.writeMeta).toHaveBeenCalledWith(projectId, { integration_state: 'security_blocked' }, { expectedState: 'ci_running' })
+    expect(mocks.save.mock.calls.at(-1)?.[1]).toMatchObject({ state: 'passed', failures: [],
+      summary: expect.stringContaining('Actions: leitura') })
+    mocks.cached.mockResolvedValue({ observedAt: new Date(Date.now() - 46_000).toISOString() })
+    await POST(request())
+    expect(mocks.merge).toHaveBeenCalledExactlyOnceWith(1, sha)
+    expect(mocks.save.mock.calls.at(-1)?.[1]).toMatchObject({ state: 'integrated' })
+  })
   it('recovers a lost event after green CI and persists confirmed integration, then does not merge again', async () => {
     expect((await POST(request())).status).toBe(200)
     expect(mocks.appToken).toHaveBeenCalledWith('owner/app')

@@ -7,6 +7,10 @@ import { buildCheckpointRecord, defaultCheckpointDeps, type CheckpointRecord } f
 
 export const TURN_DIR = '.supremo/turns'
 
+export class TurnLockBusyError extends Error {
+  constructor() { super('Lifecycle ocupado por outro processo; tente novamente.'); this.name = 'TurnLockBusyError' }
+}
+
 export function gitText(cwd: string, args: string[], env: NodeJS.ProcessEnv = {}): string {
   return execFileSync('git', args, { cwd, env: { ...process.env, ...env }, encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024 }).trim()
@@ -40,7 +44,7 @@ export async function withTurnLock<T>(cwd: string, work: () => T | Promise<T>): 
       try { process.kill(owner.pid, 0) }
       catch (probe) { dead = (probe as NodeJS.ErrnoException).code === 'ESRCH' }
     }
-    if (!dead) throw new Error('Lifecycle ocupado por outro processo; tente novamente.')
+    if (!dead) throw new TurnLockBusyError()
     fs.rmSync(lock, { recursive: true })
     fs.mkdirSync(lock)
   }

@@ -4,8 +4,47 @@ import http from 'node:http'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { describe, expect, it } from 'vitest'
 import { previewSupervisorScript } from './harness'
+
+async function stopFixture(dir: string): Promise<void> {
+  const pidPath = join(dir, '.supremo/preview.pid')
+  if (!existsSync(pidPath)) return
+  const pid = Number(readFileSync(pidPath, 'utf8'))
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error('Invalid fixture process group')
+  const signal = (value: NodeJS.Signals): void => {
+    try { process.kill(-pid, value) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+  }
+  const hasLiveMembers = (): boolean => {
+    const result = spawnSync('ps', ['-eo', 'pgid=,stat='], { encoding: 'utf8', timeout: 2000 })
+    if (result.status !== 0) throw new Error('Could not inspect fixture shutdown')
+    return result.stdout.trim().split('\n').some((line) => {
+      const [group, state] = line.trim().split(/\s+/)
+      // npm pode sair antes do Next; zumbis no Linux já não escrevem no disco.
+      return Number(group) === pid && !/^[ZXx]/.test(state ?? '')
+    })
+  }
+  const waitForExit = async (timeout: number): Promise<boolean> => {
+    const deadline = Date.now() + timeout
+    while (hasLiveMembers()) {
+      if (Date.now() >= deadline) return false
+      await delay(50)
+    }
+    return true
+  }
+  signal('SIGTERM')
+  const stopped = spawnSync(process.execPath, ['scripts/preview.mjs', 'stop'], {
+    cwd: dir, timeout: 5000, encoding: 'utf8',
+  })
+  if (!await waitForExit(3000)) {
+    signal('SIGKILL')
+    if (!await waitForExit(2000)) throw new Error('Fixture processes did not terminate')
+  }
+  expect(stopped.status, stopped.stderr).toBe(0)
+}
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -42,7 +81,7 @@ function request(port: number, cookieBytes: number): Promise<{ status: number; b
 
 describe('preview local — capacidade HTTP com cookies de vários projetos', () => {
   it.each([
-    { name: 'padrão', options: '', limit: 65536, recovery: true },
+    { name: 'padrão', options: '', limit: 65536, recovery: true, delayedShutdown: true },
     { name: 'opções preexistentes', options: '--no-warnings', limit: 65536, recovery: true },
     { name: 'limite explícito com igual', options: '--max-http-header-size=32768', limit: 32768 },
     { name: 'limite explícito separado', options: '--max-http-header-size 24576', limit: 24576 },
@@ -50,7 +89,7 @@ describe('preview local — capacidade HTTP com cookies de vários projetos', ()
     { name: 'limite explícito com underscore', options: '--max_http_header_size=24576', limit: 24576 },
     { name: 'limite explícito menor preservado', options: '--max-http-header-size=8192', limit: 8192 },
     { name: 'produção preservada', options: '', limit: http.maxHeaderSize, environment: 'production' as const },
-  ])('$name: servidor real respeita o limite e preserva as opções', async ({ options, limit, recovery, environment }) => {
+  ])('$name: servidor real respeita o limite e preserva as opções', async ({ options, limit, recovery, environment, delayedShutdown }) => {
     const dir = mkdtempSync(join(tmpdir(), 'supremo-header-capacity-'))
     const port = await freePort()
     const inheritedOptions = process.env.NODE_OPTIONS
@@ -60,6 +99,16 @@ describe('preview local — capacidade HTTP com cookies de vários projetos', ()
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { dev: 'node server.mjs' } }))
     writeFileSync(join(dir, 'server.mjs'), `
       import http from 'node:http'
+      import { writeFileSync } from 'node:fs'
+      ${delayedShutdown ? `let shuttingDown = false
+      process.on('SIGTERM', () => {
+        if (shuttingDown) return
+        shuttingDown = true
+        setTimeout(() => {
+          writeFileSync('shutdown-complete', 'flushed')
+          process.exit(0)
+        }, 250)
+      })` : ''}
       http.createServer((request, response) => response.end(JSON.stringify({
         limit: http.maxHeaderSize,
         retained: globalThis.previewOptionRetained === true,
@@ -101,15 +150,12 @@ describe('preview local — capacidade HTTP com cookies de vários projetos', ()
       }
       expect(process.env.NODE_OPTIONS).toBe(inheritedOptions)
     } finally {
-      const pidPath = join(dir, '.supremo/preview.pid')
-      if (existsSync(pidPath)) {
-        const pid = Number(readFileSync(pidPath, 'utf8'))
-        try { process.kill(-pid, 'SIGTERM') } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-        }
-        spawnSync(process.execPath, ['scripts/preview.mjs', 'stop'], { cwd: dir, timeout: 5000 })
+      await stopFixture(dir)
+      try {
+        if (delayedShutdown) expect(readFileSync(join(dir, 'shutdown-complete'), 'utf8')).toBe('flushed')
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
       }
-      rmSync(dir, { recursive: true, force: true })
     }
   }, 20_000)
 
@@ -153,14 +199,10 @@ describe('preview local — capacidade HTTP com cookies de vários projetos', ()
       expect(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8')).toBe(pid)
       expect(Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8'))).toBe(actualPort)
     } finally {
-      const pidPath = join(dir, '.supremo/preview.pid')
-      if (existsSync(pidPath)) {
-        try { process.kill(-Number(readFileSync(pidPath, 'utf8')), 'SIGTERM') } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-        }
-        spawnSync(process.execPath, ['scripts/preview.mjs', 'stop'], { cwd: dir, timeout: 5000 })
-      }
-      rmSync(dir, { recursive: true, force: true })
+      // Next grava seu cache ao encerrar: só apagar depois que todos os
+      // processos desta fixture terminarem, preservando o preview do usuário.
+      await stopFixture(dir)
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     }
   }, 60_000)
 })

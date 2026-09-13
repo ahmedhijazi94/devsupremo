@@ -2,7 +2,7 @@
 import type { ValidationManifest } from '../validation-integrity'
 export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
   {
-    "version": "4.0.3",
+    "version": "4.0.4",
     "kind": "public",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -2923,7 +2923,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
     ]
   },
   {
-    "version": "4.0.3",
+    "version": "4.0.4",
     "kind": "solo",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -5844,7 +5844,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
     ]
   },
   {
-    "version": "4.0.3",
+    "version": "4.0.4",
     "kind": "team",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",

@@ -6,6 +6,7 @@ import { buildProjectFiles } from '../templates/project-files'
 import { blobHash, lockEntryHash } from '../../../packages/cli/src/validation-integrity'
 import { selectTrustedWorkflow, verifyCandidatePolicy, verifyPolicyChanges, workflowChecks, type WorkflowEvidence } from './trusted-policy'
 import { TRUSTED_VALIDATION_POLICIES_4_0_2 } from './validation-policy-releases/4.0.2'
+import { TRUSTED_VALIDATION_POLICIES } from '../../../packages/cli/src/generated/validation-policy'
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'
@@ -38,6 +39,16 @@ function packageEdit(edit: (pkg: Record<string, unknown>) => void) {
 }
 
 describe('independent engine policy over actual generated candidates', () => {
+  it('4.0.4 preserves the complete validation authority released in 4.0.3', () => {
+    // Hash da política em 09e6723, removendo apenas o número da versão.
+    // Alterar validadores numa versão futura exige arquivar esta autoridade.
+    const authority = TRUSTED_VALIDATION_POLICIES.map(({ version, ...policy }) => {
+      expect(version).toBe('4.0.4')
+      return policy
+    })
+    expect(createHash('sha256').update(JSON.stringify(authority)).digest('hex'))
+      .toBe('73a1698a206c284dd66eaf835edf855e574a16abba9eea9774de8a1e73cba161')
+  })
   it('pins the complete historical authority to its recorded immutable release contents', () => {
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_2)).digest('hex'))
       .toBe('ac8079a1684751bcac5bbba1bdd6d4dea09d6f19a27691f58f6cd518090b11aa')

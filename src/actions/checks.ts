@@ -19,6 +19,7 @@ import { githubMergeGateway } from '@/lib/github/gateway'
 import { reconcileMerge } from '@/lib/github/merge-controller'
 import { resolveRequiredChecks } from '@/lib/github/reconcile'
 import { evaluateMergeEligibility } from '@/lib/github/merge-policy'
+import { postMergeBadge } from '@/lib/checkpoint/presentation'
 
 /**
  * Os gates rodando, ao vivo, dentro do Supremo — e as ações do PR aqui mesmo.
@@ -174,7 +175,8 @@ export async function getProjectChecks(
         state: integrationBlocked ? 'failed' : state,
         summary: integrationBlocked
           ? `${summary} A integração desta versão está bloqueada. Consulte o diagnóstico no histórico.` : summary,
-        ...(integrationBlocked ? { badgeLabel: 'Integração bloqueada' } : {}),
+        ...(integrationBlocked ? { badgeLabel: 'Integração bloqueada' }
+          : !agentPr && latest?.status === 'Integrado' ? { badgeLabel: postMergeBadge(true, state)! } : {}),
         checks: checks.checks.map((check) => ({
           name: check.name,
           status: check.status,

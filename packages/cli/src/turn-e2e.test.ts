@@ -109,9 +109,9 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
     // A fresh OS process reads persisted state; no conversation memory is involved.
     const cli = path.resolve(__dirname, '../dist/bin.js')
     const cold = JSON.parse(execFileSync(process.execPath, [cli, 'turn', 'status'], { cwd: root, encoding: 'utf8', input: '' })) as {
-      context: { pendingRecovery: { status: string } }; turn: { status: string; checkpointId: string }
+      context: { pendingRecovery: { status: string } | null }; turn: { status: string; checkpointId: string }
     }
-    expect(cold.context.pendingRecovery.status).toBe('resolved')
+    expect(cold.context.pendingRecovery).toBeNull()
     expect(cold.turn.status).toBe('completed')
     const full = JSON.parse(execFileSync(process.execPath, [cli, 'turn', 'status', '--full-state'], { cwd: root, encoding: 'utf8', input: '' })) as {
       state: { turn: { recovery: { status: string }; checkpointId: string } }

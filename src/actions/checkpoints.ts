@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { requireUser, toActionError } from '@/lib/auth'
 import { humanCheckpointStatus, humanRestoreStatus } from '@/lib/checkpoint/restore'
 import { validationFeedbackSchema } from '@/lib/checkpoint/feedback'
+import { checkpointValidationSummary } from '@/lib/checkpoint/presentation'
 import { localCheckpointPresentation } from '@/lib/checkpoint/local-report'
 import { readLocalDiagnostic, type LocalDiagnosticPresentation } from '@/lib/checkpoint/local-diagnostic'
 
@@ -82,7 +83,7 @@ export async function listProjectCheckpoints(
           : '',
         validationSummary: r.push_status === 'local'
           ? localCheckpointPresentation(r.local_validation_status, r.local_upload_status).summary
-          : feedback?.summary ?? '',
+          : checkpointValidationSummary(r.push_status === 'integrated' || r.integration_status === 'merged', feedback),
         }
       }),
     }

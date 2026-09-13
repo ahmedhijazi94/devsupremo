@@ -20,6 +20,56 @@ beforeEach(() => {
 })
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals() })
 describe('API do banco: dispositivo, dono e ambiente', () => {
+  it('counts auth users through the fixed server query, without granting general auth SQL', async () => {
+    vi.mocked(fetch).mockResolvedValue(Response.json([{ count: 7 }]))
+    const response = await POST(request({ operation: 'auth-count', expectedRef: 'dev-ref', environment: 'development' }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ readOnly: true, data: { users: 7 }, environment: 'development' })
+    expect(fetch).toHaveBeenCalledWith('https://api.supabase.com/v1/projects/dev-ref/database/query/read-only', expect.objectContaining({ method: 'POST',
+      body: expect.stringContaining('SELECT count(*) AS count FROM auth.users'), redirect: 'error' }))
+    expect((await POST(request({ operation: 'auth-count', expectedRef: 'dev-ref', environment: 'development', sql: 'SELECT * FROM auth.users' }))).status).toBe(400)
+  })
+  it('changes email confirmation with a minimal patch and verifies it without disclosing SMTP credentials', async () => {
+    const config = { mailer_autoconfirm: false, disable_signup: false, smtp_pass: 'server-only-password' }
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json(config)).mockResolvedValueOnce(Response.json({}))
+      .mockResolvedValueOnce(Response.json({ ...config, mailer_autoconfirm: true }))
+    const response = await POST(request({ operation: 'auth-configure', expectedRef: 'dev-ref', environment: 'development', config: { emailConfirmation: false } }))
+    expect(response.status).toBe(200)
+    const data: unknown = await response.json()
+    expect(data).toMatchObject({ readOnly: false, data: { before: { emailConfirmation: true }, after: { emailConfirmation: false }, verified: true } })
+    expect(JSON.stringify(data)).not.toContain('server-only-password')
+    expect(vi.mocked(fetch).mock.calls[1]?.[1]?.body).toBe('{"mailer_autoconfirm":true}')
+  })
+  it('revocation between configuration read and write prevents the write', async () => {
+    let authorized = true
+    vi.mocked(authenticateDeviceSecret).mockImplementation(async () => authorized ? { ok: true, device: { id: 'device', ownerUserId: 'owner', revokedAt: null, label: null } } : { ok: false, reason: 'revoked' })
+    vi.mocked(fetch).mockImplementation(async () => { authorized = false; return Response.json({ mailer_autoconfirm: false, disable_signup: false }) })
+    const response = await POST(request({ operation: 'auth-configure', expectedRef: 'dev-ref', environment: 'development', config: { emailConfirmation: false } }))
+    expect(response.status).toBe(401)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.method).toBe('GET')
+  })
+  it('never uses user administration credentials from a changed account', async () => {
+    vi.mocked(fetch).mockImplementation(async () => {
+      vi.mocked(getProject).mockResolvedValue({ id: body.projectId, user_id: 'owner', supabase_project_ref: 'dev-ref', supabase_account_id: 'other-account' } as Awaited<ReturnType<typeof getProject>>)
+      return Response.json([{ name: 'service_role', api_key: 'server-admin-fixture' }])
+    })
+    expect((await POST(request({ operation: 'auth-delete', expectedRef: 'dev-ref', environment: 'development', userId: body.projectId }))).status).toBe(409)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('keeps admin keys on the server and passes only the selected user update', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json([{ name: 'service_role', api_key: 'server-admin-fixture' }]))
+      .mockResolvedValueOnce(Response.json({ id: body.projectId, email: 'a@example.test', app_metadata: { key: 'server-admin-fixture' }, recovery_token: 'hidden' }))
+    const response = await POST(request({ operation: 'auth-update', expectedRef: 'dev-ref', environment: 'development', userId: body.projectId, user: { banHours: 24 } }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ data: { user: { id: body.projectId, email: 'a@example.test' } } })
+    expect(fetch).toHaveBeenLastCalledWith(`https://dev-ref.supabase.co/auth/v1/admin/users/${body.projectId}`, expect.objectContaining({ method: 'PUT', body: '{"ban_duration":"24h"}' }))
+  })
+  it.each(['foreign-ref', null])('refuses auth operations for target %s', async ref => {
+    if (ref === null) vi.mocked(readEnvironment).mockResolvedValue(null)
+    expect((await POST(request({ operation: 'auth-configure', expectedRef: ref ?? 'dev-ref', environment: 'development', config: { emailConfirmation: false } }))).status).toBe(409)
+    expect(fetch).not.toHaveBeenCalled()
+  })
   it('status machine-readable consulta o projeto pelo dono autenticado', async () => {
     const response = await POST(request())
     expect(await response.json()).toMatchObject({ environment: 'development', automaticMigrations: true })

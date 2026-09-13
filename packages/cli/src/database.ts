@@ -66,6 +66,12 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   // Snapshot informativo, jamais usado como autorização para uma escrita futura.
   fs.writeFileSync(path.join(cwd, '.supremo/database.json'), JSON.stringify(status, null, 2) + '\n')
   if (operation === 'status') return status
+  if (operation.startsWith('auth-')) {
+    const target = z.object({ environment: z.enum(['development', 'production', 'unknown']),
+      projectRef: z.string().regex(/^[a-z0-9_-]+$/).max(64) }).parse(status)
+    if (checkedOptions.environment && checkedOptions.environment !== target.environment) throw new Error('Ambiente solicitado diverge do banco vinculado; nenhuma operação enviada.')
+    return request(operation, { ...checkedOptions, expectedRef: target.projectRef, environment: target.environment })
+  }
   if (['inspect', 'query', 'logs', 'report', 'cron-list', 'cron-history'].includes(operation)) {
     const target = z.object({ environment: z.enum(['development', 'production', 'unknown']),
       projectRef: z.string().regex(/^[a-z0-9_-]+$/).max(64) }).parse(status)

@@ -19,7 +19,8 @@ describe('persisted recovery memory', () => {
   it('does not resurrect a failure after a validated successor when another checkpoint starts', async () => {
     const store = db([null, { ...identity, created_at: '2026-09-06T02:00:00Z', validation_success: { ...failure, state: 'passed', failures: [], checks: [{ name: 'coverage', status: 'passed' }], observedAt: '2026-09-06T02:10:00.000Z' } },
       { ...identity, created_at: '2026-09-06T01:00:00Z', validation_failure: failure }])
-    expect(await readFeedbackEnvelope(store.client, projectId, checkpointId)).toEqual({ current: null, previousFailure: null })
+    expect(await readFeedbackEnvelope(store.client, projectId, checkpointId)).toMatchObject({ current: null, previousFailure: null,
+      lastSuccess: { checkpointId, state: 'passed', observedAt: '2026-09-06T02:10:00.000Z' } })
   })
   it('retains a failure observed after a successful attempt on the same checkpoint', async () => {
     const store = db([{ ...identity, validation_feedback: { ...failure, state: 'pending' } },

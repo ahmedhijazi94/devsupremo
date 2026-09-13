@@ -68,5 +68,5 @@ export async function readFeedbackEnvelope(client: SupabaseClient, projectId: st
     (data.created_at < successRow.created_at ||
       (data.created_at === successRow.created_at && failure && failure.observedAt <= success.observedAt))
   const previousFailure = failure && !resolved ? failure : null
-  return { current, previousFailure }
+  return { current, previousFailure, ...(success ? { lastSuccess: success } : {}) }
 }

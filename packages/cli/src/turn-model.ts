@@ -30,6 +30,7 @@ export const checkpointLinkSchema = z.object({
   commitSha: shaSchema, publishedSha: shaSchema.nullable(),
   environment: turnEnvironmentSchema, createdAt: z.string().datetime(),
   fingerprint: fingerprintSchema.optional(),
+  parentCheckpointId: z.string().uuid().nullable().optional(),
 })
 export type CheckpointLink = z.infer<typeof checkpointLinkSchema>
 
@@ -168,6 +169,39 @@ export interface ReconcileRecoveryInput {
   maxAttempts?: number
 }
 
+function descendsFrom(target: CheckpointLink, ancestor: CheckpointLink, queue: readonly CheckpointLink[]): boolean {
+  const visited = new Set<string>()
+  let cursor: CheckpointLink | undefined = target
+  while (cursor && !visited.has(cursor.checkpointId)) {
+    if (cursor.checkpointId === ancestor.checkpointId) return true
+    visited.add(cursor.checkpointId)
+    const parentId: string | null | undefined = cursor.parentCheckpointId
+    cursor = queue.find(record => record.checkpointId === parentId && record.projectId === target.projectId && record.environment === target.environment)
+  }
+  return false
+}
+
+function remoteRecoveryProof(prior: RecoveryState, success: ValidationFeedback, input: ReconcileRecoveryInput,
+  current: ValidationFeedback | null, workspace: WorkspaceSnapshot): boolean {
+  if (!['passed', 'integrated'].includes(success.state) || success.observedAt < prior.observedAt ||
+    Date.parse(success.observedAt) > Date.parse(input.now) + 60_000 || prior.environment !== workspace.environment) return false
+  const approved = feedbackLink(success, input.queue, workspace)
+  if (!approved) return false
+  const failed = input.queue.find(record => record.checkpointId === prior.checkpointId && record.projectId === prior.projectId &&
+    record.environment === prior.environment && record.commitSha === prior.localSha)
+  if (!failed) return false
+  const same = success.checkpointId === prior.checkpointId && success.commitSha === prior.localSha && success.publishedSha === prior.remoteSha
+  if (same && current?.checkpointId === success.checkpointId && currentRecovery(prior, workspace, approved).freshness === 'current') return true
+  // A newer snapshot needs an explicit chain and proof of every formerly failing check.
+  if (!descendsFrom(approved, failed, input.queue) || approved.createdAt < failed.createdAt || !success.checks?.length ||
+    !prior.failures.every(failure => success.checks!.some(check => check.status === 'passed' &&
+      (check.name === failure.name || (['typecheck', 'lint'].includes(failure.type) && failure.name.startsWith(`${failure.type}: `) && classifyFailure(check.name) === failure.type))))) return false
+  const target = current ? feedbackLink(current, input.queue, workspace) : approved
+  if (!target || (current && !['pending', 'passed', 'integrated'].includes(current.state))) return false
+  const matches = target.fingerprint ? target.fingerprint === workspace.fingerprint : target.commitSha === workspace.headSha && !workspace.dirty
+  return matches && descendsFrom(target, approved, input.queue)
+}
+
 /**
  * A backend read is mandatory per turn; absence/offline never resolves a failure.
  * Local and published SHAs are deliberately distinct. Only a project/environment
@@ -186,18 +220,17 @@ export function reconcileRecovery(input: ReconcileRecoveryInput): RecoveryState 
     return { ...observed, freshness: input.remoteStatus === 'offline' ? 'offline' : 'unknown', reason: `feedback_${input.remoteStatus}` }
   }
   const parsed = feedbackEnvelopeSchema.safeParse(input.feedback)
-  if (!parsed.success || [parsed.data.current, parsed.data.previousFailure].some((item) => item && item.projectId !== workspace.projectId)) {
+  if (!parsed.success || [parsed.data.current, parsed.data.previousFailure, parsed.data.lastSuccess].some((item) => item && item.projectId !== workspace.projectId)) {
     return prior && prior.required ? { ...prior, freshness: 'unknown', reason: 'feedback_invalid' } : null
   }
-  const { current, previousFailure } = parsed.data
-  if (current && (current.state === 'passed' || current.state === 'integrated') && prior?.required &&
-    current.checkpointId === prior.checkpointId && current.commitSha === prior.localSha &&
-    current.publishedSha === prior.remoteSha && current.observedAt >= prior.observedAt &&
-    feedbackLink(current, input.queue, workspace) &&
-    currentRecovery(prior, workspace, feedbackLink(current, input.queue, workspace)).freshness === 'current') {
+  const { current, previousFailure, lastSuccess } = parsed.data
+  const success = [current, lastSuccess].find((item): item is ValidationFeedback => item != null && prior?.required === true &&
+    ![current, previousFailure].some(failure => failure?.state === 'failed' && failure.observedAt > item.observedAt) &&
+    remoteRecoveryProof(prior, item, input, current, workspace))
+  if (success && prior) {
     return { ...prior, status: 'resolved', required: false, freshness: 'current', reason: null,
-      observedAt: current.observedAt,
-      resolvedValidationId: `${current.checkpointId}:${current.observedAt}` }
+      observedAt: success.observedAt,
+      resolvedValidationId: `${success.checkpointId}:${success.observedAt}` }
   }
   const failure = [current, previousFailure].filter((item): item is ValidationFeedback => item?.state === 'failed')
     .sort((a, b) => b.observedAt.localeCompare(a.observedAt))[0]
@@ -237,6 +270,11 @@ export function reconcileRecovery(input: ReconcileRecoveryInput): RecoveryState 
     resolvedValidationId: null,
   }
   const linked = currentRecovery(recovery, workspace, feedbackLink(failure, input.queue, workspace))
+  const recovered = [current, lastSuccess].find((item): item is ValidationFeedback => item != null &&
+    ![current, previousFailure].some(failed => failed?.state === 'failed' && failed.observedAt > item.observedAt) &&
+    remoteRecoveryProof(linked, item, input, current, workspace))
+  if (recovered) return { ...linked, status: 'resolved', required: false, freshness: 'current', reason: null,
+    observedAt: recovered.observedAt, resolvedValidationId: `${recovered.checkpointId}:${recovered.observedAt}` }
   if (Date.parse(failure.observedAt) > Date.parse(input.now) + 60_000) {
     return { ...linked, status: 'stale', freshness: 'unknown', reason: 'feedback_from_future' }
   }

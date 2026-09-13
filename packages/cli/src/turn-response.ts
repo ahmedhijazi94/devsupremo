@@ -33,13 +33,13 @@ export function turnAgentResponse(output: TurnResult) {
         environment: state.turn.environment, databaseEnvironment: context?.databaseEnvironment,
         databaseAuthority: context?.databaseAuthority, preview: context?.preview, daemon: context?.daemon,
         reconciliation: context?.reconciliation, integrationMode: state.turn.integrationMode,
-        pendingRecovery: recovery ? {
+        pendingRecovery: recovery?.required ? {
           required: recovery.required, validationId: recovery.validationId,
           status: recovery.status, freshness: recovery.freshness,
           failures: recovery.failures.slice(0, 12).map(f => ({ type: f.type, summary: bounded(f.summary, 160) })),
           evidence: bounded(diagnostic.logs ?? recovery.evidence, 2600),
         } : null,
-        ...(Object.keys(diagnostic).length ? { recoveryDiagnostic: {
+        ...(recovery?.required && Object.keys(diagnostic).length ? { recoveryDiagnostic: {
           checks: Array.isArray(diagnostic.checks) ? diagnostic.checks.slice(0, 12).map(c => {
             const check = object(c)
             return { name: bounded(check.name, 120), type: check.type, status: check.status }

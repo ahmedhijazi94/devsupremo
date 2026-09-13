@@ -53,6 +53,28 @@ function complete(recovery: RecoveryState, validation: ValidationEvidence = evid
 }
 
 describe('reconciliation binds backend feedback to the actual local project snapshot', () => {
+  it('resolves a failed E2E with a proven successor and keeps it resolved while a descendant waits for CI', () => {
+    const approved: CheckpointLink = { ...checkpoint, checkpointId: NEXT_CHECKPOINT, commitSha: NEXT, publishedSha: NEXT,
+      parentCheckpointId: CHECKPOINT, fingerprint: 'fixed-tree', createdAt: NOW }
+    const success: ValidationFeedback = { ...feedback, checkpointId: NEXT_CHECKPOINT, commitSha: NEXT, publishedSha: NEXT,
+      state: 'integrated', observedAt: LATER, failures: [], checks: [{ name: 'E2E browser', status: 'passed' }] }
+    const fixedWorkspace = { ...workspace, fingerprint: 'fixed-tree', headSha: NEXT }
+    const input = { workspace: fixedWorkspace, queue: [checkpoint, approved], feedback: { current: success, previousFailure: null },
+      previous: pending(), remoteStatus: 'fresh' as const, now: LATER }
+    expect(reconcileRecovery(input)).toMatchObject({ required: false, status: 'resolved' })
+    const next = { ...approved, checkpointId: TURN, parentCheckpointId: NEXT_CHECKPOINT, commitSha: HEAD, publishedSha: HEAD, fingerprint: 'new-tree' }
+    expect(reconcileRecovery({ ...input, workspace: { ...workspace, headSha: HEAD, fingerprint: 'new-tree' }, queue: [...input.queue, next],
+      feedback: { current: { ...success, checkpointId: TURN, commitSha: HEAD, publishedSha: HEAD, state: 'pending', checks: [] }, previousFailure: null, lastSuccess: success } }))
+      .toMatchObject({ required: false, status: 'resolved' })
+    for (const invalid of [
+      { ...input, remoteStatus: 'offline' as const },
+      { ...input, queue: [checkpoint, { ...approved, parentCheckpointId: null }] },
+      { ...input, queue: [checkpoint, { ...approved, environment: 'production' as const }] },
+      { ...input, workspace: { ...fixedWorkspace, fingerprint: 'other-tree' } },
+      { ...input, feedback: { current: { ...success, checks: [{ name: 'unit', status: 'passed' as const }] }, previousFailure: null } },
+      { ...input, feedback: { current: { ...success, observedAt: '2099-01-01T00:00:00.000Z' }, previousFailure: null } },
+    ]) expect(reconcileRecovery(invalid)?.required).toBe(true)
+  })
   it('delivers a backend failure even when the daemon cache has not received it', () => {
     const result = pending()
     expect(result).toMatchObject({ required: true, status: 'pending', freshness: 'current', localSha: LOCAL, remoteSha: REMOTE,

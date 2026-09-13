@@ -224,7 +224,11 @@ describe('turn preflight backend reconciliation', () => {
     await saveCheckpointFeedback(database.client, feedback(newer, 'passed', '2026-09-06T03:00:00.000Z'))
     expect((await context()).feedback).toMatchObject({ current: { checkpointId: newer.id, state: 'passed' }, previousFailure: null })
     database.tables.checkpoints!.push(checkpoint(3))
-    expect((await context()).feedback).toEqual({ current: null, previousFailure: null })
+    expect((await context()).feedback).toEqual({
+      current: null,
+      previousFailure: null,
+      lastSuccess: feedback(newer, 'passed', '2026-09-06T03:00:00.000Z'),
+    })
   })
 
   it('ignores late observations for the same checkpoint and never applies old failure as the current SHA', async () => {

@@ -99,7 +99,7 @@ export async function POST(req: Request): Promise<Response> {
       )
       try {
         await capturePrFeedback(client, project.id,
-          installationCreds(token, target.repoFullName, project.defaultBranch), prNumber)
+          installationCreds(token, target.repoFullName, project.defaultBranch), prNumber, result)
       } catch {
         logger.event('feedback_capture_deferred', { projectId: project.id, prNumber })
       }

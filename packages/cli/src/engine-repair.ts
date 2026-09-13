@@ -15,11 +15,12 @@ import { RepairRunnerUnavailableError, resolveRepairExecutable } from './repair-
 import { fetchTurnContext } from './turn-context-client'
 import { canAutoRepairPaths } from './turn-model'
 import { evidenceFor, scanCheckpointForUpload, validateCheckpoint, type LocalEvidence } from './turn-validation'
-import { captureTree, captureTurnCheckpoint, gitText, readJson, TURN_DIR, withTurnLock, writeJson } from './turn-workspace'
+import { captureTree, captureTurnCheckpoint, gitText, readJson, TURN_DIR, TurnLockBusyError, withTurnLock, writeJson } from './turn-workspace'
 import { verifyTrustedFiles } from './trusted-validation'
 
 const DIR = '.supremo/validation/repair'
 const repairStateSchema = z.object({ checkpointId: z.string(), sha: z.string(), attempts: z.number().int().nonnegative(),
+  starts: z.number().int().nonnegative().optional(),
   status: z.enum(['disabled', 'paused', 'unavailable', 'waiting', 'running', 'validating', 'applied', 'stale', 'failed', 'exhausted']),
   updatedAt: z.number(), reason: z.string(), candidateSha: z.string().optional(), resultCheckpointId: z.string().optional() })
 export type RepairJob = z.infer<typeof repairStateSchema>
@@ -63,9 +64,23 @@ function current(cwd: string, record: CheckpointRecord): boolean {
   return sourceUnchanged && (!record.workspaceHeadSha || tree.headSha === record.workspaceHeadSha)
     && defaultCheckpointDeps(cwd).readQueue().at(-1)?.checkpointId === record.checkpointId
 }
+function candidateRef(job: RepairJob): string {
+  return `refs/supremo/repairs/${z.string().uuid().parse(job.checkpointId)}`
+}
+function releaseCandidate(cwd: string, job: RepairJob): void {
+  if (job.candidateSha && /^[a-f0-9]{40}$/.test(job.candidateSha)) {
+    gitText(cwd, ['update-ref', '-d', candidateRef(job), job.candidateSha])
+  }
+}
 function saveJob(cwd: string, job: RepairJob): void {
+  const previous = repairStateSchema.safeParse(readJson(path.join(cwd, DIR, `${job.checkpointId}.json`)))
   writeJson(path.join(cwd, DIR, `${job.checkpointId}.json`), job)
   writeJson(path.join(cwd, DIR, 'status.json'), job)
+  const transition = (state: RepairJob): string => JSON.stringify({ ...state, updatedAt: 0 })
+  if (!previous.success || transition(previous.data) !== transition(job)) {
+    fs.appendFileSync(path.join(cwd, DIR, 'events.jsonl'), JSON.stringify(job) + '\n', { mode: 0o600 })
+  }
+  if (['applied', 'stale', 'exhausted', 'failed'].includes(job.status)) releaseCandidate(cwd, job)
 }
 function safeFile(cwd: string, file: string): void {
   if (!canAutoRepairPaths([file]) || !/^(?:src|app|components|lib)\/[a-zA-Z0-9_@()[\]./ -]+\.(?:[cm]?[jt]sx?|css|json)$/.test(file) || file.includes('\\')) {
@@ -152,6 +167,11 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
   const recovered = await recoverRepairJournal(cwd, deps)
   if (recovered !== null) return recovered
   const record = defaultCheckpointDeps(cwd).readQueue().at(-1)
+  const previous = repairStateSchema.safeParse(readJson(path.join(cwd, DIR, 'status.json')))
+  if (record && previous.success && previous.data.checkpointId !== record.checkpointId &&
+    ['waiting', 'paused', 'disabled', 'running', 'validating'].includes(previous.data.status)) {
+    saveJob(cwd, { ...previous.data, status: 'stale', updatedAt: Date.now(), reason: 'Novo checkpoint assumiu a validação; reparo anterior substituído.' })
+  }
   if (!record || record.validationStatus !== 'failed' || record.environment !== 'development') return 0
   const evidence = evidenceFor(cwd, record)
   if (!evidence || evidence.checks.some(check => check.status === 'failed' && (!check.type || ['security', 'rls', 'migration', 'environment', 'external_dependency', 'unknown'].includes(check.type)))) return 0
@@ -160,13 +180,18 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
   // A repair-generated checkpoint belongs to the same bounded chain. A human's
   // next implementation checkpoint starts a new budget; repairs cannot reset it.
   let inheritedAttempts = 0
+  let inheritedStarts = 0
   if (!old.success && fs.existsSync(path.join(cwd, DIR))) {
     for (const file of fs.readdirSync(path.join(cwd, DIR)).filter(file => /^[a-f0-9-]{36}\.json$/.test(file))) {
       const prior = repairStateSchema.safeParse(readJson(path.join(cwd, DIR, file)))
-      if (prior.success && prior.data.resultCheckpointId === record.checkpointId) inheritedAttempts = Math.max(inheritedAttempts, prior.data.attempts)
+      if (prior.success && prior.data.resultCheckpointId === record.checkpointId) {
+        inheritedAttempts = Math.max(inheritedAttempts, prior.data.attempts)
+        inheritedStarts = Math.max(inheritedStarts, prior.data.starts ?? prior.data.attempts)
+      }
     }
   }
-  const job: RepairJob = old.success ? old.data : { checkpointId: record.checkpointId, sha: record.commitSha, attempts: inheritedAttempts, status: 'waiting', updatedAt: 0, reason: '' }
+  const job: RepairJob = old.success ? old.data : { checkpointId: record.checkpointId, sha: record.commitSha, attempts: inheritedAttempts, starts: inheritedStarts, status: 'waiting', updatedAt: 0, reason: '' }
+  job.starts ??= job.attempts
   const update = (status: RepairJob['status'], reason: string): void => { Object.assign(job, { status, reason: sanitizeDiagnostic(reason), updatedAt: Date.now() }); saveJob(cwd, job) }
   if (!policy.enabled || policy.paused) { update(policy.enabled ? 'paused' : 'disabled', 'Autocura controlada pela política do projeto.'); return 0 }
   const runner = policy.runner ?? hostRunner(cwd)
@@ -177,7 +202,10 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
     }
     return 0
   }
-  if (job.attempts >= policy.max_attempts) { update('exhausted', 'Limite de tentativas atingido; diagnóstico preservado.'); return 0 }
+  if (!job.candidateSha && job.attempts >= policy.max_attempts) { update('exhausted', 'Limite de tentativas atingido; diagnóstico preservado.'); return 0 }
+  // Interruptions are not failed repairs, but launches still have a hard cap.
+  // A retained candidate can finish without spending another model invocation.
+  if (!job.candidateSha && job.starts >= policy.max_attempts * 2) { update('exhausted', 'Limite de execuções interrompidas atingido; diagnóstico preservado.'); return 0 }
   if (['failed', 'unavailable'].includes(job.status) && Date.now() - job.updatedAt < 30_000) return 0
   if (busy(cwd)) { update('waiting', 'Aguardando o turno de edição terminar.'); return 0 }
   if (!current(cwd, record)) { update('stale', 'Workspace avançou; nenhuma alteração aplicada.'); return 0 }
@@ -210,46 +238,60 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
       const newest = defaultCheckpointDeps(cwd).readQueue().at(-1)
       // Cheap activity detection while inference runs. Full-tree CAS still happens
       // under the workspace lease before every application (including other files).
-      if (!latest.enabled || latest.paused || busy(cwd) || newest?.checkpointId !== record.checkpointId || stamp() !== initialStamp) abort()
+      // Inference and validation only touch immutable copies. An active turn by
+      // itself does not invalidate them; live application still requires idle CAS.
+      if (!latest.enabled || latest.paused || newest?.checkpointId !== record.checkpointId || stamp() !== initialStamp) abort()
     }
     catch { abort() }
   }, 500)
   try {
-    deps.preflight?.(runner)
+    if (!job.candidateSha) deps.preflight?.(runner)
     await deps.authorize(cwd, record)
     deps.trust(cwd)
     if (scanCheckpointForUpload(cwd, record).status === 'failed') throw new Error('Snapshot não autorizado para autocura.')
-    const prompt = repairPrompt(cwd, record, evidence, policy)
-    inference = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-repair-proposal-'))
-    job.attempts++; attemptStarted = true; update('running', `Proposta isolada via ${runner}; orçamento limitado.`)
-    const proposal = await deps.propose(runner, inference, prompt, { ...policy, max_budget_usd: policy.max_budget_usd / policy.max_attempts }, controller.signal)
-    if (controller.signal.aborted) throw new Error('Autocura cancelada por atividade, pausa ou encerramento.')
-    if (proposal.files.length > policy.max_changed_files || new Set(proposal.files.map(file => file.path)).size !== proposal.files.length || Buffer.byteLength(JSON.stringify(proposal)) > policy.max_output_bytes) throw new Error('Proposta excede limites ou duplica caminhos.')
-    candidate = path.join(cwd, DIR, `candidate-${crypto.randomUUID()}`)
-    execFileSync('git', ['worktree', 'add', '--detach', candidate, record.commitSha], { cwd, stdio: 'pipe' })
-    for (const file of proposal.files) {
-      safeFile(candidate, file.path)
-      fs.mkdirSync(path.dirname(path.join(candidate, file.path)), { recursive: true })
-      fs.writeFileSync(path.join(candidate, file.path), file.content)
+    if (controller.signal.aborted) throw new Error('Autocura interrompida antes da proposta.')
+    let sha = job.candidateSha
+    if (!sha) {
+      const prompt = repairPrompt(cwd, record, evidence, policy)
+      inference = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-repair-proposal-'))
+      job.attempts++; job.starts++; attemptStarted = true; update('running', `Proposta isolada via ${runner}; orçamento limitado.`)
+      const proposal = await deps.propose(runner, inference, prompt, { ...policy, max_budget_usd: policy.max_budget_usd / (policy.max_attempts * 2) }, controller.signal)
+      if (controller.signal.aborted) throw new Error('Autocura cancelada por atividade, pausa ou encerramento.')
+      if (proposal.files.length > policy.max_changed_files || new Set(proposal.files.map(file => file.path)).size !== proposal.files.length || Buffer.byteLength(JSON.stringify(proposal)) > policy.max_output_bytes) throw new Error('Proposta excede limites ou duplica caminhos.')
+      candidate = path.join(cwd, DIR, `candidate-${crypto.randomUUID()}`)
+      execFileSync('git', ['worktree', 'add', '--detach', candidate, record.commitSha], { cwd, stdio: 'pipe' })
+      for (const file of proposal.files) {
+        safeFile(candidate, file.path)
+        fs.mkdirSync(path.dirname(path.join(candidate, file.path)), { recursive: true })
+        fs.writeFileSync(path.join(candidate, file.path), file.content)
+      }
+      deps.trust(candidate)
+      const captured = captureTree(candidate)
+      if (!captured.dirty) throw new Error('Proposta não alterou a implementação.')
+      sha = gitText(candidate, ['commit-tree', captured.treeSha, '-p', record.commitSha, '-m', 'Autocura isolada'])
     }
-    deps.trust(candidate)
-    const captured = captureTree(candidate)
-    if (!captured.dirty) throw new Error('Proposta não alterou a implementação.')
-    const sha = gitText(candidate, ['commit-tree', captured.treeSha, '-p', record.commitSha, '-m', 'Autocura isolada'])
-    const paths = gitText(candidate, ['diff', '--name-only', '-z', record.commitSha, sha]).split('\0').filter(Boolean)
-    paths.forEach(file => safeFile(candidate!, file))
-    job.candidateSha = sha; update('validating', 'Validando candidato isolado com os gates protegidos.')
-    const candidateRecord: CheckpointRecord = { ...record, checkpointId: crypto.randomUUID(), commitSha: sha, treeSha: captured.treeSha,
+    if (!/^[a-f0-9]{40}$/.test(sha) || gitText(cwd, ['rev-parse', `${sha}^`]) !== record.commitSha) throw new Error('Candidato não pertence ao checkpoint em reparação.')
+    const treeSha = gitText(cwd, ['rev-parse', `${sha}^{tree}`])
+    const paths = gitText(cwd, ['diff', '--name-only', '-z', record.commitSha, sha]).split('\0').filter(Boolean)
+    if (!paths.length || paths.length > policy.max_changed_files) throw new Error('Candidato excede limites de arquivos.')
+    paths.forEach(file => safeFile(cwd, file))
+    job.candidateSha = sha
+    // A worktree is temporary. Pin the candidate across restarts/Git collection
+    // while the live turn owns editing; never move the user's branch or index.
+    gitText(cwd, ['update-ref', candidateRef(job), sha])
+    update('validating', 'Validando candidato isolado com os gates protegidos.')
+    const candidateRecord: CheckpointRecord = { ...record, checkpointId: crypto.randomUUID(), commitSha: sha, treeSha,
       changesetBaseSha: evidence.baseSha, changedPaths: paths, validationStatus: 'pending' }
     if (scanCheckpointForUpload(cwd, candidateRecord).status === 'failed') throw new Error('Candidato contém risco de segredo.')
     const proof = await deps.validate(cwd, candidateRecord, controller.signal)
     const repairedChecks = evidence.checks.filter(check => check.status === 'failed').every(failed =>
       proof.checks.some(check => check.status === 'passed' && (check.name === failed.name || (failed.type && check.type === failed.type))))
-    if (proof.sha !== sha || proof.fingerprint !== captured.treeSha || proof.status === 'failed' || !repairedChecks || !proof.checks.length) throw new Error('Candidato não comprovou a correção; workspace preservado.')
+    if (proof.sha !== sha || proof.fingerprint !== treeSha || proof.status === 'failed' || !repairedChecks || !proof.checks.length) throw new Error('Candidato não comprovou a correção; workspace preservado.')
     await deps.authorize(cwd, record)
-    await withTurnLock(cwd, () => {
+    const applied = await withTurnLock(cwd, () => {
       const latestPolicy = readEnginePolicy(cwd).auto_heal
-      if (controller.signal.aborted || !latestPolicy.enabled || latestPolicy.paused || busy(cwd) || !current(cwd, record)) throw new Error('Workspace avançou ou autocura pausada; candidato não aplicado.')
+      if (controller.signal.aborted || !latestPolicy.enabled || latestPolicy.paused || !current(cwd, record)) throw new Error('Workspace avançou ou autocura pausada; candidato não aplicado.')
+      if (busy(cwd)) { update('waiting', 'Candidato preservado; aplicação aguarda o turno de edição terminar.'); return false }
       paths.forEach(file => safeFile(cwd, file))
       deps.trust(cwd)
       const patch = execFileSync('git', ['diff', '--binary', record.commitSha, sha, '--', ...paths], { cwd, maxBuffer: policy.max_output_bytes })
@@ -264,17 +306,23 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
       job.resultCheckpointId = result.checkpointId
       update('applied', 'Correção aplicada sem mover HEAD/index; novo checkpoint aguarda validação/CI próprios.')
       fs.rmSync(path.join(cwd, DIR, 'apply-journal.json'), { force: true })
+      return true
     })
-    return 1
+    return applied ? 1 : 0
   } catch (error) {
     const unavailable = error instanceof RepairRunnerUnavailableError
+    const lockBusy = error instanceof TurnLockBusyError
     // A missing/replaced executable never started inference. Return only this
     // invocation's attempt; earlier model failures keep their original budget.
-    if (unavailable && attemptStarted) job.attempts--
+    if (unavailable && attemptStarted) { job.attempts--; job.starts-- }
+    else if (controller.signal.aborted && attemptStarted && !job.candidateSha) job.attempts--
     const currentPolicy = readEnginePolicy(cwd).auto_heal
+    if (!controller.signal.aborted && !unavailable && !lockBusy && currentPolicy.enabled && !currentPolicy.paused) {
+      releaseCandidate(cwd, job); delete job.candidateSha
+    }
     const status = !currentPolicy.enabled ? 'disabled' : currentPolicy.paused ? 'paused'
-      : !current(cwd, record) ? 'stale' : unavailable ? 'unavailable' : job.attempts >= policy.max_attempts ? 'exhausted'
-        : controller.signal.aborted ? 'waiting' : 'failed'
+      : !current(cwd, record) ? 'stale' : unavailable ? 'unavailable' : (controller.signal.aborted || lockBusy) ? 'waiting'
+        : job.attempts >= policy.max_attempts ? 'exhausted' : 'failed'
     update(status, error instanceof Error ? error.message : String(error))
     return 0
   } finally {

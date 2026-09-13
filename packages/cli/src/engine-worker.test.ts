@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultCheckpointDeps, type CheckpointRecord } from './checkpoint'
 import { readEnginePolicy } from './engine-policy'
-import { drainAutoHeal, type RepairDeps } from './engine-repair'
+import { drainAutoHeal, type RepairDeps, type RepairJob } from './engine-repair'
 import { runRepairProposal, type ProcessRunner } from './repair-runner'
 import { RepairRunnerUnavailableError } from './repair-executable'
 import { drainLocalValidation, evidenceFor, requestCheckpointValidation, validateCheckpoint } from './turn-validation'
@@ -117,6 +117,24 @@ async function failingRecord(): Promise<CheckpointRecord> {
 function repairDeps(propose: RepairDeps['propose'] = async () => ({ summary: 'Fix value', files: [{ path: 'src/card.ts', content: 'export const value = 2;\n' }] })): RepairDeps {
   return { authorize: async () => {}, propose, trust: () => {}, validate: validateCheckpoint }
 }
+function setTurnStatus(status: 'active' | 'completed'): void {
+  writeJson(path.join(cwd, '.supremo/turns/state.json'), { turn: { status } })
+}
+function repairJob(record: CheckpointRecord): RepairJob {
+  return readJson(path.join(cwd, '.supremo/validation/repair', `${record.checkpointId}.json`)) as RepairJob
+}
+async function deferredCandidate(): Promise<{ record: CheckpointRecord; propose: ReturnType<typeof vi.fn<RepairDeps['propose']>>; validate: ReturnType<typeof vi.fn<RepairDeps['validate']>> }> {
+  const record = await failingRecord()
+  writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+  const propose = vi.fn<RepairDeps['propose']>(async () => {
+    setTurnStatus('active')
+    return { summary: 'Fix value', files: [{ path: 'src/card.ts', content: 'export const value = 2;\n' }] }
+  })
+  const validate = vi.fn<RepairDeps['validate']>(validateCheckpoint)
+  expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate })).toBe(0)
+  expect(repairJob(record)).toMatchObject({ status: 'waiting', attempts: 1, candidateSha: expect.stringMatching(/^[a-f0-9]{40}$/) })
+  return { record, propose, validate }
+}
 describe('actual isolated repair executor with controlled inference boundary', () => {
   it('repairs the app/ layout used by generated Supremo projects', async () => {
     fs.renameSync(path.join(cwd, 'src'), path.join(cwd, 'app'))
@@ -202,6 +220,20 @@ describe('actual isolated repair executor with controlled inference boundary', (
     expect(propose).not.toHaveBeenCalled()
     expect(readJson(path.join(cwd, '.supremo/validation/repair/status.json'))).toMatchObject({ status: 'exhausted', attempts: 2 })
   })
+  it('inherits spent launches across repair-produced checkpoints, including interrupted launches', async () => {
+    const parent = await failingRecord()
+    const next = capture(3)
+    const proof = await validateCheckpoint(cwd, next)
+    defaultCheckpointDeps(cwd).appendQueue({ ...next, validationStatus: 'failed', validationId: proof.id, validatedSha: proof.sha })
+    writeJson(path.join(cwd, '.supremo/validation/repair', `${parent.checkpointId}.json`), {
+      checkpointId: parent.checkpointId, sha: parent.commitSha, attempts: 1, starts: 4,
+      status: 'applied', updatedAt: Date.now(), reason: 'One completed proposal after interrupted launches', resultCheckpointId: next.checkpointId,
+    })
+    const propose = vi.fn<RepairDeps['propose']>(async () => { throw new Error('Chain already spent its launch budget') })
+    expect(await drainAutoHeal(cwd, undefined, repairDeps(propose))).toBe(0)
+    expect(propose).not.toHaveBeenCalled()
+    expect(repairJob(next)).toMatchObject({ status: 'exhausted', attempts: 1, starts: 4 })
+  })
   it('waits for an available executable without consuming prior attempts, then resumes the same repair', async () => {
     const record = await failingRecord()
     const jobFile = path.join(cwd, '.supremo/validation/repair', `${record.checkpointId}.json`)
@@ -239,6 +271,189 @@ describe('actual isolated repair executor with controlled inference boundary', (
     expect(preflight).not.toHaveBeenCalled(); expect(propose).not.toHaveBeenCalled()
     expect(readJson(jobFile)).toMatchObject({ status: 'exhausted', attempts: 2,
       reason: expect.stringContaining('sem nova inferência automática') })
+  })
+  it('keeps inference alive during a new turn and automatically applies its validated candidate after the turn ends', async () => {
+    const record = await failingRecord()
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    const head = gitText(cwd, ['rev-parse', 'HEAD']), index = fs.readFileSync(path.join(cwd, '.git/index'))
+    const propose = vi.fn<RepairDeps['propose']>(async (_runner, _dir, _prompt, _policy, signal) => {
+      setTurnStatus('active')
+      await wait(650) // The activity watcher runs while the foreground turn is active.
+      expect(signal?.aborted).toBe(false)
+      return { summary: 'Fix value', files: [{ path: 'src/card.ts', content: 'export const value = 2;\n' }] }
+    })
+    const validate = vi.fn<RepairDeps['validate']>(validateCheckpoint)
+    const authorize = vi.fn<RepairDeps['authorize']>(async () => {})
+    const deps = { ...repairDeps(propose), validate, authorize }
+    expect(await drainAutoHeal(cwd, undefined, deps)).toBe(0)
+    expect(repairJob(record)).toMatchObject({ status: 'waiting', attempts: 1, starts: 1, candidateSha: expect.any(String) })
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 1')
+    expect(validate).toHaveBeenCalledTimes(1)
+    expect(await drainAutoHeal(cwd, undefined, deps)).toBe(0)
+    expect(propose).toHaveBeenCalledTimes(1)
+    expect(validate).toHaveBeenCalledTimes(1)
+    setTurnStatus('completed')
+    expect(await drainAutoHeal(cwd, undefined, deps)).toBe(1)
+    expect(propose).toHaveBeenCalledTimes(1)
+    expect(validate).toHaveBeenCalledTimes(2)
+    expect(authorize).toHaveBeenCalledTimes(4)
+    expect(repairJob(record)).toMatchObject({ status: 'applied', attempts: 1, starts: 1 })
+    expect(gitText(cwd, ['rev-parse', 'HEAD'])).toBe(head)
+    expect(fs.readFileSync(path.join(cwd, '.git/index'))).toEqual(index)
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 2')
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)).toMatchObject({ validationStatus: 'pending' })
+  })
+  it('retains a candidate across worker replacement and Git cleanup without needing the inference executable again', async () => {
+    const { record } = await deferredCandidate()
+    const sha = repairJob(record).candidateSha!
+    gitText(cwd, ['gc', '--prune=now'])
+    setTurnStatus('completed')
+    const propose = vi.fn<RepairDeps['propose']>(async () => { throw new Error('A resumed candidate must not invoke the model') })
+    const preflight = vi.fn(() => { throw new RepairRunnerUnavailableError('codex') })
+    const validate = vi.fn<RepairDeps['validate']>(validateCheckpoint)
+    expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), preflight, validate })).toBe(1)
+    expect(preflight).not.toHaveBeenCalled(); expect(propose).not.toHaveBeenCalled()
+    expect(validate).toHaveBeenCalledTimes(1)
+    expect(validate.mock.calls[0]?.[1].commitSha).toBe(sha)
+    expect(repairJob(record)).toMatchObject({ status: 'applied', attempts: 1, starts: 1 })
+  })
+  it('revalidates a durable candidate after its worker is interrupted instead of spending another proposal', async () => {
+    const record = await failingRecord()
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    const interrupted = new AbortController()
+    const propose = vi.fn<RepairDeps['propose']>(repairDeps().propose)
+    const validate = vi.fn<RepairDeps['validate']>(async (root, candidate, signal) => {
+      const proof = await validateCheckpoint(root, candidate, signal)
+      interrupted.abort()
+      throw Object.assign(new WorkerAbortedError(), { validationId: proof.id })
+    })
+    expect(await drainAutoHeal(cwd, interrupted.signal, { ...repairDeps(propose), validate })).toBe(0)
+    expect(repairJob(record)).toMatchObject({ status: 'waiting', candidateSha: expect.any(String), attempts: 1, starts: 1 })
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 1')
+    validate.mockImplementation(validateCheckpoint)
+    expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate })).toBe(1)
+    expect(propose).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(2)
+    expect(repairJob(record)).toMatchObject({ status: 'applied', attempts: 1, starts: 1 })
+  })
+  it('defers a validated candidate when another lifecycle process holds the lock, then resumes it once', async () => {
+    const record = await failingRecord()
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    const propose = vi.fn<RepairDeps['propose']>(repairDeps().propose)
+    const lock = path.join(cwd, '.supremo/turns/lock')
+    const validate = vi.fn<RepairDeps['validate']>(async (root, candidate, signal) => {
+      const proof = await validateCheckpoint(root, candidate, signal)
+      writeJson(path.join(lock, 'owner.json'), { pid: process.pid })
+      return proof
+    })
+    expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate })).toBe(0)
+    expect(repairJob(record)).toMatchObject({ status: 'waiting', attempts: 1, starts: 1, candidateSha: expect.any(String) })
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 1')
+    fs.rmSync(lock, { recursive: true })
+    validate.mockImplementation(validateCheckpoint)
+    expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate })).toBe(1)
+    expect(propose).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(2)
+    expect(repairJob(record)).toMatchObject({ status: 'applied', attempts: 1, starts: 1 })
+  })
+  it('discards a deferred candidate when the owner edits instead of overwriting their new work', async () => {
+    const { record, propose, validate } = await deferredCandidate()
+    fs.writeFileSync(path.join(cwd, 'src/card.ts'), 'export const value = 7;\n')
+    setTurnStatus('completed')
+    expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate })).toBe(0)
+    expect(repairJob(record)).toMatchObject({ status: 'stale' })
+    expect(propose).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(1)
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 7')
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
+  })
+  it('settles a waiting job when a newer checkpoint takes over, even if that checkpoint has not failed', async () => {
+    const { record, propose } = await deferredCandidate()
+    setTurnStatus('completed')
+    const newer = capture(7)
+    expect(await drainAutoHeal(cwd, undefined, repairDeps(propose))).toBe(0)
+    expect(repairJob(record)).toMatchObject({ status: 'stale', reason: expect.stringContaining('Novo checkpoint') })
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)?.checkpointId).toBe(newer.checkpointId)
+    expect(propose).toHaveBeenCalledTimes(1)
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 7')
+  })
+  it('holds a candidate through a pause and requires authorization again before its application', async () => {
+    const { record, propose, validate } = await deferredCandidate()
+    setTurnStatus('completed')
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', paused: true, max_attempts: 1 } })
+    const authorize = vi.fn<RepairDeps['authorize']>(async () => {})
+    expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate, authorize })).toBe(0)
+    expect(repairJob(record)).toMatchObject({ status: 'paused', candidateSha: expect.any(String) })
+    expect(authorize).not.toHaveBeenCalled()
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    authorize.mockRejectedValue(new Error('Development authorization revoked'))
+    expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate, authorize })).toBe(0)
+    expect(authorize).toHaveBeenCalledTimes(1)
+    expect(propose).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(1)
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 1')
+    expect(defaultCheckpointDeps(cwd).readQueue()).toHaveLength(1)
+  })
+  it('retains a validated candidate when pause arrives just before application and resumes without another inference', async () => {
+    const record = await failingRecord()
+    const policyFile = path.join(cwd, '.supremo/lifecycle.json')
+    writeJson(policyFile, { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    const propose = vi.fn<RepairDeps['propose']>(repairDeps().propose)
+    const validate = vi.fn<RepairDeps['validate']>(validateCheckpoint)
+    let authorizations = 0
+    const authorize = vi.fn<RepairDeps['authorize']>(async () => {
+      authorizations++
+      if (authorizations === 2) writeJson(policyFile, { auto_heal: { runner: 'codex', max_attempts: 1, paused: true } })
+    })
+    const deps = { ...repairDeps(propose), validate, authorize }
+    expect(await drainAutoHeal(cwd, undefined, deps)).toBe(0)
+    expect(repairJob(record)).toMatchObject({ status: 'paused', candidateSha: expect.any(String), attempts: 1, starts: 1 })
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 1')
+    writeJson(policyFile, { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    expect(await drainAutoHeal(cwd, undefined, deps)).toBe(1)
+    expect(propose).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(2)
+    expect(authorize).toHaveBeenCalledTimes(4)
+    expect(repairJob(record)).toMatchObject({ status: 'applied', attempts: 1, starts: 1 })
+  })
+  it('does not apply a retained candidate if trusted files fail their new check', async () => {
+    const { record, propose, validate } = await deferredCandidate()
+    setTurnStatus('completed')
+    const trust = vi.fn(() => { throw new Error('Protected gate changed') })
+    expect(await drainAutoHeal(cwd, undefined, { ...repairDeps(propose), validate, trust })).toBe(0)
+    expect(trust).toHaveBeenCalledTimes(1)
+    expect(propose).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(1)
+    expect(repairJob(record).status).not.toBe('applied')
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 1')
+  })
+  it('bounds repeated interrupted launches separately from unsuccessful repair attempts', async () => {
+    const record = await failingRecord()
+    writeJson(path.join(cwd, '.supremo/lifecycle.json'), { auto_heal: { runner: 'codex', max_attempts: 1 } })
+    let interruption = new AbortController()
+    const propose = vi.fn<RepairDeps['propose']>(async () => {
+      interruption.abort()
+      throw new WorkerAbortedError()
+    })
+    const deps = repairDeps(propose)
+    for (let starts = 1; starts <= 2; starts++) {
+      interruption = new AbortController()
+      expect(await drainAutoHeal(cwd, interruption.signal, deps)).toBe(0)
+      expect(repairJob(record)).toMatchObject({ status: 'waiting', starts, attempts: 0 })
+    }
+    expect(await drainAutoHeal(cwd, undefined, deps)).toBe(0)
+    expect(propose).toHaveBeenCalledTimes(2)
+    expect(repairJob(record)).toMatchObject({ status: 'exhausted', starts: 2, attempts: 0 })
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toContain('value = 1')
+  })
+  it('preserves earlier sanitized repair failures when a later state is waiting', async () => {
+    const record = await failingRecord()
+    const token = ['ghp', 'syntheticFixtureNotARealCredential'].join('_')
+    const deps = repairDeps(async () => { throw new Error(`Runner failure: ${token}`) })
+    expect(await drainAutoHeal(cwd, undefined, deps)).toBe(0)
+    setTurnStatus('active')
+    writeJson(path.join(cwd, '.supremo/validation/repair', `${record.checkpointId}.json`), { ...repairJob(record), updatedAt: 0 })
+    expect(await drainAutoHeal(cwd, undefined, deps)).toBe(0)
+    const history = fs.readFileSync(path.join(cwd, '.supremo/validation/repair/events.jsonl'), 'utf8')
+    const events = history.trim().split('\n').map(line => JSON.parse(line) as RepairJob)
+    expect(events.map(event => event.status)).toEqual(['running', 'failed', 'waiting'])
+    expect(history).not.toContain(token)
+    expect(events.find(event => event.status === 'failed')?.reason).toContain('[REDACTED]')
+    expect(repairJob(record)).toMatchObject({ status: 'waiting' })
   })
 })
 

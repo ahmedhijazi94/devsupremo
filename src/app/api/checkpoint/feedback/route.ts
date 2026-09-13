@@ -4,7 +4,7 @@ import { createServiceClient } from '@/lib/supabase/admin'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import { getLatestKnownCheckpoint, reconcileCheckpointsForPr, supabaseCheckpointDeviceStore, type LatestCheckpointRow } from '@/lib/checkpoint/store'
 import { readCheckpointFeedback, readFeedbackEnvelope, saveCheckpointFeedback } from '@/lib/checkpoint/feedback-store'
-import { buildValidationFeedback, withFeedbackEvidence } from '@/lib/checkpoint/feedback'
+import { buildValidationFeedback, withFeedbackEvidence, withIntegrationFeedback } from '@/lib/checkpoint/feedback'
 import { getProject, getGithubCredentials, NotFoundError, readIntegrationMeta, writeIntegrationMeta, type ProjectRecord } from '@/lib/projects/repository'
 import { getChecks, getFailedJobLogs } from '@/lib/github/client'
 import { checkpointStatusFromReconcile, reconcileProjectPr, resolveRequiredChecks } from '@/lib/github/reconcile'
@@ -12,6 +12,7 @@ import { getAcceptanceEvidence } from '@/lib/github/acceptance'
 import { appTokenForRepo, installationCreds } from '@/lib/github/app'
 import { githubMergeGateway } from '@/lib/github/gateway'
 import { isSupremoIntegrationRef } from '@/lib/github/webhook'
+import type { ReconcileResult } from '@/lib/github/merge-controller'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -21,9 +22,9 @@ const schema = z.object({ deviceSecret: z.string().min(10).max(256), projectId: 
 /** A daemon heartbeat retries lost/transient integration events; it does not
  * confer approval. The common controller still requires the trusted workflow,
  * independent policy, CodeQL and the configured native protections. */
-async function retryIntegration(client: SupabaseClient, project: ProjectRecord, latest: LatestCheckpointRow): Promise<boolean> {
+async function retryIntegration(client: SupabaseClient, project: ProjectRecord, latest: LatestCheckpointRow): Promise<ReconcileResult | null> {
   if (latest.pushStatus !== 'published' || !latest.publishedSha || !latest.prNumber ||
-    !latest.integrationBranch || !isSupremoIntegrationRef(latest.integrationBranch) || !project.github_repo_full_name) return false
+    !latest.integrationBranch || !isSupremoIntegrationRef(latest.integrationBranch) || !project.github_repo_full_name) return null
   const prNumber = latest.prNumber
   const publishedSha = latest.publishedSha
   const token = await appTokenForRepo(project.github_repo_full_name)
@@ -68,7 +69,7 @@ async function retryIntegration(client: SupabaseClient, project: ProjectRecord, 
     // before this UPDATE executes. Compare against the state captured before I/O.
     await writeIntegrationMeta(project.id, { integration_state: result.state }, { expectedState: meta.integrationState })
   }
-  return result.merged
+  return result
 }
 
 /** Background-only. The agent's preflight never waits for GitHub. */
@@ -113,9 +114,9 @@ export async function POST(request: Request): Promise<Response> {
         await saveCheckpointFeedback(client, base)
         if (base.state === 'passed') {
           try {
-            if (await retryIntegration(client, project, latest)) {
-              await saveCheckpointFeedback(client, { ...base, observedAt: new Date().toISOString(),
-                state: 'integrated', summary: 'Versão validada e integrada.' })
+            const integration = await retryIntegration(client, project, latest)
+            if (integration) {
+              await saveCheckpointFeedback(client, { ...withIntegrationFeedback(base, integration), observedAt: new Date().toISOString() })
             }
           } catch {
             // Keep the CI receipt truthful and retry on a later heartbeat. No

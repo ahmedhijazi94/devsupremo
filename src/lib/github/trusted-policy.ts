@@ -1,6 +1,7 @@
 import { TRUSTED_VALIDATION_POLICIES } from '../../../packages/cli/src/generated/validation-policy'
 import { blobHash, inspectValidationIntegrity, type PolicyTreeEntry, type ValidationManifest } from '../../../packages/cli/src/validation-integrity'
 import { TRUSTED_VALIDATION_POLICIES_4_0_2 } from './validation-policy-releases/4.0.2'
+import { TRUSTED_VALIDATION_POLICIES_4_0_4 } from './validation-policy-releases/4.0.4'
 import type { CheckRun } from './merge-policy'
 import type { FileOp } from '../checkpoint/changeset'
 
@@ -10,9 +11,8 @@ export interface ValidationAuthority { approved: boolean; headSha: string; reaso
 // policy by declaring a version, and future generator output is not implicitly
 // approved here. The archived release has no dependency on the current manifest.
 const releasedPolicies: readonly ValidationManifest[] = [
-  // 4.0.4 altera apenas o supervisor local. Os hashes dos validadores, scripts
-  // e dependências são idênticos aos de 4.0.3, preservando os projetos existentes.
-  ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.4'),
+  ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.5'),
+  ...TRUSTED_VALIDATION_POLICIES_4_0_4,
   ...TRUSTED_VALIDATION_POLICIES_4_0_2,
 ]
 function policiesForKind(kind: string | null): readonly ValidationManifest[] {

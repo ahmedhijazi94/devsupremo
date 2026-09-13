@@ -79,7 +79,9 @@ export {
 // próprio Supremo (migration 017, NÃO aplicada).
 // 4.0.4: preview tolera cookies compartilhados entre projetos locais e recupera
 // overflow de headers em navegações seguras, sem reiniciar nem limpar sessões.
-export const TEMPLATE_VERSION = '4.0.4'
+// 4.0.5: autocura preserva candidatos durante edição/pausa e retoma sem gastar
+// outra proposta; diagnóstico mantém interrupções e falhas de integração.
+export const TEMPLATE_VERSION = '4.0.5'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '3.0.0'

@@ -94,6 +94,30 @@ describe('reconcileMerge — modo NATIVE_GITHUB', () => {
 })
 
 describe('reconcileMerge — modo SUPREMO_MANAGED', () => {
+  it.each(['native', 'supremo_managed'] as const)('persists an Actions read refusal and retries the same revision safely in %s mode', async mode => {
+    const gw = gateway()
+    vi.mocked(gw.getChecks).mockRejectedValueOnce({ status: 403, message: 'Resource not accessible by integration ghp_private' })
+    const blocked = await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode })
+    expect(blocked).toMatchObject({ headSha: SHA, state: 'security_blocked', decision: 'blocked', merged: false })
+    expect(blocked.reasons.join(' ')).toContain('Actions: leitura')
+    expect(JSON.stringify(blocked)).not.toContain('ghp_private')
+    expect(gw.verifyPolicy).not.toHaveBeenCalled()
+    expect(gw.merge).not.toHaveBeenCalled()
+
+    const recovered = await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode })
+    expect(recovered).toMatchObject({ headSha: SHA, state: 'merged', merged: true })
+    expect(gw.verifyPolicy).toHaveBeenCalledWith(SHA)
+    expect(gw.getCodeScanning).toHaveBeenCalledTimes(2)
+    expect(gw.merge).toHaveBeenCalledExactlyOnceWith(1, SHA)
+  })
+  it('does not describe an unavailable provider as a missing permission or accept cached green checks', async () => {
+    const gw = gateway({ getChecks: vi.fn().mockRejectedValue(new Error('upstream token=private')) })
+    const result = await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'supremo_managed' })
+    expect(result).toMatchObject({ headSha: SHA, state: 'security_blocked', merged: false })
+    expect(result.reasons.join(' ')).toContain('Não foi possível consultar')
+    expect(JSON.stringify(result)).not.toMatch(/private|Actions: leitura/)
+    expect(gw.merge).not.toHaveBeenCalled()
+  })
   it.each(['pending', 'failed', 'unavailable'] as const)('does not merge when official CodeQL is %s despite every CI job passing', async status => {
     const gw = gateway({ getCodeScanning: vi.fn(async headSha => ({ headSha, status, reasons: ['CodeQL evidence'] })) })
     const result = await reconcileMerge(gw, { prNumber: 1, requiredChecks: REQUIRED, mode: 'supremo_managed' })

@@ -99,7 +99,20 @@ export async function reconcileMerge(
       reasons: ['A proteção nativa não comprova todos os gates obrigatórios.'] }
   }
 
-  const checks = await gw.getChecks(pr.headSha)
+  let checks: Awaited<ReturnType<MergeGateway['getChecks']>>
+  try {
+    checks = await gw.getChecks(pr.headSha)
+  } catch (error) {
+    // A green receipt read with the owner's OAuth token does not prove the
+    // background App can inspect the trusted workflow. In particular,
+    // Workflows:write does not grant Actions:read. Keep the gate closed and
+    // return a persistable diagnosis instead of leaving the version waiting.
+    const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined
+    return { headSha: pr.headSha, state: 'security_blocked', decision: 'blocked', merged: false,
+      reasons: [status === 403
+        ? 'O GitHub recusou a leitura dos testes pela integração Supremo. Confira a permissão Actions: leitura da GitHub App e sua aprovação na instalação. A integração será tentada novamente automaticamente.'
+        : 'Não foi possível consultar a execução confiável dos testes no GitHub. A integração está suspensa e será tentada novamente automaticamente.'] }
+  }
   const evaluation = evaluateMergeEligibility({
     requiredChecks,
     checkRuns: checks.checks,

@@ -80,7 +80,7 @@ export async function GET(req: Request): Promise<Response> {
         checkpointStatusFromReconcile(result),
       )
       try {
-        await capturePrFeedback(createServiceClient(), project.id, creds, prNumber)
+        await capturePrFeedback(createServiceClient(), project.id, creds, prNumber, result)
       } catch {
         logger.event('feedback_capture_deferred', { projectId: project.id, prNumber })
       }

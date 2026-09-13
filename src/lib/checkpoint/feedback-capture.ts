@@ -3,11 +3,12 @@ import type { GithubCredentials } from '@/lib/projects/repository'
 import { getChecks, getFailedJobLogs, getPullRequest } from '@/lib/github/client'
 import { resolveRequiredChecks } from '@/lib/github/reconcile'
 import { getAcceptanceEvidence } from '@/lib/github/acceptance'
-import { buildValidationFeedback, withFeedbackEvidence } from './feedback'
+import { buildValidationFeedback, withFeedbackEvidence, withIntegrationFeedback } from './feedback'
 import { saveCheckpointFeedback } from './feedback-store'
+import type { ReconcileResult } from '@/lib/github/merge-controller'
 
 /** Webhook and cron save evidence even while every local machine is offline. */
-export async function capturePrFeedback(client: SupabaseClient, projectId: string, creds: GithubCredentials, prNumber: number): Promise<void> {
+export async function capturePrFeedback(client: SupabaseClient, projectId: string, creds: GithubCredentials, prNumber: number, integration?: ReconcileResult): Promise<void> {
   const observedAt = new Date().toISOString()
   const pr = await getPullRequest(creds, prNumber)
   const { data, error } = await client.from('checkpoints').select('id, commit_sha, published_sha')
@@ -36,5 +37,5 @@ export async function capturePrFeedback(client: SupabaseClient, projectId: strin
     // so recovery cannot treat a generic green RLS gate as custom evidence.
     feedback.acceptance = undefined
   }
-  await saveCheckpointFeedback(client, feedback)
+  await saveCheckpointFeedback(client, integration ? withIntegrationFeedback(feedback, integration) : feedback)
 }

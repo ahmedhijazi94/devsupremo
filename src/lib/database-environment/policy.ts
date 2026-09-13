@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { assertSafeSql } from '@/lib/database/sql-guard'
+import { maskVerifiedTriggerSyntax } from './trigger-migration'
 
 export const environmentSchema = z.object({
   project_ref: z.string().min(1),
@@ -42,12 +43,11 @@ export function validateAutomaticMigration(sql: string): void {
   assertSafeSql(sql, { allowDdl: true })
   // Conservador: operações destrutivas/dinâmicas seguem fora do caminho automático.
   // Examina também strings e comentários: falsos positivos falham explicitamente.
-  // EXECUTE FUNCTION do trigger de timestamp do scaffold não é SQL dinâmico.
-  // A exceção é só esta chamada sem argumentos; EXECUTE arbitrário segue recusado.
-  const checked = sql
+  // BEGIN de um corpo PL/pgSQL e EXECUTE FUNCTION de um gatilho verificado
+  // não são transação nem SQL dinâmico. O restante do corpo continua inspecionado.
+  const checked = maskVerifiedTriggerSyntax(sql)
     .replace(/\bon\s+delete\s+(cascade|restrict|set\s+null|no\s+action)\b/gi, '')
     .replace(/\bfor\s+delete\b/gi, '')
-    .replace(/\bexecute\s+function\s+public\.set_updated_at\s*\(\s*\)/gi, '')
   if (/\b(drop|truncate|execute|do|commit|rollback|begin|call|copy|dblink|pg_read_file|pg_write_file)\b|\bdelete\s+from\b|\bupdate\s+[\w."]+\s+set\b/i.test(checked) || /\bsupabase_migrations\b/i.test(sql)) {
     throw new Error('Migration exige revisão: operação destrutiva, dinâmica ou controle de transação não permitido no fluxo automático.')
   }

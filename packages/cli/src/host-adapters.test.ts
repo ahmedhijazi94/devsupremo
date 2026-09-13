@@ -93,6 +93,15 @@ function dispatch(root: string, host: 'claude-code' | 'codex', event: keyof type
 }
 
 describe('Codex native lifecycle and executable receipts', () => {
+  it('puts the recovery action first in prompt context and uses it to continue a stopped agent', () => {
+    const action = { kind: 'repair_previous_failure', instruction: 'Continue no mesmo turno e corrija.', command: 'turn recovery-check' }
+    const root = fixture(`console.log(JSON.stringify({protocolVersion:1,workerAvailable:true,allowed:true,nextAction:${JSON.stringify(action)},context:{pendingRecovery:{required:true}}}))`)
+    installHostAdapters(root)
+    const prompt = JSON.parse(dispatch(root, 'codex', 'UserPromptSubmit').stdout).hookSpecificOutput.additionalContext as string
+    expect(prompt.indexOf(action.instruction)).toBeLessThan(prompt.indexOf('pendingRecovery'))
+    fs.writeFileSync(path.join(root, 'node_modules/supremo-cli/dist/bin.js'), `console.log(JSON.stringify({allowed:false,reason:'checkpoint bloqueado',nextAction:${JSON.stringify(action)}}))`)
+    expect(JSON.parse(dispatch(root, 'codex', 'Stop').stdout)).toEqual({ decision: 'block', reason: action.instruction + '\n' + action.command })
+  })
   it.each(['claude-code', 'codex'] as const)('%s only upgrades after all events execute for the installed configuration', (host) => {
     const root = fixture()
     const initial = installHostAdapters(root).adapters[host]

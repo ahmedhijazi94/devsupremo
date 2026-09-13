@@ -8,6 +8,7 @@ import { selectTrustedWorkflow, verifyCandidatePolicy, verifyPolicyChanges, work
 import { TRUSTED_VALIDATION_POLICIES_4_0_2 } from './validation-policy-releases/4.0.2'
 import { TRUSTED_VALIDATION_POLICIES_4_0_4 } from './validation-policy-releases/4.0.4'
 import { TRUSTED_VALIDATION_POLICIES_4_0_5 } from './validation-policy-releases/4.0.5'
+import { TRUSTED_VALIDATION_POLICIES_4_0_6 } from './validation-policy-releases/4.0.6'
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'
@@ -61,6 +62,8 @@ describe('independent engine policy over actual generated candidates', () => {
       .toBe('73a1698a206c284dd66eaf835edf855e574a16abba9eea9774de8a1e73cba161')
   })
   it('pins the complete historical authority to its recorded immutable release contents', () => {
+    expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_6)).digest('hex'))
+      .toBe('4342233dc49919270c2c33093b0f7afcda7a952333e240136b4c5c72b0591ae8')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_2)).digest('hex'))
       .toBe('ac8079a1684751bcac5bbba1bdd6d4dea09d6f19a27691f58f6cd518090b11aa')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_4)).digest('hex'))
@@ -89,7 +92,7 @@ describe('independent engine policy over actual generated candidates', () => {
     const current = candidate(kind)
     const cliVersion = (input: Candidate): string => (JSON.parse(input.lockContent) as { packages: Record<string, { version?: string }> }).packages['tools/supremo-cli']!.version!
     expect(cliVersion(previous)).toBe('1.7.2')
-    expect(cliVersion(current)).toBe('1.7.5')
+    expect(cliVersion(current)).toBe('1.7.6')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     expect(verifyCandidatePolicy(current)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })

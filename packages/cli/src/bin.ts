@@ -35,13 +35,15 @@ program
   .command('turn <event>')
   .description('Protocolo executável de turnos e validação em background')
   .option('--host <name>', 'Host que entregou o evento', 'assisted')
-  .action(async (event: string, options: { host: string }) => {
+  .option('--full-state', 'Inclui o estado completo para diagnóstico interno')
+  .action(async (event: string, options: { host: string; fullState?: boolean }) => {
     const { runTurnEvent } = await import('./turn-runtime')
+    const { turnAgentResponse } = await import('./turn-response')
     const fs = await import('node:fs')
     try {
       const raw = process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8')
       const output = await runTurnEvent(event, process.cwd(), raw.trim() ? JSON.parse(raw) as unknown : {}, options.host)
-      console.log(JSON.stringify(output))
+      console.log(JSON.stringify(options.fullState ? output : turnAgentResponse(output)))
     } catch (error) {
       const { sanitizeDiagnostic } = await import('../../../src/lib/checkpoint/feedback')
       console.log(JSON.stringify({ protocolVersion: 1, workerAvailable: true, allowed: false,

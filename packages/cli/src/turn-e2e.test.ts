@@ -108,8 +108,16 @@ describe('lifecycle executable integration — real Git/worktrees, deterministic
     expect(gitText(root, ['rev-parse', 'HEAD'])).toBe(initialHead)
     // A fresh OS process reads persisted state; no conversation memory is involved.
     const cli = path.resolve(__dirname, '../dist/bin.js')
-    const cold = JSON.parse(execFileSync(process.execPath, [cli, 'turn', 'status'], { cwd: root, encoding: 'utf8', input: '' })) as { state: { turn: { recovery: { status: string } } } }
-    expect(cold.state.turn.recovery.status).toBe('resolved')
+    const cold = JSON.parse(execFileSync(process.execPath, [cli, 'turn', 'status'], { cwd: root, encoding: 'utf8', input: '' })) as {
+      context: { pendingRecovery: { status: string } }; turn: { status: string; checkpointId: string }
+    }
+    expect(cold.context.pendingRecovery.status).toBe('resolved')
+    expect(cold.turn.status).toBe('completed')
+    const full = JSON.parse(execFileSync(process.execPath, [cli, 'turn', 'status', '--full-state'], { cwd: root, encoding: 'utf8', input: '' })) as {
+      state: { turn: { recovery: { status: string }; checkpointId: string } }
+    }
+    expect(full.state.turn.recovery.status).toBe('resolved')
+    expect(full.state.turn.checkpointId).toBe(cold.turn.checkpointId)
   }, 30_000)
 
   it('reconciliação offline preserva recovery e não deixa editar; nova consulta recupera', async () => {

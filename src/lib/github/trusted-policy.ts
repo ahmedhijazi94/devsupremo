@@ -3,6 +3,7 @@ import { blobHash, inspectValidationIntegrity, type PolicyTreeEntry, type Valida
 import { TRUSTED_VALIDATION_POLICIES_4_0_2 } from './validation-policy-releases/4.0.2'
 import { TRUSTED_VALIDATION_POLICIES_4_0_4 } from './validation-policy-releases/4.0.4'
 import { TRUSTED_VALIDATION_POLICIES_4_0_5 } from './validation-policy-releases/4.0.5'
+import { TRUSTED_VALIDATION_POLICIES_4_0_6 } from './validation-policy-releases/4.0.6'
 import type { CheckRun } from './merge-policy'
 import type { FileOp } from '../checkpoint/changeset'
 
@@ -12,7 +13,8 @@ export interface ValidationAuthority { approved: boolean; headSha: string; reaso
 // policy by declaring a version, and future generator output is not implicitly
 // approved here. The archived release has no dependency on the current manifest.
 const releasedPolicies: readonly ValidationManifest[] = [
-  ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.6'),
+  ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.7'),
+  ...TRUSTED_VALIDATION_POLICIES_4_0_6,
   ...TRUSTED_VALIDATION_POLICIES_4_0_5,
   ...TRUSTED_VALIDATION_POLICIES_4_0_4,
   ...TRUSTED_VALIDATION_POLICIES_4_0_2,

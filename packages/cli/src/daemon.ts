@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { z } from 'zod'
 import {
   defaultCheckpointDeps,
   classifyCheckpointRisk,
@@ -29,7 +30,7 @@ import { runDatabaseDirect } from './database'
 import { startFeedbackWorker } from './feedback'
 import { evidenceFor, startLocalValidationWorker } from './turn-validation'
 import { inferLocalDiagnostic, type LocalDiagnosticCode } from '../../../src/lib/checkpoint/local-diagnostic'
-import { gitText, readJson, TURN_DIR, withTurnLock } from './turn-workspace'
+import { gitText, readJson, writeJson, TURN_DIR, withTurnLock } from './turn-workspace'
 import {
   applyRestore,
   defaultRestoreDeps,
@@ -93,6 +94,7 @@ export function upsertQueue(
 // ── I/O injetável ────────────────────────────────────────────────────────────
 
 export class NetworkError extends Error {}
+export class PublishTimeoutError extends NetworkError {}
 export class AuthError extends Error {}
 export class ConflictError extends Error {}
 
@@ -274,7 +276,7 @@ export async function processCheckpoint(
     }
     // Rede offline OU conflito (409, corrida/non-ff): vira pending e re-tenta com
     // backoff. O backend re-planeja a branch a cada tentativa. Nada se perde.
-    const reason = err instanceof ConflictError ? 'conflict' : 'network'
+    const reason = err instanceof PublishTimeoutError ? 'timeout' : err instanceof ConflictError ? 'conflict' : 'network'
     return {
       record: withStatus(record, 'upload_pending', { attempts: record.attempts + 1 }),
       result: 'deferred',
@@ -285,14 +287,15 @@ export async function processCheckpoint(
 
 // ── Adapter HTTP real (I/O; coberto por E2E) ─────────────────────────────────
 
-/** v3.3 — sync-status é uma checagem de sessão, não um retry em background:
- * nunca deixa a PRIMEIRA mensagem esperando. Latência é prioridade forte aqui
- * — 2s no máximo, mesmo com backend lento/indisponível. As demais chamadas
- * (publish/restore) não levam timeout de propósito — são do daemon, que já
- * retenta com backoff. */
+/** Session/status calls stay short; publication gets time for the GitHub work.
+ * Backoff cannot recover a request that never settles: both headers and body
+ * must finish within this deadline. Retry keeps the same checkpoint ID/hash. */
 export const SYNC_STATUS_TIMEOUT_MS = 2000
+// Longer than publish route maxDuration (300s), with a network margin. A client
+// abort cannot stop server work; do not retry while that handler may still run.
+export const PUBLISH_TIMEOUT_MS = 360_000
 
-export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
+export function defaultDaemonHttp(apiBaseUrl: string, options: { publishTimeoutMs?: number; signal?: AbortSignal } = {}): DaemonHttp {
   const base = deviceIssuer(apiBaseUrl)
   // CodeQL js/file-access-to-http sinaliza dado de arquivo (o conteúdo dos
   // arquivos do changeset, lido por defaultCommitReader em changeset.ts)
@@ -303,34 +306,37 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
   // de um arquivo sensível não relacionado. Suprimido nas 2 linhas exatas
   // abaixo com esta justificativa — a regra e o job continuam ativos para
   // qualquer outro fluxo novo.
-  const postJson = async (route: string, body: unknown, timeoutMs?: number): Promise<unknown> => {
-    let res: Response
-    const controller = timeoutMs != null ? new AbortController() : undefined
-    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined
+  const postJson = async (route: string, body: unknown, timeoutMs: number): Promise<unknown> => {
+    const controller = new AbortController()
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
+    const stop = (): void => { controller.abort() }
+    options.signal?.addEventListener('abort', stop, { once: true })
+    if (options.signal?.aborted) stop()
     try {
       // codeql[js/file-access-to-http] changeset do usuário → backend que ele configurou (ver nota acima)
-      res = await fetch(`${base}${route}`, {
+      const res = await fetch(`${base}${route}`, {
         method: 'POST',
         redirect: 'error',
         headers: { 'Content-Type': 'application/json' },
         // codeql[js/file-access-to-http] mesmo fluxo intencional (ver nota acima)
         body: JSON.stringify(body),
-        ...(controller ? { signal: controller.signal } : {}),
+        signal: controller.signal,
       })
-    } catch {
-      // Aborto por timeout cai aqui também (AbortError) — mesmo tratamento:
-      // "não deu pra falar com o backend agora", nunca trava o chamador.
-      if (timer) clearTimeout(timer)
-      throw new NetworkError('offline')
-    }
-    try {
       if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`)
       if (res.status === 409) throw new ConflictError('conflict')
       if (!res.ok) throw new NetworkError(`${res.status}`)
       // Keep the deadline active while reading the body too, not only headers.
-      return await res.json().catch(() => { throw new NetworkError('invalid_response') })
+      return await res.json()
+    } catch (error) {
+      if (timedOut && route === '/api/checkpoint/publish') throw new PublishTimeoutError('publish_timeout')
+      if (error instanceof AuthError || error instanceof ConflictError || error instanceof NetworkError) throw error
+      throw new NetworkError('response_unavailable')
     } finally {
-      if (timer) clearTimeout(timer)
+      clearTimeout(timer)
+      options.signal?.removeEventListener('abort', stop)
+      // Also release an unread error body before retrying the request.
+      controller.abort()
     }
   }
   return {
@@ -339,8 +345,10 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
       if (data.reported !== true) throw new NetworkError('report_not_acknowledged')
     },
     publish: async (input) => {
-      const data = (await postJson('/api/checkpoint/publish', input)) as { prNumber?: number }
-      return { prNumber: data.prNumber ?? 0 }
+      const data = z.object({ prNumber: z.number().int().positive() }).safeParse(
+        await postJson('/api/checkpoint/publish', input, options.publishTimeoutMs ?? PUBLISH_TIMEOUT_MS))
+      if (!data.success) throw new NetworkError('publish_not_acknowledged')
+      return data.data
     },
     pollRestores: async (input) => {
       const data = (await postJson('/api/checkpoint/restore-poll', input, SYNC_STATUS_TIMEOUT_MS)) as {
@@ -371,6 +379,22 @@ export function defaultDaemonHttp(apiBaseUrl: string): DaemonHttp {
 
 export const DAEMON_PID_FILE = `${CHECKPOINT_DIR}/daemon.pid`
 export const DAEMON_LOG_FILE = `${CHECKPOINT_DIR}/daemon.log`
+export const DAEMON_PROGRESS_FILE = `${CHECKPOINT_DIR}/upload-health.json`
+
+const uploadProgressSchema = z.object({
+  pid: z.number().int().positive(),
+  phase: z.enum(['checking', 'publishing', 'waiting', 'retrying', 'stopped']),
+  checkpointId: z.string().optional(),
+  updatedAt: z.string().datetime(),
+  deadlineAt: z.string().datetime(),
+  recoveredTimeouts: z.number().int().nonnegative(),
+})
+export type UploadProgress = z.infer<typeof uploadProgressSchema>
+interface UploadProgressEvent {
+  phase: UploadProgress['phase']
+  checkpointId?: string
+  timeout?: boolean
+}
 
 interface ProjectConfig {
   projectId: string
@@ -471,10 +495,11 @@ export function ensureDaemon(cwd: string): 'reuse' | 'start' {
 
 export interface DaemonStatus {
   running: boolean
-  /** Sem healthcheck HTTP próprio (diferente do preview): vivo = saudável. */
+  /** Upload-loop progress, independent of database/validation heartbeats. */
   healthy: boolean
   pid: number | null
   pendingCheckpoints: number
+  upload?: UploadProgress
 }
 
 export function daemonStatus(cwd: string): DaemonStatus {
@@ -487,7 +512,18 @@ export function daemonStatus(cwd: string): DaemonStatus {
   } catch {
     // sem fila ainda: 0 pendências
   }
-  return { running, healthy: running, pid, pendingCheckpoints }
+  // Older daemons have no progress receipt. Preserve their lifecycle contract,
+  // but never let an unrelated worker heartbeat hide a stalled new daemon.
+  let upload: UploadProgress | undefined
+  let progressHealthy = true
+  try {
+    const parsed = uploadProgressSchema.safeParse(readJson(path.join(cwd, DAEMON_PROGRESS_FILE)))
+    if (parsed.success) {
+      upload = parsed.data
+      progressHealthy = upload.pid === pid && upload.phase !== 'stopped' && Date.parse(upload.deadlineAt) >= Date.now()
+    } else if (fs.existsSync(path.join(cwd, DAEMON_PROGRESS_FILE))) progressHealthy = false
+  } catch { progressHealthy = false }
+  return { running, healthy: running && progressHealthy, pid, pendingCheckpoints, ...(upload ? { upload } : {}) }
 }
 
 export function stopDaemon(cwd: string): boolean {
@@ -512,7 +548,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 function minPendingAttempts(queue: readonly CheckpointRecord[]): number | null {
   let min: number | null = null
   for (const r of queue) {
-    if (RETRIABLE.has(r.pushStatus)) {
+    if (RETRIABLE.has(r.pushStatus) && r.validationStatus !== 'failed') {
       min = min === null ? r.attempts : Math.min(min, r.attempts)
     }
   }
@@ -669,9 +705,13 @@ export async function processRestores(
 }
 
 /** Processa o snapshot atual; resultados são anexados sem apagar novos pedidos. */
-export async function drainOnce(config: DaemonConfig): Promise<number> {
+export async function drainOnce(config: DaemonConfig, options: {
+  http?: DaemonHttp
+  onProgress?: (event: UploadProgressEvent) => void
+} = {}): Promise<number> {
   // Restores primeiro: um checkpoint "E" resultante já entra na fila a tempo.
-  await processRestores(config)
+  options.onProgress?.({ phase: 'checking' })
+  await processRestores(config, options.http ? { http: options.http } : {})
 
   const queuePath = path.join(config.cwd, QUEUE_FILE)
   let queue: CheckpointRecord[]
@@ -683,12 +723,15 @@ export async function drainOnce(config: DaemonConfig): Promise<number> {
   const ctx: DaemonContext = {
     projectId: config.projectId,
     getSecret: config.getSecret,
-    http: defaultDaemonHttp(config.apiBaseUrl),
+    http: options.http ?? defaultDaemonHttp(config.apiBaseUrl),
     reader: defaultCommitReader(config.cwd),
   }
   let processed = 0
+  // Bound this cycle to its original work; fresh appends wait for the next tick.
+  const pendingIds = new Set(queue.map((record) => record.checkpointId))
   for (;;) {
-    let next = selectNextPending(queue)
+    queue = parseQueue(fs.readFileSync(queuePath, 'utf8'))
+    let next = selectNextPending(queue.filter((record) => pendingIds.has(record.checkpointId)))
     if (!next) break
     if (!next.validationStatus) {
       // Upgrade legacy records into the safety worker; no environment authority
@@ -718,12 +761,20 @@ export async function drainOnce(config: DaemonConfig): Promise<number> {
       }
       next = rebased
     }
+    options.onProgress?.({ phase: 'publishing', checkpointId: next.checkpointId })
     const outcome = await processCheckpoint(next, ctx)
-    queue = upsertQueue(queue, outcome.record)
+    // Validation runs independently and can finish while HTTP is outstanding.
+    // Only the transport owns these fields; do not restore stale validation.
+    const latest = parseQueue(fs.readFileSync(queuePath, 'utf8')).find((record) => record.checkpointId === next.checkpointId)
+    if (!latest || latest.commitSha !== next.commitSha) throw new Error('Checkpoint alterado durante o envio.')
+    const delivered = { ...latest, pushStatus: outcome.record.pushStatus, attempts: outcome.record.attempts,
+      ...(outcome.record.prNumber != null ? { prNumber: outcome.record.prNumber } : {}) }
     // Nunca regravar o snapshot lido antes da rede: o agente pode ter anexado
     // novos checkpoints enquanto este envio estava em andamento.
-    fs.appendFileSync(queuePath, serializeQueue([outcome.record]))
+    fs.appendFileSync(queuePath, serializeQueue([delivered]))
     processed++
+    options.onProgress?.({ phase: outcome.result === 'done' ? 'checking' : 'retrying',
+      checkpointId: next.checkpointId, timeout: outcome.result === 'deferred' && outcome.reason === 'timeout' })
     if (outcome.result !== 'done') break
   }
   return processed
@@ -735,7 +786,7 @@ export async function drainOnce(config: DaemonConfig): Promise<number> {
  */
 export async function runDaemonLoop(
   cwd: string,
-  opts: { idleMs?: number } = {},
+  opts: { idleMs?: number; publishTimeoutMs?: number; getSecret?: () => string | null; signal?: AbortSignal } = {},
 ): Promise<void> {
   const config = readProjectConfig(cwd)
   if (!config) {
@@ -747,45 +798,76 @@ export async function runDaemonLoop(
     projectId: config.projectId,
     apiBaseUrl: config.apiBaseUrl,
     cwd,
-    getSecret: () => readDeviceSecret(keychain, config.projectId, config.apiBaseUrl),
+    getSecret: opts.getSecret ?? (() => readDeviceSecret(keychain, config.projectId, config.apiBaseUrl)),
   }
   const idleMs = opts.idleMs ?? 3000
   let stopped = false
   let authorityUnavailable = false
+  let recoveredTimeouts = 0
+  const controller = new AbortController()
+  const publishTimeoutMs = opts.publishTimeoutMs ?? PUBLISH_TIMEOUT_MS
+  const http = defaultDaemonHttp(config.apiBaseUrl, { publishTimeoutMs, signal: controller.signal })
+  const progress = (event: UploadProgressEvent, durationMs = publishTimeoutMs + 30_000): void => {
+    if (event.timeout) {
+      recoveredTimeouts++
+      process.stderr.write('[daemon] Envio sem resposta cancelado; o mesmo checkpoint será reenviado automaticamente.\n')
+    }
+    try {
+      const now = Date.now()
+      writeJson(path.join(cwd, DAEMON_PROGRESS_FILE), {
+        pid: process.pid, phase: event.phase, checkpointId: event.checkpointId,
+        updatedAt: new Date(now).toISOString(), deadlineAt: new Date(now + durationMs).toISOString(), recoveredTimeouts,
+      } satisfies UploadProgress)
+    } catch {
+      process.stderr.write('[daemon] Não foi possível registrar a saúde do envio.\n')
+    }
+  }
+  progress({ phase: 'checking' })
   // Independente do upload/CI/backoff: o banco responde mesmo com checkpoint pendente.
   const stopLocalValidationWorker = startLocalValidationWorker(cwd)
   const stopLocalReportWorker = startLocalReportWorker(daemonConfig)
   const stopDatabaseWorker = startDatabaseWorker(cwd, (operation, options) => runDatabaseDirect(operation, cwd, options))
   const stopFeedbackWorker = startFeedbackWorker(daemonConfig)
-  process.on('SIGTERM', () => {
+  const stop = (): void => {
     stopped = true
+    controller.abort()
     stopDatabaseWorker()
     stopFeedbackWorker()
     stopLocalValidationWorker()
     stopLocalReportWorker()
-  })
-  while (!stopped) {
-    let queue: CheckpointRecord[] = []
-    try {
-      queue = parseQueue(fs.readFileSync(path.join(cwd, QUEUE_FILE), 'utf8'))
-    } catch {
-      /* sem fila ainda */
+  }
+  process.on('SIGTERM', stop)
+  opts.signal?.addEventListener('abort', stop, { once: true })
+  if (opts.signal?.aborted) stop()
+  try {
+    while (!stopped) {
+      try {
+        await drainOnce(daemonConfig, { http, onProgress: (event) => progress(event) })
+        authorityUnavailable = false
+      } catch {
+        // A missing/legacy/mismatched private identity must stop network work,
+        // not terminate the supervisor or lose its local database/preview channels.
+        if (!authorityUnavailable) process.stderr.write('[daemon] Identidade ou backend indisponível; confirme a origem e a autorização. Checkpoints locais preservados.\n')
+        authorityUnavailable = true
+      }
+      if (stopped) break
+      try {
+        fs.rmSync(path.join(cwd, NOTIFY_FILE))
+      } catch {
+        /* nenhum sinal pendente */
+      }
+      let queue: CheckpointRecord[] = []
+      try { queue = parseQueue(fs.readFileSync(path.join(cwd, QUEUE_FILE), 'utf8')) }
+      catch { /* Sem fila ainda. */ }
+      const attempts = minPendingAttempts(queue)
+      const delayMs = attempts != null ? backoffDelayMs(attempts) : idleMs
+      progress({ phase: attempts != null && attempts > 0 ? 'retrying' : 'waiting' }, delayMs + 30_000)
+      await sleep(delayMs)
     }
-    try {
-      await drainOnce(daemonConfig)
-      authorityUnavailable = false
-    } catch {
-      // A missing/legacy/mismatched private identity must stop network work,
-      // not terminate the supervisor or lose its local database/preview channels.
-      if (!authorityUnavailable) process.stderr.write('[daemon] Identidade ou backend indisponível; confirme a origem e a autorização. Checkpoints locais preservados.\n')
-      authorityUnavailable = true
-    }
-    try {
-      fs.rmSync(path.join(cwd, NOTIFY_FILE))
-    } catch {
-      /* nenhum sinal pendente */
-    }
-    const attempts = minPendingAttempts(queue)
-    await sleep(attempts != null ? backoffDelayMs(attempts) : idleMs)
+  } finally {
+    stop()
+    process.removeListener('SIGTERM', stop)
+    opts.signal?.removeEventListener('abort', stop)
+    progress({ phase: 'stopped' }, 0)
   }
 }

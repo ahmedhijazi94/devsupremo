@@ -85,7 +85,8 @@ export {
 // correção local em cópia isolada, preservando preview e gates de publicação.
 // 4.0.7: continuação explícita da correção e diagnóstico compacto para o agente.
 // 4.0.8: títulos descritivos, diagnóstico atualizado e administração de autenticação.
-export const TEMPLATE_VERSION = '4.0.8'
+// 4.0.9: recuperação automática de envios parados no daemon.
+export const TEMPLATE_VERSION = '4.0.9'
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '3.0.0'

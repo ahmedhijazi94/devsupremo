@@ -2,7 +2,7 @@
 import type { ValidationManifest } from '../validation-integrity'
 export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
   {
-    "version": "4.0.8",
+    "version": "4.0.9",
     "kind": "public",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -2918,12 +2918,12 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "00c3610072b5ed3b7afc18c698a2ae7c054d88bb02a4deee3d8c77349bc7b1eb"
+        "8db1a6b955f3e5984572e9b26e34f371a86e3f1d09011d43d79a6fcbd746f048"
       ]
     ]
   },
   {
-    "version": "4.0.8",
+    "version": "4.0.9",
     "kind": "solo",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -5839,12 +5839,12 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "00c3610072b5ed3b7afc18c698a2ae7c054d88bb02a4deee3d8c77349bc7b1eb"
+        "8db1a6b955f3e5984572e9b26e34f371a86e3f1d09011d43d79a6fcbd746f048"
       ]
     ]
   },
   {
-    "version": "4.0.8",
+    "version": "4.0.9",
     "kind": "team",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -8760,7 +8760,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "00c3610072b5ed3b7afc18c698a2ae7c054d88bb02a4deee3d8c77349bc7b1eb"
+        "8db1a6b955f3e5984572e9b26e34f371a86e3f1d09011d43d79a6fcbd746f048"
       ]
     ]
   }

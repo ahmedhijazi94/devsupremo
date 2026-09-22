@@ -7,6 +7,15 @@ const identitySchema = z.object({ version: z.literal(1), projectId: z.string().u
 // Keep new identities in a separate namespace, then retire that legacy slot.
 const identityAccount = (projectId: string): string => `identity-v1:${projectId}`
 
+/** Only a genuine legacy-only slot can be replaced through a new browser flow.
+ * Corrupt or issuer-mismatched bound identities are separate fail-closed cases. */
+export class LegacyDeviceIdentityError extends Error {
+  constructor() {
+    super('Autorização antiga sem origem verificável. Reautorize este projeto com supremo authorize --url <origem confiável>. Nenhuma credencial foi enviada.')
+    this.name = 'LegacyDeviceIdentityError'
+  }
+}
+
 /** Canonical authority, including a self-hosted installation's base path. */
 export function deviceIssuer(raw: string): string {
   const url = new URL(raw)
@@ -30,8 +39,8 @@ export function readDeviceSecret(keychain: Keychain, projectId: string, issuer: 
   z.string().uuid().parse(projectId)
   const expected = deviceIssuer(issuer)
   const stored = keychain.get(identityAccount(projectId))
-  if (!stored) {
-    if (keychain.get(projectId)) throw new Error('Autorização antiga sem origem verificável. Reautorize este projeto com supremo authorize --url <origem confiável>. Nenhuma credencial foi enviada.')
+  if (stored === null) {
+    if (keychain.get(projectId)) throw new LegacyDeviceIdentityError()
     return null
   }
   let value: unknown

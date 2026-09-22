@@ -7,7 +7,9 @@ import { deviceIssuer, saveDeviceIdentity } from './device-identity'
 import { resolveKeychain } from './keychain'
 import { preCommitHook, prePushHook } from './git-hooks'
 import { inspectHostAdapters, type IntegrationMode } from './host-adapters'
-import { assertFrameworkNodeVersion, publicSupabaseEnvironment, readProjectStack } from './framework-runtime'
+import { readProjectStack } from './framework-runtime'
+import { checkoutProject, configureAuthorizedCheckout, verifyCheckoutRepository } from './prepare-config'
+import { ensureProjectRuntime, type ProjectRuntime } from './project-runtime'
 
 /**
  * `supremo bootstrap <project-id>` — device flow + workspace local pronto.
@@ -255,10 +257,11 @@ const tryExecOut = (cmd: string, args: string[]): string | null => {
 }
 
 /** Como `tryExecOut`, mas rodando dentro de `cwd` (para checar o projeto gerado). */
-const tryExecOutIn = (cmd: string, args: string[], cwd: string): string | null => {
+const tryExecOutIn = (cmd: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): string | null => {
   try {
     return execFileSync(cmd, args, {
       cwd,
+      env,
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8',
     })
@@ -413,22 +416,16 @@ export function gitHooksVerified(root: string): boolean {
 }
 
 /** Roda o mesmo comando que `npm run daemon:status` rodaria, no projeto gerado. */
-function checkNpmScriptsCompatible(dest: string): boolean {
+function checkNpmScriptsCompatible(dest: string, runtime: ProjectRuntime): boolean {
   return daemonCliOutputLooksValid(
-    tryExecOutIn(process.execPath, [path.join(dest, 'node_modules/supremo-cli/dist/bin.js'), 'daemon', '--status'], dest),
+    tryExecOutIn(runtime.node, [path.join(dest, 'node_modules/supremo-cli/dist/bin.js'), 'daemon', '--status'], dest, runtime.env),
   )
 }
 
 // ── Node runtime (v3.1 finalização, seção 8) ─────────────────────────────────
 //
-// E2E real: Node 23 (release "Current", não-LTS) fez `npm ci` do projeto
-// gerado avisar (EBADENGINE) que `eslint-visitor-keys` só suporta
-// "^20.19.0 || ^22.13.0 || >=24" — Node 23 cai fora de TODAS essas faixas.
-// Confirmado NÃO-BLOQUEANTE (npm segue instalando; é warning, não erro) — por
-// isso o tratamento aqui é AVISO CLARO + recomendação de Node 22 LTS, não
-// fail-fast: não há evidência de risco real de falha, só de incompatibilidade
-// pontual de engines em devDependencies. Se isso mudar (uma versão realmente
-// quebrar o build), o fail-fast vira justificado — não hoje.
+// The advisory runs before clone. Once the framework is known, the dedicated
+// project runtime helper prepares compatible Node locally when necessary.
 
 export const RECOMMENDED_NODE_MAJORS = [20, 22, 24] as const // linhas LTS
 
@@ -447,15 +444,14 @@ export function checkNodeVersion(nodeVersion: string): NodeVersionCheck {
     major,
     message:
       `Node ${nodeVersion} não é uma versão LTS testada pelo Supremo (recomendado: ` +
-      `Node 22 LTS). Isto NÃO deveria travar a instalação, mas algumas dependências ` +
-      `podem avisar incompatibilidade (EBADENGINE) — se algo estranho acontecer, ` +
-      `troque para Node 22 LTS e rode o bootstrap de novo.`,
+      `Node 22 LTS). Um runtime compatível será preparado no projeto quando necessário. ` +
+      `Se a preparação falhar, retome dentro do checkout com supremo prepare --url <origem confiável>.`,
   }
 }
 
 /** Roda o mesmo comando que `npm run preview:status` rodaria, no projeto gerado. */
-function checkPreviewHealthy(dest: string): boolean {
-  return previewStatusHealthy(tryExecOutIn('node', ['scripts/preview.mjs', 'status'], dest))
+function checkPreviewHealthy(dest: string, runtime: ProjectRuntime): boolean {
+  return previewStatusHealthy(tryExecOutIn(runtime.node, ['scripts/preview.mjs', 'status'], dest, runtime.env))
 }
 
 /**
@@ -475,7 +471,7 @@ function checkPreviewHealthy(dest: string): boolean {
  * Retorna true só quando o checkout ficou linkado e validado. Falha aqui não
  * quebra o bootstrap (o app local já está pronto); sempre imprime o passo manual.
  */
-async function linkSupabaseRemote(
+export async function linkSupabaseRemote(
   dest: string,
   supabase: { projectRef: string; dbPassword?: string; majorVersion?: number },
 ): Promise<boolean> {
@@ -660,14 +656,19 @@ export async function runBootstrap(opts: {
   const baseUrl = deviceIssuer(opts.url)
   console.log('\nSupremo Bootstrap\n')
 
-  // Aviso de runtime ANTES de instalar qualquer coisa (seção 8) — nunca
-  // bloqueia (confirmado não-fatal), mas nunca fica silencioso também.
+  // Advise first; resolve a framework-compatible runtime after saving setup.
   const nodeCheck = checkNodeVersion(process.version)
   if (nodeCheck.status === 'warn') {
     console.log(`⚠ ${nodeCheck.message}\n`)
   }
 
   const config = await authorizeDevice(opts.projectId, baseUrl)
+  // Browser authorization is already complete. Confirm durable storage before
+  // clone, runtime selection or dependency installation can fail.
+  if (config.daemon) {
+    saveDeviceIdentity(resolveKeychain(), config.project.id, baseUrl, config.daemon.deviceSecret)
+    ok('Máquina autorizada — identidade confirmada no keychain')
+  }
   console.log(`  Projeto: ${config.project.name}`)
 
   const dest = targetDir(config.repo.fullName, opts.dir)
@@ -683,22 +684,18 @@ export async function runBootstrap(opts: {
   })
   ok('Repository clonado')
 
+  checkoutProject(dest, baseUrl, opts.projectId)
+  verifyCheckoutRepository(dest, config.repo)
   const stack = readProjectStack(dest)
-  assertFrameworkNodeVersion(stack, process.version)
   if (config.project.stack !== undefined && config.project.stack !== stack) {
     throw new Error('A stack do checkout diverge do projeto autorizado; bootstrap interrompido.')
   }
-  // .env.local (gitignored no scaffold). Nunca imprimimos o conteúdo. Só públicas.
-  fs.writeFileSync(path.join(dest, '.env.local'), buildEnvFile(publicSupabaseEnvironment(stack, config.env)), {
-    mode: 0o600,
-  })
+  // Preserve resumable setup before acquiring Node or installing dependencies.
+  configureAuthorizedCheckout(dest, stack, config)
   ok('Environment público configurado')
-  fs.mkdirSync(path.join(dest, '.supremo'), { recursive: true })
-  fs.writeFileSync(path.join(dest, '.supremo/database.json'), JSON.stringify(config.database ?? {
-    environment: 'unknown', projectRef: config.supabase?.projectRef ?? null, automaticMigrations: false,
-  }, null, 2) + '\n')
 
-  run('npm', ['ci'], dest)
+  const runtime = await ensureProjectRuntime(dest, stack)
+  run(runtime.node, [runtime.npm, 'ci'], dest, runtime.env)
   ok('Dependências instaladas')
 
   // Linka o checkout ao Supabase remoto (auth guiada + link + validação do ref),
@@ -710,7 +707,7 @@ export async function runBootstrap(opts: {
 
   let setupSucceeded = false
   try {
-    run('npm', ['run', 'setup:local'], dest)
+    run(runtime.node, [runtime.npm, 'run', 'setup:local'], dest, runtime.env)
     setupSucceeded = true
     ok('Infraestrutura local preparada; testes sob demanda e CI em background')
   } catch {
@@ -727,17 +724,15 @@ export async function runBootstrap(opts: {
   let npmScriptsCompatible: boolean | null = null
   if (config.daemon) {
     try {
-      saveDeviceIdentity(resolveKeychain(), config.project.id, baseUrl, config.daemon.deviceSecret)
-      ok('Máquina autorizada (checkpoint daemon) — identidade no keychain')
-      const { ensureDaemon, daemonStatus } = await import('./daemon')
-      ensureDaemon(dest)
+      const { daemonStatus } = await import('./daemon')
+      run(runtime.node, [path.join(dest, 'node_modules/supremo-cli/dist/bin.js'), 'daemon', '--ensure'], dest, runtime.env)
       daemonRunning = daemonStatus(dest).running
       if (daemonRunning) {
         ok('Checkpoint daemon no ar — push/PR em background (npm run daemon:status)')
       }
       // Roda o MESMO comando que "npm run daemon:status" rodaria, agora — pega
       // uma CLI publicada desatualizada ANTES de declarar o projeto pronto.
-      npmScriptsCompatible = checkNpmScriptsCompatible(dest)
+      npmScriptsCompatible = checkNpmScriptsCompatible(dest, runtime)
       if (npmScriptsCompatible) {
         ok('Scripts de checkpoint/daemon compatíveis com a CLI instalada')
       }
@@ -754,8 +749,8 @@ export async function runBootstrap(opts: {
   // aposentado: isto já não é mais opcional, é parte do bootstrap.
   let previewHealthy = false
   try {
-    run('npm', ['run', 'preview:ensure'], dest)
-    previewHealthy = checkPreviewHealthy(dest)
+    if (!checkPreviewHealthy(dest, runtime)) run(runtime.node, [runtime.npm, 'run', 'preview:ensure'], dest, runtime.env)
+    previewHealthy = checkPreviewHealthy(dest, runtime)
     if (previewHealthy) ok('Preview no ar (npm run preview:status)')
   } catch {
     console.log(
@@ -790,7 +785,7 @@ export async function runBootstrap(opts: {
   }, null, 2) + '\n')
 
   if (readiness.ok) {
-    const url = previewStatusUrl(tryExecOutIn(process.execPath, ['scripts/preview.mjs', 'status'], dest)) ?? 'consulte preview:status'
+    const url = previewStatusUrl(tryExecOutIn(runtime.node, ['scripts/preview.mjs', 'status'], dest, runtime.env)) ?? 'consulte preview:status'
     console.log(
       `\nInfraestrutura pronta para ${selectedHost} com ciclo comprovado:\n\n  ${dest}\n  Preview: ${url}\n`,
     )

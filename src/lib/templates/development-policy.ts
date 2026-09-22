@@ -42,6 +42,35 @@ Este bloco atualiza somente os padrões de workflow gerados pelo Supremo, inclus
 quando há instruções antigas de testes/QA/recovery neste arquivo. Instruções explícitas
 do usuário continuam tendo precedência; preserve as regras de arquitetura e segurança.
 
+- Primeiro pedido de desenvolvimento neste projeto: antes de preparar o ambiente ou
+  alterar o app, faça uma única pergunta de autorização em linguagem comum, junto das
+  dúvidas importantes sobre o produto que o pedido ainda não respondeu. Exemplo:
+  “Você autoriza preparar este projeto e alterar seu código, configurações e banco de
+  desenvolvimento conforme seus pedidos, conectando este computador ao Supremo em
+  [endereço do Supremo deste projeto]? Para começar, preciso também definir: [...]”.
+  Mostre o endereço concreto; não peça ao usuário comandos, versões de Node ou decisões
+  de infraestrutura. Pergunte apenas o que muda o resultado do app; se o pedido já está
+  claro, não invente perguntas. Aguarde a resposta antes da preparação e das edições.
+  Reutilize uma autorização explícita já dada para este projeto e esse endereço.
+  Pedidos somente de leitura continuam somente de leitura, sem iniciar onboarding.
+- Após a autorização, prepare automaticamente o checkout existente com
+  \`node tools/supremo-cli/dist/bin.js prepare --url <endereço confirmado>\`.
+  A CLI incluída funciona antes de instalar dependências. Ela seleciona Node compatível
+  apenas para o projeto, instala pelo lockfile quando necessário, reutiliza a identidade
+  autorizada ou abre a autorização oficial no navegador, confirma o vínculo do banco de
+  desenvolvimento e inicia o supervisor de preview. Não clone por cima do projeto nem
+  altere o Node global. Não exija um segundo prompt técnico para continuar o pedido.
+  O usuário ainda conclui a tela de autorização do dispositivo quando ela for necessária.
+- A preparação registra \`.supremo/onboarding.json\` com projeto, origem, escopo e data,
+  sem credenciais, para lembrar a conversa inicial nas próximas sessões. Confira que o
+  projeto e a origem correspondem aos atuais; esse registro é contexto, não credencial
+  nem prova de permissão do host. Não repita a pergunta inicial quando já respondida,
+  mas respeite qualquer restrição posterior do usuário. A autorização cobre somente
+  este projeto e seu desenvolvimento; produção, operações destrutivas e recursos de
+  outros projetos mantêm suas autorizações próprias. Nunca contorne a revisão do host.
+  Se ela bloquear uma operação, informe a operação e o motivo concreto, sem declarar o
+  ambiente pronto. Depois da preparação, retome o preflight e os gates normais antes
+  de implementar. Preserve um preview saudável e continue o pedido original.
 - Padrão: no início de cada pedido de alteração, trate o diagnóstico anterior entregue
   pelo Supremo. Confira se a falha ainda existe no código atual e corrija as causas
   confirmadas antes do pedido novo, sem esperar o usuário avisar. Depois implemente

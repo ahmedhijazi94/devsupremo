@@ -88,6 +88,7 @@ export {
 // 4.0.7: continuação explícita da correção e diagnóstico compacto para o agente.
 // 4.0.8: títulos descritivos, diagnóstico atualizado e administração de autenticação.
 // 4.0.10: CLI 1.8.0 com resolução explícita de runtime; gates Next preservados.
+// 4.0.11: onboarding consentido e preparação retomável, CLI 1.8.1.
 // 4.0.9: recuperação automática de envios parados no daemon.
 export const TEMPLATE_VERSION = NEXT_TEMPLATE_VERSION
 
@@ -353,7 +354,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
     // ── Documentação e regras ─────────────────────────────────
     { path: 'README.md', content: readme(projectName, summary) },
     { path: 'AGENTS.md', content: withDevelopmentPolicy(agentsMd(projectName, summary)) },
-    { path: '.supremo/DEVELOPMENT.md', content: developmentPolicyMd() },
+    { path: '.supremo/DEVELOPMENT.md', content: withDevelopmentPolicy(developmentPolicyMd()) },
     { path: 'CLAUDE.md', content: withDevelopmentPolicy(claudeMd(projectName)) },
     { path: 'SECURITY.md', content: securityMd(projectName) },
     { path: 'ARCHITECTURE.md', content: architectureMd(projectName, kind) },
@@ -777,6 +778,9 @@ supabase/.branches/
 .supremo/validation/
 .supremo/host-adapters.json
 .supremo/bootstrap-readiness.json
+.supremo/prepare-readiness.json
+.supremo/onboarding.json
+.supremo/runtime/
 .supremo/verify-result.json*
 .claude/settings.local.json
 

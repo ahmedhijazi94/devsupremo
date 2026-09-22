@@ -85,6 +85,36 @@ program
   })
 
 program
+  .command('runtime-preview [args...]')
+  .description('Executa o supervisor existente com o Node já preparado, sem instalar')
+  .allowUnknownOption()
+  .action(async (args: string[]) => {
+    const { runPreviewWithProjectRuntime } = await import('./runtime-entry')
+    await runPreviewWithProjectRuntime(process.cwd(), args)
+  })
+
+program
+  .command('prepare')
+  .description('Após autorização do usuário, prepara este projeto existente e preserva o preview saudável')
+  .requiredOption('-u, --url <url>', 'Origem do Supremo confirmada pelo usuário para este projeto')
+  .option('--host <name>', 'Agente usado no projeto: claude-code ou codex')
+  .action(async (options: { url: string; host?: string }) => {
+    try {
+      if (options.host !== undefined && options.host !== 'claude-code' && options.host !== 'codex') {
+        throw new Error('Host inválido: use claude-code ou codex.')
+      }
+      const { runPrepare } = await import('./prepare')
+      const result = await runPrepare({ url: options.url, ...(options.host ? { host: options.host } : {}) })
+      console.log(JSON.stringify(result))
+      if (result.state === 'not_ready') process.exitCode = 1
+    } catch (error) {
+      const { sanitizeDiagnostic } = await import('../../../src/lib/checkpoint/feedback')
+      console.error(sanitizeDiagnostic(error instanceof Error ? error.message : String(error)))
+      process.exitCode = 1
+    }
+  })
+
+program
   .command('bootstrap <project-id>')
   .description('Prepara o workspace local do projeto (autoriza no navegador)')
   .requiredOption('-u, --url <url>', 'URL do Supremo, ex.: https://supremo.app')
@@ -368,4 +398,16 @@ program
 
 guardUnknownCommand(process.argv.slice(2))
 if (process.argv.length === 2) program.outputHelp()
-else program.parse()
+else void (async () => {
+  const command = process.argv[2]
+  if (command && !command.startsWith('-') && !['bootstrap', 'prepare'].includes(command) &&
+    !process.argv.includes('--help') && !process.argv.includes('-h')) {
+    const { maybeRelaunchWithProjectRuntime } = await import('./runtime-entry')
+    if (await maybeRelaunchWithProjectRuntime(process.cwd())) return
+  }
+  await program.parseAsync()
+})().catch(async error => {
+  const { sanitizeDiagnostic } = await import('../../../src/lib/checkpoint/feedback')
+  console.error(sanitizeDiagnostic(error instanceof Error ? error.message : String(error)))
+  process.exitCode = 1
+})

@@ -1,6 +1,6 @@
 # __PROJECT_NAME_JS__
 
-Supremo template `tanstack-start-vite`, version 5.0.0. Use Node 22 LTS (22.13+) or Node 24+ and `npm ci`. Copy `.env.example` to `.env.local` using only the development Supabase public URL and anon/publishable key supplied by bootstrap.
+Supremo template `tanstack-start-vite`, version 5.0.1. Use Node 22 LTS (22.13+) or Node 24+ and `npm ci`. Copy `.env.example` to `.env.local` using only the development Supabase public URL and anon/publishable key supplied by bootstrap.
 
 `npm run dev` starts the app at http://localhost:3000. In Supremo, use the existing preview supervisor so the process and port survive subsequent edits. Route generation happens automatically during dev and explicitly before typecheck; do not edit `src/routeTree.gen.ts`.
 

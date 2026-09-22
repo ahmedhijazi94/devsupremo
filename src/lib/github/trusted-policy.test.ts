@@ -12,6 +12,7 @@ import { TRUSTED_VALIDATION_POLICIES_4_0_6 } from './validation-policy-releases/
 import { TRUSTED_VALIDATION_POLICIES_4_0_7 } from './validation-policy-releases/4.0.7'
 import { TRUSTED_VALIDATION_POLICIES_4_0_8 } from './validation-policy-releases/4.0.8'
 import { TRUSTED_VALIDATION_POLICIES_4_0_9 } from './validation-policy-releases/4.0.9'
+import { TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0 } from './validation-policy-releases/4.0.10-5.0.0'
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'
@@ -65,6 +66,7 @@ describe('independent engine policy over actual generated candidates', () => {
       .toBe('73a1698a206c284dd66eaf835edf855e574a16abba9eea9774de8a1e73cba161')
   })
   it('pins the complete historical authority to its recorded immutable release contents', () => {
+    expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0)).digest('hex')).toBe('6d4101e5b7582fbd1d5dbcd88d8b42bc1edb36fad410ef1af0b454d9ca758200')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_9)).digest('hex')).toBe('d45b2a79ab9869075760051d61ec73aa408ea7fe13e6b4f017ec13eb69a644cb')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_8)).digest('hex')).toBe('fcff94f43c1d3b112ca1fd7ab7d8c6b80697c95fc8ace583e575813f82e4e223')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_7)).digest('hex')).toBe('3b4a199e3b414ee51691026d0b1db3db96e3f6b17a240ad69e06ed752494d4cf')
@@ -76,6 +78,15 @@ describe('independent engine policy over actual generated candidates', () => {
       .toBe('861344ab9f225ebe667002a61194f65ae7df144cefdf2210d1c4321925e23904')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_5)).digest('hex'))
       .toBe('43c6b61a351ca0c4b6f0f76e9bbeb660a5165f52863da722f37b68007c564be5')
+  })
+  it.each(['4.0.10', '5.0.0'])('preserves all three profiles from release %s after onboarding upgrade', version => {
+    const fixture = JSON.parse(gunzipSync(readFileSync(new URL(`./fixtures/validation-policy-${version}.json.gz`, import.meta.url))).toString('utf8')) as ReleasedFixture
+    expect(fixture.sourceCommit).toBe('8f027a328c2797da5f317a2b093f91362f929451')
+    for (const kind of ['public', 'solo', 'team'] as const) {
+      const input = { ...fixture.common, headSha: SHA, kind, truncated: false, tree: fixture.kinds[kind].tree }
+      expect(verifyCandidatePolicy(input)).toMatchObject({ approved: true, reasons: [] })
+      expect(verifyCandidatePolicy({ ...input, tree: input.tree.map(entry => entry.path === 'scripts/verify.mjs' ? { ...entry, sha: '0'.repeat(40) } : entry) }).approved).toBe(false)
+    }
   })
   it('refuses altered CI rails before publish and allows exact engine base upgrades', () => {
     const ci = buildProjectFiles({ projectName: 'app', description: '' }).find(file => file.path === '.github/workflows/ci.yml')!
@@ -129,7 +140,7 @@ describe('independent engine policy over actual generated candidates', () => {
     const current = candidate(kind)
     const cliVersion = (input: Candidate): string => (JSON.parse(input.lockContent) as { packages: Record<string, { version?: string }> }).packages['tools/supremo-cli']!.version!
     expect(cliVersion(previous)).toBe('1.7.2')
-    expect(cliVersion(current)).toBe('1.8.0')
+    expect(cliVersion(current)).toBe('1.8.1')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     expect(verifyCandidatePolicy(current)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })

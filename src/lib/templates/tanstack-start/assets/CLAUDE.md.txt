@@ -1,2 +1,2 @@
 # __PROJECT_NAME_JS__
-Read `AGENTS.md` for Supremo template 5.0.0 with TanStack Start 1.168.57 and `.supremo/DEVELOPMENT.md` for the existing Supremo workflow. `SECURITY.md` and `DESIGN.md` remain authoritative. Do not apply Next.js patterns to this project. Preserve the supervisor, validation gates, checkpoint and background recovery contracts.
+Read `AGENTS.md` for Supremo template 5.0.1 with TanStack Start 1.168.57 and `.supremo/DEVELOPMENT.md` for the existing Supremo workflow. `SECURITY.md` and `DESIGN.md` remain authoritative. Do not apply Next.js patterns to this project. Preserve the supervisor, validation gates, checkpoint and background recovery contracts.

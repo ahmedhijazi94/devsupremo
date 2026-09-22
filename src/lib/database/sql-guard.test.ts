@@ -218,14 +218,20 @@ describe('assertSafeSql — furos encontrados atacando o guard', () => {
   })
 
   describe('privilégio que passa por cima do RLS', () => {
-    it('recusa função SECURITY DEFINER', () => {
+    it.each(['public', 'private', 'expense_private'])('recusa SECURITY DEFINER em %s sem sugerir que mover o schema resolve', (schema) => {
       expect(() =>
         assertSafeSql(
-          `CREATE FUNCTION vazar() RETURNS SETOF profiles LANGUAGE sql
+          `CREATE FUNCTION ${schema}.vazar() RETURNS SETOF profiles LANGUAGE sql
              SECURITY DEFINER AS $$ SELECT * FROM profiles $$;`,
           migration,
         ),
-      ).toThrow(/SECURITY DEFINER/)
+      ).toThrow(new UnsafeSqlError(
+        'SECURITY DEFINER não é permitido neste canal em qualquer schema, inclusive public e private. ' +
+        'Mover ou renomear o schema não libera a operação. Use SECURITY INVOKER com RLS. ' +
+        'Se privilégio elevado for indispensável, interrompa a aplicação automática e encaminhe ' +
+        'a mudança para revisão e autorização explícita pelo fluxo oficial do Supremo. ' +
+        'Não contorne a recusa com SQL direto ou credenciais privilegiadas.',
+      ))
     })
 
     it('recusa NO FORCE ROW LEVEL SECURITY', () => {

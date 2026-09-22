@@ -172,9 +172,11 @@ const ALWAYS_FORBIDDEN: Array<{ pattern: RegExp; reason: string }> = [
     // tabela inteira sem tocar em nenhuma policy.
     pattern: /\bsecurity\s+definer\b/i,
     reason:
-      'SECURITY DEFINER roda por cima do RLS e fica exposta em /rest/v1/rpc/ ' +
-      'com a anon key. Use SECURITY INVOKER (padrão). Se a função precisa mesmo ' +
-      'de privilégio elevado, ela não pertence ao schema public.',
+      'SECURITY DEFINER não é permitido neste canal em qualquer schema, inclusive public e private. ' +
+      'Mover ou renomear o schema não libera a operação. Use SECURITY INVOKER com RLS. ' +
+      'Se privilégio elevado for indispensável, interrompa a aplicação automática e encaminhe ' +
+      'a mudança para revisão e autorização explícita pelo fluxo oficial do Supremo. ' +
+      'Não contorne a recusa com SQL direto ou credenciais privilegiadas.',
   },
   {
     pattern:

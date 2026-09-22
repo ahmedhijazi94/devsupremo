@@ -13,6 +13,8 @@ Read `.supremo/DEVELOPMENT.md` for the mandatory workflow and `SECURITY.md` for 
 ## Identity and data
 Every private operation must call `requireUser()` on the server before reading/writing. `beforeLoad`, a route redirect and a hidden button do not authorize the RPC endpoint. Use the returned user's Supabase client so RLS applies. Never use service_role for ordinary CRUD or trust user/organization/role fields supplied by the browser.
 
+Before writing migrations, read the migration section in `.supremo/DEVELOPMENT.md` for the shared Next/Start database workflow and accepted trigger syntax. Use the authorized `db migrate` channel; changing frameworks does not change SQL permissions.
+
 `profile.functions.ts` demonstrates schema validation and identity-bound updates. In team projects, `organization.functions.ts` demonstrates membership verification before tenant data access. Keep runtime validation and authorization when adding CRUD, filters and detail routes; reject extra fields rather than accepting a forged owner.
 
 Use route loaders for initial data. When remote cache is useful use TanStack Query through the request-local `queryClient` in router context, `ensureQueryData` in the loader and that same query key in the component. Do not fetch the same data independently in loader, effect and query. Invalidate affected queries after mutations. Never share private QueryClient state at module scope. Signout must clear/leave private UI and redirect.
@@ -28,6 +30,8 @@ Public pages use SSR. Route-level client rendering is optional for interactive p
 
 ## Development and checks
 The existing Supremo supervisor owns one persistent preview. Use its commands in `.supremo/DEVELOPMENT.md`; do not spawn another watcher or restart for ordinary edits. HMR does not run a second lint/test/build pipeline.
+
+Open/share the healthy preview as soon as the first requested flow is usable, while continuing the remaining implementation and relevant test authoring. State what is still pending. The commands below are a reference for background workers, CI and explicit diagnosis, not a checklist to run before showing the preview. Reuse existing tests for unchanged behavior; do not add assertions that merely repeat copy, CSS classes or JSX structure.
 
 - `npm ci`: exact locked dependencies, Node 22.13+ on the 22 line or Node 24+. Node 23 is unsupported; `.nvmrc` selects 22.
 - `npm run routes:generate`: deterministic generation before checks. Never edit `src/routeTree.gen.ts` manually; it is ignored and recreated in clean checkouts.

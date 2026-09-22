@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { deviceIssuer, readDeviceSecret, saveDeviceIdentity } from './device-identity'
+import { deviceIssuer, LegacyDeviceIdentityError, readDeviceSecret, saveDeviceIdentity } from './device-identity'
 import type { Keychain } from './keychain'
 import { fetchTurnContext } from './turn-context-client'
 
@@ -26,12 +26,26 @@ describe('device credentials are bound to their authenticated issuer outside the
   it('does not migrate a bare legacy secret from untrusted checkout configuration', () => {
     const { keychain, values } = fixture(); values.set(PROJECT, SECRET)
     expect(() => readDeviceSecret(keychain, PROJECT, ISSUER)).toThrow('sem origem verificável')
+    expect(() => readDeviceSecret(keychain, PROJECT, ISSUER)).toThrow(LegacyDeviceIdentityError)
     expect(values.get(PROJECT)).toBe(SECRET)
     // The existing checkout can reauthorize; only a fresh device-flow credential is persisted.
     saveDeviceIdentity(keychain, PROJECT, ISSUER, 'newly-issued-device-secret')
     expect(readDeviceSecret(keychain, PROJECT, ISSUER)).toBe('newly-issued-device-secret')
     expect(keychain.get(PROJECT)).toBeNull() // an old daemon cannot retrieve the new credential
   })
+  it.each(['', '{broken', '{"version":1}', JSON.stringify({ version: 1, projectId: PROJECT, issuer: `${ISSUER}/other`, secret: SECRET })])(
+    'does not classify a corrupt or mismatched bound identity as recoverable legacy: %s', source => {
+      const { keychain, values } = fixture()
+      values.set(`identity-v1:${PROJECT}`, source); values.set(PROJECT, 'old-unbound-secret')
+      const get = vi.spyOn(keychain, 'get')
+      let failure: unknown
+      try { readDeviceSecret(keychain, PROJECT, ISSUER) } catch (error) { failure = error }
+      expect(failure).toBeInstanceOf(Error)
+      expect(failure).not.toBeInstanceOf(LegacyDeviceIdentityError)
+      expect(get).toHaveBeenCalledExactlyOnceWith(`identity-v1:${PROJECT}`)
+      expect(values.get(`identity-v1:${PROJECT}`)).toBe(source)
+    },
+  )
   it('rejects a copied identity for a different project', () => {
     const { keychain, values } = fixture(); saveDeviceIdentity(keychain, PROJECT, ISSUER, SECRET)
     values.set(`identity-v1:${OTHER}`, values.get(`identity-v1:${PROJECT}`)!)

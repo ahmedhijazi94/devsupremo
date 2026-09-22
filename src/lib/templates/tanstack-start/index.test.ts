@@ -30,7 +30,7 @@ describe('TanStack template boundary', () => {
     expect(pkg.devDependencies).toEqual(lock.packages['']!.devDependencies)
     for (const version of Object.values({ ...pkg.dependencies, ...pkg.devDependencies })) expect(version).toMatch(/^(?:\d+\.\d+\.\d+(?:-[\w.-]+)?|file:tools\/supremo-cli)$/)
     expect(pkg.dependencies).not.toHaveProperty('next')
-    expect(JSON.parse(files.get('.supremo/project.json')!)).toMatchObject({ stack: 'tanstack-start-vite', scaffoldVersion: '5.0.0' })
+    expect(JSON.parse(files.get('.supremo/project.json')!)).toMatchObject({ stack: 'tanstack-start-vite', scaffoldVersion: '5.0.1' })
     expect(files.get('vite.config.mts')).toContain('envPrefix: []')
     expect(files.get('vite.config.mts')).toContain("behavior: 'error'")
     expect(files.get('src/start.ts')).toContain('createCsrfMiddleware')
@@ -41,6 +41,20 @@ describe('TanStack template boundary', () => {
     expect(files.get('src/routes/index.tsx')).toContain('&lt;Demo&gt;&#123;')
     expect(files.get('src/routes/index.tsx')).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
     expect(files.get('src/routes/__root.tsx')).toContain("\\'x\\'")
+  })
+  it.each(['public', 'solo', 'team'] as const)('delivers first-request preparation without installed dependencies for %s', kind => {
+    const files = byPath(buildProjectFiles({ projectName: 'onboarding', description: '', kind, stack: 'tanstack-start-vite' }))
+    const pkg = JSON.parse(files.get('package.json')!) as { scripts: Record<string, string> }
+    expect(pkg.scripts).not.toHaveProperty('prepare')
+    expect(pkg.scripts['supremo:prepare']).toBe('node tools/supremo-cli/dist/bin.js prepare')
+    expect(pkg.scripts['preview:ensure']).toBe('node tools/supremo-cli/dist/bin.js runtime-preview ensure')
+    expect(files.has('tools/supremo-cli/dist/bin.js')).toBe(true)
+    for (const name of ['AGENTS.md', 'CLAUDE.md', '.supremo/DEVELOPMENT.md']) {
+      expect(files.get(name)).toContain('Primeiro pedido de desenvolvimento')
+      expect(files.get(name)).toContain('Aguarde a resposta antes da preparação e das edições')
+      expect(files.get(name)).toContain('Pedidos somente de leitura continuam somente de leitura')
+    }
+    for (const entry of ['.supremo/runtime/', '.supremo/onboarding.json', '.supremo/prepare-readiness.json']) expect(files.get('.gitignore')).toContain(entry)
   })
   it('uses the configured Supremo origin for hosted preview without client-controlled origin grants', () => {
     const legacy = buildProjectFiles({ projectName: 'proof', description: '' })

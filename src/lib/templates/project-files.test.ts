@@ -563,7 +563,10 @@ describe('segurança — o que o SECURITY.md promete existe', () => {
 describe('consultas reais pelo canal de leitura, sem ritual de entrega', () => {
   it('os exemplos completos são aceitos pelo guard de leitura e o SQL pelo validador real', () => {
     const guide = file('.supremo/DEVELOPMENT.md')
-    const commands = [...guide.matchAll(/`(db (?:status|inspect|query|logs|report)\b[^`]*)`/g)].map((match) => match[1]!)
+    // The shared policy also names operations without their required arguments.
+    // Executable examples are the six full commands in the reference table.
+    const examples = guide.split('\n').filter((line) => line.startsWith('|')).join('\n')
+    const commands = [...examples.matchAll(/`(db (?:status|inspect|query|logs|report)\b[^`]*)`/g)].map((match) => match[1]!)
     expect(commands).toHaveLength(6)
     for (const command of commands) {
       expect(isDatabaseReadCommand('node node_modules/supremo-cli/dist/bin.js ' + command), command).toBe(true)

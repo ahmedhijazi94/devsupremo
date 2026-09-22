@@ -30,10 +30,38 @@ No Codex, os hooks precisam ser revisados e confiados no próprio host.
 - `--host <name>` — `claude-code` (padrão) ou `codex`, para verificar o agente escolhido.
 - Consulte `supremo bootstrap --help` para as opções da versão instalada.
 
-Comandos atuais: `bootstrap`, `authorize`, `turn`, `host`, `engine`, `checkpoint`, `daemon`, `sync`, `db`, `jobs` e `secrets`. Sem argumentos,
+Comandos atuais: `bootstrap`, `prepare`, `runtime-preview`, `authorize`, `turn`, `host`, `engine`, `checkpoint`, `daemon`, `sync`, `db`, `jobs` e `secrets`. Sem argumentos,
 a CLI mostra ajuda. A antiga ponte MCP (`connect`/`mcp`) foi removida.
 Checkpoints são locais; envio e integração rodam em background, sem esperar
 CI para a próxima edição.
+
+### Primeiro pedido e preparação retomável (1.8.1)
+
+As instruções geradas pedem uma única autorização para preparar e desenvolver
+aquele projeto, mostrando a origem do Supremo e reunindo dúvidas relevantes sobre
+o produto. Pedidos de leitura não preparam o ambiente. Uma resposta já dada é
+reutilizada; o usuário não precisa fornecer um prompt técnico de instalação.
+
+Após essa resposta, o agente executa no checkout existente:
+
+```sh
+node tools/supremo-cli/dist/bin.js prepare --url <origem confirmada>
+```
+
+O comando funciona antes de `node_modules`: reutiliza a identidade vinculada ao
+projeto/origem ou abre a autorização oficial no navegador; confirma o banco de
+desenvolvimento no servidor; prepara Node compatível apenas em `.supremo/runtime`
+quando necessário; instala pelo lockfile e usa os hooks, daemon e supervisor
+existentes. Um preview saudável é preservado. A confirmação do vínculo do banco
+não equivale a uma prova de conectividade SQL ou de isolamento entre usuários.
+
+O bootstrap salva a identidade logo após a autorização, antes de clonar e instalar.
+Falhas posteriores podem ser retomadas por `prepare`, sem reclonar. A preparação
+registra resultado sanitizado em `.supremo/prepare-readiness.json`; falhas não são
+anunciadas como prontidão. `.supremo/onboarding.json` lembra o contexto da conversa,
+mas não autoriza banco, dispositivo ou host. A tela do dispositivo e a revisão de
+permissões do agente continuam independentes. Após preparar, o preflight normal
+volta a conferir a autorização; os gates de features, validação e restore permanecem.
 
 ### Turnos e evidências (1.7.0)
 

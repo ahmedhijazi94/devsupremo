@@ -1,5 +1,5 @@
 /** Comandos explícitos; entrada desconhecida nunca inicia um serviço. */
-export const KNOWN_COMMANDS = ['bootstrap', 'authorize', 'checkpoint', 'daemon', 'sync', 'db', 'turn', 'host', 'engine', 'jobs', 'secrets', 'auth'] as const
+export const KNOWN_COMMANDS = ['bootstrap', 'prepare', 'runtime-preview', 'authorize', 'checkpoint', 'daemon', 'sync', 'db', 'turn', 'host', 'engine', 'jobs', 'secrets', 'auth'] as const
 
 /** O primeiro token de argv é um comando conhecido, uma opção global, ou vazio? */
 export function isKnownOrGlobal(firstArg: string | undefined): boolean {

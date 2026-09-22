@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { onboardingHookParserSource } from './onboarding-hook'
 
 /** Protocol support means hooks are installed; execution receipts remain turn state. */
 export type IntegrationMode = 'enforced' | 'assisted' | 'unsupported'
@@ -113,6 +114,7 @@ const host = ${JSON.stringify(host)}
 const events = ${JSON.stringify(eventsFor(host))}
 const event = process.argv[2]
 const fail = (reason) => { console.error(reason); process.exit(2) }
+${onboardingHookParserSource()}
 try {
   const root = fs.realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'))
   if (!Object.values(events).includes(event)) fail('Supremo: evento de lifecycle desconhecido.')
@@ -126,15 +128,96 @@ try {
   if (typeof payload.cwd !== 'string') fail('Supremo: cwd do hook ausente.')
   const relative = path.relative(root, fs.realpathSync(path.resolve(payload.cwd)))
   if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) fail('Supremo: hook pertence a outro workspace.')
+  let project = null
+  try { project = JSON.parse(fs.readFileSync(path.join(root, '.supremo/project.json'), 'utf8')) } catch { /* lifecycle validates identity below */ }
+  // This receipt only remembers the initial conversation. It grants no device,
+  // server, feature or host authority, and never replaces a core lifecycle call.
+  const canonicalIssuer = (value) => {
+    if (typeof value !== 'string') return null
+    try {
+      const url = new URL(value)
+      if (url.username || url.password || url.search || url.hash ||
+          (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) return null
+      return url.origin + url.pathname.replace(/\\/+$/, '')
+    } catch { return null }
+  }
+  const projectIssuer = canonicalIssuer(project?.supremoUrl)
+  const hasProject = project && typeof project.projectId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project.projectId) && projectIssuer !== null
+  let rememberedOnboarding = false
+  if (hasProject) {
+    try {
+      const directory = fs.lstatSync(path.join(root, '.supremo'))
+      const filename = path.join(root, '.supremo/onboarding.json')
+      const stat = fs.lstatSync(filename)
+      if (directory.isDirectory() && !directory.isSymbolicLink() && stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size <= 16384) {
+        const receipt = JSON.parse(fs.readFileSync(filename, 'utf8'))
+        const keys = ['version', 'projectId', 'issuer', 'acceptedAt', 'scope']
+        rememberedOnboarding = receipt && typeof receipt === 'object' && !Array.isArray(receipt) &&
+          Object.keys(receipt).length === keys.length && keys.every(key => Object.hasOwn(receipt, key)) &&
+          receipt.version === 1 && receipt.projectId === project.projectId && receipt.scope === 'project-development' &&
+          canonicalIssuer(receipt.issuer) === projectIssuer && typeof receipt.acceptedAt === 'string' &&
+          /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$/.test(receipt.acceptedAt) && Number.isFinite(Date.parse(receipt.acceptedAt))
+      }
+    } catch { /* Missing or malformed context means the initial question is still needed. */ }
+  }
+  if (hasProject && !rememberedOnboarding && (event === 'preflight' || event === 'complete')) {
+    // Do not start services before the first question, even when a device was
+    // authorized by bootstrap. Reporting/asking is not successful feature work.
+    console.log(event === 'preflight' ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext:
+      'Supremo: conversa inicial pendente. Siga a seção Primeiro pedido de desenvolvimento em AGENTS.md: reúna autorização e dúvidas do produto numa pergunta e aguarde a resposta antes de preparar ou alterar o app. Reutilize uma autorização explícita já dada nesta conversa para este projeto e endereço. Endereço deste projeto: ' + projectIssuer + '. Pedidos só de leitura não iniciam preparação. O registro local é apenas contexto; a preparação e o preflight do servidor continuam obrigatórios antes das funcionalidades.' } }) : '{}')
+    process.exit(0)
+  }
+  const preparing = isOnboardingPrepare(payload, project, host, root)
+  const asking = ['AskUserQuestion', 'request_user_input', 'request_user_input_async',
+    'functions.request_user_input', 'functions.request_user_input_async'].includes(payload.tool_name)
+  // Setup is a distinct operation with its own device/server checks. An empty
+  // decision leaves the host's normal approval in place; it never approves it.
+  if (preparing && event === 'before-mutation') { console.log('{}'); process.exit(0) }
+  if (asking && (event === 'before-mutation' || event === 'mutation')) { console.log('{}'); process.exit(0) }
   const cli = path.join(root, 'node_modules/supremo-cli/dist/bin.js')
-  if (!fs.existsSync(cli)) fail('Supremo: CLI local ausente; bootstrap não está pronto.')
-  const result = spawnSync(process.execPath, [cli, 'turn', event, '--host', host], {
+  if (!fs.existsSync(cli)) {
+    if (['Read', 'Glob', 'Grep', 'LS'].includes(payload.tool_name) &&
+        (event === 'before-mutation' || event === 'mutation')) { console.log('{}'); process.exit(0) }
+    if (event === 'preflight') {
+      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext:
+        'Supremo: preparação inicial pendente. Siga a seção Primeiro pedido de desenvolvimento em AGENTS.md: reúna autorização e dúvidas do produto numa pergunta, aguarde a resposta e use a CLI incluída para prepare. Pedidos só de leitura não iniciam preparação. Não altere funcionalidades antes do preflight autorizado.' } }))
+      process.exit(0)
+    }
+    // Asking for authorization or reporting a failed setup is not a feature
+    // completion. No receipt/checkpoint is produced while the CLI is absent.
+    if (event === 'complete' || (preparing && event === 'mutation')) { console.log('{}'); process.exit(0) }
+    fail('Supremo: preparação pendente; somente o fluxo oficial prepare pode prosseguir.')
+  }
+  const effectiveEvent = preparing && event === 'mutation' ? 'preflight' : event
+  const result = spawnSync(process.execPath, [cli, 'turn', effectiveEvent, '--host', host], {
     cwd: root, input: JSON.stringify({ ...payload, cwd: root, supremo_host_pid: process.ppid }), encoding: 'utf8', timeout: 80000, killSignal: 'SIGKILL', maxBuffer: 2097152,
   })
   // Do not echo child stderr, argv, prompts or tool inputs: these may contain secrets.
   if (result.error || result.status !== 0) fail('Supremo: falha no lifecycle local; consulte o estado sanitizado do projeto.')
   const output = JSON.parse(result.stdout)
   if (!output || typeof output !== 'object' || typeof output.allowed !== 'boolean') fail('Supremo: resposta de lifecycle inválida.')
+  if (preparing && event === 'mutation') {
+    // Fresh server authority replaces the pre-setup context. Do not count a
+    // preparation as a feature mutation or a completed lifecycle receipt.
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: payload.hook_event_name,
+      additionalContext: 'Supremo após preparação (não é aprovação da feature): ' + JSON.stringify(output) } }))
+    process.exit(0)
+  }
+  if (event === 'preflight' && !output.allowed && output.context?.permissions?.editing === false &&
+      output.context?.reconciliation?.status !== 'fresh') {
+    // A refused editing context must still let the agent ask for the missing
+    // authorization. Feature tools continue through the original deny gate.
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext:
+      'Supremo: autorização/preparação pendente. Siga o onboarding de AGENTS.md e peça somente a autorização ainda ausente. Edições continuam bloqueadas até novo preflight autorizado. Contexto: ' + JSON.stringify(output) } }))
+    process.exit(0)
+  }
+  if (event === 'complete' && !output.allowed && output.turn?.status === 'blocked' &&
+      output.context?.permissions?.editing === false && output.context?.reconciliation?.status !== 'fresh') {
+    // Permit the agent to report/request authorization. The turn stays blocked
+    // in the core; this is neither a successful completion nor a checkpoint.
+    console.log('{}'); process.exit(0)
+  }
   // A capability on disk is not proof that the host trusted and fired it.
   // Receipts are scoped to these exact definitions, wrapper bytes and session.
   const configPath = path.join(root, ${JSON.stringify(host === 'claude-code' ? CLAUDE_SETTINGS_PATH : CODEX_SETTINGS_PATH)})

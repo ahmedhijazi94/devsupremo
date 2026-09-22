@@ -39,12 +39,13 @@ export function harnessPackageScripts(stack: ProjectStack = 'nextjs'): Record<st
     'verify:security': 'node scripts/verify.mjs security',
     'verify:full': 'node scripts/verify.mjs full',
     'setup:local': 'node scripts/setup-local.mjs',
+    'supremo:prepare': 'node tools/supremo-cli/dist/bin.js prepare',
     'local:start': 'supabase start',
     'local:stop': 'supabase stop',
     // v3.1 — preview PERSISTENTE (infra da sessão, não processo do turno).
-    'preview:ensure': 'node scripts/preview.mjs ensure',
-    'preview:status': 'node scripts/preview.mjs status',
-    'preview:stop': 'node scripts/preview.mjs stop',
+    'preview:ensure': stack === 'tanstack-start-vite' ? 'node tools/supremo-cli/dist/bin.js runtime-preview ensure' : 'node scripts/preview.mjs ensure',
+    'preview:status': stack === 'tanstack-start-vite' ? 'node tools/supremo-cli/dist/bin.js runtime-preview status' : 'node scripts/preview.mjs status',
+    'preview:stop': stack === 'tanstack-start-vite' ? 'node tools/supremo-cli/dist/bin.js runtime-preview stop' : 'node scripts/preview.mjs stop',
     // v3.1 item 4 — checkpoint LOCAL (o agente só faz isto ao concluir um pedido)
     // e o checkpoint daemon (push/PR assíncronos; o agente NUNCA faz git push).
     // A CLI acompanha o projeto e é resolvida localmente pelo PATH do npm.
@@ -1098,7 +1099,10 @@ console.log('\\n✓ componentes instalados. Bootstrap verifica daemon, preview, 
  * `npx`/global nem tenta `npm install` sozinho (seria bootstrap automático,
  * fora do preflight) — fica não-saudável com uma mensagem clara, fail-closed.
  */
-export function supremoStatusScript(): string {
+export function supremoStatusScript(stack: ProjectStack = 'nextjs'): string {
+  const previewArguments = stack === 'tanstack-start-vite'
+    ? "'tools/supremo-cli/dist/bin.js', 'runtime-preview'"
+    : "'scripts/preview.mjs'"
   return `#!/usr/bin/env node
 // GERADO pelo Supremo (v3.1/v3.4) — diagnóstico agregado (preview + daemon).
 // Uso:
@@ -1186,7 +1190,7 @@ function readDaemonLocal() {
   return { running, healthy: running, pendingCheckpoints }
 }
 
-const readPreview = () => tryJson('node', ['scripts/preview.mjs', 'status']) ?? { running: false, healthy: false }
+const readPreview = () => tryJson('node', [${previewArguments}, 'status']) ?? { running: false, healthy: false }
 const readDaemon = readDaemonLocal
 
 // ── Religar o daemon é 100% LOCAL (teste-v3-15) — supremo-cli é uma
@@ -1266,7 +1270,7 @@ if (process.argv.includes('--ensure')) {
     }
   }
   if (!preview.healthy) {
-    previewEnsureError = run('node', ['scripts/preview.mjs', 'ensure'])
+    previewEnsureError = run('node', [${previewArguments}, 'ensure'])
     preview = previewEnsureError?.code === 2 ? readPreview() : await waitForPreviewHealthy(PREVIEW_POLL_TIMEOUT_MS)
 
     // E2E real (teste-v3-13): a primeira tentativa do supervisor pode falhar
@@ -1277,7 +1281,7 @@ if (process.argv.includes('--ensure')) {
     // quando a janela de espera acima esgotou e o preview REALMENTE não
     // ficou saudável — não por causa de uma leitura cedo demais.
     if (!preview.healthy && previewEnsureError?.code !== 2) {
-      previewEnsureError = run('node', ['scripts/preview.mjs', 'ensure'])
+      previewEnsureError = run('node', [${previewArguments}, 'ensure'])
       preview = await waitForPreviewHealthy(PREVIEW_POLL_TIMEOUT_MS)
     }
   }
@@ -1318,7 +1322,7 @@ export function harnessFiles(stack: ProjectStack = 'nextjs'): Record<string, str
     'scripts/verify.mjs': verifyScript(stack),
     'scripts/setup-local.mjs': setupLocalScript(stack),
     'scripts/preview.mjs': previewSupervisorScript(stack),
-    'scripts/supremo-status.mjs': supremoStatusScript(),
+    'scripts/supremo-status.mjs': supremoStatusScript(stack),
     '.githooks/pre-commit': preCommitHook,
     '.githooks/pre-push': prePushHook,
   }

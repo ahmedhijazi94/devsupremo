@@ -74,6 +74,116 @@ describe('host installation and executable protocol', () => {
 const ready = { projectJsonOk: true, hasDaemonIdentity: true, daemonRunning: true, npmScriptsCompatible: true,
   previewHealthy: true, setupSucceeded: true, gitHooksVerified: true, lifecycleVerified: true,
   validationWorkerAvailable: true, databaseEnvironmentReady: true, integrationMode: 'enforced' as const }
+describe('first-project onboarding stays outside feature mutation gates', () => {
+  const prepareCommand = 'node tools/supremo-cli/dist/bin.js prepare --url https://supremo.example'
+  function onboardingFixture(): string {
+    const root = fs.realpathSync(fixture())
+    installHostAdapters(root)
+    fs.mkdirSync(path.join(root, '.supremo'), { recursive: true })
+    fs.writeFileSync(path.join(root, '.supremo/project.json'), JSON.stringify({ projectId: '11111111-1111-4111-8111-111111111111', supremoUrl: 'https://supremo.example' }))
+    return root
+  }
+  function hook(root: string, event: keyof typeof coreEvents, command = prepareCommand, tool = 'Bash') {
+    return spawnSync(process.execPath, [path.join(root, CODEX_HOOK_PATH), coreEvents[event]], {
+      input: JSON.stringify({ cwd: root, session_id: 'setup', hook_event_name: event, tool_name: tool, tool_input: { command } }), encoding: 'utf8',
+    })
+  }
+  function remember(root: string, changes: Record<string, unknown> = {}): void {
+    fs.writeFileSync(path.join(root, '.supremo/onboarding.json'), JSON.stringify({ version: 1,
+      projectId: '11111111-1111-4111-8111-111111111111', issuer: 'https://SUPREMO.example:443/',
+      acceptedAt: '2026-09-22T12:30:00.000Z', scope: 'project-development', ...changes,
+    }))
+  }
+  function probe(root: string, output: Record<string, unknown> = { allowed: true, context: { authoritative: true } }): string {
+    const calls = path.join(root, 'lifecycle-calls.log')
+    fs.writeFileSync(path.join(root, 'node_modules/supremo-cli/dist/bin.js'),
+      `require('node:fs').appendFileSync(${JSON.stringify(calls)}, process.argv[3] + '\\n'); console.log(JSON.stringify(${JSON.stringify(output)}))`)
+    return calls
+  }
+  it('asks before invoking the installed CLI or starting services, and reports without completing a feature', () => {
+    const root = onboardingFixture()
+    const calls = probe(root)
+    const first = hook(root, 'UserPromptSubmit')
+    expect(first.status, first.stderr).toBe(0)
+    expect(JSON.parse(first.stdout).hookSpecificOutput.additionalContext).toContain('conversa inicial pendente')
+    expect(JSON.parse(first.stdout).hookSpecificOutput.additionalContext).toContain('https://supremo.example')
+    expect(JSON.parse(hook(root, 'PreToolUse', '', 'request_user_input').stdout)).toEqual({})
+    expect(JSON.parse(hook(root, 'PostToolUse', '', 'request_user_input').stdout)).toEqual({})
+    expect(JSON.parse(hook(root, 'Stop').stdout)).toEqual({})
+    expect(fs.existsSync(calls)).toBe(false)
+    expect(fs.existsSync(path.join(root, '.supremo/host-receipts'))).toBe(false)
+    expect(fs.existsSync(path.join(root, '.supremo/onboarding.json'))).toBe(false)
+  })
+  it('uses a matching contextual receipt only to avoid repeating the initial question', () => {
+    const root = onboardingFixture()
+    remember(root)
+    const calls = probe(root)
+    const first = hook(root, 'UserPromptSubmit')
+    expect(first.status, first.stderr).toBe(0)
+    expect(JSON.parse(first.stdout).hookSpecificOutput.additionalContext).toContain('authoritative')
+    expect(JSON.parse(first.stdout).hookSpecificOutput.additionalContext).not.toContain('conversa inicial pendente')
+    expect(fs.readFileSync(calls, 'utf8')).toBe('preflight\n')
+  })
+  it.each([
+    { projectId: '22222222-2222-4222-8222-222222222222' }, { issuer: 'https://other.example' },
+    { issuer: 'https://supremo.example/other' }, { issuer: 'https://supremo.example:8443' },
+    { version: 2 }, { scope: 'production' }, { acceptedAt: 'yesterday' }, { unexpected: true },
+  ])('requires the initial question for a mismatched or malformed receipt %#', receipt => {
+    const root = onboardingFixture()
+    remember(root, receipt)
+    const calls = probe(root)
+    const first = hook(root, 'UserPromptSubmit')
+    expect(first.status, first.stderr).toBe(0)
+    expect(JSON.parse(first.stdout).hookSpecificOutput.additionalContext).toContain('conversa inicial pendente')
+    expect(fs.existsSync(calls)).toBe(false)
+    expect(fs.existsSync(path.join(root, '.supremo/host-receipts'))).toBe(false)
+  })
+  it.each([false, true])('keeps denied feature tools behind the core gate with remembered context=%s', remembered => {
+    const root = onboardingFixture()
+    if (remembered) remember(root)
+    const calls = probe(root, { allowed: false, reason: 'current authority denied',
+      context: { permissions: { editing: false }, reconciliation: { status: 'fresh' } } })
+    if (remembered) {
+      expect(JSON.parse(hook(root, 'UserPromptSubmit').stdout)).toEqual({ decision: 'block', reason: 'current authority denied' })
+    }
+    const denied = hook(root, 'PreToolUse', 'touch owned')
+    expect(denied.status, denied.stderr).toBe(0)
+    expect(JSON.parse(denied.stdout).hookSpecificOutput).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: 'current authority denied' })
+    expect(fs.readFileSync(calls, 'utf8')).toContain('before-mutation\n')
+  })
+  it('lets an uninstalled project ask and prepare, without approving other edits or writing receipts', () => {
+    const root = onboardingFixture()
+    fs.rmSync(path.join(root, 'node_modules'), { recursive: true })
+    const first = hook(root, 'UserPromptSubmit')
+    expect(first.status, first.stderr).toBe(0)
+    expect(JSON.parse(first.stdout).hookSpecificOutput.additionalContext).toContain('reúna autorização e dúvidas')
+    expect(JSON.parse(hook(root, 'PreToolUse').stdout)).toEqual({})
+    expect(hook(root, 'PreToolUse', `${prepareCommand} && touch owned`).status).toBe(2)
+    expect(hook(root, 'PreToolUse', 'touch owned').status).toBe(2)
+    expect(hook(root, 'PreToolUse', '', 'request_user_input_async').status).toBe(0)
+    expect(hook(root, 'Stop').status).toBe(0)
+    expect(fs.existsSync(path.join(root, '.supremo/host-receipts'))).toBe(false)
+  })
+  it('refreshes authority after setup instead of reporting a feature mutation', () => {
+    const root = onboardingFixture()
+    const cli = path.join(root, 'node_modules/supremo-cli/dist/bin.js')
+    fs.writeFileSync(cli, 'console.log(JSON.stringify({allowed:process.argv[3]==="preflight",context:{event:process.argv[3]}}))')
+    const after = hook(root, 'PostToolUse')
+    expect(after.status, after.stderr).toBe(0)
+    expect(JSON.parse(after.stdout).hookSpecificOutput.additionalContext).toContain('"event":"preflight"')
+    expect(fs.existsSync(path.join(root, '.supremo/host-receipts'))).toBe(false)
+    const denied = hook(root, 'PreToolUse', 'touch owned')
+    expect(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision).toBe('deny')
+  })
+  it('allows asking for missing device authorization without completing the blocked feature', () => {
+    const root = onboardingFixture()
+    remember(root)
+    fs.writeFileSync(path.join(root, 'node_modules/supremo-cli/dist/bin.js'), 'console.log(JSON.stringify({allowed:false,turn:{status:"blocked"},context:{permissions:{editing:false},reconciliation:{status:"unauthorized"}}}))')
+    expect(JSON.parse(hook(root, 'UserPromptSubmit').stdout).hookSpecificOutput.additionalContext).toContain('Edições continuam bloqueadas')
+    expect(JSON.parse(hook(root, 'Stop').stdout)).toEqual({})
+    expect(JSON.parse(hook(root, 'PreToolUse', 'touch owned').stdout).hookSpecificOutput.permissionDecision).toBe('deny')
+  })
+})
 describe('readiness never greenwashes incomplete installation', () => {
   it.each(['setupSucceeded', 'gitHooksVerified', 'lifecycleVerified', 'validationWorkerAvailable', 'databaseEnvironmentReady'] as const)('%s é obrigatório', (component) => {
     expect(validateLocalReadiness({ ...ready, [component]: false }).state).toBe('not_ready')

@@ -1,9 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { withDevelopmentPolicy } from '../development-policy'
+import { harnessPackageScripts } from '../harness'
 import type { FileEntry, TemplateOptions } from '../project-files'
 
-export const TANSTACK_TEMPLATE_VERSION = '5.0.0'
+export const TANSTACK_TEMPLATE_VERSION = '5.0.1'
 export const TANSTACK_STACK = 'tanstack-start-vite'
 
 interface PackageManifest {
@@ -59,6 +60,7 @@ export function adaptTanStackFiles(legacyFiles: readonly FileEntry[], options: T
   manifest.name = options.projectName
   manifest.scripts = {
     ...legacyPackage.scripts,
+    ...harnessPackageScripts('tanstack-start-vite'),
     dev: 'vite --host 127.0.0.1 --strictPort',
     'dev:preview': 'vite --host 127.0.0.1 --strictPort',
     'routes:generate': 'node scripts/generate-routes.mjs',

@@ -1,0 +1,12 @@
+import { createFileRoute, Link } from '@tanstack/react-router'
+import { Card, CardTitle, CardDescription } from '@/components/ui/card'
+import { GreetingForm } from '@/features/example/greeting-form'
+
+export const Route = createFileRoute('/')({ component: HomePage })
+export function HomePage() {
+  return <main className="mx-auto flex min-h-dvh max-w-3xl flex-col justify-center gap-8 px-6 py-16">
+    <div><p className="text-accent text-sm font-medium">Seu projeto começa aqui</p><h1 className="mt-3 text-4xl font-semibold tracking-tight">__PROJECT_NAME_JSX__</h1><p className="text-muted mt-4">__DESCRIPTION_JSX__</p></div>
+    __AUTH_HOME_LINK__
+    <Card><CardTitle>Vamos começar</CardTitle><CardDescription>Uma saudação enviada ao servidor, com validação de entrada.</CardDescription><div className="mt-5"><GreetingForm /></div></Card>
+  </main>
+}

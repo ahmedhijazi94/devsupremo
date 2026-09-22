@@ -1,0 +1,11 @@
+import { createFileRoute } from '@tanstack/react-router'
+import { createClient } from '@/lib/supabase/server'
+import { isSameOrigin } from '@/lib/security/origin'
+
+export const Route = createFileRoute('/auth/signout')({ server: { handlers: { POST: async ({ request }) => {
+  if (!isSameOrigin(request)) return new Response('Origem não permitida.', { status: 403 })
+  const supabase = createClient()
+  const { error } = await supabase.auth.signOut()
+  if (error) return new Response('Não foi possível sair.', { status: 502 })
+  return new Response(null, { status: 303, headers: { Location: '/login', 'Cache-Control': 'private, no-store' } })
+} } } })

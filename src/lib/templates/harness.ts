@@ -2,6 +2,7 @@ import { preCommitHook, prePushHook } from '../../../packages/cli/src/git-hooks'
 import { recoveryContextScript } from './recovery-context'
 import { previewHttpRecoveryScript } from './preview-http-recovery'
 import { claudeHookSettings, codexHookSettings, turnHookScript } from '../../../packages/cli/src/host-adapters'
+import type { ProjectStack } from '../../../packages/cli/src/project-stack'
 import {
   BROAD_FILE_COUNT,
   CODE_BUILD_FAILURE_PATTERNS,
@@ -11,6 +12,10 @@ import {
   QUICK_PATTERNS,
   SECURITY_PATTERNS,
   SECURITY_CONTENT_PATTERNS,
+  START_FULL_PATTERNS,
+  START_SECURITY_PATTERNS,
+  START_SECURITY_CONTENT_PATTERNS,
+  START_CODE_BUILD_FAILURE_PATTERNS,
   serializePatterns,
 } from './verify-classifier'
 
@@ -26,9 +31,9 @@ import {
  */
 
 /** Scripts que o harness contribui ao package.json do projeto gerado. */
-export function harnessPackageScripts(): Record<string, string> {
+export function harnessPackageScripts(stack: ProjectStack = 'nextjs'): Record<string, string> {
   return {
-    typecheck: 'tsc --noEmit',
+    typecheck: stack === 'tanstack-start-vite' ? 'node scripts/generate-routes.mjs && tsc --noEmit' : 'tsc --noEmit',
     verify: 'node scripts/verify.mjs',
     'verify:quick': 'node scripts/verify.mjs quick',
     'verify:security': 'node scripts/verify.mjs security',
@@ -291,9 +296,9 @@ export function isHeartbeatTrusted(
  * A escrita do arquivo é atômica (tmp + rename) — uma leitura concorrente
  * nunca pega JSON parcial/truncado.
  */
-export function previewSupervisorScript(): string {
+export function previewSupervisorScript(stack: ProjectStack = 'nextjs'): string {
   return `#!/usr/bin/env node
-// GERADO pelo Supremo (v3.1) — supervisor do preview. NÃO rode 'next dev' à mão:
+// GERADO pelo Supremo (v3.1) — supervisor do preview. NÃO rode '${stack === 'tanstack-start-vite' ? 'vite' : 'next dev'}' à mão:
 //   node scripts/preview.mjs ensure     → garante 1 preview saudável (reusa/inicia)
 //   node scripts/preview.mjs status     → estado (json)
 //   node scripts/preview.mjs stop       → para
@@ -425,18 +430,18 @@ async function pickPort(configuredPort, span = PORT_SEARCH_SPAN) {
 // na ordem — \`127.0.0.1\` primeiro (mantém o caminho comum exatamente tão
 // rápido quanto antes: só tenta \`::1\` se o primeiro falhar de verdade).
 const LOOPBACK_HOSTS = [HOST, '::1']
-function healthOnce(host, port, timeoutMs) {
+function healthOnce(host, port, timeoutMs${stack === 'tanstack-start-vite' ? ', requireReady' : ''}) {
   return new Promise((resolve) => {
     const req = http.get({ host, port, path: '/', timeout: timeoutMs }, (res) => {
-      res.resume(); resolve((res.statusCode || 0) > 0)
+      res.resume(); resolve(${stack === 'tanstack-start-vite' ? '(res.statusCode || 0) > 0 && (!requireReady || ((res.statusCode || 0) >= 200 && (res.statusCode || 0) < 400))' : '(res.statusCode || 0) > 0'})
     })
     req.on('error', () => resolve(false))
     req.on('timeout', () => { req.destroy(); resolve(false) })
   })
 }
-async function health(port, timeoutMs = 1500) {
+${stack === 'tanstack-start-vite' ? '// Initial readiness requires a successful page. Once tracked, any HTTP response\n// proves the server is alive: an edit returning 404/500 must not restart Vite.\n' : ''}async function health(port, timeoutMs = 1500${stack === 'tanstack-start-vite' ? ', requireReady = false' : ''}) {
   for (const host of LOOPBACK_HOSTS) {
-    if (await healthOnce(host, port, timeoutMs)) return true
+    if (await healthOnce(host, port, timeoutMs${stack === 'tanstack-start-vite' ? ', requireReady' : ''})) return true
   }
   return false
 }
@@ -555,7 +560,7 @@ async function heartbeatLoop(pid, port, instanceId) {
 const WAIT_TRIES = Number(process.env.SUPREMO_PREVIEW_WAIT_TRIES) || 90
 const WAIT_INTERVAL_MS = Number(process.env.SUPREMO_PREVIEW_WAIT_INTERVAL_MS) || 1000
 async function waitReady(port, tries = WAIT_TRIES) {
-  for (let i = 0; i < tries; i++) { if (await health(port)) return true; await new Promise((r) => setTimeout(r, WAIT_INTERVAL_MS)) }
+  for (let i = 0; i < tries; i++) { if (await health(port${stack === 'tanstack-start-vite' ? ', 1500, true' : ''})) return true; await new Promise((r) => setTimeout(r, WAIT_INTERVAL_MS)) }
   return false
 }
 // Mesma decisão pura de harness.decidePreviewAction (mantidas em sincronia).
@@ -583,7 +588,7 @@ function startDetached(port) {
     previewOptions = [nodeOptions, '--max-http-header-size=65536', '--require=' + JSON.stringify(preload)].filter(Boolean).join(' ')
   }
   // DESACOPLADO do pai: sobrevive ao fim do turno/comando do agente.
-  const child = spawn('npm', ['run', 'dev', '--', '--port', String(port)], {
+  const child = ${stack === 'tanstack-start-vite' ? "spawn(process.execPath, [join(ROOT, 'node_modules/vite/bin/vite.js'), '--host', HOST, '--strictPort', '--port', String(port)], {" : "spawn('npm', ['run', 'dev', '--', '--port', String(port)], {"}
     cwd: ROOT,
     detached: true,
     stdio: ['ignore', out, out],
@@ -647,7 +652,7 @@ async function ensure() {
     console.log(\`• porta \${PORT} ocupada por outro processo — usando \${chosen}\`)
   }
   const newPid = startDetached(chosen)
-  const ok = await waitReady(chosen)
+  const ok = await waitReady(chosen)${stack === 'tanstack-start-vite' ? ' && alive(newPid)' : ''}
   if (!ok) {
     // Candidata NÃO ficou saudável (ex.: listen EPERM num sandbox, como no
     // E2E real) — NUNCA sobrescreve .supremo/preview.pid|.port: um estado
@@ -704,7 +709,8 @@ void existsSync
 }
 
 /** O `scripts/verify.mjs` — classificador embutido a partir das regras do Supremo. */
-export function verifyScript(): string {
+export function verifyScript(stack: ProjectStack = 'nextjs'): string {
+  const start = stack === 'tanstack-start-vite'
   return `#!/usr/bin/env node
 // GERADO pelo Supremo — verify adaptativo. NÃO edite as regras à mão: elas vêm
 // do classificador do Supremo (fonte única). Uso:
@@ -731,15 +737,15 @@ const saveEvidence = (status) => {
   fs.writeFileSync('.supremo/verify-result.json.tmp', JSON.stringify(evidence, null, 2) + '\\n')
   fs.renameSync('.supremo/verify-result.json.tmp', '.supremo/verify-result.json')
 }
-const FULL_PATTERNS = ${serializePatterns(FULL_PATTERNS)}
-const SECURITY_PATTERNS = ${serializePatterns(SECURITY_PATTERNS)}
-const SECURITY_CONTENT_PATTERNS = ${serializePatterns(SECURITY_CONTENT_PATTERNS)}
+const FULL_PATTERNS = ${serializePatterns(start ? [...FULL_PATTERNS, ...START_FULL_PATTERNS] : FULL_PATTERNS)}
+const SECURITY_PATTERNS = ${serializePatterns(start ? [...SECURITY_PATTERNS, ...START_SECURITY_PATTERNS] : SECURITY_PATTERNS)}
+const SECURITY_CONTENT_PATTERNS = ${serializePatterns(start ? [...SECURITY_CONTENT_PATTERNS, ...START_SECURITY_CONTENT_PATTERNS] : SECURITY_CONTENT_PATTERNS)}
 const QUICK_PATTERNS = ${serializePatterns(QUICK_PATTERNS)}
 const BROAD_FILE_COUNT = ${BROAD_FILE_COUNT}
 // Só o passo \`build\` consulta isto — ver ENV_BUILD_FAILURE_PATTERNS em
 // verify-classifier.ts (fonte única, mesma regra testada lá).
 const ENV_BUILD_FAILURE_PATTERNS = ${serializePatterns(ENV_BUILD_FAILURE_PATTERNS)}
-const CODE_BUILD_FAILURE_PATTERNS = ${serializePatterns(CODE_BUILD_FAILURE_PATTERNS)}
+const CODE_BUILD_FAILURE_PATTERNS = ${serializePatterns(start ? [...CODE_BUILD_FAILURE_PATTERNS, ...START_CODE_BUILD_FAILURE_PATTERNS] : CODE_BUILD_FAILURE_PATTERNS)}
 const isKnownEnvironmentalBuildFailure = (output) => !CODE_BUILD_FAILURE_PATTERNS.some((re) => re.test(output)) && ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
 
 // Ruído CONHECIDO/transitório do Next em tsconfig.json (v3-11) — MESMA
@@ -860,7 +866,7 @@ function classify(paths, noisePaths) {
 // de RLS quando há Supabase local; senão, o gate "Políticas RLS" do CI cobre.
 const hasLocalDb = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY) && (() => {
   // A service role alone does not authorize a target; only loopback development.
-  try { return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').hostname) }
+  try { return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(process.env.SUPABASE_URL || process.env.${start ? 'VITE_SUPABASE_URL' : 'NEXT_PUBLIC_SUPABASE_URL'} || '').hostname) }
   catch { return false }
 })()
 const UNIT = 'vitest run --coverage --exclude "**/*.rls.test.ts"'
@@ -886,7 +892,7 @@ const STEPS = {
     ['unit + integração', UNIT],
     ...rlsStep,
     ['secret scan', 'node scripts/security-audit.js --strict'],
-    ['build', 'next build --webpack'],
+    ['build', '${start ? 'vite build' : 'next build --webpack'}'],
   ],
 }
 
@@ -906,12 +912,22 @@ if (level === 'quick') {
   const shellQuote = (value) => "'" + value.replaceAll("'", "'\\\"'\\\"'") + "'"
   STEPS.quick[1] = ['lint', lintPaths.length ? 'eslint --no-warn-ignored -- ' + lintPaths.map(shellQuote).join(' ') : 'eslint --cache']
 }
-if (background && level !== 'quick' && !args.includes('--draft') && paths.some((p) => /^(app|components|src\\/(app|components))\\//.test(p)) && fs.existsSync('e2e/smoke.spec.ts')) {
+if (background && level !== 'quick' && !args.includes('--draft') && paths.some((p) => /^(app|components|src\\/(app|components${start ? '|routes|features' : ''}))\\//.test(p)) && fs.existsSync('e2e/smoke.spec.ts')) {
   STEPS[level].push(['browser e2e', 'playwright test e2e/smoke.spec.ts'])
 }
 const t0 = Date.now()
 let buildDeferred = false
-// Verificações independentes em paralelo; build só começa após todas passarem.
+${start ? `// File-based routes are generated only in this workspace before concurrent checks.
+// A generation failure is a failed typecheck, never a skipped or approved gate.
+try { execFileSync(process.execPath, ['scripts/generate-routes.mjs'], { stdio: ['ignore', 'pipe', 'pipe'] }) }
+catch (error) {
+  evidence.checks.push({ name: 'typecheck', status: 'failed' })
+  if (error.stdout) process.stderr.write(error.stdout.toString())
+  if (error.stderr) process.stderr.write(error.stderr.toString())
+  saveEvidence('failed')
+  process.exit(1)
+}
+` : ''}// Verificações independentes em paralelo; build só começa após todas passarem.
 const checks = STEPS[level].filter(([label]) => label !== 'build')
 const results = await Promise.allSettled(checks.map(async ([label, cmd]) => {
   const started = Date.now()
@@ -977,7 +993,7 @@ console.log(\`\\n✓ verify \${level} passou em \${((Date.now() - t0) / 1000).to
 }
 
 /** O `scripts/setup-local.mjs` — idempotente, prepara a máquina pós-clone. */
-export function setupLocalScript(): string {
+export function setupLocalScript(stack: ProjectStack = 'nextjs'): string {
   return `#!/usr/bin/env node
 // GERADO pelo Supremo — setup local idempotente. Rodar de novo não destrói nada.
 import { execSync, execFileSync } from 'node:child_process'
@@ -993,7 +1009,7 @@ console.log('\\nSupremo — setup local\\n')
 
 step('runtime Node', () => {
   const major = Number(process.versions.node.split('.')[0])
-  if (major < 18) throw new Error(\`Node \${process.versions.node} < 18\`)
+  ${stack === 'tanstack-start-vite' ? "const minor = Number(process.versions.node.split('.')[1])\n  if (major < 22 || major === 23 || (major === 22 && minor < 13)) throw new Error(`Node ${process.versions.node} incompatível; TanStack Start requer Node 22.13+ (linha 22) ou >= 24. Use Node 22 LTS.`)" : 'if (major < 18) throw new Error(`Node ${process.versions.node} < 18`)'}
 })
 
 step('.env.local', () => {
@@ -1292,16 +1308,16 @@ if (process.argv.includes('--ensure') && !healthy) {
 `
 }
 
-export function harnessFiles(): Record<string, string> {
+export function harnessFiles(stack: ProjectStack = 'nextjs'): Record<string, string> {
   return {
     '.claude/settings.json': claudeHookSettings(),
     '.codex/hooks.json': codexHookSettings(),
     'scripts/supremo-codex-hook.mjs': turnHookScript('codex'),
     'scripts/supremo-turn-hook.mjs': turnHookScript(),
     'scripts/recovery-context.mjs': recoveryContextScript(),
-    'scripts/verify.mjs': verifyScript(),
-    'scripts/setup-local.mjs': setupLocalScript(),
-    'scripts/preview.mjs': previewSupervisorScript(),
+    'scripts/verify.mjs': verifyScript(stack),
+    'scripts/setup-local.mjs': setupLocalScript(stack),
+    'scripts/preview.mjs': previewSupervisorScript(stack),
     'scripts/supremo-status.mjs': supremoStatusScript(),
     '.githooks/pre-commit': preCommitHook,
     '.githooks/pre-push': prePushHook,

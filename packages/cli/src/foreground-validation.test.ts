@@ -42,6 +42,46 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(cwd, { recursive: true, force: true }) })
 
 describe('foreground recovery on immutable copies', () => {
+  function startFixture(generator: string): void {
+    writeJson(path.join(cwd, 'package.json'), { name: 'foreground-start-fixture', type: 'module', dependencies: {
+      '@tanstack/react-start': '1.168.4', '@tanstack/react-router': '1.168.4', vite: '7.3.1',
+    } })
+    fs.writeFileSync(path.join(cwd, 'vite.config.mts'), "import { tanstackStart } from '@tanstack/react-start/plugin/vite'\n")
+    fs.appendFileSync(path.join(cwd, '.gitignore'), '\nsrc/routeTree.gen.ts\n.tanstack/\n.output/\n')
+    fs.mkdirSync(path.join(cwd, 'scripts'))
+    fs.writeFileSync(path.join(cwd, 'scripts/generate-routes.mjs'), generator)
+  }
+
+  it('prepares Start route types in the snapshot with synthetic public env and preserves live artifacts', async () => {
+    startFixture(`import fs from 'node:fs';
+if (process.env.VITE_SUPABASE_URL !== 'http://127.0.0.1:9' || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('Environment leak');
+fs.writeFileSync('src/routeTree.gen.ts', 'export const route: string = "generated";');
+fs.mkdirSync('node_modules/.vite', { recursive: true });
+fs.writeFileSync('node_modules/.vite/validation-marker', 'private');
+`)
+    fs.writeFileSync(path.join(cwd, 'src/routeTree.gen.ts'), 'export const route = "live";')
+    fs.mkdirSync(path.join(cwd, '.output')); fs.writeFileSync(path.join(cwd, '.output/live'), 'preserved')
+    const record = capture("import { route } from './routeTree.gen.js'; export const value: string = route;\n")
+    const worker = vi.spyOn(processWorker, 'runWorkerProcess')
+    const evidence = await validateForegroundRecovery(cwd, record, ['typecheck'])
+    expect(evidence, evidence.logs).toMatchObject({ status: 'passed', sha: record.commitSha, fingerprint: record.treeSha })
+    expect(worker).toHaveBeenCalledTimes(2)
+    expect(worker.mock.calls[0]?.[1]?.[0]).toMatch(/foreground-work-.*\/scripts\/generate-routes\.mjs$/)
+    expect(fs.readFileSync(path.join(cwd, 'src/routeTree.gen.ts'), 'utf8')).toBe('export const route = "live";')
+    expect(fs.readFileSync(path.join(cwd, '.output/live'), 'utf8')).toBe('preserved')
+    expect(fs.existsSync(path.join(cwd, 'node_modules/.vite/validation-marker'))).toBe(false)
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)?.validationStatus).toBe('pending')
+  })
+
+  it('does not allow Start generation to rewrite protected or application source before passing checks', async () => {
+    startFixture("import fs from 'node:fs'; fs.writeFileSync('src/card.ts', 'export const value = 99;');")
+    const record = capture('export const value = 1;\n')
+    const evidence = await validateForegroundRecovery(cwd, record, ['typecheck'])
+    expect(evidence).toMatchObject({ status: 'failed', checks: [{ name: 'foreground recovery integrity', type: 'security', status: 'failed' }] })
+    expect(evidence.logs).toContain('Geração de tipos alterou')
+    expect(fs.readFileSync(path.join(cwd, 'src/card.ts'), 'utf8')).toBe('export const value = 1;\n')
+  })
+
   it('finds invalid TypeScript in a test file and leaves checkpoint publication pending', async () => {
     fs.writeFileSync(path.join(cwd, 'src/card.test.ts'), "export const expected: number = 'invalid';\n")
     const record = capture('export const value = 1;\n')

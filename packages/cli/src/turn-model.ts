@@ -293,13 +293,15 @@ export function blocksDevelopment(recovery: RecoveryState | null): boolean {
 
 const PROTECTED_REPAIR_PATHS = [
   /(^|\/)(?:\.git|\.supremo|\.codex|\.claude|\.agents)(?:\/|$)/,
-  /(^|\/)(?:node_modules|\.next|coverage|test-results|playwright-report)(?:\/|$)/,
+  /(^|\/)(?:node_modules|\.next|\.output|\.tanstack|\.nitro|coverage|test-results|playwright-report)(?:\/|$)/,
+  /(^|\/)routeTree\.gen\.[jt]s$/,
   /(^|\/)(?:\.gitignore|\.npmrc|\.yarnrc(?:\.yml)?|\.eslintrc(?:\.[^/]*)?|\.eslintignore|biome\.jsonc?|Dockerfile|\.dockerignore)$/,
   /(^|\/)supabase\/config\.toml$/,
   /(^|\/)(?:AGENTS|CLAUDE)\.md$/i,
   /(^|\/)\.github(?:\/|$)/,
   /(^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$/,
-  /(^|\/)(?:vitest|jest|playwright|eslint|next|tsconfig|vercel)(?:\.[^/]*)?\.(?:[cm]?[jt]s|json)$/,
+  /(^|\/)(?:vitest|jest|playwright|eslint|next|vite|nitro|app|tsconfig|vercel)(?:\.[^/]*)?\.(?:[cm]?[jt]s|json)$/,
+  /(^|\/)src\/start\.[cm]?[jt]sx?$/,
   /(^|\/)(?:supabase\/migrations|scripts)(?:\/|$)/,
   /(^|\/)(?:tests?|__tests__|__snapshots__)(?:\/|$)/,
   /\.(?:test|spec)\.[cm]?[jt]sx?$/,

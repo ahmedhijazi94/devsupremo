@@ -1,0 +1,67 @@
+{
+  "timestamp": "2026-09-22T14:31:47.186Z",
+  "services": {
+    "auth": "2.197.0",
+    "postgrest": "16.3",
+    "postgres": "14.17"
+  },
+  "synthetic": true,
+  "evidence": [
+    {
+      "as": "a",
+      "target": "b",
+      "action": "read",
+      "rows": 0
+    },
+    {
+      "as": "a",
+      "target": "b",
+      "action": "update",
+      "rows": 0
+    },
+    {
+      "as": "a",
+      "target": "b",
+      "action": "delete",
+      "rows": 0
+    },
+    {
+      "as": "a",
+      "action": "self-enroll",
+      "errorCode": "42501"
+    },
+    {
+      "as": "a",
+      "action": "owner-reread",
+      "unchanged": true
+    },
+    {
+      "as": "b",
+      "target": "a",
+      "action": "read",
+      "rows": 0
+    },
+    {
+      "as": "b",
+      "target": "a",
+      "action": "update",
+      "rows": 0
+    },
+    {
+      "as": "b",
+      "target": "a",
+      "action": "delete",
+      "rows": 0
+    },
+    {
+      "as": "b",
+      "action": "self-enroll",
+      "errorCode": "42501"
+    },
+    {
+      "as": "b",
+      "action": "owner-reread",
+      "unchanged": true
+    }
+  ]
+}

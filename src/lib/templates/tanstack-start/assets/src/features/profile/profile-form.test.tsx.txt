@@ -1,0 +1,17 @@
+import { afterEach, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { ProfileForm } from './profile-form'
+const rpc = vi.hoisted(() => vi.fn())
+vi.mock('@tanstack/react-start', () => ({ useServerFn: () => rpc }))
+vi.mock('./profile.functions', () => ({ updateProfile: vi.fn() }))
+afterEach(() => { cleanup(); vi.clearAllMocks() })
+it('submits a name without an owner field', async () => {
+  rpc.mockResolvedValue({ displayName: 'Ana' }); render(<ProfileForm />)
+  fireEvent.change(screen.getByLabelText('Como prefere ser chamado?'), { target: { value: 'Ana' } })
+  fireEvent.submit(screen.getByRole('button').closest('form')!)
+  expect(await screen.findByText('Perfil salvo: Ana')).toBeVisible(); expect(rpc).toHaveBeenCalledWith({ data: { displayName: 'Ana' } })
+})
+it('preserves the form after a denied mutation', async () => {
+  rpc.mockRejectedValue(new Error('unauthenticated')); render(<ProfileForm />); fireEvent.submit(screen.getByRole('button').closest('form')!)
+  expect(await screen.findByText(/Não foi possível salvar/)).toBeVisible(); expect(screen.getByRole('button')).toBeEnabled()
+})

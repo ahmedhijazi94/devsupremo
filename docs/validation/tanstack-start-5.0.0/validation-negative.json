@@ -1,0 +1,123 @@
+{
+  "node": "v22.22.1",
+  "probes": {
+    "cosmetic": {
+      "status": "passed",
+      "checks": [
+        {
+          "name": "typecheck",
+          "status": "passed",
+          "type": "typecheck"
+        },
+        {
+          "name": "lint",
+          "status": "passed",
+          "type": "lint"
+        },
+        {
+          "name": "testes afetados",
+          "status": "passed",
+          "type": "unit"
+        },
+        {
+          "name": "secret scan",
+          "status": "passed",
+          "type": "security"
+        }
+      ],
+      "sha": "61b4e95b806cc9550e179bf5155b1aaf49bd69e0",
+      "sourceHeadPreserved": true,
+      "stagingPreserved": true,
+      "snapshotPreserved": true
+    },
+    "type-error": {
+      "status": "failed",
+      "checks": [
+        {
+          "name": "typecheck",
+          "status": "failed",
+          "type": "typecheck"
+        },
+        {
+          "name": "lint",
+          "status": "passed",
+          "type": "lint"
+        },
+        {
+          "name": "testes afetados",
+          "status": "failed",
+          "type": "unit"
+        },
+        {
+          "name": "secret scan",
+          "status": "passed",
+          "type": "security"
+        }
+      ],
+      "sha": "c00675be9af18ab519a85768885a0ee8f4c4b673",
+      "sourceHeadPreserved": true,
+      "stagingPreserved": true,
+      "snapshotPreserved": true
+    },
+    "test-failure": {
+      "status": "failed",
+      "checks": [
+        {
+          "name": "typecheck",
+          "status": "passed",
+          "type": "typecheck"
+        },
+        {
+          "name": "lint",
+          "status": "passed",
+          "type": "lint"
+        },
+        {
+          "name": "testes afetados",
+          "status": "failed",
+          "type": "unit"
+        },
+        {
+          "name": "secret scan",
+          "status": "passed",
+          "type": "security"
+        }
+      ],
+      "sha": "c44ec0a4bbaa80c46dba8350b19014e97901a329",
+      "sourceHeadPreserved": true,
+      "stagingPreserved": true,
+      "snapshotPreserved": true
+    },
+    "security-finding": {
+      "status": "failed",
+      "checks": [
+        {
+          "name": "typecheck",
+          "status": "passed",
+          "type": "typecheck"
+        },
+        {
+          "name": "lint",
+          "status": "passed",
+          "type": "lint"
+        },
+        {
+          "name": "testes afetados",
+          "status": "passed",
+          "type": "unit"
+        },
+        {
+          "name": "secret scan",
+          "status": "failed",
+          "type": "security"
+        }
+      ],
+      "sha": "5c50cea5642bd40a9d312ba0d45099048380c811",
+      "sourceHeadPreserved": true,
+      "stagingPreserved": true,
+      "snapshotPreserved": true
+    }
+  },
+  "directRouteGeneration": "passed without dev server or production build",
+  "status": "passed"
+}

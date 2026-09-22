@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { buildProjectFiles, TEMPLATE_VERSION } from '../src/lib/templates/project-files'
+import { buildProjectFiles } from '../src/lib/templates/project-files'
+import { templateVersionFor } from '../src/lib/templates/stacks'
 import { blobHash, lockEntryHash, type ValidationManifest } from '../packages/cli/src/validation-integrity'
 
 const protectedPaths = [
@@ -12,19 +13,24 @@ const protectedPaths = [
 const protectedScripts = ['typecheck', 'lint', 'test', 'test:coverage', 'test:rls', 'test:e2e',
   'audit:security', 'build', 'verify', 'verify:quick', 'verify:security', 'verify:full', 'security:audit']
 const manifests: ValidationManifest[] = []
-for (const kind of ['public', 'solo', 'team'] as const) {
-  const files = buildProjectFiles({ projectName: 'supremo-policy', description: '', kind })
+for (const stack of ['nextjs', 'tanstack-start-vite'] as const) for (const kind of ['public', 'solo', 'team'] as const) {
+  const files = buildProjectFiles({ projectName: 'supremo-policy', description: '', kind, stack })
+  const paths = stack === 'nextjs' ? protectedPaths : [
+    ...protectedPaths.filter(path => path !== 'vitest.config.ts'),
+    'vitest.config.mts', 'vite.config.mts', 'scripts/generate-routes.mjs', 'scripts/start-production.mjs',
+  ]
+  const scripts = stack === 'nextjs' ? protectedScripts : [...protectedScripts, 'routes:generate']
   const contents = new Map(files.map(file => [file.path, file.content]))
   const pkg = JSON.parse(contents.get('package.json')!) as { scripts: Record<string, string>; devDependencies: Record<string, string> }
   const lock = JSON.parse(contents.get('package-lock.json')!) as { packages: Record<string, unknown> }
   manifests.push({
-    version: TEMPLATE_VERSION, kind,
-    files: Object.fromEntries(protectedPaths.map(path => {
+    version: templateVersionFor(stack), kind,
+    files: Object.fromEntries(paths.map(path => {
       const content = contents.get(path)
       if (content === undefined) throw new Error(`Missing policy file: ${path}`)
       return [path, blobHash(content)]
     })),
-    scripts: Object.fromEntries(protectedScripts.map(name => {
+    scripts: Object.fromEntries(scripts.map(name => {
       const value = pkg.scripts[name]
       if (!value) throw new Error(`Missing policy script: ${name}`)
       return [name, value]

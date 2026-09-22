@@ -1,0 +1,36 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { LoginForm } from './login-form'
+const auth = vi.hoisted(() => ({ signInWithPassword: vi.fn(), signUp: vi.fn(), navigate: vi.fn(), invalidate: vi.fn() }))
+vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({ auth }) }))
+vi.mock('@tanstack/react-router', () => ({ useRouter: () => auth }))
+beforeEach(() => { cleanup(); vi.clearAllMocks(); auth.signInWithPassword.mockResolvedValue({ data: { session: {} }, error: null }); auth.signUp.mockResolvedValue({ data: { session: null }, error: null }) })
+function credentials() { fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.invalid' } }); fireEvent.change(screen.getByLabelText('Senha'), { target: { value: 'development-password' } }) }
+describe('login and signup', () => {
+  it('uses credentials and refreshes route identity after login', async () => {
+    render(<LoginForm />); credentials(); fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    await waitFor(() => expect(auth.navigate).toHaveBeenCalledWith({ to: '/app' }))
+    expect(auth.signInWithPassword).toHaveBeenCalledWith({ email: 'ana@example.invalid', password: 'development-password' }); expect(auth.invalidate).toHaveBeenCalledOnce()
+  })
+  it('does not navigate on rejected credentials', async () => {
+    auth.signInWithPassword.mockResolvedValue({ error: { message: 'secret server detail' } })
+    render(<LoginForm />); credentials(); fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    expect(await screen.findByText(/Não foi possível entrar/)).toBeVisible(); expect(auth.navigate).not.toHaveBeenCalled(); expect(screen.queryByText('secret server detail')).toBeNull()
+  })
+  it('waits for signup confirmation and preserves form input', async () => {
+    render(<LoginForm />); credentials(); fireEvent.click(screen.getByRole('button', { name: 'Criar uma conta' })); fireEvent.click(screen.getByRole('button', { name: 'Criar conta' }))
+    expect(await screen.findByText(/Confira seu email/)).toBeVisible(); expect(auth.navigate).not.toHaveBeenCalled()
+    expect(auth.signUp).toHaveBeenCalledWith({ email: 'ana@example.invalid', password: 'development-password', options: { emailRedirectTo: `${window.location.origin}/auth/callback` } })
+    fireEvent.click(screen.getByRole('button', { name: 'Já tenho uma conta' })); expect(screen.getByLabelText('Email')).toHaveValue('ana@example.invalid')
+  })
+  it('accepts signup with a verified session', async () => {
+    auth.signUp.mockResolvedValue({ data: { session: {} }, error: null })
+    render(<LoginForm />); credentials(); fireEvent.click(screen.getByRole('button', { name: 'Criar uma conta' })); fireEvent.click(screen.getByRole('button', { name: 'Criar conta' }))
+    await waitFor(() => expect(auth.navigate).toHaveBeenCalledWith({ to: '/app' }))
+  })
+  it('handles unavailable auth without losing the form', async () => {
+    auth.signInWithPassword.mockRejectedValue(new Error('network'))
+    render(<LoginForm />); credentials(); fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+    expect(await screen.findByText(/Não foi possível conectar/)).toBeVisible(); expect(screen.getByRole('button', { name: 'Entrar' })).toBeEnabled()
+  })
+})

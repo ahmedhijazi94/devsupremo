@@ -1,0 +1,12 @@
+import { createBrowserClient } from '@supabase/ssr'
+
+/** Only the public URL and publishable/anon key may enter the browser. RLS still applies. */
+export function createClient() {
+  const url = import.meta.env.VITE_SUPABASE_URL
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY
+  if (!url || !key) throw new Error('Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.')
+  const cookieOptions = import.meta.env.SUPREMO_HOSTED_PREVIEW
+    ? { sameSite: 'none' as const, secure: true, partitioned: true }
+    : { sameSite: 'lax' as const, secure: import.meta.env.PROD, partitioned: false }
+  return createBrowserClient(url, key, { cookieOptions })
+}

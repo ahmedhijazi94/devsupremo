@@ -6,7 +6,9 @@ const target = process.env.SUPREMO_TEST_DATABASE_URL
 if (!target || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(target).hostname)) {
   throw new Error('SUPREMO_TEST_DATABASE_URL deve apontar para um Postgres local descartável.')
 }
-const files = buildProjectFiles({ projectName: 'rls-test', description: '', kind: 'team' })
+const stack = process.argv[2] ?? 'nextjs'
+if (stack !== 'nextjs' && stack !== 'tanstack-start-vite') throw new Error('Stack de teste inválida.')
+const files = buildProjectFiles({ projectName: 'rls-test', description: '', kind: 'team', stack })
 const initial = files.find((file) => file.path.endsWith('00000000000000_initial_schema.sql'))!.content
 const upgrade = files.find((file) => file.path.endsWith('_membership_authorization.sql'))!.content
 

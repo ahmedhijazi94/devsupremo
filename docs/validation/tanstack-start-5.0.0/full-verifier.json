@@ -1,0 +1,92 @@
+{
+  "node": "v22.22.1",
+  "startedAt": "2026-09-22T14:59:22.495Z",
+  "definition": "Wall-clock npm run verify:full -- --background on original generated gate ordering. Actual typecheck, lint, coverage, RLS, strict audit, changed-source browser smoke and production build; no migration reset or remote CI scheduling.",
+  "next": {
+    "elapsedMs": 51193,
+    "exitCode": 0,
+    "receipt": {
+      "schemaVersion": 1,
+      "sha": "7455f996529bb0e24361a69e7e5535662882e9ad",
+      "base": "7455f996529bb0e24361a69e7e5535662882e9ad",
+      "status": "passed",
+      "level": "full",
+      "checks": [
+        {
+          "name": "typecheck",
+          "status": "passed"
+        },
+        {
+          "name": "lint",
+          "status": "passed"
+        },
+        {
+          "name": "unit + integra\u00e7\u00e3o",
+          "status": "passed"
+        },
+        {
+          "name": "rls / isolamento",
+          "status": "passed"
+        },
+        {
+          "name": "secret scan",
+          "status": "passed"
+        },
+        {
+          "name": "browser e2e",
+          "status": "passed"
+        },
+        {
+          "name": "build",
+          "status": "passed"
+        }
+      ],
+      "startedAt": "2026-09-22T14:59:33.069Z",
+      "completedAt": "2026-09-22T15:00:24.069Z"
+    }
+  },
+  "start": {
+    "elapsedMs": 18345,
+    "exitCode": 0,
+    "receipt": {
+      "schemaVersion": 1,
+      "sha": "3912a55a7a833e35eb1c097f7bc9a7d501e0a1c2",
+      "base": "3912a55a7a833e35eb1c097f7bc9a7d501e0a1c2",
+      "status": "passed",
+      "level": "full",
+      "checks": [
+        {
+          "name": "typecheck",
+          "status": "passed"
+        },
+        {
+          "name": "lint",
+          "status": "passed"
+        },
+        {
+          "name": "unit + integra\u00e7\u00e3o",
+          "status": "passed"
+        },
+        {
+          "name": "rls / isolamento",
+          "status": "passed"
+        },
+        {
+          "name": "secret scan",
+          "status": "passed"
+        },
+        {
+          "name": "browser e2e",
+          "status": "passed"
+        },
+        {
+          "name": "build",
+          "status": "passed"
+        }
+      ],
+      "startedAt": "2026-09-22T15:00:24.446Z",
+      "completedAt": "2026-09-22T15:00:42.599Z"
+    }
+  },
+  "limitations": "One sequential run per stack, same Node and machine, npm cache populated, no prior build/dev cache; excludes install, remote CI and transport. Next copy omitted only nonexecutable .supremo/DEVELOPMENT.md; reusable runner now retains it."
+}

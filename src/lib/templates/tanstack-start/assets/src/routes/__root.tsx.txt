@@ -1,0 +1,16 @@
+import { HeadContent, Link, Outlet, Scripts, useRouter, createRootRouteWithContext } from '@tanstack/react-router'
+import type { QueryClient } from '@tanstack/react-query'
+import { PreviewInspector } from '@/components/preview-inspector'
+import stylesheet from '@/styles.css?url'
+
+export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+  head: () => ({ meta: [{ charSet: 'utf-8' }, { name: 'viewport', content: 'width=device-width, initial-scale=1' }, { title: '__PROJECT_NAME_JS__' }], links: [{ rel: 'stylesheet', href: stylesheet }] }),
+  component: RootDocument,
+  notFoundComponent: () => <main className="p-8"><h1>Página não encontrada</h1><Link to="/">Voltar ao início</Link></main>,
+  errorComponent: ({ reset }) => <main className="p-8"><h1>Não foi possível carregar</h1><button onClick={reset}>Tentar novamente</button></main>,
+  pendingComponent: () => <main className="p-8" role="status">Carregando…</main>,
+})
+function RootDocument() {
+  const nonce = useRouter().options.ssr?.nonce
+  return <html lang="pt-BR"><head><meta name="csp-nonce" content={nonce} /><HeadContent /></head><body><Outlet />{(import.meta.env.DEV || import.meta.env.SUPREMO_HOSTED_PREVIEW) && <PreviewInspector />}<Scripts /></body></html>
+}

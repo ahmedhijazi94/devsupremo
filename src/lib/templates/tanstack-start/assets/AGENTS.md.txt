@@ -1,0 +1,39 @@
+# __PROJECT_NAME_JS__ — Supremo template 5.0.0 / TanStack Start 1.168.57
+
+Read `.supremo/DEVELOPMENT.md` for the mandatory workflow and `SECURITY.md` for isolation. Those rules override convenience. Never change gates, protected policies or their thresholds to make a check pass. A healthy preview is not validated/integrated code.
+
+## Canonical structure
+- `src/routes`: TanStack Router file routes and typed navigation. Do not introduce Next APIs, React Router, `use client`, `use server`, RSC, or `getServerSideProps`.
+- `src/features/<feature>/*.schema.ts`: client-safe Zod schemas and types.
+- `*.functions.ts`: `createServerFn({method: ...}).validator(schema).handler(...)` wrappers. They can be imported by routes/components.
+- `*.server.ts`: server implementations, guarded by `import '@tanstack/react-start/server-only'`. Never import these into UI or universal loaders; call the RPC wrapper instead.
+- Internal server operations use server functions; HTTP integrations/webhooks use `server.handlers` in route files with their own authentication and signature/origin checks.
+- Shared UI stays in `src/components/ui`, styles in `src/styles.css`; follow `DESIGN.md`. Reuse the existing components and dependencies.
+
+## Identity and data
+Every private operation must call `requireUser()` on the server before reading/writing. `beforeLoad`, a route redirect and a hidden button do not authorize the RPC endpoint. Use the returned user's Supabase client so RLS applies. Never use service_role for ordinary CRUD or trust user/organization/role fields supplied by the browser.
+
+`profile.functions.ts` demonstrates schema validation and identity-bound updates. In team projects, `organization.functions.ts` demonstrates membership verification before tenant data access. Keep runtime validation and authorization when adding CRUD, filters and detail routes; reject extra fields rather than accepting a forged owner.
+
+Use route loaders for initial data. When remote cache is useful use TanStack Query through the request-local `queryClient` in router context, `ensureQueryData` in the loader and that same query key in the component. Do not fetch the same data independently in loader, effect and query. Invalidate affected queries after mutations. Never share private QueryClient state at module scope. Signout must clear/leave private UI and redirect.
+
+## Authentication and browser boundaries
+`src/lib/supabase/client.ts` exposes only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Do not rename other environment values to VITE_. Helpers, credentials and administrative tokens remain server-only; return minimal fields from loaders/RPCs.
+
+The Supabase SSR client is created per request and writes refreshed cookies on that request's response. Use verified `auth.getUser()` identity; never authorize from unverified session payloads. Keep `/auth/callback`, strict same-origin POST signout and server-side checks intact.
+
+`src/start.ts` explicitly installs Start's CSRF middleware because a custom Start entry replaces defaults. Do not allow missing origins or cross-origin RPCs to make tests/preview pass. Import protection errors in dev and build are intentional; do not change them to mocks/warnings.
+
+Public pages use SSR. Route-level client rendering is optional for interactive private areas; respect inherited SSR behavior, and never disable SSR globally to hide hydration errors. Browser-only code belongs in event handlers/effects or documented client boundaries. Security headers use a fresh nonce per request; private responses use `private, no-store`.
+
+## Development and checks
+The existing Supremo supervisor owns one persistent preview. Use its commands in `.supremo/DEVELOPMENT.md`; do not spawn another watcher or restart for ordinary edits. HMR does not run a second lint/test/build pipeline.
+
+- `npm ci`: exact locked dependencies, Node 22.13+ on the 22 line or Node 24+. Node 23 is unsupported; `.nvmrc` selects 22.
+- `npm run routes:generate`: deterministic generation before checks. Never edit `src/routeTree.gen.ts` manually; it is ignored and recreated in clean checkouts.
+- `npm run typecheck`: route generation + strict TypeScript.
+- `npm run lint`, `npm test`, `npm run test:coverage`, `npm run audit:security -- --strict`, `npm run test:rls`, `npm run test:e2e`: existing gates, unchanged acceptance criteria.
+- `npm run build`: Vite client + Start SSR + Nitro runtime. `npm start -- --port 3000`: actual Node production server, never static hosting of server functions.
+- Vercel uses the existing provider integration and the `tanstack-start` framework/Nitro output. No new hosting service.
+
+Follow background validation, checkpoint, recovery and isolation rules in `.supremo/DEVELOPMENT.md`. Do not wait for remote CI in the edit→preview loop. Do not bypass a failed check, weaken coverage, add broad casts/any/suppressions, replace real security checks with mocks, or run database tests against production.

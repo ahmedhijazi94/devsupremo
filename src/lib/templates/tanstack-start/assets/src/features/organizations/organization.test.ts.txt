@@ -1,0 +1,17 @@
+import { beforeEach, expect, it, vi } from 'vitest'
+import { listOrganizationProjects } from './organization.server'
+const io = vi.hoisted(() => ({ requireUser: vi.fn(), from: vi.fn(), select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() }))
+vi.mock('@tanstack/react-start/server-only', () => ({}))
+vi.mock('@/features/auth/auth.server', () => ({ requireUser: io.requireUser }))
+const organizationId = 'd9428888-122b-4ea2-9cda-df7f3a8e3b61'
+beforeEach(() => { vi.clearAllMocks(); io.requireUser.mockResolvedValue({ user: { id: 'verified-user' }, supabase: { from: io.from } }); io.from.mockReturnValue({ select: io.select }); io.select.mockReturnValue({ eq: io.eq }); io.eq.mockReturnValue({ eq: io.eq, maybeSingle: io.maybeSingle }); io.maybeSingle.mockResolvedValue({ data: { org_id: organizationId }, error: null }) })
+it('rejects absent membership before reading projects', async () => { io.maybeSingle.mockResolvedValue({ data: null, error: null }); await expect(listOrganizationProjects({ organizationId })).rejects.toThrow('Organização não autorizada'); expect(io.from).toHaveBeenCalledTimes(1); expect(io.eq).toHaveBeenCalledWith('user_id', 'verified-user') })
+it('rejects failed membership lookup', async () => { io.maybeSingle.mockResolvedValue({ data: null, error: {} }); await expect(listOrganizationProjects({ organizationId })).rejects.toThrow('Organização não autorizada') })
+it('reads only the authorized organization', async () => {
+  io.eq.mockReturnValueOnce({ eq: io.eq }).mockReturnValueOnce({ maybeSingle: io.maybeSingle }).mockResolvedValueOnce({ data: [], error: null })
+  expect(await listOrganizationProjects({ organizationId })).toEqual([]); expect(io.eq).toHaveBeenLastCalledWith('org_id', organizationId)
+})
+it('handles query failures without exposing database details', async () => {
+  io.eq.mockReturnValueOnce({ eq: io.eq }).mockReturnValueOnce({ maybeSingle: io.maybeSingle }).mockResolvedValueOnce({ data: null, error: {} })
+  await expect(listOrganizationProjects({ organizationId })).rejects.toThrow('Não foi possível carregar')
+})

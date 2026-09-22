@@ -10,22 +10,14 @@ import { isKnownNextTsconfigNoise } from './restore'
 import { readStableFile } from './stable-file'
 import type { FailureType } from './turn-model'
 import { localEvidenceSchema, scanCheckpointForUpload, VALIDATION_DIR, type LocalEvidence } from './turn-validation'
-import { captureTree, gitText, readJson, writeJson } from './turn-workspace'
+import { captureTree, gitText, writeJson } from './turn-workspace'
 import { verifyTrustedFiles } from './trusted-validation'
 import { runWorkerProcess, WorkerAbortedError } from './worker-process'
+import { linkIsolatedDependencies, readProjectStack, routePreparation, syntheticValidationEnvironment } from './framework-runtime'
 
 const supportedType = z.enum(['typecheck', 'lint', 'unit', 'integration'])
 type SupportedType = z.infer<typeof supportedType>
 const shaSchema = z.string().regex(/^[a-f0-9]{40}$/)
-
-/** Reuse installed packages, but keep tool caches out of the live node_modules. */
-function linkDependencies(cwd: string, scratch: string): void {
-  const source = path.join(cwd, 'node_modules'), target = path.join(scratch, 'node_modules')
-  fs.mkdirSync(target)
-  for (const name of fs.readdirSync(source)) {
-    if (!name.startsWith('.')) fs.symlinkSync(path.join(source, name), path.join(target, name))
-  }
-}
 
 /** Local proof for selected previous failures only. Never approves or changes the
  * publication queue; foreground evidence is stored outside its evidence lookup. */
@@ -63,8 +55,9 @@ export async function validateForegroundRecovery(
     execFileSync('git', ['worktree', 'add', '--detach', scratch, sha], { cwd, stdio: 'pipe' })
     added = true
     verifyTrustedFiles(scratch)
+    const stack = readProjectStack(scratch)
     failureType = 'external_dependency'
-    linkDependencies(cwd, scratch)
+    linkIsolatedDependencies(cwd, scratch)
     const privateRoot = path.join(scratch, VALIDATION_DIR)
     const home = path.join(privateRoot, 'home'), temp = path.join(privateRoot, 'tmp')
     fs.mkdirSync(home, { recursive: true, mode: 0o700 }); fs.mkdirSync(temp, { recursive: true, mode: 0o700 })
@@ -72,40 +65,40 @@ export async function validateForegroundRecovery(
       PATH: `${path.join(cwd, 'node_modules/.bin')}${path.delimiter}${process.env.PATH ?? ''}`,
       HOME: home, TMPDIR: temp, TMP: temp, TEMP: temp, CI: 'true',
       NEXT_TELEMETRY_DISABLED: '1', SUPREMO_VALIDATION: '1',
-      NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:9',
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: 'supremo-synthetic-smoke-key',
+      ...syntheticValidationEnvironment(stack),
     }
     let remainingOutput = limits.max_output_bytes
-    const nextPackage = z.object({ dependencies: z.object({ next: z.string().optional() }).optional(),
-      devDependencies: z.object({ next: z.string().optional() }).optional() }).parse(readJson(path.join(scratch, 'package.json')))
-    const prepareNext = selected.includes('typecheck') && Boolean(nextPackage.dependencies?.next || nextPackage.devDependencies?.next)
+    const needsRoutes = selected.includes('typecheck') || (stack === 'tanstack-start-vite' && selected.some(type => type === 'unit' || type === 'integration'))
+    const preparation = needsRoutes ? routePreparation(stack, cwd, scratch) : null
     const required = [
       ...(selected.includes('typecheck') ? ['typescript/bin/tsc'] : []),
       ...(selected.includes('lint') ? ['eslint/bin/eslint.js'] : []),
       ...(selected.some(type => type === 'unit' || type === 'integration') ? ['vitest/vitest.mjs', '@vitest/coverage-v8/package.json'] : []),
-      ...(prepareNext ? ['next/dist/bin/next'] : []),
+      ...(preparation && stack === 'nextjs' ? ['next/dist/bin/next'] : []),
     ]
     for (const file of required) {
       if (!fs.statSync(path.join(cwd, 'node_modules', file), { throwIfNoEntry: false })?.isFile()) throw new Error(`Dependência local indisponível: ${file}`)
     }
-    if (prepareNext) {
-      // Next's route declarations are generated artifacts, absent from immutable
-      // Git snapshots. Prepare them without starting the preview or a full build.
-      const nextEnv = path.join(scratch, 'next-env.d.ts')
-      if (fs.lstatSync(nextEnv, { throwIfNoEntry: false })) readStableFile(nextEnv, 64 * 1024, scratch)
+    if (preparation) {
+      // Route declarations are generated in the immutable snapshot, without
+      // starting the preview, editing its artifacts or running a full build.
+      if (stack === 'nextjs') {
+        const nextEnv = path.join(scratch, 'next-env.d.ts')
+        if (fs.lstatSync(nextEnv, { throwIfNoEntry: false })) readStableFile(nextEnv, 64 * 1024, scratch)
+      }
       failureType = 'typecheck'
-      const result = await runWorkerProcess(process.execPath, [path.join(cwd, 'node_modules/next/dist/bin/next'), 'typegen'], {
+      const result = await runWorkerProcess(process.execPath, [preparation.command, ...preparation.args], {
         cwd: scratch, env, timeoutMs: Math.max(1, deadline - Date.now()), maxOutputBytes: remainingOutput, signal,
       })
       const output = `${result.stdout}\n${result.stderr}`
       remainingOutput -= Buffer.byteLength(output)
-      log(`next typegen\n${output}`)
+      log(`${stack === 'nextjs' ? 'next typegen' : 'routes:generate'}\n${output}`)
       failureType = 'security'
       const prepared = captureTree(scratch)
       const changed = gitText(scratch, ['diff', '--name-only', '-z', fingerprint, prepared.treeSha]).split('\0').filter(Boolean)
-      if (prepared.headSha !== sha || changed.some(file => file !== 'next-env.d.ts' && !(file === 'tsconfig.json' && isKnownNextTsconfigNoise(
+      if (prepared.headSha !== sha || changed.some(file => stack !== 'nextjs' || (file !== 'next-env.d.ts' && !(file === 'tsconfig.json' && isKnownNextTsconfigNoise(
         gitText(scratch, ['show', `${sha}:tsconfig.json`]), readStableFile(path.join(scratch, file), 256 * 1024, scratch).content,
-      )))) throw new Error('Geração de tipos alterou a implementação ou configuração protegida.')
+      ))))) throw new Error('Geração de tipos alterou a implementação ou configuração protegida.')
       expectedTree = prepared.treeSha
     }
     const commands: { types: SupportedType[]; executable: string; args: string[] }[] = []

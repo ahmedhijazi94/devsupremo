@@ -11,9 +11,9 @@ import {
 } from '@/lib/github/client'
 import type { GithubCredentials } from '@/lib/projects/repository'
 import {
-  TEMPLATE_VERSION,
   type ProjectKind,
 } from '@/lib/templates/project-files'
+import { stackForVersion, type ProjectStack } from '@/lib/templates/stacks'
 import {
   planIsEmpty,
   planTemplateSync,
@@ -39,7 +39,7 @@ interface ResolvedProject {
   creds: GithubCredentials
   supabase: Awaited<ReturnType<typeof requireProjectOwner>>['supabase']
   userId: string
-  options: { projectName: string; description: string; kind: ProjectKind }
+  options: { projectName: string; description: string; kind: ProjectKind; stack?: ProjectStack }
   templateVersion: string | null
 }
 
@@ -97,6 +97,7 @@ async function resolveProject(
         defaultBranch,
       },
       options: {
+        ...(stackForVersion(project.template_version) ? { stack: stackForVersion(project.template_version)! } : {}),
         projectName: project.name as string,
         description: (project.description as string | null) ?? '',
         // Projeto antigo, de antes da coluna, é 'solo' — o que ele já era.
@@ -153,10 +154,10 @@ export async function getTemplateSyncStatus(
 
     // Repo já no template atual: grava a versão. Torna o selo "em dia" honesto
     // depois do merge, sem depender de gancho nenhum.
-    if (upToDate && templateVersion !== TEMPLATE_VERSION) {
+    if (upToDate && templateVersion !== plan.templateVersion) {
       await supabase
         .from('projects')
-        .update({ template_version: TEMPLATE_VERSION })
+        .update({ template_version: plan.templateVersion })
         .eq('id', projectId)
         .eq('user_id', userId)
     }
@@ -174,7 +175,7 @@ export async function getTemplateSyncStatus(
     return {
       status: {
         projectVersion: templateVersion,
-        latestVersion: TEMPLATE_VERSION,
+        latestVersion: plan.templateVersion,
         upToDate,
         updates: plan.updates.map((item) => item.path),
         creates: plan.creates.map((item) => item.path),
@@ -221,14 +222,14 @@ export async function applyTemplateSync(
     await commitFiles(
       creds,
       branch,
-      `chore: atualizar base para o template ${TEMPLATE_VERSION}`,
+      `chore: atualizar base para o template ${plan.templateVersion}`,
       planToFileChanges(plan),
     )
 
     const pr = await openOrUpdatePullRequest(
       creds,
       branch,
-      `Atualizar base do template (${TEMPLATE_VERSION})`,
+      `Atualizar base do template (${plan.templateVersion})`,
       buildPrBody(plan),
     )
 
@@ -238,7 +239,7 @@ export async function applyTemplateSync(
       resource_type: 'project',
       resource_id: projectId,
       metadata: {
-        template_version: TEMPLATE_VERSION,
+        template_version: plan.templateVersion,
         pr: pr.number,
         updated: plan.updates.length,
         created: plan.creates.length,
@@ -259,13 +260,13 @@ export async function applyTemplateSync(
   }
 }
 
-function buildPrBody(plan: SyncPlan): string {
+function buildPrBody(plan: SyncPlan & { templateVersion: string }): string {
   const lines: string[] = [
-    `Traz a base deste projeto para o template **${TEMPLATE_VERSION}**.`,
+    `Traz a base deste projeto para o template **${plan.templateVersion}**.`,
     '',
     'Só toca em arquivos de base (rails) — infraestrutura da qual o Supremo é',
-    'dono. Nada de página, migration, teste do app ou `package.json` foi',
-    'mexido: a funcionalidade do app fica intacta.',
+    'dono. Preserva páginas, migrations e testes do app. Os comandos e as',
+    'dependências de validação são atualizados dentro da mesma stack.',
     '',
     'Os gates rodam neste PR. Revise o diff e faça o merge quando ficar verde.',
     'Se você customizou algum arquivo de base à mão, o diff mostra antes.',

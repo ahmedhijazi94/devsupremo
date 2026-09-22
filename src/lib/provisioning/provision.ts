@@ -1,3 +1,4 @@
+import { provisioningTemplate } from '@/lib/templates/stacks'
 import { createServiceClient } from '@/lib/supabase/admin'
 import { readEnvironment, registerDevelopment } from '@/lib/database-environment/store'
 import { requireDevelopment } from '@/lib/database-environment/policy'
@@ -9,7 +10,6 @@ import {
   buildProjectMigrations,
   CI_JOB_NAMES,
   type ProjectKind,
-  TEMPLATE_VERSION,
   SECURITY_BASELINE_VERSION,
   type FileEntry,
 } from '@/lib/templates/project-files'
@@ -105,6 +105,7 @@ export async function provisionProject(params: {
     return { error: 'Conecte uma conta GitHub antes de provisionar.' }
   }
 
+  const template = provisioningTemplate(project.template_version)
   const name = project.name as string
   const description = (project.description as string | null) ?? ''
   // O tipo escolhido na criação decide a migration e os arquivos. Projeto
@@ -143,6 +144,7 @@ export async function provisionProject(params: {
   const supabaseAccountId = project.supabase_account_id as string | null
   const files = buildProjectFiles({
     projectName: name,
+    stack: template.stack,
     description,
     kind,
     capabilities,
@@ -213,10 +215,10 @@ export async function provisionProject(params: {
       .from('projects')
       .update({
         is_active: true,
-        template_version: TEMPLATE_VERSION,
+        template_version: template.version,
         capabilities,
         security_profile: securityProfile,
-        scaffold_version: TEMPLATE_VERSION,
+        scaffold_version: template.version,
         security_baseline_version: SECURITY_BASELINE_VERSION,
         provisioning_state: 'ready',
         provisioning_error: null,
@@ -234,7 +236,7 @@ export async function provisionProject(params: {
         repo: persisted.github?.output?.repoFullName ?? null,
         commit: persisted.scaffold?.output?.commitSha ?? null,
         supabase_ref: persisted.supabase?.output?.supabaseProjectRef ?? null,
-        template_version: TEMPLATE_VERSION,
+        template_version: template.version,
         capabilities,
         files: files.length,
       },

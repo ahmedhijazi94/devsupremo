@@ -1,0 +1,3 @@
+// Tailwind is compiled by its Vite plugin for both client and SSR.
+const config = {}
+export default config

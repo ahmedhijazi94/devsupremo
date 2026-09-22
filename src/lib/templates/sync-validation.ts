@@ -1,4 +1,5 @@
 import { TRUSTED_VALIDATION_POLICIES } from '../../../packages/cli/src/generated/validation-policy'
+import { resolveProjectStack } from './stacks'
 
 type JsonObject = Record<string, unknown>
 function object(value: unknown): JsonObject {
@@ -10,10 +11,15 @@ function object(value: unknown): JsonObject {
 export function upgradeValidationPackages(currentPackage: string, currentLock: string, targetPackage: string, targetLock: string): { packageContent: string; lockContent: string } {
   const current = object(JSON.parse(currentPackage))
   const target = object(JSON.parse(targetPackage))
+  const stackOf = (pkg: JsonObject) => resolveProjectStack({
+    dependencies: object(pkg.dependencies ?? {}), devDependencies: object(pkg.devDependencies ?? {}),
+  })
+  if (stackOf(current) !== stackOf(target)) throw new Error('Atualizar a base não pode trocar a stack do projeto.')
   const scripts = { ...object(current.scripts ?? {}) }
   const targetScripts = object(target.scripts)
   const managedScripts = new Set(TRUSTED_VALIDATION_POLICIES.flatMap(policy => Object.keys(policy.scripts)))
   for (const name of managedScripts) {
+    if (typeof targetScripts[name] !== 'string') continue
     scripts[name] = targetScripts[name]
     delete scripts[`pre${name}`]
     delete scripts[`post${name}`]

@@ -1,0 +1,60 @@
+{
+  "startedAt": "2026-09-22T14:59:41.491Z",
+  "syntheticOnly": true,
+  "realAuthAndDatabase": true,
+  "checks": {
+    "browserSignupAndAuthenticatedSsr": {
+      "sessions": 2,
+      "passed": true
+    },
+    "createFilterReadUpdate": {
+      "passed": true,
+      "filterExcludedOtherNote": true
+    },
+    "endpointDenials": {
+      "positiveBCreateUpdateRead": true,
+      "crossUserRead": 200,
+      "crossUserUpdate": 200,
+      "crossUserDelete": 200,
+      "crossUserAttemptedDifferentTitle": true,
+      "crossUserAuthenticatedResourceDenial": true,
+      "anonymousMutation": 401,
+      "crossOriginMutation": 403,
+      "invalidInput": 200,
+      "runtimeValidationError": true,
+      "ownerRereadUnchanged": true
+    },
+    "deleteAndNavigation": {
+      "browserOwnerA": true,
+      "positiveBDelete": true
+    },
+    "finalAuthenticatedReads": {
+      "sessions": 2,
+      "notesRemaining": 0
+    }
+  },
+  "timingsMs": {
+    "install": 4259,
+    "typecheck": 3323,
+    "lint": 3606,
+    "security-audit": 530,
+    "coverage": 6046,
+    "production-build": 6237,
+    "notes-schema-check": 36,
+    "schema-reload": 24
+  },
+  "passed": true,
+  "syntheticAccountCleanup": {
+    "requested": 2,
+    "failed": 0
+  },
+  "environment": {
+    "node": "23.11.0",
+    "platform": "darwin-arm64",
+    "supabaseAuth": "2.197.0",
+    "postgrest": "16.3",
+    "postgres": "14.17"
+  },
+  "negativeResponseSemantics": "TanStack RPC transports validated application errors in HTTP 200. Cross-user checks require the exact resource-denial error after positive authenticated controls; 401 is counted only as anonymous denial.",
+  "expectedNegativeBrowserDiagnostics": "Foreign detail load returns error UI without private content; one intentionally aborted owner delete verifies that the denied other-user replay happens before owner deletion."
+}

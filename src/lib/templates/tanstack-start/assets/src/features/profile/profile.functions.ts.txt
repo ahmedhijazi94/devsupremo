@@ -1,0 +1,5 @@
+import { createServerFn } from '@tanstack/react-start'
+import { profileSchema } from './profile.schema'
+import { saveOwnProfile } from './profile.server'
+
+export const updateProfile = createServerFn({ method: 'POST' }).validator(profileSchema).handler(async ({ data }) => saveOwnProfile(data))

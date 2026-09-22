@@ -9,6 +9,7 @@ import { FAILURE_TYPES, acceptanceCriterionSchema, classifyFailure } from './tur
 import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
 import { defaultCheckpointDeps, type CheckpointRecord } from './checkpoint'
 import { isKnownNextTsconfigNoise } from './restore'
+import { linkIsolatedDependencies, readProjectStack, syntheticValidationEnvironment } from './framework-runtime'
 import { captureTurnCheckpoint, gitText, readJson, TURN_DIR, withTurnLock, writeJson } from './turn-workspace'
 
 import { automaticValidation, readEnginePolicy } from './engine-policy'
@@ -166,10 +167,15 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
     if (signal?.aborted) throw new WorkerAbortedError()
     execFileSync('git', ['worktree', 'add', '--detach', scratch, record.commitSha], { cwd, stdio: 'pipe' })
     added = true
-    // Dependencies are reused, build/test outputs remain isolated. Never copy .env or device identity.
-    if (fs.existsSync(path.join(cwd, 'node_modules'))) fs.symlinkSync(path.join(cwd, 'node_modules'), path.join(scratch, 'node_modules'), 'dir')
     failedStage = { name: 'validation integrity', type: 'security', status: 'failed' }
     verifyTrustedFiles(scratch)
+    const stack = readProjectStack(scratch)
+    // Dependencies are reused, build/test outputs remain isolated. Never copy
+    // .env or device identity; Start caches must not write into live node_modules.
+    if (fs.existsSync(path.join(cwd, 'node_modules'))) {
+      if (stack === 'tanstack-start-vite') linkIsolatedDependencies(cwd, scratch)
+      else fs.symlinkSync(path.join(cwd, 'node_modules'), path.join(scratch, 'node_modules'), 'dir')
+    }
     failedStage = { name: 'validation infrastructure', type: 'external_dependency', status: 'failed' }
     const script = path.join(scratch, 'scripts/verify.mjs')
     if (!fs.existsSync(script)) throw new Error('Worker indisponível: scripts/verify.mjs ausente.')
@@ -179,8 +185,7 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
       NEXT_TELEMETRY_DISABLED: '1', SUPREMO_VALIDATION: '1',
       // Anonymous UI smoke can instantiate the SDK and prove the login redirect.
       // These are synthetic, unusable for authentication or any remote database.
-      NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:9',
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: 'supremo-synthetic-smoke-key',
+      ...syntheticValidationEnvironment(stack),
     }
     failedStage = { name: 'acceptance contract', type: 'code', status: 'failed' }
     const acceptancePath = path.join(scratch, '.supremo/acceptance.json')
@@ -242,7 +247,7 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
         checks.some((check) => check.name === name && check.status === 'passed'))).map((criterion) => criterion.id)
     }
     const after = gitText(scratch, ['diff', '--name-only', '-z', 'HEAD']).split('\0').filter(Boolean)
-    if (after.some((file) => file !== 'next-env.d.ts' && !(file === 'tsconfig.json' && isKnownNextTsconfigNoise(
+    if (after.some((file) => (stack === 'tanstack-start-vite' || file !== 'next-env.d.ts') && !(stack !== 'tanstack-start-vite' && file === 'tsconfig.json' && isKnownNextTsconfigNoise(
       gitText(scratch, ['show', 'HEAD:tsconfig.json']), fs.readFileSync(path.join(scratch, file), 'utf8'),
     )))) {
       status = 'failed'; logs += '\nValidação alterou arquivos versionados.'

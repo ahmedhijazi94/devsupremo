@@ -1,0 +1,12 @@
+import '@tanstack/react-start/server-only'
+import { requireUser } from '@/features/auth/auth.server'
+import type { z } from 'zod'
+import { profileSchema } from './profile.schema'
+
+export async function saveOwnProfile(input: z.infer<typeof profileSchema>) {
+  const data = profileSchema.parse(input)
+  const { user, supabase } = await requireUser()
+  const { error } = await supabase.from('profiles').upsert({ user_id: user.id, display_name: data.displayName }, { onConflict: 'user_id' })
+  if (error) throw new Error('Não foi possível salvar seu perfil.')
+  return { displayName: data.displayName }
+}

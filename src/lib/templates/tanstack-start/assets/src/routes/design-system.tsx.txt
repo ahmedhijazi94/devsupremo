@@ -1,0 +1,6 @@
+import { createFileRoute, notFound } from '@tanstack/react-router'
+import { createServerFn } from '@tanstack/react-start'
+import { DesignExamples } from '@/components/design-examples'
+
+const designEnabled = createServerFn().handler(async () => process.env.NODE_ENV !== 'production' || process.env.SUPREMO_PREVIEW === '1')
+export const Route = createFileRoute('/design-system')({ beforeLoad: async () => { if (!await designEnabled()) throw notFound() }, component: DesignExamples })

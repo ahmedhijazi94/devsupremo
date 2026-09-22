@@ -1,3 +1,5 @@
+import { adaptTanStackFiles } from './tanstack-start'
+import { NEXT_TEMPLATE_VERSION, type ProjectStack } from './stacks'
 import { isolationGateFiles } from './isolation-gate'
 import { anonymousSessionHelper } from './anonymous-session'
 import fs from 'node:fs'
@@ -85,8 +87,9 @@ export {
 // correção local em cópia isolada, preservando preview e gates de publicação.
 // 4.0.7: continuação explícita da correção e diagnóstico compacto para o agente.
 // 4.0.8: títulos descritivos, diagnóstico atualizado e administração de autenticação.
+// 4.0.10: CLI 1.8.0 com resolução explícita de runtime; gates Next preservados.
 // 4.0.9: recuperação automática de envios parados no daemon.
-export const TEMPLATE_VERSION = '4.0.9'
+export const TEMPLATE_VERSION = NEXT_TEMPLATE_VERSION
 
 /** Versão do baseline de segurança embutido no scaffold. */
 export const SECURITY_BASELINE_VERSION = '3.0.0'
@@ -112,6 +115,8 @@ export interface FileEntry {
 export type ProjectKind = 'public' | 'solo' | 'team'
 
 export interface TemplateOptions {
+  /** Omitted means the legacy Next template, never the creation default. */
+  stack?: ProjectStack
   projectName: string
   description: string
   /** Padrão: 'solo'. Ver ProjectKind. */
@@ -365,7 +370,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
   ]
 
   // ── Local dev harness (verify adaptativo, setup:local, git hooks) ─────────
-  for (const [p, content] of Object.entries(harnessFiles())) {
+  for (const [p, content] of Object.entries(harnessFiles(options.stack))) {
     files.push({
       path: p,
       content,
@@ -395,7 +400,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
       content: generateRlsTest(inferTablesFromMigration(migration).filter((table) => table.tenant?.isSelf)),
     })
   }
-  return files
+  return options.stack === 'tanstack-start-vite' ? adaptTanStackFiles(files, options) : files
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -2566,13 +2571,11 @@ function packageLock(projectName: string): string {
 }
 
 /**
- * O script de auditoria é o mesmo que o Supremo roda em si próprio.
- *
- * Ele é lido do disco em vez de duplicado numa string: uma cópia paralela
- * divergiria na primeira correção feita de um lado só.
+ * Release 4.0.9 is immutable: its scanner bytes match the pinned validation
+ * manifest. Framework extensions ship in the separately versioned Start release.
  */
 function securityAuditScript(): string {
-  const scriptPath = path.join(process.cwd(), 'scripts', 'security-audit.js')
+  const scriptPath = path.join(process.cwd(), 'src/lib/templates/assets/security-audit-next-4.0.9.js.txt')
 
   try {
     return fs.readFileSync(/* turbopackIgnore: true */ scriptPath, 'utf8')

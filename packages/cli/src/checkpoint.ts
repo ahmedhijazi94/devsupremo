@@ -84,6 +84,10 @@ const HIGH_RE: RegExp[] = [
   /(^|\/)middleware\.(ts|js)$/,
   /\.(rls|policy)\.(sql|ts)$/,
   /(^|\/)(next\.config|tsconfig|package)\.(ts|js|json)$/,
+  /(^|\/)(?:vite|nitro|app)\.config\.[cm]?[jt]s$/,
+  /\.(?:functions|server)\.[cm]?[jt]sx?$/,
+  /(^|\/)src\/start\.[cm]?[jt]sx?$/,
+  /(^|\/)src\/routes\/api(?:[./]|$)/,
   /(^|\/)vercel\.json$/,
 ]
 const MEDIUM_RE: RegExp[] = [/(^|\/)(lib|hooks|stores|server|src\/lib)\//]

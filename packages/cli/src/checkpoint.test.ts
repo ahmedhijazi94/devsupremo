@@ -68,6 +68,8 @@ describe('checkpoint puro', () => {
     expect(classifyCheckpointRisk(['app/api/orders/route.ts'])).toBe('high')
     expect(classifyCheckpointRisk(['supabase/migrations/1.sql'])).toBe('high')
     expect(classifyCheckpointRisk(['.github/workflows/ci.yml'])).toBe('high')
+    for (const file of ['vite.config.mts', 'nitro.config.ts', 'src/start.ts', 'src/features/expenses.functions.ts',
+      'src/features/expenses.server.ts', 'src/routes/api.webhook.ts']) expect(classifyCheckpointRisk([file])).toBe('high')
     expect(classifyCheckpointRisk(Array.from({ length: 9 }, (_, i) => `c${i}.tsx`))).toBe(
       'medium',
     )

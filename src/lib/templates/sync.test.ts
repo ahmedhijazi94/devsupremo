@@ -16,6 +16,9 @@ describe('isManagedPath', () => {
   it('trata infra como rail', () => {
     expect(isManagedPath('lib/supabase/server.ts')).toBe(true)
     expect(isManagedPath('proxy.ts')).toBe(true)
+    for (const path of ['src/start.ts', 'src/lib/security/headers.ts', 'src/lib/security/origin.ts']) {
+      expect(isManagedPath(path)).toBe(true)
+    }
     expect(isManagedPath('.github/workflows/ci.yml')).toBe(true)
     expect(isManagedPath('e2e/smoke.spec.ts')).toBe(true)
   })

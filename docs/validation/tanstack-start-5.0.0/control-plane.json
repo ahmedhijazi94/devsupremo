@@ -1,0 +1,51 @@
+{
+  "checkedAt": "2026-09-22T15:17:46.800107+00:00",
+  "scope": "Final local source and isolated physical snapshot; no remote deployment",
+  "controlPlane": {
+    "framework": "Next.js 16.3.3",
+    "typecheck": "passed",
+    "lint": "passed",
+    "strictAudit": {
+      "critical": 0,
+      "high": 0,
+      "medium": 13,
+      "mediumUnchangedFromBaseline": true
+    },
+    "coverage": {
+      "tests": 1810,
+      "files": 114,
+      "statements": 98.86,
+      "lines": 98.86,
+      "branches": 94.8,
+      "functions": 95.32,
+      "threshold": 85
+    },
+    "productionBuild": "passed",
+    "productionSmoke": {
+      "framework": "nextjs",
+      "status": 200,
+      "loginRendered": true,
+      "startupMs": 418,
+      "isolatedTemporaryProcess": true,
+      "realOAuthExecuted": false
+    }
+  },
+  "cli": {
+    "version": "1.8.0",
+    "typecheck": "passed",
+    "tests": 698,
+    "testFiles": 41,
+    "workers": 2,
+    "durationSeconds": 62.43,
+    "httpDistributionWithRegistryUnreachable": "passed",
+    "bundleSha256": "cc39e68d319e13f31a63c1431ee598e750efdae8f2a2115ee9b6e3d9841486cb"
+  },
+  "manifestCheck": "passed",
+  "gitleaksHistoryAndDistributedBundle": "passed",
+  "defaultNewProjectStack": "tanstack-start-vite",
+  "templateVersion": "5.0.0",
+  "limitations": [
+    "No remote GitHub CI/CodeQL run or hosted OAuth/deployment acceptance",
+    "Unrelated initially untracked packages/lut-studio excluded from isolated verification; no source/ignore/config changes to that project"
+  ]
+}

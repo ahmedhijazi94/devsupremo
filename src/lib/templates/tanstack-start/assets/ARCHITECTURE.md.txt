@@ -1,0 +1,7 @@
+# Architecture
+
+TanStack Start + React + TypeScript + TanStack Router + Vite. Public routes retain SSR. Internal server operations use validated server functions; external HTTP APIs use server routes. Database access uses request-local Supabase user sessions and RLS. Zod validates runtime inputs; TanStack Query is available through a new QueryClient per request.
+
+The existing migrations define the security model (public, personal or organizations); this template does not reinterpret or rewrite them. The control plane, CLI, validation, checkpoints and background workers remain Supremo's existing systems.
+
+The exact direct and transitive dependencies are pinned in package.json/package-lock.json. Nitro `3.0.260903-beta` is the currently documented Vite deployment integration and is intentionally pinned; upgrading it requires repeat SSR, RPC, CSP and deployment tests. It is a prerelease dependency, not a guarantee of API stability.

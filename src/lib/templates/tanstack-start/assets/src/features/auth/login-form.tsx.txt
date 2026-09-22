@@ -1,0 +1,36 @@
+import { useState } from 'react'
+import { useRouter } from '@tanstack/react-router'
+import { createClient } from '@/lib/supabase/client'
+import { Button } from '@/components/ui/button'
+import { Input, Label } from '@/components/ui/input'
+
+export function LoginForm() {
+  const router = useRouter()
+  const [signup, setSignup] = useState(false)
+  const [message, setMessage] = useState('')
+  const [pending, setPending] = useState(false)
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setPending(true)
+    setMessage('')
+    const data = new FormData(event.currentTarget)
+    const credentials = { email: String(data.get('email') ?? '').trim(), password: String(data.get('password') ?? '') }
+    try {
+      const client = createClient()
+      const result = signup
+        ? await client.auth.signUp({ ...credentials, options: { emailRedirectTo: `${window.location.origin}/auth/callback` } })
+        : await client.auth.signInWithPassword(credentials)
+      if (result.error) { setMessage('Não foi possível entrar. Confira seus dados e tente novamente.'); return }
+      if (!result.data.session) { setMessage('Confira seu email para confirmar o cadastro.'); return }
+      await router.invalidate()
+      await router.navigate({ to: '/app' })
+    } catch { setMessage('Não foi possível conectar. Tente novamente.') }
+    finally { setPending(false) }
+  }
+  return <div className="space-y-6"><form className="space-y-4" onSubmit={submit}>
+    <div><Label htmlFor="email">Email</Label><Input id="email" name="email" type="email" required autoComplete="email" /></div>
+    <div><Label htmlFor="password">Senha</Label><Input id="password" name="password" type="password" minLength={8} required autoComplete={signup ? 'new-password' : 'current-password'} /></div>
+    <Button type="submit" disabled={pending}>{pending ? 'Aguarde…' : signup ? 'Criar conta' : 'Entrar'}</Button>
+    <p role="status">{message}</p>
+  </form><button type="button" className="text-accent" onClick={() => { setSignup(!signup); setMessage('') }}>{signup ? 'Já tenho uma conta' : 'Criar uma conta'}</button></div>
+}

@@ -1,0 +1,30 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { greeting, greetingSchema } from './example.schema'
+import { GreetingForm } from './greeting-form'
+const rpc = vi.hoisted(() => vi.fn())
+vi.mock('@tanstack/react-start', () => ({ useServerFn: () => rpc }))
+vi.mock('./example.functions', () => ({ greet: vi.fn() }))
+afterEach(() => { cleanup(); vi.clearAllMocks() })
+it('validates normalized input and rejects malformed or extra fields', () => {
+  expect(greetingSchema.parse({ name: ' Ana ' })).toEqual({ name: 'Ana' })
+  expect(greeting('Ana')).toBe('Olá, Ana!')
+  for (const data of [{ name: '' }, { name: 'x'.repeat(81) }, { name: 4 }, { name: 'Ana', role: 'admin' }]) expect(greetingSchema.safeParse(data).success).toBe(false)
+})
+describe('greeting form', () => {
+  it('shows the server result', async () => {
+    rpc.mockResolvedValue({ message: 'Olá, Ana!' })
+    render(<GreetingForm />)
+    fireEvent.change(screen.getByLabelText('Seu nome'), { target: { value: 'Ana' } })
+    fireEvent.submit(screen.getByRole('button', { name: 'Enviar saudação' }).closest('form')!)
+    expect(await screen.findByText('Olá, Ana!')).toBeVisible()
+    expect(rpc).toHaveBeenCalledWith({ data: { name: 'Ana' } })
+  })
+  it('keeps errors recoverable', async () => {
+    rpc.mockRejectedValue(new Error('network'))
+    render(<GreetingForm />)
+    fireEvent.submit(screen.getByRole('button', { name: 'Enviar saudação' }).closest('form')!)
+    expect(await screen.findByText(/Não foi possível enviar/)).toBeVisible()
+    expect(screen.getByRole('button')).toBeEnabled()
+  })
+})

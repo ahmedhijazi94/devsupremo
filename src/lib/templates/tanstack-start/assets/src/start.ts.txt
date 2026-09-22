@@ -1,0 +1,19 @@
+import { createCsrfMiddleware, createMiddleware, createStart } from '@tanstack/react-start'
+import { setResponseHeader, setResponseHeaders } from '@tanstack/react-start/server'
+import { securityHeaders } from '@/lib/security/headers'
+
+const headers = createMiddleware().server(async ({ request, next }) => {
+  const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
+  setResponseHeader('x-supremo-nonce', nonce)
+  setResponseHeaders(new Headers(securityHeaders({
+    nonce, development: process.env.NODE_ENV === 'development',
+    preview: process.env.SUPREMO_PREVIEW === '1' || process.env.VERCEL_ENV === 'preview',
+    supremoOrigin: '__SUPREMO_ORIGIN__', requestOrigin: new URL(request.url).origin,
+    supabaseUrl: process.env.VITE_SUPABASE_URL,
+  })))
+  return next()
+})
+
+// Defining start.ts replaces Start's default; install its real CSRF protection explicitly.
+const csrf = createCsrfMiddleware({ filter: (context) => context.handlerType === 'serverFn' })
+export const startInstance = createStart(() => ({ requestMiddleware: [headers, csrf] }))

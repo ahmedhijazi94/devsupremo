@@ -1,0 +1,50 @@
+{
+  "checkedAt": "2026-09-22T15:03:29.273Z",
+  "gitleaks": {
+    "version": "8.21.2",
+    "platform": "darwin_arm64",
+    "sha256": "cad3de5dc9a4d5447d967a70a4d49499c557f04db028274cc324f9ff983f6502",
+    "checksumSource": "https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_checksums.txt",
+    "history": {
+      "status": "passed",
+      "commits": 224
+    },
+    "distributedCli": {
+      "status": "passed",
+      "rules": "default, empty ignore"
+    },
+    "currentSource": {
+      "status": "one preexisting synthetic fixture finding",
+      "files": 599,
+      "file": "src/lib/checkpoint/feedback.test.ts",
+      "line": 95,
+      "rule": "private-key",
+      "description": "Unchanged sanitization test with literal private body, already reviewed in historical fingerprint; no allowlist change."
+    },
+    "newAndChangedSource": {
+      "status": "passed",
+      "files": 110,
+      "findings": 0
+    },
+    "excludedUserWork": "packages/lut-studio"
+  },
+  "npmAudit": {
+    "status": "passed at required high threshold",
+    "lockMatchesCurrentTemplate": true,
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 3,
+      "high": 0,
+      "critical": 0,
+      "total": 3
+    },
+    "advisory": "https://github.com/advisories/GHSA-82fw-gwwq-j7x9",
+    "affectedDevelopmentPackages": [
+      "vitest",
+      "@vitest/mocker",
+      "@vitest/coverage-v8"
+    ],
+    "dependenciesChanged": false
+  }
+}

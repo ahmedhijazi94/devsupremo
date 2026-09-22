@@ -1,3 +1,4 @@
+import type { ProjectStack } from './stacks'
 import type { CapabilityId, SecurityCheck } from '@/lib/capabilities'
 import { securityChecksFor } from '@/lib/capabilities'
 
@@ -71,6 +72,31 @@ export const SECURITY_CONTENT_PATTERNS: RegExp[] = [
   /\bprocess\s*\.\s*env\b/,
 ]
 
+/** Additive adapters, emitted only for Start. Published Next rails stay immutable. */
+export const START_FULL_PATTERNS: RegExp[] = [
+  /(^|\/)vite\.config\.[cm]?[jt]s$/,
+  /(^|\/)nitro\.config\.[cm]?[jt]s$/,
+  /(^|\/)scripts\/generate-routes\.mjs$/,
+]
+export const START_SECURITY_PATTERNS: RegExp[] = [
+  /\.(?:functions|server)\.[cm]?[jt]sx?$/,
+  /(^|\/)src\/start\.[cm]?[jt]sx?$/,
+  /(^|\/)src\/routes\/api[/.]/,
+]
+export const START_SECURITY_CONTENT_PATTERNS: RegExp[] = [
+  /\bcreateServerFn\s*\(/,
+  /\bcreateServerFileRoute\s*\(/,
+  /\bserver\s*:\s*\{\s*(?:middleware|handlers)\s*:/,
+  /\bimport\s*\.\s*meta\s*\.\s*env\b/,
+]
+export const START_CODE_BUILD_FAILURE_PATTERNS: RegExp[] = [
+  /\b(?:RollupError|RolldownError)\b/,
+  /failed to resolve import/i,
+  /could not resolve ["']/i,
+  /is not exported by/i,
+  /\[plugin:[^\]]+\].*error/i,
+]
+
 /**
  * Assinaturas CONHECIDAS e estritas de falha AMBIENTAL do sandbox — nunca um
  * heurístico amplo. Servem só pra decidir se o passo `build` (único passo
@@ -115,8 +141,9 @@ export const CODE_BUILD_FAILURE_PATTERNS: RegExp[] = [
  * Só o passo `build` (nível FULL) pode consultar isto — ver
  * `ENV_BUILD_FAILURE_PATTERNS`. Casa contra a saída (stdout+stderr) da falha.
  */
-export function isKnownEnvironmentalBuildFailure(output: string): boolean {
-  return !CODE_BUILD_FAILURE_PATTERNS.some((re) => re.test(output)) &&
+export function isKnownEnvironmentalBuildFailure(output: string, stack: ProjectStack = 'nextjs'): boolean {
+  const codePatterns = stack === 'tanstack-start-vite' ? [...CODE_BUILD_FAILURE_PATTERNS, ...START_CODE_BUILD_FAILURE_PATTERNS] : CODE_BUILD_FAILURE_PATTERNS
+  return !codePatterns.some((re) => re.test(output)) &&
     ENV_BUILD_FAILURE_PATTERNS.some((re) => re.test(output))
 }
 
@@ -219,6 +246,7 @@ export function classifyRisk(
   capabilities: readonly CapabilityId[] = [],
   knownNoisePaths: readonly string[] = [],
   changedContent: Readonly<Record<string, string>> = {},
+  stack: ProjectStack = 'nextjs',
 ): RiskResult {
   const applicable = securityChecksFor(capabilities)
   const changed = changedPaths.length
@@ -231,9 +259,12 @@ export function classifyRisk(
   const riskPaths = changedPaths.filter((p) => !noiseSet.has(p))
   const noiseSuffix = noiseSet.size > 0 ? ' (tsconfig.json: ruído conhecido do Next, ignorado na classificação)' : ''
 
-  const hasFull = riskPaths.some((p) => matchesAny(p, FULL_PATTERNS))
-  const hasSecurity = riskPaths.some((p) => matchesAny(p, SECURITY_PATTERNS) ||
-    (/[.][cm]?[jt]sx?$/.test(p) && SECURITY_CONTENT_PATTERNS.some((pattern) => pattern.test(changedContent[p] ?? ''))))
+  const full = stack === 'tanstack-start-vite' ? [...FULL_PATTERNS, ...START_FULL_PATTERNS] : FULL_PATTERNS
+  const sensitive = stack === 'tanstack-start-vite' ? [...SECURITY_PATTERNS, ...START_SECURITY_PATTERNS] : SECURITY_PATTERNS
+  const content = stack === 'tanstack-start-vite' ? [...SECURITY_CONTENT_PATTERNS, ...START_SECURITY_CONTENT_PATTERNS] : SECURITY_CONTENT_PATTERNS
+  const hasFull = riskPaths.some((p) => matchesAny(p, full))
+  const hasSecurity = riskPaths.some((p) => matchesAny(p, sensitive) ||
+    (/[.][cm]?[jt]sx?$/.test(p) && content.some((pattern) => pattern.test(changedContent[p] ?? ''))))
   const allCosmetic = changedPaths.every((p) => noiseSet.has(p) || matchesAny(p, QUICK_PATTERNS))
 
   if (hasFull || riskPaths.length > BROAD_FILE_COUNT) {

@@ -1,0 +1,22 @@
+import { createRouter } from '@tanstack/react-router'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createIsomorphicFn } from '@tanstack/react-start'
+import { getResponseHeader } from '@tanstack/react-start/server'
+import { routeTree } from './routeTree.gen'
+
+const getNonce = createIsomorphicFn()
+  .server(() => getResponseHeader('x-supremo-nonce'))
+  .client(() => document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content)
+
+export function getRouter() {
+  // A fresh cache per SSR request: private responses never cross user sessions.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 0, retry: false } } })
+  return createRouter({
+    routeTree, context: { queryClient }, scrollRestoration: true,
+    defaultPreload: 'intent', defaultPreloadStaleTime: 0,
+    ssr: { nonce: getNonce() },
+    Wrap: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+  })
+}
+
+declare module '@tanstack/react-router' { interface Register { router: ReturnType<typeof getRouter> } }

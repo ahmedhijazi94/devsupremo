@@ -1,0 +1,7 @@
+import { z } from 'zod'
+
+export const filterSchema = z.object({ q: z.string().trim().max(100).default('') }).strict()
+export const idSchema = z.object({ id: z.uuid() }).strict()
+export const createNoteSchema = z.object({ title: z.string().trim().min(1).max(100) }).strict()
+export const updateNoteSchema = createNoteSchema.extend({ id: z.uuid() }).strict()
+export const noteSchema = z.object({ id: z.uuid(), title: z.string(), created_at: z.string() })

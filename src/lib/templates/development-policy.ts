@@ -69,8 +69,9 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   este projeto e seu desenvolvimento; produção, operações destrutivas e recursos de
   outros projetos mantêm suas autorizações próprias. Nunca contorne a revisão do host.
   Se ela bloquear uma operação, informe a operação e o motivo concreto, sem declarar o
-  ambiente pronto. Depois da preparação, retome o preflight e os gates normais antes
-  de implementar. Preserve um preview saudável e continue o pedido original.
+  ambiente pronto. Depois da preparação, retome o preflight para conferir identidade,
+  ambiente e permissões; isso não pede execução de testes, cobertura ou build.
+  Preserve um preview saudável e continue o pedido original.
 - Padrão: no início de cada pedido de alteração, trate o diagnóstico anterior entregue
   pelo Supremo. Confira se a falha ainda existe no código atual e corrija as causas
   confirmadas antes do pedido novo, sem esperar o usuário avisar. Depois implemente
@@ -78,6 +79,25 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   O motor executa testes locais adaptativos em background e a suíte completa no GitHub.
   Não espere esses testes nem abra uma sessão de QA manual por rotina. Testes explícitos
   pedidos pelo usuário continuam disponíveis. Dados de teste ficam em ambiente isolado.
+- Na criação inicial, implemente primeiro um fluxo utilizável do pedido, com acesso e
+  persistência reais quando necessários. Assim que estiver disponível no preview saudável,
+  abra/informe a URL ao usuário em uma atualização, dizendo o que já funciona e o que falta.
+  Não espere terminar a escrita dos testes ou toda a interface para disponibilizar esse
+  primeiro fluxo. Continue o restante do pedido e as provas neste mesmo turno; preview
+  parcial não é entrega concluída nem aprovação. Reutilize o supervisor existente.
+- Escrever provas e executar provas são tarefas diferentes: o agente escreve os testes
+  necessários da mudança; o worker os executa em background. Reutilize helpers e fixtures
+  existentes. Cubra decisões, cálculos, entradas inválidas e permissões alteradas; não
+  recrie suítes de login/UI que já cobrem comportamento inalterado nem escreva testes que
+  apenas repetem textos, classes CSS ou estrutura JSX. Não rode suíte, cobertura, build
+  ou polling de CI por rotina antes da entrega. Testes pedidos explicitamente e o
+  recovery-check de falhas anteriores confirmadas seguem o fluxo próprio abaixo.
+- Antes de escrever migrations, consulte a seção Migrations no desenvolvimento em
+  .supremo/DEVELOPMENT.md. Ela descreve o caminho automático aceito e um exemplo de
+  gatilho; evita descobrir o formato por tentativas.
+  SECURITY DEFINER é bloqueado nesse caminho em qualquer schema: mover para private
+  não libera a operação. Use o modelo de identidade e RLS existente, sem privilégios
+  administrativos para CRUD. Uma recusa exige corrigir a causa, não contornar o canal.
 - Leia o contexto compacto do turno e os arquivos necessários ao diagnóstico e à alteração.
   Não examine o bundle da CLI, releia o repositório inteiro nem investigue o banco remoto
   para exibir um campo que já está presente no modelo e na consulta do app.

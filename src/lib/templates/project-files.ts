@@ -7,6 +7,7 @@ import path from 'node:path'
 import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
 import { designSystemFiles } from './design-system'
 import { withDevelopmentPolicy } from './development-policy'
+import { MIGRATION_GUIDE } from './migration-guide'
 import { harnessFiles, harnessPackageScripts } from './harness'
 import {
   capabilitiesForKind,
@@ -2705,6 +2706,8 @@ explícitas do usuário, regras de segurança do host nem os gates de integraç�
   o comando indicado e tente complete novamente. A recusa de encerramento não
   proíbe corrigir. Não repita complete sem ação nem devolva só a mensagem de bloqueio.
   A resposta da CLI é compacta; \`turn status --full-state\` dá o diagnóstico completo.
+
+${MIGRATION_GUIDE}
 
 ## Chaves de integrações
 

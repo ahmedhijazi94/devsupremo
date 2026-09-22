@@ -7,6 +7,7 @@ import { deviceIssuer, saveDeviceIdentity } from './device-identity'
 import { resolveKeychain } from './keychain'
 import { preCommitHook, prePushHook } from './git-hooks'
 import { inspectHostAdapters, type IntegrationMode } from './host-adapters'
+import { assertFrameworkNodeVersion, publicSupabaseEnvironment, readProjectStack } from './framework-runtime'
 
 /**
  * `supremo bootstrap <project-id>` — device flow + workspace local pronto.
@@ -26,6 +27,7 @@ export interface BootstrapConfig {
     capabilities: string[]
     scaffoldVersion: string | null
     securityProfile: string | null
+    stack?: 'nextjs' | 'tanstack-start-vite'
   }
   repo: { url: string; fullName: string; branch: string }
   gitToken: string
@@ -681,8 +683,13 @@ export async function runBootstrap(opts: {
   })
   ok('Repository clonado')
 
+  const stack = readProjectStack(dest)
+  assertFrameworkNodeVersion(stack, process.version)
+  if (config.project.stack !== undefined && config.project.stack !== stack) {
+    throw new Error('A stack do checkout diverge do projeto autorizado; bootstrap interrompido.')
+  }
   // .env.local (gitignored no scaffold). Nunca imprimimos o conteúdo. Só públicas.
-  fs.writeFileSync(path.join(dest, '.env.local'), buildEnvFile(config.env), {
+  fs.writeFileSync(path.join(dest, '.env.local'), buildEnvFile(publicSupabaseEnvironment(stack, config.env)), {
     mode: 0o600,
   })
   ok('Environment público configurado')

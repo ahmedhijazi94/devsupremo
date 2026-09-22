@@ -1,0 +1,7 @@
+import { createServerFn } from '@tanstack/react-start'
+import { greeting, greetingSchema } from './example.schema'
+
+// Public reference RPC: validate on the server, return only a minimal serializable value.
+export const greet = createServerFn({ method: 'POST' })
+  .validator(greetingSchema)
+  .handler(async ({ data }) => ({ message: greeting(data.name) }))

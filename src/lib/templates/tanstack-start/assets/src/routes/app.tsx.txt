@@ -1,0 +1,19 @@
+import { createFileRoute, redirect } from '@tanstack/react-router'
+import { getCurrentUser } from '@/features/auth/auth.functions'
+import { ProfileForm } from '@/features/profile/profile-form'
+import { Button } from '@/components/ui/button'
+import { Card, CardTitle, CardDescription } from '@/components/ui/card'
+
+export const Route = createFileRoute('/app')({
+  loader: async () => { const user = await getCurrentUser(); if (!user) throw redirect({ to: '/login' }); return { user } },
+  component: AppPage,
+})
+function AppPage() {
+  const { user } = Route.useLoaderData()
+  return <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-6 px-6 py-16">
+    <h1 className="text-3xl font-semibold">Olá, {user.email}</h1>
+    <Card><CardTitle>Seu espaço está pronto</CardTitle><CardDescription>Os dados são protegidos pelas permissões da sua conta.</CardDescription></Card>
+    <ProfileForm />
+    <form action="/auth/signout" method="post"><Button type="submit" variant="secondary">Sair</Button></form>
+  </main>
+}

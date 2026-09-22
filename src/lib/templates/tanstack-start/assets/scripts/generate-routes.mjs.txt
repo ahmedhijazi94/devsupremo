@@ -1,0 +1,6 @@
+import { Generator, getConfig } from '@tanstack/router-generator'
+
+// Same deterministic generator as the Start plugin, available before tsc in a clean checkout.
+const root = process.cwd()
+const config = getConfig({ routesDirectory: './src/routes', generatedRouteTree: './src/routeTree.gen.ts', quoteStyle: 'single' }, root)
+await new Generator({ config, root }).run()

@@ -1,0 +1,29 @@
+import '@tanstack/react-start/server-only'
+import { createServerClient } from '@supabase/ssr'
+import { getCookies, setCookie, setResponseHeader } from '@tanstack/react-start/server'
+
+/** A new client for each request. The user session, never service_role, authorizes database access. */
+export function createClient() {
+  const url = process.env.VITE_SUPABASE_URL
+  const key = process.env.VITE_SUPABASE_ANON_KEY
+  if (!url || !key) throw new Error('Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no servidor.')
+  const cookieJar = new Map(Object.entries(getCookies()))
+  const hostedPreview = process.env.NODE_ENV !== 'development' && (process.env.SUPREMO_PREVIEW === '1' || process.env.VERCEL_ENV === 'preview')
+  const cookieOptions = hostedPreview
+    ? { sameSite: 'none' as const, secure: true, partitioned: true }
+    : { sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', partitioned: false }
+  return createServerClient(url, key, {
+    cookieOptions,
+    cookies: {
+      getAll: () => [...cookieJar].map(([name, value]) => ({ name, value })),
+      setAll: (cookies, headers) => {
+        for (const { name, value, options } of cookies) {
+          cookieJar.set(name, value)
+          setCookie(name, value, { ...options, ...cookieOptions })
+        }
+        for (const [name, value] of Object.entries(headers ?? {})) setResponseHeader(name, value)
+        setResponseHeader('Cache-Control', 'private, no-store')
+      },
+    },
+  })
+}

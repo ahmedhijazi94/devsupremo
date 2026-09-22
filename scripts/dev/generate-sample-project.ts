@@ -18,7 +18,10 @@ if (!out) {
 
 const kind = process.argv[3] ?? 'solo'
 if (!['public', 'solo', 'team'].includes(kind)) throw new Error('Tipo inválido: public, solo ou team.')
+const stack = process.argv[4] ?? 'nextjs'
+if (stack !== 'nextjs' && stack !== 'tanstack-start-vite') throw new Error('Stack inválida.')
 const files = buildProjectFiles({
+  stack,
   kind: kind as 'public' | 'solo' | 'team',
   projectName: 'app-de-teste',
   description: 'Prova de que o template compila e passa nos próprios gates',

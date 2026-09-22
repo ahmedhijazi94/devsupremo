@@ -109,6 +109,7 @@ jobs:
           test "$ready" = 1
       - run: |
           npx tsx scripts/test-template-rls.mts
+          npx tsx scripts/test-template-rls.mts tanstack-start-vite
           npx tsx scripts/test-provisioning-migrations.mts
           npx tsx scripts/test-restore-recovery.mts
           npx tsx scripts/test-secret-requests.mts
@@ -157,6 +158,16 @@ jobs:
           node scripts/preview.mjs ensure
           cd "$GITHUB_WORKSPACE"
           node --import tsx scripts/test-fast-dev.mts /tmp/supremo-fast-dev
+
+      - name: Gerar TanStack Start e executar os mesmos gates em cada perfil
+        run: |
+          ./scripts/dev/verify-template.sh /tmp/supremo-start-solo tanstack-start-vite solo
+          ./scripts/dev/verify-template.sh /tmp/supremo-start-team tanstack-start-vite team
+          ./scripts/dev/verify-template.sh /tmp/supremo-start-public tanstack-start-vite public
+      - name: Verificar SSR, RPC, CSRF, imports e preview persistente reais do Start
+        run: node --import tsx scripts/test-start-runtime.mts
+      - name: Verificar reprovações e isolamento do worker real no Start
+        run: node --import tsx scripts/test-start-validation.mts
 
   dependencies:
     name: Vulnerabilidades

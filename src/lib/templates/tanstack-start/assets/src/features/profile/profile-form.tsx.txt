@@ -1,0 +1,19 @@
+import { useState } from 'react'
+import { useServerFn } from '@tanstack/react-start'
+import { updateProfile } from './profile.functions'
+import { Button } from '@/components/ui/button'
+import { Input, Label } from '@/components/ui/input'
+
+export function ProfileForm() {
+  const save = useServerFn(updateProfile)
+  const [message, setMessage] = useState('')
+  const [pending, setPending] = useState(false)
+  return <form className="space-y-3" onSubmit={async (event) => {
+    event.preventDefault()
+    const displayName = String(new FormData(event.currentTarget).get('displayName') ?? '')
+    setPending(true)
+    try { const result = await save({ data: { displayName } }); setMessage(`Perfil salvo: ${result.displayName}`) }
+    catch { setMessage('Não foi possível salvar seu perfil. Tente novamente.') }
+    finally { setPending(false) }
+  }}><Label htmlFor="displayName">Como prefere ser chamado?</Label><Input id="displayName" name="displayName" required maxLength={80} /><Button type="submit" disabled={pending}>{pending ? 'Salvando…' : 'Salvar perfil'}</Button><p role="status">{message}</p></form>
+}

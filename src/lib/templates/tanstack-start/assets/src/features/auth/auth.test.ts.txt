@@ -1,0 +1,34 @@
+import { beforeEach, expect, it, vi } from 'vitest'
+import { currentUser, requireUser } from './auth.server'
+const boundary = vi.hoisted(() => ({ cookies: vi.fn(), headers: vi.fn(), status: vi.fn(), client: vi.fn(), getUser: vi.fn() }))
+vi.mock('@tanstack/react-start/server-only', () => ({}))
+vi.mock('@tanstack/react-start/server', () => ({ getCookies: boundary.cookies, setResponseHeader: boundary.headers, setResponseStatus: boundary.status }))
+vi.mock('@/lib/supabase/server', () => ({ createClient: boundary.client }))
+beforeEach(() => { vi.clearAllMocks(); boundary.cookies.mockReturnValue({ 'sb-project-auth-token': 'opaque' }); boundary.client.mockImplementation(() => ({ auth: { getUser: boundary.getUser } })); boundary.getUser.mockResolvedValue({ data: { user: { id: 'a', email: 'a@example.test', privateMetadata: 'never serialized' } }, error: null }) })
+it('denies absent session without creating a client and marks the response private', async () => {
+  boundary.cookies.mockReturnValue({ unrelated: 'cookie' })
+  expect(await currentUser()).toBeNull()
+  await expect(requireUser()).rejects.toThrow('Autenticação necessária')
+  expect(boundary.client).not.toHaveBeenCalled()
+  expect(boundary.status).toHaveBeenCalledWith(401)
+  expect(boundary.headers).toHaveBeenCalledWith('Cache-Control', 'private, no-store')
+})
+it.each([{ data: { user: null }, error: null }, { data: { user: { id: 'forged' } }, error: { message: 'expired' } }])('verifies the session with auth.getUser before authorizing', async (response) => {
+  boundary.getUser.mockResolvedValue(response)
+  expect(await currentUser()).toBeNull()
+  await expect(requireUser()).rejects.toThrow('Autenticação necessária')
+  expect(boundary.status).toHaveBeenCalledWith(401)
+})
+it('returns only minimal public identity and never caches a previous request user', async () => {
+  expect(await currentUser()).toEqual({ id: 'a', email: 'a@example.test' })
+  boundary.getUser.mockResolvedValue({ data: { user: { id: 'b' } }, error: null })
+  expect(await currentUser()).toEqual({ id: 'b', email: '' })
+  expect(boundary.client).toHaveBeenCalledTimes(2)
+  expect(boundary.getUser).toHaveBeenCalledTimes(2)
+})
+it('returns a freshly authenticated client for authorized server work', async () => {
+  const identity = await requireUser()
+  expect(identity.user.id).toBe('a')
+  expect(identity.supabase.auth.getUser).toBe(boundary.getUser)
+  expect(boundary.status).not.toHaveBeenCalled()
+})

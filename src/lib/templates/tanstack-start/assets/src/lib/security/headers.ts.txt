@@ -1,0 +1,45 @@
+export interface HeaderOptions { nonce: string; development: boolean; preview: boolean; supremoOrigin: string; requestOrigin: string; supabaseUrl?: string }
+
+// Configuration contributes one exact origin, never CSP syntax or a wildcard.
+function supabaseOrigins(value: string | undefined): string[] {
+  if (!value || /[\s;'"<>`]/.test(value)) return []
+  try {
+    const url = new URL(value)
+    if (url.username || url.password || url.search || url.hash || url.pathname !== '/') return []
+    if (!/^(?:[a-z0-9.-]+|\[[a-f0-9:]+\])$/i.test(url.hostname)) return []
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) return []
+    return [url.origin, url.origin.replace(/^http/, 'ws')]
+  } catch {
+    return []
+  }
+}
+
+export function securityHeaders({ nonce, development, preview, supremoOrigin, requestOrigin, supabaseUrl }: HeaderOptions): Record<string, string> {
+  const frameable = development || preview
+  const websocketOrigin = requestOrigin.replace(/^http/, 'ws')
+  const backendOrigins = supabaseOrigins(supabaseUrl)
+  const backendImageOrigin = backendOrigins[0] ? ` ${backendOrigins[0]}` : ''
+  const backendConnections = backendOrigins.length ? ` ${backendOrigins.join(' ')}` : ''
+  const csp = [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${development ? " 'unsafe-eval'" : ''}`,
+    "style-src 'self' 'unsafe-inline'",
+    `img-src 'self' data: blob: https://*.supabase.co https://avatars.githubusercontent.com${backendImageOrigin}`,
+    "font-src 'self' data:",
+    `connect-src 'self' https://*.supabase.co wss://*.supabase.co${backendConnections}${development ? ` ${websocketOrigin}` : ''}`,
+    frameable ? `frame-ancestors 'self' ${development ? 'http://localhost:*' : supremoOrigin}` : "frame-ancestors 'none'",
+    "base-uri 'self'", "form-action 'self'", "object-src 'none'",
+    ...(development ? [] : ['upgrade-insecure-requests']),
+  ].join('; ')
+  return {
+    'Content-Security-Policy': csp,
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), interest-cohort=()',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    ...(frameable ? {} : { 'X-Frame-Options': 'DENY' }),
+    ...(development ? {} : { 'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload' }),
+  }
+}

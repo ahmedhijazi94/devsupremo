@@ -1,0 +1,37 @@
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
+import { useState } from 'react'
+import { listNotes, createNote } from '@/features/notes/notes.functions'
+import { filterSchema } from '@/features/notes/notes.schema'
+
+export const Route = createFileRoute('/notes/')({
+  validateSearch: filterSchema,
+  loaderDeps: ({ search }) => ({ q: search.q }),
+  loader: ({ deps }) => listNotes({ data: deps }),
+  component: Notes,
+})
+function Notes() {
+  const notes = Route.useLoaderData()
+  const router = useRouter()
+  const navigate = Route.useNavigate()
+  const search = Route.useSearch()
+  const [message, setMessage] = useState('')
+  async function add(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    try {
+      await createNote({ data: { title: String(new FormData(form).get('title') ?? '') } })
+      form.reset()
+      setMessage('Nota criada.')
+      await router.invalidate()
+    } catch { setMessage('Não foi possível criar a nota.') }
+  }
+  return <main>
+    <h1>Minhas notas</h1>
+    <form onSubmit={add}><label>Título<input name="title" required maxLength={100} /></label><button type="submit">Criar nota</button></form>
+    <form onSubmit={event => { event.preventDefault(); void navigate({ search: { q: String(new FormData(event.currentTarget).get('q') ?? '') } }) }}>
+      <label>Filtro<input name="q" defaultValue={search.q} /></label><button type="submit">Filtrar</button>
+    </form>
+    <p role="status">{message}</p>
+    <ul>{notes.map(note => <li key={note.id}><Link to="/notes/$noteId" params={{ noteId: note.id }}>{note.title}</Link></li>)}</ul>
+  </main>
+}

@@ -3,6 +3,7 @@ import type { GithubCredentials } from '@/lib/projects/repository'
 import type { FileChange } from '@/lib/github/client'
 import { listTree, readFile } from '@/lib/github/client'
 import { withDevelopmentPolicy } from './development-policy'
+import { resolveProjectStack, templateVersionFor, type ProjectStack } from './stacks'
 import { upgradeValidationPackages } from './sync-validation'
 import {
   buildProjectFiles,
@@ -37,6 +38,11 @@ export interface SyncPlan {
   unchanged: number
   /** Scaffold que já existe e fica intocado — funcionalidade do app mora aqui. */
   skipped: string[]
+}
+
+export interface ResolvedSyncPlan extends SyncPlan {
+  stack: ProjectStack
+  templateVersion: string
 }
 
 /**
@@ -122,25 +128,16 @@ export function planToFileChanges(plan: SyncPlan): FileChange[] {
 export async function planTemplateSync(
   creds: GithubCredentials,
   options: TemplateOptions,
-): Promise<SyncPlan> {
-  const templateFiles = buildProjectFiles(options)
+): Promise<ResolvedSyncPlan> {
   const ref = creds.defaultBranch
 
   const tree = await listTree(creds, ref)
   const existingPaths = new Set(tree.map((entry) => entry.path))
   const shaByPath = new Map(tree.map((entry) => [entry.path, entry.sha]))
 
-  const managedUpToDate = new Set<string>()
-  for (const file of templateFiles) {
-    if (!existingPaths.has(file.path) || !isManagedPath(file.path)) continue
-    if (shaByPath.get(file.path) === gitBlobSha(file.content)) {
-      managedUpToDate.add(file.path)
-    }
-  }
-
   // Agent instructions contain user-owned additions. Read only these two files
   // when needed and update the platform block, never replace the whole document.
-  const instructionPaths = ['AGENTS.md', 'CLAUDE.md', 'package.json', 'package-lock.json'].filter((file) => existingPaths.has(file))
+  const instructionPaths = ['AGENTS.md', 'CLAUDE.md', 'package.json', 'package-lock.json', '.supremo/project.json'].filter((file) => existingPaths.has(file))
   const instructions = await Promise.allSettled(instructionPaths.map(async (file) => {
     const content = await readFile(creds, file, ref)
     // The tree and content must describe the same revision, even if main moved.
@@ -152,6 +149,34 @@ export async function planTemplateSync(
     if (result.status === 'rejected') throw result.reason
     existingInstructions.set(...result.value)
   }
+  const object = (content: string): Record<string, unknown> => {
+    const value: unknown = JSON.parse(content)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Manifesto do projeto inválido.')
+    return value as Record<string, unknown>
+  }
+  const pkg = object(existingInstructions.get('package.json') ?? '{}')
+  const metadata = object(existingInstructions.get('.supremo/project.json') ?? '{}')
+  const dependencies = (value: unknown): Record<string, unknown> => {
+    if (value === undefined) return {}
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Dependências inválidas.')
+    return value as Record<string, unknown>
+  }
+  const stack = resolveProjectStack({
+    dependencies: dependencies(pkg.dependencies), devDependencies: dependencies(pkg.devDependencies),
+    declaredStack: metadata.stack ?? options.stack, scaffoldVersion: metadata.scaffoldVersion,
+  })
+  if (!stack || (options.stack && options.stack !== stack)) {
+    throw new Error('Não foi possível confirmar a stack deste projeto. Nenhum template será aplicado.')
+  }
+  const templateFiles = buildProjectFiles({ ...options, stack })
+  const managedUpToDate = new Set<string>()
+  for (const file of templateFiles) {
+    if (!existingPaths.has(file.path) || !isManagedPath(file.path)) continue
+    if (shaByPath.get(file.path) === gitBlobSha(file.content)) {
+      managedUpToDate.add(file.path)
+    }
+  }
+
   const plan = computePlan(templateFiles, existingPaths, managedUpToDate, existingInstructions)
   const currentPackage = existingInstructions.get('package.json')
   const currentLock = existingInstructions.get('package-lock.json')
@@ -167,5 +192,5 @@ export async function planTemplateSync(
       plan.skipped = plan.skipped.filter(file => file !== path)
     }
   }
-  return plan
+  return { ...plan, stack, templateVersion: templateVersionFor(stack) }
 }

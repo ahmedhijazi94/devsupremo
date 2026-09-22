@@ -1,0 +1,23 @@
+import { useState } from 'react'
+import { useServerFn } from '@tanstack/react-start'
+import { Button } from '@/components/ui/button'
+import { Input, Label } from '@/components/ui/input'
+import { greet } from './example.functions'
+
+export function GreetingForm() {
+  const call = useServerFn(greet)
+  const [message, setMessage] = useState('')
+  const [pending, setPending] = useState(false)
+  return <form className="space-y-3" onSubmit={async (event) => {
+    event.preventDefault()
+    const name = String(new FormData(event.currentTarget).get('name') ?? '')
+    setPending(true)
+    try { setMessage((await call({ data: { name } })).message) }
+    catch { setMessage('Não foi possível enviar. Confira o nome e tente novamente.') }
+    finally { setPending(false) }
+  }}>
+    <Label htmlFor="name">Seu nome</Label><Input id="name" name="name" required maxLength={80} />
+    <Button type="submit" disabled={pending}>{pending ? 'Enviando…' : 'Enviar saudação'}</Button>
+    <p role="status">{message}</p>
+  </form>
+}

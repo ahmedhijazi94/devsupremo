@@ -1,0 +1,5 @@
+import { createServerFn } from '@tanstack/react-start'
+import { organizationSchema } from './organization.schema'
+import { listOrganizationProjects } from './organization.server'
+
+export const getOrganizationProjects = createServerFn({ method: 'GET' }).validator(organizationSchema).handler(async ({ data }) => listOrganizationProjects(data))

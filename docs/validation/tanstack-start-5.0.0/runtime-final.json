@@ -1,0 +1,119 @@
+{
+  "node": "v22.22.1",
+  "platform": "darwin",
+  "startedAt": "2026-09-22T15:12:32.979Z",
+  "checks": {
+    "originalGeneratedTypecheck": true,
+    "ssr": {
+      "status": 200,
+      "contentPresentBeforeHydration": true,
+      "nonceCsp": true
+    },
+    "hydrationAndRpc": true,
+    "csrfCrossOrigin": {
+      "status": 403
+    },
+    "serverValidation": {
+      "status": 200,
+      "rejected": true
+    },
+    "unauthenticatedPrivateRpc": {
+      "status": 401
+    },
+    "clientSecretScan": {
+      "scannedFiles": 8,
+      "canaries": 4,
+      "exposed": 0
+    },
+    "serverOnlyBuildBoundary": true,
+    "development": true
+  },
+  "timings": {
+    "install": 7039,
+    "routes": 496,
+    "typecheck": 2960,
+    "productionBuild": 5092,
+    "productionStart": 164,
+    "startRuntimeSamples": {
+      "startup": [
+        1328,
+        1324,
+        1350
+      ],
+      "reuse": [
+        49,
+        53,
+        53
+      ],
+      "ui": [
+        77,
+        78,
+        181
+      ],
+      "route": [
+        212,
+        319,
+        286
+      ],
+      "server": [
+        137,
+        126,
+        125
+      ]
+    },
+    "startDevelopment": {
+      "startup": {
+        "milliseconds": [
+          1328,
+          1324,
+          1350
+        ],
+        "medianMs": 1328
+      },
+      "healthyReuse": {
+        "milliseconds": [
+          49,
+          53,
+          53
+        ],
+        "medianMs": 53
+      },
+      "initialBrowserReadyMs": 1173,
+      "uiHmr": {
+        "milliseconds": [
+          77,
+          78,
+          181
+        ],
+        "medianMs": 78
+      },
+      "routeAdd": {
+        "milliseconds": [
+          212,
+          319,
+          286
+        ],
+        "medianMs": 286
+      },
+      "serverEdit": {
+        "milliseconds": [
+          137,
+          126,
+          125
+        ],
+        "medianMs": 126
+      },
+      "componentDraftPreserved": true,
+      "editedComponent": "src/features/example/greeting-form.tsx",
+      "pidPreserved": true,
+      "browserReconnect": true,
+      "routeDeletion": true,
+      "routeNavigationInterruptions": 0,
+      "compileErrorPidPreservedAndRecovered": true,
+      "note": "Round 1 startup starts with generated/install/build caches. Rounds 2\u20133 reuse framework caches. Initial browser readiness includes network-idle and an actual RPC before editing. Polling adds up to 75ms to route and server results."
+    }
+  },
+  "databaseIsolation": "Not exercised by this runtime suite; no database emulation is counted as isolation.",
+  "result": "passed",
+  "measurementContext": "Final regenerated scaffold and rebuilt CLI regression, including compilation error recovery on the same tracked Vite PID. Timing is not substituted into the controlled framework comparison."
+}

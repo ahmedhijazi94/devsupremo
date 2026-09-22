@@ -8,6 +8,7 @@ import { parseDatabaseOptions, type DatabaseOperation, type DatabaseOptions } fr
 import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
 import { z } from 'zod'
 import { readJobManifest, secretResponse } from './project-service-request'
+import { readProjectStack } from './framework-runtime'
 export type { DatabaseOperation, DatabaseOptions } from './database-request'
 
 export interface DatabaseStatus {
@@ -22,7 +23,11 @@ export function validateLocalTarget(cwd: string, status: DatabaseStatus): string
   }
   const linked = fs.readFileSync(path.join(cwd, 'supabase/.temp/project-ref'), 'utf8').trim()
   const env = fs.readFileSync(path.join(cwd, '.env.local'), 'utf8')
-  const url = /^NEXT_PUBLIC_SUPABASE_URL\s*=\s*["']?([^\s"']+)/m.exec(env)?.[1]
+  const start = readProjectStack(cwd) === 'tanstack-start-vite'
+  const nextUrl = /^NEXT_PUBLIC_SUPABASE_URL\s*=\s*["']?([^\s"']+)/m.exec(env)?.[1]
+  const startUrl = /^VITE_SUPABASE_URL\s*=\s*["']?([^\s"']+)/m.exec(env)?.[1]
+  if (nextUrl !== undefined && startUrl !== undefined && nextUrl !== startUrl) throw new Error('Variáveis públicas do banco divergem; nenhuma alteração foi enviada.')
+  const url = start ? startUrl : nextUrl
   if (linked !== status.projectRef || url !== `https://${status.projectRef}.supabase.co`) {
     throw new Error('O banco do preview ou o link local diverge do development registrado. Nenhuma alteração foi enviada.')
   }

@@ -24,7 +24,7 @@ import { SecretsCard } from '@/components/projects/secrets-card'
 import { LocalDevCard } from '@/components/projects/local-dev-card'
 import { Pill, type PillTone } from '@/components/ui/pill'
 import { bootstrapCommand } from '@/lib/bootstrap/command'
-import { TEMPLATE_VERSION } from '@/lib/templates/project-files'
+import { latestTemplateVersion } from '@/lib/templates/stacks'
 import { CAPABILITIES, type CapabilityId } from '@/lib/capabilities'
 import {
   ActivityFeed,
@@ -120,8 +120,9 @@ export default async function ProjectPage({
   const pstate = (project.provisioning_state ??
     (provisioned ? 'ready' : 'draft')) as keyof typeof PSTATE
   const state = PSTATE[pstate] ?? PSTATE.draft
+  const latestVersion = latestTemplateVersion(project.template_version)
   const templateBehind =
-    provisioned && project.template_version !== TEMPLATE_VERSION
+    provisioned && project.template_version !== latestVersion
 
   const capabilities = (project.capabilities ?? []) as CapabilityId[]
 
@@ -251,7 +252,7 @@ export default async function ProjectPage({
           <TemplateUpdateCard
             projectId={project.id}
             projectVersion={project.template_version}
-            latestVersion={TEMPLATE_VERSION}
+            latestVersion={latestVersion}
           />
         )}
 

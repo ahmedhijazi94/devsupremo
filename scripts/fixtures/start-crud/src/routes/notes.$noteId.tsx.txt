@@ -1,0 +1,32 @@
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
+import { useState } from 'react'
+import { readNote, updateNote, removeNote } from '@/features/notes/notes.functions'
+
+export const Route = createFileRoute('/notes/$noteId')({
+  loader: ({ params }) => readNote({ data: { id: params.noteId } }),
+  component: Detail,
+})
+function Detail() {
+  const note = Route.useLoaderData()
+  const router = useRouter()
+  const [message, setMessage] = useState('')
+  async function save(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    try {
+      await updateNote({ data: { id: note.id, title: String(new FormData(event.currentTarget).get('title') ?? '') } })
+      await router.invalidate()
+      setMessage('Nota atualizada.')
+    } catch { setMessage('Não foi possível atualizar a nota.') }
+  }
+  async function remove() {
+    try {
+      await removeNote({ data: { id: note.id } })
+      await router.navigate({ to: '/notes', search: { q: '' } })
+    } catch { setMessage('Não foi possível excluir a nota.') }
+  }
+  return <main><h1>{note.title}</h1>
+    <form onSubmit={save}><label>Título<input name="title" defaultValue={note.title} required /></label><button type="submit">Salvar</button></form>
+    <button type="button" onClick={() => { void remove() }}>Excluir nota</button>
+    <p role="status">{message}</p><Link to="/notes" search={{ q: '' }}>Voltar</Link>
+  </main>
+}

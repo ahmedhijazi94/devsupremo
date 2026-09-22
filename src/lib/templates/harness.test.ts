@@ -1,4 +1,6 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { createServer } from 'node:net'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -319,6 +321,78 @@ describe('preview supervisor (v3.1) — script gerado é determinístico', () =>
     const file = join(dir, 'preview.mjs')
     writeFileSync(file, src, 'utf8')
     expect(() => execFileSync(process.execPath, ['--check', file])).not.toThrow()
+  })
+})
+
+describe('Start preview — readiness inicial e reuso durante erro de edição', () => {
+  const environment = (): NodeJS.ProcessEnv => ({ NODE_ENV: 'test', PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
+    SUPREMO_PREVIEW_WAIT_TRIES: '4', SUPREMO_PREVIEW_WAIT_INTERVAL_MS: '50' })
+
+  it.each([404, 500])('reusa o PID rastreado que responde HTTP %s, sem heartbeat prévio ou restart', async status => {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-start-preview-reuse-'))
+    mkdirSync(join(dir, 'scripts')); mkdirSync(join(dir, '.supremo'))
+    writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript('tanstack-start-vite'))
+    // A real independent process serves requests while ensure runs synchronously.
+    // No Vite executable is installed: an attempted replacement must fail.
+    const server = spawn(process.execPath, ['-e', `
+      const http = require('node:http')
+      const server = http.createServer((_req, res) => { res.statusCode = ${status}; res.end('temporary route error') })
+      server.listen(0, '127.0.0.1', () => process.send(server.address().port))
+    `], { env: environment(), stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+    try {
+      const [port] = await once(server, 'message')
+      expect(typeof port).toBe('number')
+      expect(server.pid).toBeDefined()
+      writeFileSync(join(dir, '.supremo/preview.pid'), String(server.pid))
+      writeFileSync(join(dir, '.supremo/preview.port'), String(port))
+      writeFileSync(join(dir, '.supremo/preview.instance'), 'existing-instance')
+      const output = execFileSync(process.execPath, ['scripts/preview.mjs', 'ensure'], {
+        cwd: dir, env: { ...environment(), PORT: String(port) }, encoding: 'utf8', timeout: 5000,
+      })
+      expect(output).toContain('preview já no ar')
+      expect(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8')).toBe(String(server.pid))
+      expect(readFileSync(join(dir, '.supremo/preview.port'), 'utf8')).toBe(String(port))
+      expect(readFileSync(join(dir, '.supremo/preview.instance'), 'utf8')).toBe('existing-instance')
+      expect(() => process.kill(server.pid!, 0)).not.toThrow()
+    } finally {
+      if (server.exitCode === null && server.signalCode === null) {
+        const stopped = once(server, 'exit'); server.kill(); await stopped
+      }
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.each([404, 500])('não libera uma primeira instância cuja página responde HTTP %s', async status => {
+    const dir = mkdtempSync(join(tmpdir(), 'supremo-start-preview-readiness-'))
+    const listener = createServer()
+    listener.listen(0, '127.0.0.1'); await once(listener, 'listening')
+    const address = listener.address()
+    if (address === null || typeof address === 'string') throw new Error('Missing test port.')
+    const port = address.port
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()))
+    mkdirSync(join(dir, 'scripts')); mkdirSync(join(dir, 'node_modules/vite/bin'), { recursive: true })
+    writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript('tanstack-start-vite'))
+    writeFileSync(join(dir, 'node_modules/vite/bin/vite.js'), `
+      const http = require('node:http'), fs = require('node:fs')
+      fs.writeFileSync('candidate.pid', String(process.pid))
+      http.createServer((_req, res) => { res.statusCode = ${status}; res.end('not ready') })
+        .listen(Number(process.env.PORT), '127.0.0.1')
+    `)
+    try {
+      expect(() => execFileSync(process.execPath, ['scripts/preview.mjs', 'ensure'], {
+        cwd: dir, env: { ...environment(), PORT: String(port) }, encoding: 'utf8', stdio: 'pipe', timeout: 5000,
+      })).toThrow()
+      expect(existsSync(join(dir, 'candidate.pid'))).toBe(true)
+      expect(existsSync(join(dir, '.supremo/preview.pid'))).toBe(false)
+      expect(existsSync(join(dir, '.supremo/preview.port'))).toBe(false)
+      expect(existsSync(join(dir, '.supremo/preview.instance'))).toBe(false)
+    } finally {
+      if (existsSync(join(dir, 'candidate.pid'))) {
+        try { process.kill(Number(readFileSync(join(dir, 'candidate.pid'), 'utf8'))) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+      }
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -699,6 +773,53 @@ describe('verify.mjs — execução real: build ambiental defere, erro real bloq
       return { status: e.status ?? 1, output: `${e.stdout}${e.stderr}` }
     }
   }
+
+  it('Start prepara rotas antes dos mesmos checks paralelos e só executa Vite build após aprovação', () => {
+    const { dir, env } = setupProject(99, 'Next must never execute for Start')
+    try {
+      writeFileSync(join(dir, 'verify.mjs'), verifyScript('tanstack-start-vite'))
+      writeFileSync(join(dir, 'scripts/generate-routes.mjs'), "import fs from 'node:fs'; fs.writeFileSync('routes.generated', 'ready');")
+      const check = `#!/usr/bin/env node
+const fs = require('node:fs');
+if (!fs.existsSync('routes.generated')) process.exit(1);
+fs.writeFileSync(require('node:path').basename(process.argv[1]) + '.done', 'ready');
+`
+      for (const name of ['tsc', 'eslint', 'vitest']) writeFileSync(join(dir, 'bin', name), check)
+      writeFileSync(join(dir, 'bin/vite'), `#!/usr/bin/env node
+const fs = require('node:fs');
+if (process.argv[2] !== 'build' || !['tsc', 'eslint', 'vitest'].every(name => fs.existsSync(name + '.done'))) process.exit(1);
+fs.writeFileSync('vite.built', 'ready');
+`, { mode: 0o755 })
+      expect(runVerifyFull(dir, env)).toMatchObject({ status: 0 })
+      expect(existsSync(join(dir, 'vite.built'))).toBe(true)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('Start mantém falha de geração como typecheck reprovado e não inicia os outros comandos', () => {
+    const { dir, env } = setupProject(0, '')
+    try {
+      writeFileSync(join(dir, 'verify.mjs'), verifyScript('tanstack-start-vite'))
+      writeFileSync(join(dir, 'scripts/generate-routes.mjs'), "throw new Error('Invalid route configuration')")
+      writeFileSync(join(dir, 'bin/tsc'), '#!/bin/sh\ntouch tsc-started\nexit 0\n')
+      expect(() => execFileSync(process.execPath, [join(dir, 'verify.mjs'), 'full', '--background'], { cwd: dir, env, stdio: 'pipe' })).toThrow()
+      const evidence = JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8')) as { status: string; checks: unknown[] }
+      expect(evidence.status).toBe('failed')
+      expect(evidence.checks).toContainEqual({ name: 'typecheck', status: 'failed' })
+      expect(existsSync(join(dir, 'tsc-started'))).toBe(false)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('Start mantém erro de compilação Vite reprovado mesmo com mensagem ambiental junto', () => {
+    const { dir, env } = setupProject(0, '')
+    try {
+      writeFileSync(join(dir, 'verify.mjs'), verifyScript('tanstack-start-vite'))
+      writeFileSync(join(dir, 'scripts/generate-routes.mjs'), '// no routes in this controlled fixture')
+      writeShim(join(dir, 'bin'), 'vite', 1, 'RollupError: unresolved dependency; ENOTFOUND registry.example')
+      const result = runVerifyFull(dir, env)
+      expect(result.status).not.toBe(0)
+      expect(result.output).not.toContain('DEFERIDO')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
 
   it('uma edição cosmética mantém testes relacionados sem repetir cobertura por falha antiga', () => {
     const { dir, env } = setupProject(0, '')

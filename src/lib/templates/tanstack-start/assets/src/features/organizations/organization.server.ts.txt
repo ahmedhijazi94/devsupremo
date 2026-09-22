@@ -1,0 +1,16 @@
+import '@tanstack/react-start/server-only'
+import { z } from 'zod'
+import { requireUser } from '@/features/auth/auth.server'
+import { organizationSchema } from './organization.schema'
+
+const projectsSchema = z.array(z.object({ id: z.uuid(), name: z.string() }))
+export async function listOrganizationProjects(input: z.infer<typeof organizationSchema>) {
+  const { organizationId } = organizationSchema.parse(input)
+  const { user, supabase } = await requireUser()
+  // The payload selects a resource; the authenticated membership authorizes it.
+  const { data: membership, error: membershipError } = await supabase.from('memberships').select('org_id').eq('org_id', organizationId).eq('user_id', user.id).maybeSingle()
+  if (membershipError || !membership) throw new Error('Organização não autorizada.')
+  const { data, error } = await supabase.from('projects').select('id,name').eq('org_id', organizationId)
+  if (error) throw new Error('Não foi possível carregar os projetos.')
+  return projectsSchema.parse(data)
+}

@@ -1,0 +1,86 @@
+import { beforeEach, expect, it, vi } from 'vitest'
+import { changeOwnNote, deleteOwnNote, insertOwnNote, listOwnNotes, readOwnNote } from './notes.server'
+import { createNoteSchema, idSchema, updateNoteSchema } from './notes.schema'
+
+const db = vi.hoisted(() => ({
+  requireUser: vi.fn(), from: vi.fn(), select: vi.fn(), eq: vi.fn(), order: vi.fn(), ilike: vi.fn(),
+  insert: vi.fn(), update: vi.fn(), delete: vi.fn(), single: vi.fn(), maybeSingle: vi.fn(),
+}))
+vi.mock('@tanstack/react-start/server-only', () => ({}))
+vi.mock('@/features/auth/auth.server', () => ({ requireUser: db.requireUser }))
+const id = '00000000-0000-4000-8000-000000000001'
+const note = { id, title: 'My note', created_at: '2026-09-22T12:00:00Z' }
+beforeEach(() => {
+  vi.resetAllMocks()
+  for (const method of [db.from, db.select, db.eq, db.insert, db.update, db.delete]) method.mockReturnValue(db)
+  db.requireUser.mockResolvedValue({ user: { id: 'verified-user' }, supabase: { from: db.from } })
+  db.order.mockReturnValue({ data: [note], error: null, ilike: db.ilike })
+  db.ilike.mockResolvedValue({ data: [note], error: null })
+  db.single.mockResolvedValue({ data: note, error: null })
+  db.maybeSingle.mockResolvedValue({ data: note, error: null })
+})
+it('rejects malformed IDs and forged owner fields', () => {
+  expect(idSchema.safeParse({ id: 'not-uuid' }).success).toBe(false)
+  expect(createNoteSchema.safeParse({ title: 'valid', user_id: 'other-user' }).success).toBe(false)
+  expect(updateNoteSchema.safeParse({ id, title: 'valid', user_id: 'other-user' }).success).toBe(false)
+})
+it('validates before acquiring identity or doing database I/O', async () => {
+  await expect(insertOwnNote({ title: '   ' })).rejects.toThrow()
+  expect(db.requireUser).not.toHaveBeenCalled()
+  expect(db.from).not.toHaveBeenCalled()
+})
+it('lists only the current owner and treats wildcard filter input literally', async () => {
+  expect(await listOwnNotes({ q: '' })).toEqual([note])
+  expect(db.eq).toHaveBeenCalledWith('user_id', 'verified-user')
+  expect(await listOwnNotes({ q: ' %_ ' })).toEqual([note])
+  expect(db.ilike).toHaveBeenCalledWith('title', '%\\%\\_%')
+})
+it('returns a narrow validated note and revalidates identity per operation', async () => {
+  expect(await readOwnNote({ id })).toEqual(note)
+  expect(db.select).toHaveBeenCalledWith('id,title,created_at')
+  expect(db.eq).toHaveBeenCalledWith('id', id)
+  expect(db.eq).toHaveBeenCalledWith('user_id', 'verified-user')
+  await readOwnNote({ id })
+  expect(db.requireUser).toHaveBeenCalledTimes(2)
+})
+it('creates with server identity, trimmed title, and no caller-supplied owner', async () => {
+  expect(await insertOwnNote({ title: ' My note ' })).toEqual(note)
+  expect(db.insert).toHaveBeenCalledWith({ title: 'My note', user_id: 'verified-user' })
+})
+it('updates and deletes only the current owner resource', async () => {
+  expect(await changeOwnNote({ id, title: ' Renamed ' })).toEqual(note)
+  expect(db.update).toHaveBeenCalledWith({ title: 'Renamed' })
+  expect(db.eq).toHaveBeenCalledWith('user_id', 'verified-user')
+  expect(await deleteOwnNote({ id })).toEqual({ deleted: true })
+  expect(db.eq).toHaveBeenCalledWith('id', id)
+})
+it.each([
+  ['list', () => listOwnNotes({ q: '' })],
+  ['read', () => readOwnNote({ id })],
+  ['insert', () => insertOwnNote({ title: 'valid' })],
+  ['update', () => changeOwnNote({ id, title: 'valid' })],
+  ['delete', () => deleteOwnNote({ id })],
+])('denies missing identity before %s I/O', async (_label, action) => {
+  db.requireUser.mockRejectedValue(new Error('unauthenticated'))
+  await expect(action()).rejects.toThrow('unauthenticated')
+  expect(db.from).not.toHaveBeenCalled()
+})
+it.each([
+  ['read', () => readOwnNote({ id })],
+  ['update', () => changeOwnNote({ id, title: 'valid' })],
+  ['delete', () => deleteOwnNote({ id })],
+])('denies missing or foreign records on %s', async (_label, action) => {
+  db.maybeSingle.mockResolvedValue({ data: null, error: null })
+  await expect(action()).rejects.toThrow('Nota não encontrada.')
+})
+it('does not leak database internals in list/create/read/update/delete failures', async () => {
+  const failure = { data: null, error: { message: 'sensitive database detail' } }
+  db.order.mockReturnValue(failure)
+  db.single.mockResolvedValue(failure)
+  db.maybeSingle.mockResolvedValue(failure)
+  await expect(listOwnNotes({ q: '' })).rejects.toThrow('Não foi possível listar as notas.')
+  await expect(insertOwnNote({ title: 'valid' })).rejects.toThrow('Não foi possível criar a nota.')
+  await expect(readOwnNote({ id })).rejects.toThrow('Nota não encontrada.')
+  await expect(changeOwnNote({ id, title: 'valid' })).rejects.toThrow('Nota não encontrada.')
+  await expect(deleteOwnNote({ id })).rejects.toThrow('Nota não encontrada.')
+})

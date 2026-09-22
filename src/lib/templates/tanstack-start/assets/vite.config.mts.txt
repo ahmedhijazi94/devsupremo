@@ -1,0 +1,32 @@
+import { fileURLToPath, URL } from 'node:url'
+import { tanstackStart } from '@tanstack/react-start/plugin/vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import { nitro } from 'nitro/vite'
+import { defineConfig, loadEnv } from 'vite'
+
+export default defineConfig(({ mode, command }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const publicNames = ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const
+  // Populate the server's public connection pair in local dev without exposing any other env.
+  for (const name of publicNames) if (!process.env[name] && env[name]) process.env[name] = env[name]
+  const hostedPreview = command !== 'serve' && (env.SUPREMO_PREVIEW === '1' || env.VERCEL_ENV === 'preview')
+  return {
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
+  // Only the public Supabase pair is exposed, never arbitrary NEXT_PUBLIC_* values.
+  envPrefix: [],
+  define: {
+    'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL ?? ''),
+    'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY ?? ''),
+    'import.meta.env.SUPREMO_HOSTED_PREVIEW': JSON.stringify(hostedPreview),
+  },
+  cacheDir: process.env.SUPREMO_VALIDATION === '1' ? '.supremo/validation/vite-cache' : '.tanstack/vite-cache',
+  server: { host: '127.0.0.1', port: 3000, strictPort: true },
+  plugins: [
+    tailwindcss(),
+    tanstackStart({ importProtection: { behavior: 'error' } }),
+    nitro({ preset: process.env.VERCEL === '1' ? 'vercel' : 'node-server' }),
+    react(),
+  ],
+  }
+})

@@ -1,0 +1,59 @@
+import { describe, expect, it } from 'vitest'
+import { isSameOrigin } from './origin'
+import { securityHeaders } from './headers'
+
+describe('same-origin boundary', () => {
+  it.each([
+    [{ origin: 'https://app.example' }, true],
+    [{ origin: 'https://attacker.example' }, false],
+    [{ referer: 'https://app.example/form' }, true],
+    [{ referer: 'https://attacker.example/form' }, false],
+    [{ referer: 'invalid' }, false],
+    [{}, false],
+  ])('checks explicit origin or referer, rejects absent evidence', (headers, allowed) => {
+    expect(isSameOrigin(new Request('https://app.example/auth/signout', { method: 'POST', headers }))).toBe(allowed)
+  })
+})
+describe('response isolation and CSP', () => {
+  const production = { nonce: 'unique', development: false, preview: false, supremoOrigin: 'https://supremo.example', requestOrigin: 'https://app.example' }
+  it.each([
+    ['https://database.example.test', 'https://database.example.test', 'wss://database.example.test'],
+    ['http://127.0.0.1:55486', 'http://127.0.0.1:55486', 'ws://127.0.0.1:55486'],
+    ['http://localhost:54321/', 'http://localhost:54321', 'ws://localhost:54321'],
+    ['http://[::1]:54321', 'http://[::1]:54321', 'ws://[::1]:54321'],
+  ])('allows the exact configured backend and Realtime origin: %s', (supabaseUrl, origin, websocket) => {
+    const csp = securityHeaders({ ...production, supabaseUrl })['Content-Security-Policy']
+    const connect = csp.split('; ').find((directive) => directive.startsWith('connect-src '))!
+    const images = csp.split('; ').find((directive) => directive.startsWith('img-src '))!
+    expect(connect.split(' ')).toContain(origin)
+    expect(connect.split(' ')).toContain(websocket)
+    expect(images.split(' ')).toContain(origin)
+    expect(csp).toContain("'nonce-unique' 'strict-dynamic'")
+    expect(csp).toContain("frame-ancestors 'none'")
+  })
+  it.each([
+    '', 'invalid', 'http://remote.example.test', 'ftp://database.example.test',
+    'https://user@database.example.test', 'https://user:password@database.example.test',
+    'https://database.example.test/path', 'https://database.example.test?source=x',
+    'https://database.example.test#fragment', 'https://*.example.test',
+    "https://database.example.test;script-src 'unsafe-inline'", 'https://database.example.test\n',
+  ])('rejects invalid or injectable backend configuration: %s', (supabaseUrl) => {
+    expect(securityHeaders({ ...production, supabaseUrl })).toEqual(securityHeaders(production))
+  })
+  it.each([false, true])('production headers preview=%s', (preview) => {
+    const headers = securityHeaders({ nonce: 'unique', development: false, preview, supremoOrigin: 'https://supremo.example', requestOrigin: 'https://app.example' })
+    expect(headers['Content-Security-Policy']).toContain("'nonce-unique' 'strict-dynamic'")
+    expect(headers['Content-Security-Policy'].split(';').find((directive) => directive.trim().startsWith('script-src '))).not.toContain("'unsafe-inline'")
+    expect(headers['Content-Security-Policy']).toContain(preview ? 'https://supremo.example' : "frame-ancestors 'none'")
+    expect(headers['Cache-Control']).toBe('private, no-store')
+    expect(headers['X-Frame-Options']).toBe(preview ? undefined : 'DENY')
+    expect(headers['Strict-Transport-Security']).toContain('max-age=')
+  })
+  it('allows only the local websocket origin for HMR', () => {
+    const headers = securityHeaders({ nonce: 'devnonce', development: true, preview: false, supremoOrigin: 'https://supremo.example', requestOrigin: 'http://localhost:3000' })
+    expect(headers['Content-Security-Policy']).toContain('ws://localhost:3000')
+    expect(headers['Content-Security-Policy']).toContain("frame-ancestors 'self' http://localhost:*")
+    expect(headers['X-Frame-Options']).toBeUndefined()
+    expect(headers['Strict-Transport-Security']).toBeUndefined()
+  })
+})

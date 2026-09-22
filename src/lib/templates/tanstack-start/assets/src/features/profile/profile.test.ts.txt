@@ -1,0 +1,17 @@
+import { beforeEach, expect, it, vi } from 'vitest'
+import { saveOwnProfile } from './profile.server'
+import { profileSchema } from './profile.schema'
+const auth = vi.hoisted(() => ({ requireUser: vi.fn(), from: vi.fn(), upsert: vi.fn() }))
+vi.mock('@tanstack/react-start/server-only', () => ({}))
+vi.mock('@/features/auth/auth.server', () => ({ requireUser: auth.requireUser }))
+beforeEach(() => { vi.clearAllMocks(); auth.requireUser.mockResolvedValue({ user: { id: 'verified-user' }, supabase: { from: auth.from } }); auth.from.mockReturnValue({ upsert: auth.upsert }); auth.upsert.mockResolvedValue({ error: null }) })
+it('writes only the server-verified identity', async () => {
+  expect(await saveOwnProfile({ displayName: ' Ana ' })).toEqual({ displayName: 'Ana' })
+  expect(auth.upsert).toHaveBeenCalledWith({ user_id: 'verified-user', display_name: 'Ana' }, { onConflict: 'user_id' })
+})
+it('rejects forged owner and invalid input before I/O', () => {
+  expect(profileSchema.safeParse({ displayName: 'Ana', user_id: 'other-user' }).success).toBe(false)
+  expect(profileSchema.safeParse({ displayName: '' }).success).toBe(false)
+})
+it('denies missing identity before query', async () => { auth.requireUser.mockRejectedValue(new Error('unauthenticated')); await expect(saveOwnProfile({ displayName: 'Ana' })).rejects.toThrow('unauthenticated'); expect(auth.from).not.toHaveBeenCalled() })
+it('does not expose database internals on failure', async () => { auth.upsert.mockResolvedValue({ error: { message: 'sensitive db error' } }); await expect(saveOwnProfile({ displayName: 'Ana' })).rejects.toThrow('Não foi possível salvar') })

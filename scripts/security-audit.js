@@ -346,11 +346,65 @@ function hasDirective(node, directive) {
 function functionName(node) {
   return node.name?.getText() ?? (ts.isVariableDeclaration(node.parent) ? node.parent.name.getText() : '(ação inline)')
 }
+// Start exposes RPC handlers without Next directives. Resolve the framework
+// binding, rather than treating any method named handler as a server endpoint.
+function importedName(syntax, node, moduleName, exportName) {
+  if (ts.isPropertyAccessExpression(node) && node.name.text === exportName && ts.isIdentifier(node.expression)) {
+    return syntax.statements.some((statement) => ts.isImportDeclaration(statement)
+      && literal(statement.moduleSpecifier) === moduleName
+      && statement.importClause?.namedBindings && ts.isNamespaceImport(statement.importClause.namedBindings)
+      && statement.importClause.namedBindings.name.text === node.expression.text)
+  }
+  if (!ts.isIdentifier(node)) return false
+  return syntax.statements.some((statement) => ts.isImportDeclaration(statement)
+    && literal(statement.moduleSpecifier) === moduleName
+    && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)
+    && statement.importClause.namedBindings.elements.some((item) => item.name.text === node.text
+      && (item.propertyName?.text ?? item.name.text) === exportName))
+}
+function callChain(call) {
+  const result = []
+  while (ts.isCallExpression(call)) {
+    result.unshift(call)
+    if (!ts.isPropertyAccessExpression(call.expression)) break
+    call = call.expression.expression
+  }
+  return result
+}
+function startRpcChain(node, syntax) {
+  const call = node.parent
+  if (!ts.isCallExpression(call) || methodName(call) !== 'handler' || !call.arguments.includes(node)) return null
+  const chain = callChain(call)
+  return importedName(syntax, chain[0].expression, '@tanstack/react-start', 'createServerFn') ? chain : null
+}
+function propertyName(node) { return node.name && (literal(node.name) ?? node.name.getText()) }
+function startRouteObject(node, syntax) {
+  let current = node
+  while (current && current !== syntax) {
+    if (ts.isPropertyAssignment(current) && propertyName(current) === 'server'
+      && ts.isObjectLiteralExpression(current.initializer)) {
+      const config = current.parent
+      const call = config.parent
+      if (ts.isCallExpression(call) && ts.isCallExpression(call.expression)
+        && importedName(syntax, call.expression.expression, '@tanstack/react-router', 'createFileRoute')) return current.initializer
+    }
+    current = current.parent
+  }
+  return null
+}
+function isStartRouteHandler(node, syntax) {
+  const parent = ts.isPropertyAssignment(node.parent) ? node.parent : node
+  return ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(propertyName(parent))
+    && ts.isObjectLiteralExpression(parent.parent)
+    && ts.isPropertyAssignment(parent.parent.parent)
+    && propertyName(parent.parent.parent) === 'handlers' && Boolean(startRouteObject(node, syntax))
+}
 function executableEntries(file, syntax) {
   const serverModule = hasDirective(syntax, 'use server')
   const route = /[\\/]route\.tsx?$/.test(file)
   return visitNodes(syntax, (node) => {
     if (!ts.isFunctionLike(node) || !node.body) return false
+    if (startRpcChain(node, syntax) || isStartRouteHandler(node, syntax)) return true
     if (hasDirective(node.body, 'use server')) return true
     if (!serverModule && !route) return false
     if (node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return true
@@ -380,8 +434,31 @@ function localImport(from, specifier) {
   return [base, `${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), path.join(base, 'index.tsx')]
     .find((candidate) => sourceByFile.has(candidate))
 }
+const startProject = [...syntaxByFile.values()].some((syntax) => syntax.statements.some((statement) =>
+  ts.isImportDeclaration(statement) && literal(statement.moduleSpecifier)?.startsWith('@tanstack/react-start')))
+function isInside(node, container) { return container.pos <= node.pos && node.end <= container.end }
+function clientNodes(syntax, predicate) {
+  const boundaries = executableEntries(syntax.fileName, syntax).filter((entry) => startRpcChain(entry, syntax))
+    .map((entry) => entry.body)
+  for (const entry of executableEntries(syntax.fileName, syntax)) {
+    const server = startRouteObject(entry, syntax)
+    if (server) boundaries.push(server)
+  }
+  return visitNodes(syntax, (node) => !boundaries.some((boundary) => isInside(node, boundary)) && predicate(node))
+}
+function importSurvivesClient(node, syntax) {
+  if (!ts.isImportDeclaration(node) || !node.importClause) return true
+  const bindings = [node.importClause.name]
+  const named = node.importClause.namedBindings
+  if (named && ts.isNamedImports(named)) bindings.push(...named.elements.filter((item) => !item.isTypeOnly).map((item) => item.name))
+  else if (named) bindings.push(named.name)
+  return bindings.filter(Boolean).some((binding) => clientNodes(syntax, (reference) => ts.isIdentifier(reference)
+    && reference.text === binding.text && !isInside(reference, node)
+    && !(ts.isPropertyAccessExpression(reference.parent) && reference.parent.name === reference)).length > 0)
+}
 for (const [entry] of sourceByFile) {
-  if (!hasDirective(syntaxByFile.get(entry), 'use client')) continue
+  const startClient = startProject && (/\.tsx$/.test(entry) || /[\\/]routes[\\/].*\.ts$/.test(entry)) && !/\.server\.tsx?$/.test(entry)
+  if (!hasDirective(syntaxByFile.get(entry), 'use client') && !startClient) continue
   const pending = [entry], seen = new Set()
   while (pending.length) {
     const file = pending.pop()
@@ -389,8 +466,11 @@ for (const [entry] of sourceByFile) {
     seen.add(file)
     const syntax = syntaxByFile.get(file)
     if (file !== entry && hasDirective(syntax, 'use server')) continue
-    const privileged = visitNodes(syntax, (node) =>
-      (ts.isImportDeclaration(node) && literal(node.moduleSpecifier) === 'server-only') ||
+    const inspect = startClient ? clientNodes : visitNodes
+    const privileged = (startClient && /\.server\.tsx?$/.test(file)) || inspect(syntax, (node) =>
+      (startClient && ts.isPropertyAccessExpression(node) && node.expression.getText(syntax) === 'import.meta.env'
+        && /(?:SECRET|SERVICE_ROLE|PRIVATE|ADMIN|TOKEN|PASSWORD)/i.test(node.name.text)) ||
+      (ts.isImportDeclaration(node) && ['server-only', '@tanstack/react-start/server-only'].includes(literal(node.moduleSpecifier))) ||
       (ts.isPropertyAccessExpression(node) && node.expression.getText(syntax) === 'process.env'
         && !node.name.text.startsWith('NEXT_PUBLIC_') && node.name.text !== 'NODE_ENV') ||
       (ts.isElementAccessExpression(node) && node.expression.getText(syntax) === 'process.env'
@@ -400,10 +480,11 @@ for (const [entry] of sourceByFile) {
         'Um componente cliente alcança código privilegiado. Separe a operação em Server Action ou Route Handler com autorização no servidor.')
       break
     }
-    const imports = visitNodes(syntax, (node) =>
+    const imports = inspect(syntax, (node) =>
       ((ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly) || (ts.isExportDeclaration(node) && !node.isTypeOnly)) && node.moduleSpecifier
       || (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || methodName(node) === 'require')))
     for (const node of imports) {
+      if (startClient && !importSurvivesClient(node, syntax)) continue
       const specifier = literal(node.moduleSpecifier ?? node.arguments?.[0])
       if (!specifier) continue
       const resolved = localImport(file, specifier)
@@ -411,7 +492,8 @@ for (const [entry] of sourceByFile) {
     }
     // Mutations belong in a server entry point even when the browser SDK would
     // apply RLS. This is an enforceable boundary, not a claim about business logic.
-    if (queryChains(syntax).some((chain) => chain.methods.some((call) => ['insert', 'update', 'delete', 'upsert'].includes(methodName(call))))) {
+    const visibleCalls = new Set(inspect(syntax, ts.isCallExpression))
+    if (queryChains(syntax).some((chain) => visibleCalls.has(chain.start) && chain.methods.some((call) => ['insert', 'update', 'delete', 'upsert'].includes(methodName(call))))) {
       finding('HIGH', 'CLIENT_MUTATION', rel(entry), 1, 'Mutação de dados no componente cliente',
         'Mova a mutação para Server Action/Route Handler, validando entradas e permissões no servidor.')
     }
@@ -461,9 +543,121 @@ function localGuard(syntax, name, seen = new Set()) {
   return calls.some((call) => call.pos < dataPosition &&
     (THROWING_GUARDS.has(methodName(call)) || localGuard(syntax, methodName(call), seen)))
 }
+function declarationFor(file, name, seen = new Set()) {
+  const key = file + ':' + name
+  if (seen.has(key)) return null
+  seen.add(key)
+  const syntax = syntaxByFile.get(file)
+  if (!syntax) return null
+  for (const statement of syntax.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name?.text === name && statement.body) return { node: statement, file, syntax }
+    if (ts.isVariableStatement(statement)) {
+      const declaration = statement.declarationList.declarations.find((item) => ts.isIdentifier(item.name) && item.name.text === name)
+      if (declaration?.initializer) return { node: declaration.initializer, file, syntax }
+    }
+    if (ts.isImportDeclaration(statement) && statement.importClause?.namedBindings
+      && ts.isNamedImports(statement.importClause.namedBindings)) {
+      const binding = statement.importClause.namedBindings.elements.find((item) => item.name.text === name)
+      const imported = binding && localImport(file, literal(statement.moduleSpecifier) ?? '')
+      if (imported) return declarationFor(imported, binding.propertyName?.text ?? binding.name.text, seen)
+    }
+  }
+  return null
+}
+const reachableStartScopes = []
+function startTrace(entry, file, syntax, seen = new Set()) {
+  const trace = []
+  if (seen.has(entry)) return trace
+  seen.add(entry)
+  reachableStartScopes.push({ entry, file })
+  const calls = visitNodes(entry.body, ts.isCallExpression, true).sort((a, b) => a.getStart(syntax) - b.getStart(syntax))
+  for (const call of calls) {
+    trace.push({ call, syntax, scope: entry, file })
+    if (!ts.isIdentifier(call.expression)) continue
+    const target = declarationFor(file, call.expression.text)
+    if (target && ts.isFunctionLike(target.node) && target.node.body) trace.push(...startTrace(target.node, target.file, target.syntax, seen))
+  }
+  return trace
+}
+function runtimeValidator(node, file, syntax, seen = new Set()) {
+  if (!node || seen.has(node)) return false
+  seen.add(node)
+  if (ts.isIdentifier(node)) {
+    const target = declarationFor(file, node.text)
+    return Boolean(target && runtimeValidator(target.node, target.file, target.syntax, seen))
+  }
+  if (ts.isFunctionLike(node) && node.body) return visitNodes(node.body, ts.isCallExpression, true)
+    .some((call) => ['parse', 'parseAsync', 'safeParse', 'safeParseAsync'].includes(methodName(call)))
+  if (!ts.isCallExpression(node)) return false
+  let root = node.expression
+  while (ts.isPropertyAccessExpression(root) || ts.isCallExpression(root)) root = ts.isCallExpression(root) ? root.expression : root.expression
+  return importedName(syntax, root, 'zod', 'z') || importedName(syntax, root, 'zod', '*')
+}
+function bindingNames(name) {
+  if (ts.isIdentifier(name)) return [name.text]
+  if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) return name.elements.flatMap((item) => ts.isBindingElement(item) ? bindingNames(item.name) : [])
+  return []
+}
+function auditStartEntry(entry, file, syntax) {
+  const trace = startTrace(entry, file, syntax)
+  const dataIndex = trace.findIndex(({ call }) => ['from', 'rpc'].includes(methodName(call))
+    || ts.isPropertyAccessExpression(call.expression) && /\.storage\b/.test(call.expression.getText()))
+  const rpc = startRpcChain(entry, syntax)
+  const route = isStartRouteHandler(entry, syntax)
+  const mutation = trace.some(({ call }) => ['insert', 'update', 'upsert', 'delete', 'rpc', 'signOut'].includes(methodName(call)))
+  const line = syntax.getLineAndCharacterOfPosition(entry.getStart(syntax)).line + 1
+  const firstMutation = trace.findIndex(({ call }) => ['insert', 'update', 'upsert', 'delete', 'rpc', 'signOut'].includes(methodName(call)))
+  const originGuarded = trace.slice(0, firstMutation < 0 ? 0 : firstMutation).some(({ call, scope }) =>
+    ['assertSameOrigin', 'requireSameOrigin', 'verifyWebhookSignature'].includes(methodName(call))
+    || methodName(call) === 'isSameOrigin' && visitNodes(scope.body, (node) => ts.isIfStatement(node)
+      && isInside(call, node.expression) && visitNodes(node.thenStatement, (child) => ts.isReturnStatement(child) || ts.isThrowStatement(child)).length > 0).length > 0)
+  if (route && mutation && !originGuarded
+    && !visitNodes(startRouteObject(entry, syntax), ts.isCallExpression).some((call) => importedName(syntax, call.expression, '@tanstack/react-start', 'createCsrfMiddleware'))) {
+    finding('HIGH', 'SERVER_ORIGIN', rel(file), line, functionName(entry),
+      'Rota Start com mutação sem proteção de origem/CSRF ou assinatura de webhook reconhecida. Proteja a requisição antes do I/O; cookies e beforeLoad não autorizam o endpoint.')
+  }
+  if (dataIndex < 0) return
+  const preceding = trace.slice(0, dataIndex)
+  const authenticated = preceding.some(({ call }) => THROWING_GUARDS.has(methodName(call))) || preceding.some(({ call, scope, syntax: ownerSyntax }) =>
+    SESSION_CALLS.has(methodName(call)) && visitNodes(scope.body, (node) => ts.isIfStatement(node)
+      && node.getStart(ownerSyntax) > call.getStart(ownerSyntax)
+      && node.getStart(ownerSyntax) < (trace[dataIndex].scope === scope ? trace[dataIndex].call.getStart(ownerSyntax) : scope.end)
+      && visitNodes(node.thenStatement, (branch) => ts.isThrowStatement(branch) || ts.isReturnStatement(branch)
+        || ts.isCallExpression(branch) && methodName(branch) === 'redirect').length > 0, true).length > 0)
+  if (!authenticated) finding('CRITICAL', 'AUTHZ', rel(file), line, functionName(entry),
+    'Endpoint Start acessa dados privados sem identidade e negação antes do I/O, inclusive nos helpers locais chamados. beforeLoad e proteção visual não protegem RPC/rotas.')
+  const validated = preceding.some(({ call }) => ['parse', 'parseAsync', 'safeParse', 'safeParseAsync'].includes(methodName(call)))
+    || Boolean(rpc?.some((call) => ['inputValidator', 'validator'].includes(methodName(call)) && runtimeValidator(call.arguments[0], file, syntax)))
+  const scopes = new Set(trace.map((item) => item.scope))
+  const rawNames = new Set([...scopes].flatMap((scope) => scope.parameters.flatMap((param) => bindingNames(param.name))))
+  const rawInput = trace.some(({ call }) => ['from', 'rpc', 'eq', 'in', 'match', 'insert', 'update', 'upsert', 'delete'].includes(methodName(call))
+    && call.arguments.some((arg) => visitNodes(arg, (node) => ts.isIdentifier(node) && rawNames.has(node.text)
+      && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)).length > 0))
+  if (rawInput && !validated) finding('HIGH', 'SERVER_INPUT', rel(file), line, functionName(entry),
+    'Endpoint Start usa entrada na query sem schema executado no servidor. Use inputValidator(schema) ou parse antes do I/O; um validator identidade não valida valores.')
+  for (const { call, syntax: ownerSyntax } of trace) {
+    if (!['eq', 'in'].includes(methodName(call)) || !['user_id', 'owner_id', 'owner_user_id'].includes(literal(call.arguments[0]))) continue
+    const value = call.arguments[1]
+    if (value && /^(?:data|input|params|body)\./.test(value.getText(ownerSyntax))) finding('HIGH', 'AUTHZ_SCOPE', rel(file), line,
+      call.getText(ownerSyntax), 'Identidade proprietária enviada pelo cliente é usada como autorização. Derive o dono da sessão validada e autorize organização/projeto no servidor.')
+  }
+}
 let guardedActions = 0
 for (const [file, syntax] of syntaxByFile) {
+  // Unsupported endpoint indirection must never disappear from the audit.
+  // The generated convention deliberately keeps a small inline RPC wrapper.
+  for (const node of visitNodes(syntax, (node) => {
+    if (ts.isCallExpression(node) && methodName(node) === 'handler') {
+      const chain = callChain(node)
+      return importedName(syntax, chain[0].expression, '@tanstack/react-start', 'createServerFn')
+        && !node.arguments.some((argument) => ts.isFunctionLike(argument) && argument.body)
+    }
+    return ts.isPropertyAssignment(node) && isStartRouteHandler(node.initializer, syntax)
+      && !ts.isFunctionLike(node.initializer)
+  })) finding('HIGH', 'SERVER_ENDPOINT_SHAPE', rel(file), syntax.getLineAndCharacterOfPosition(node.getStart(syntax)).line + 1,
+    node.getText(syntax), 'Endpoint Start usa referência indireta não comprovada pelo auditor. Preserve um wrapper inline auditável, com validação e autorização antes do I/O.')
   for (const entry of executableEntries(file, syntax)) {
+    if (startRpcChain(entry, syntax) || isStartRouteHandler(entry, syntax)) { auditStartEntry(entry, file, syntax); continue }
     const calls = visitNodes(entry.body, ts.isCallExpression, true)
     const dataCalls = calls.filter((call) => ['from', 'rpc'].includes(methodName(call))
       || (ts.isPropertyAccessExpression(call.expression) && /\.storage\b/.test(call.expression.getText(syntax))))
@@ -509,6 +703,58 @@ for (const [file, syntax] of syntaxByFile) {
 }
 if (guardedActions > 0) strength(`${guardedActions} entrada(s) com guard local reconhecido; autorização efetiva exige testes negativos`)
 
+// A custom Start entry replaces the framework defaults. Merely importing or
+// constructing CSRF middleware is insufficient: it must be in requestMiddleware.
+if (startProject) {
+  const startFile = [path.join(ROOT, 'src/start.ts'), path.join(ROOT, 'start.ts')].find((file) => syntaxByFile.has(file))
+  if (startFile) {
+    const syntax = syntaxByFile.get(startFile)
+    const validCsrf = (node) => {
+      if (ts.isIdentifier(node)) {
+        const declaration = declarationFor(startFile, node.text)
+        return Boolean(declaration && ts.isCallExpression(declaration.node) && validCsrf(declaration.node))
+      }
+      if (!ts.isCallExpression(node) || !importedName(syntax, node.expression, '@tanstack/react-start', 'createCsrfMiddleware')) return false
+      if (!node.arguments.length) return true
+      const options = node.arguments[0]
+      if (!ts.isObjectLiteralExpression(options)) return false
+      return options.properties.every((property) => {
+        if (!ts.isPropertyAssignment(property)) return false
+        const name = propertyName(property)
+        if (name === 'allowRequestsWithoutOriginCheck') return property.initializer.kind === ts.SyntaxKind.FalseKeyword
+        if (name === 'filter') {
+          const initializer = property.initializer
+          return ts.isArrowFunction(initializer) && ts.isBinaryExpression(initializer.body)
+            && initializer.body.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+            && ts.isPropertyAccessExpression(initializer.body.left) && initializer.body.left.name.text === 'handlerType'
+            && literal(initializer.body.right) === 'serverFn'
+        }
+        return name === 'origin' && literal(property.initializer) !== '*'
+      })
+    }
+    const starts = visitNodes(syntax, (node) => ts.isCallExpression(node)
+      && importedName(syntax, node.expression, '@tanstack/react-start', 'createStart'))
+    const installed = starts.some((start) => visitNodes(start, (node) => ts.isPropertyAssignment(node)
+      && propertyName(node) === 'requestMiddleware' && ts.isArrayLiteralExpression(node.initializer)
+      && node.initializer.elements.some(validCsrf)).length > 0)
+    if (!installed) finding('CRITICAL', 'SERVER_ORIGIN', rel(startFile), 1, 'createStart/requestMiddleware',
+      'Inicialização Start personalizada sem middleware CSRF ativo e restritivo. Instale createCsrfMiddleware no requestMiddleware e preserve a rejeição de origem ausente/cruzada.')
+  }
+  for (const config of ['vite.config.ts', 'vite.config.mts', 'src/start.ts', 'src/server.ts']) {
+    const file = path.join(ROOT, config)
+    if (!fs.existsSync(file)) continue
+    const syntax = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
+    for (const property of visitNodes(syntax, ts.isPropertyAssignment)) {
+      if ((['disableCsrfMiddlewareWarning', 'allowRequestsWithoutOriginCheck'].includes(propertyName(property)) && property.initializer.kind === ts.SyntaxKind.TrueKeyword)
+        || propertyName(property) === 'importProtection' && property.initializer.kind === ts.SyntaxKind.FalseKeyword
+        || propertyName(property) === 'behavior' && ['mock', 'warn'].includes(literal(property.initializer))) {
+        finding('HIGH', 'START_SECURITY_CONFIG', config, syntax.getLineAndCharacterOfPosition(property.getStart(syntax)).line + 1,
+          property.getText(syntax), 'A configuração Start relaxa a proteção de origem/imports. Preserve bloqueio real em desenvolvimento e build; aviso ou mock não é aprovação de segurança.')
+      }
+    }
+  }
+}
+
 // ═════════════════════════════════════════════════════════════
 // 3. IDOR — syntax, never code examples inside comments/strings
 // ═════════════════════════════════════════════════════════════
@@ -539,6 +785,7 @@ for (const [file, syntax] of syntaxByFile) {
           && literal(option.initializer)?.split(',').map((key) => key.trim()).includes(property.name.getText(syntax).replace(/['"]/g, '')))))
     if (ownUpsert) { ownershipChecked++; continue }
     const exposed = executableEntries(file, syntax).some((entry) => entry.pos <= chain.start.pos && entry.end >= chain.end.end)
+      || reachableStartScopes.some((item) => item.file === file && isInside(chain.start, item.entry))
     // Internal privileged adapters can receive already-authorized capabilities.
     // Report uncertainty explicitly instead of claiming a proven vulnerability
     // or silently exempting a filename. Exposed mutations always fail closed.

@@ -1,0 +1,194 @@
+{
+  "node": "v22.22.1",
+  "platform": "darwin",
+  "startedAt": "2026-09-22T14:47:00.979Z",
+  "checks": {
+    "originalGeneratedTypecheck": true,
+    "ssr": {
+      "status": 200,
+      "contentPresentBeforeHydration": true,
+      "nonceCsp": true
+    },
+    "hydrationAndRpc": true,
+    "csrfCrossOrigin": {
+      "status": 403
+    },
+    "serverValidation": {
+      "status": 200,
+      "rejected": true
+    },
+    "unauthenticatedPrivateRpc": {
+      "status": 401
+    },
+    "clientSecretScan": {
+      "scannedFiles": 8,
+      "canaries": 4,
+      "exposed": 0
+    },
+    "serverOnlyBuildBoundary": true,
+    "development": true
+  },
+  "timings": {
+    "install": 4163,
+    "routes": 432,
+    "typecheck": 2924,
+    "productionBuild": 5053,
+    "productionStart": 162,
+    "startRuntimeSamples": {
+      "startup": [
+        1318,
+        1309,
+        1311
+      ],
+      "reuse": [
+        49,
+        48,
+        49
+      ],
+      "ui": [
+        180,
+        78,
+        181
+      ],
+      "route": [
+        293,
+        296,
+        294
+      ],
+      "server": [
+        127,
+        124,
+        143
+      ]
+    },
+    "startDevelopment": {
+      "startup": {
+        "milliseconds": [
+          1318,
+          1309,
+          1311
+        ],
+        "medianMs": 1311
+      },
+      "healthyReuse": {
+        "milliseconds": [
+          49,
+          48,
+          49
+        ],
+        "medianMs": 49
+      },
+      "initialBrowserReadyMs": 1103,
+      "uiHmr": {
+        "milliseconds": [
+          180,
+          78,
+          181
+        ],
+        "medianMs": 180
+      },
+      "routeAdd": {
+        "milliseconds": [
+          293,
+          296,
+          294
+        ],
+        "medianMs": 294
+      },
+      "serverEdit": {
+        "milliseconds": [
+          127,
+          124,
+          143
+        ],
+        "medianMs": 127
+      },
+      "componentDraftPreserved": true,
+      "editedComponent": "src/features/example/greeting-form.tsx",
+      "pidPreserved": true,
+      "browserReconnect": true,
+      "routeDeletion": true,
+      "routeNavigationInterruptions": 1,
+      "note": "Round 1 startup starts with generated/install/build caches. Rounds 2–3 reuse framework caches. Initial browser readiness includes network-idle and an actual RPC before editing. Polling adds up to 75ms to route and server results."
+    },
+    "nextRuntimeSamples": {
+      "startup": [
+        3762,
+        3110,
+        3057
+      ],
+      "reuse": [
+        53,
+        49,
+        49
+      ],
+      "ui": [
+        76,
+        76,
+        75
+      ],
+      "route": [
+        836,
+        352,
+        309
+      ],
+      "server": [
+        236,
+        225,
+        217
+      ]
+    },
+    "nextDevelopment": {
+      "startup": {
+        "milliseconds": [
+          3762,
+          3110,
+          3057
+        ],
+        "medianMs": 3110
+      },
+      "healthyReuse": {
+        "milliseconds": [
+          53,
+          49,
+          49
+        ],
+        "medianMs": 49
+      },
+      "initialBrowserReadyMs": 801,
+      "uiHmr": {
+        "milliseconds": [
+          76,
+          76,
+          75
+        ],
+        "medianMs": 76
+      },
+      "routeAdd": {
+        "milliseconds": [
+          836,
+          352,
+          309
+        ],
+        "medianMs": 352
+      },
+      "serverEdit": {
+        "milliseconds": [
+          236,
+          225,
+          217
+        ],
+        "medianMs": 225
+      },
+      "componentDraftPreserved": true,
+      "editedComponent": "app/runtime-form.tsx",
+      "pidPreserved": true,
+      "browserReconnect": true,
+      "routeDeletion": true,
+      "routeNavigationInterruptions": 0,
+      "note": "Round 1 startup starts with generated/install/build caches. Rounds 2–3 reuse framework caches. Initial browser readiness includes network-idle and an actual RPC before editing. Polling adds up to 75ms to route and server results."
+    }
+  },
+  "databaseIsolation": "Not exercised by this runtime suite; no database emulation is counted as isolation.",
+  "result": "passed"
+}

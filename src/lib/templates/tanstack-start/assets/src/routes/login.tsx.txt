@@ -1,0 +1,5 @@
+import { createFileRoute } from '@tanstack/react-router'
+import { LoginForm } from '@/features/auth/login-form'
+
+export const Route = createFileRoute('/login')({ component: LoginPage })
+function LoginPage() { return <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 px-6 py-16"><h1 className="text-3xl font-semibold">Entrar em __PROJECT_NAME_JSX__</h1><LoginForm /></main> }

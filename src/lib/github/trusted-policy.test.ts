@@ -11,6 +11,7 @@ import { TRUSTED_VALIDATION_POLICIES_4_0_5 } from './validation-policy-releases/
 import { TRUSTED_VALIDATION_POLICIES_4_0_6 } from './validation-policy-releases/4.0.6'
 import { TRUSTED_VALIDATION_POLICIES_4_0_7 } from './validation-policy-releases/4.0.7'
 import { TRUSTED_VALIDATION_POLICIES_4_0_8 } from './validation-policy-releases/4.0.8'
+import { TRUSTED_VALIDATION_POLICIES_4_0_9 } from './validation-policy-releases/4.0.9'
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'
@@ -41,8 +42,8 @@ function replaceMetadata(input: Candidate, path: 'package.json' | 'package-lock.
   return { ...input, ...(path === 'package.json' ? { packageContent: content } : { lockContent: content }),
     tree: input.tree.map(entry => entry.path === path ? { ...entry, sha: blobHash(content) } : entry) }
 }
-function candidate(kind: 'public' | 'solo' | 'team' = 'solo', changes: Record<string, string | null> = {}) {
-  const files = new Map(buildProjectFiles({ projectName: 'real-app', description: 'Own app', kind }).map(f => [f.path, f.content]))
+function candidate(kind: 'public' | 'solo' | 'team' = 'solo', changes: Record<string, string | null> = {}, stack: 'nextjs' | 'tanstack-start-vite' = 'nextjs') {
+  const files = new Map(buildProjectFiles({ projectName: 'real-app', description: 'Own app', kind, stack }).map(f => [f.path, f.content]))
   for (const [path, content] of Object.entries(changes)) if (content === null) files.delete(path); else files.set(path, content)
   return { headSha: SHA, kind, truncated: false, tree: [...files].map(([path, content]) => ({ path, sha: blobHash(content), mode: '100644' })), packageContent: files.get('package.json')!, lockContent: files.get('package-lock.json')! }
 }
@@ -64,6 +65,7 @@ describe('independent engine policy over actual generated candidates', () => {
       .toBe('73a1698a206c284dd66eaf835edf855e574a16abba9eea9774de8a1e73cba161')
   })
   it('pins the complete historical authority to its recorded immutable release contents', () => {
+    expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_9)).digest('hex')).toBe('d45b2a79ab9869075760051d61ec73aa408ea7fe13e6b4f017ec13eb69a644cb')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_8)).digest('hex')).toBe('fcff94f43c1d3b112ca1fd7ab7d8c6b80697c95fc8ace583e575813f82e4e223')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_7)).digest('hex')).toBe('3b4a199e3b414ee51691026d0b1db3db96e3f6b17a240ad69e06ed752494d4cf')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_6)).digest('hex'))
@@ -103,6 +105,20 @@ describe('independent engine policy over actual generated candidates', () => {
     lock.packages['tools/supremo-cli']!.version = '999.0.0'
     expect(verifyCandidatePolicy(replaceMetadata(input, 'package-lock.json', JSON.stringify(lock))).approved).toBe(false)
   })
+  it.each(['public', 'solo', 'team'] as const)('authorizes the complete Start %s release without permitting weaker rails', kind => {
+    const input = candidate(kind, {}, 'tanstack-start-vite')
+    expect(verifyCandidatePolicy(input)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
+    for (const path of ['vite.config.mts', 'vitest.config.mts', 'scripts/generate-routes.mjs', 'scripts/start-production.mjs', 'scripts/security-audit.js', '.github/workflows/ci.yml']) {
+      expect(verifyCandidatePolicy(candidate(kind, { [path]: 'process.exit(0)' }, 'tanstack-start-vite')).approved).toBe(false)
+      expect(verifyCandidatePolicy(candidate(kind, { [path]: null }, 'tanstack-start-vite')).approved).toBe(false)
+    }
+    const pkg = JSON.parse(input.packageContent) as { scripts: Record<string, string> }
+    pkg.scripts['routes:generate'] = 'echo bypass'
+    expect(verifyCandidatePolicy(replaceMetadata(input, 'package.json', JSON.stringify(pkg))).approved).toBe(false)
+    const next = candidate(kind)
+    const mixed = { ...input, tree: input.tree.map(entry => entry.path === 'scripts/security-audit.js' ? next.tree.find(file => file.path === entry.path)! : entry) }
+    expect(verifyCandidatePolicy(mixed).approved).toBe(false)
+  })
   it.each(['public', 'solo', 'team'] as const)('accepts intact released %s validators', kind => {
     expect(verifyCandidatePolicy(candidate(kind))).toMatchObject({ approved: true, reasons: [] })
   })
@@ -113,7 +129,7 @@ describe('independent engine policy over actual generated candidates', () => {
     const current = candidate(kind)
     const cliVersion = (input: Candidate): string => (JSON.parse(input.lockContent) as { packages: Record<string, { version?: string }> }).packages['tools/supremo-cli']!.version!
     expect(cliVersion(previous)).toBe('1.7.2')
-    expect(cliVersion(current)).toBe('1.7.8')
+    expect(cliVersion(current)).toBe('1.8.0')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     expect(verifyCandidatePolicy(current)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })

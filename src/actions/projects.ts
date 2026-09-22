@@ -1,4 +1,5 @@
 'use server'
+import { newProjectTemplateVersion } from '@/lib/templates/stacks'
 
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
@@ -140,6 +141,7 @@ export async function createProject(
       name: parsed.data.name,
       description: parsed.data.description ?? null,
       kind: parsed.data.kind,
+      template_version: newProjectTemplateVersion(),
       github_account_id: parsed.data.githubAccountId ?? null,
       supabase_account_id: parsed.data.supabaseAccountId ?? null,
       active_branch: 'main',
@@ -423,6 +425,7 @@ export async function createEmptyProject(
       name,
       description,
       kind: safeKind,
+      template_version: newProjectTemplateVersion(),
       status: 'creating',
     })
     .select('id')

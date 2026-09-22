@@ -7,14 +7,18 @@
 set -euo pipefail
 
 OUT="${1:-/tmp/supremo-template-check}"
+STACK="${2:-nextjs}"
+KIND="${3:-solo}"
 cd "$(dirname "$0")/../.."
 
 rm -rf "$OUT"
-npx tsx scripts/dev/generate-sample-project.ts "$OUT" >/dev/null
+node --import tsx scripts/dev/generate-sample-project.ts "$OUT" "$KIND" "$STACK" >/dev/null
 cd "$OUT"
 
 export NEXT_PUBLIC_SUPABASE_URL="https://placeholder.supabase.co"
 export NEXT_PUBLIC_SUPABASE_ANON_KEY="placeholder"
+export VITE_SUPABASE_URL="https://placeholder.supabase.co"
+export VITE_SUPABASE_ANON_KEY="placeholder"
 
 echo "── npm ci ──"
 npm ci --silent --ignore-scripts

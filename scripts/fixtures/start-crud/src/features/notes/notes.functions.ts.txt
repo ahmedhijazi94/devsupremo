@@ -1,0 +1,9 @@
+import { createServerFn } from '@tanstack/react-start'
+import { createNoteSchema, filterSchema, idSchema, updateNoteSchema } from './notes.schema'
+import { listOwnNotes, readOwnNote, insertOwnNote, changeOwnNote, deleteOwnNote } from './notes.server'
+
+export const listNotes = createServerFn({ method: 'GET' }).validator(filterSchema).handler(({ data }) => listOwnNotes(data))
+export const readNote = createServerFn({ method: 'GET' }).validator(idSchema).handler(({ data }) => readOwnNote(data))
+export const createNote = createServerFn({ method: 'POST' }).validator(createNoteSchema).handler(({ data }) => insertOwnNote(data))
+export const updateNote = createServerFn({ method: 'POST' }).validator(updateNoteSchema).handler(({ data }) => changeOwnNote(data))
+export const removeNote = createServerFn({ method: 'POST' }).validator(idSchema).handler(({ data }) => deleteOwnNote(data))

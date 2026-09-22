@@ -299,7 +299,8 @@ describe('anti-greenwashing and development browser policies', () => {
   })
 
   it.each(['node_modules/vitest/index.js', '.eslintrc.json', '.eslintignore', '.gitignore', '.npmrc', 'biome.json',
-    'supabase/config.toml', '.next/server/app.js', 'coverage/coverage-final.json'])('protects dependency and gate configuration %s', (file) => {
+    'supabase/config.toml', '.next/server/app.js', 'coverage/coverage-final.json', 'vite.config.mts', 'nitro.config.ts',
+    'src/start.ts', 'src/routeTree.gen.ts', '.output/server/index.mjs', '.tanstack/router/cache'])('protects dependency and gate configuration %s', (file) => {
     expect(canAutoRepairPaths([file])).toBe(false)
   })
 

@@ -4,13 +4,17 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input, Label } from '@/components/ui/input'
 
-export function LoginForm() {
+export type LoginMode = 'login' | 'signup'
+
+export function LoginForm({ mode, onModeChange }: { mode?: LoginMode; onModeChange?: (mode: LoginMode) => void } = {}) {
   const router = useRouter()
-  const [signup, setSignup] = useState(false)
+  const [localMode, setLocalMode] = useState<LoginMode>('login')
+  const signup = (mode ?? localMode) === 'signup'
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState(false)
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (pending) return
     setPending(true)
     setMessage('')
     const data = new FormData(event.currentTarget)
@@ -27,10 +31,16 @@ export function LoginForm() {
     } catch { setMessage('Não foi possível conectar. Tente novamente.') }
     finally { setPending(false) }
   }
-  return <div className="space-y-6"><form className="space-y-4" onSubmit={submit}>
-    <div><Label htmlFor="email">Email</Label><Input id="email" name="email" type="email" required autoComplete="email" /></div>
-    <div><Label htmlFor="password">Senha</Label><Input id="password" name="password" type="password" minLength={8} required autoComplete={signup ? 'new-password' : 'current-password'} /></div>
-    <Button type="submit" disabled={pending}>{pending ? 'Aguarde…' : signup ? 'Criar conta' : 'Entrar'}</Button>
-    <p role="status">{message}</p>
-  </form><button type="button" className="text-accent" onClick={() => { setSignup(!signup); setMessage('') }}>{signup ? 'Já tenho uma conta' : 'Criar uma conta'}</button></div>
+  return <div>
+    <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-accent">{signup ? 'Um novo começo' : 'Bem-vindo de volta'}</p>
+    <h1 className="text-3xl font-semibold tracking-tight">{signup ? 'Crie sua conta' : 'Entre na sua conta'}</h1>
+    <p className="mb-8 mt-3 text-sm leading-relaxed text-muted">{signup ? 'Use seu email e escolha uma senha para começar.' : 'Use o email e a senha do seu cadastro.'}</p>
+    <form className="space-y-5" onSubmit={submit} aria-busy={pending}>
+      <div className="space-y-2"><Label htmlFor="email">Email</Label><Input id="email" name="email" type="email" required autoComplete="email" placeholder="voce@exemplo.com" className="h-11" /></div>
+      <div className="space-y-2"><Label htmlFor="password">Senha</Label><Input id="password" name="password" type="password" minLength={8} required autoComplete={signup ? 'new-password' : 'current-password'} aria-describedby={signup ? 'password-hint' : undefined} className="h-11" />{signup && <p id="password-hint" className="text-xs text-muted">Use pelo menos 8 caracteres.</p>}</div>
+      {message && <p role="status" className="rounded-lg border border-border bg-elevated px-4 py-3 text-sm leading-relaxed">{message}</p>}
+      <Button type="submit" loading={pending} className="h-12 w-full">{pending ? 'Aguarde…' : signup ? 'Criar conta' : 'Entrar'}</Button>
+    </form>
+    <p className="mt-7 text-center text-sm text-muted">{signup ? 'Já faz parte?' : 'Primeira vez por aqui?'}{' '}<button type="button" disabled={pending} className="rounded font-medium text-accent underline-offset-4 hover:underline disabled:opacity-50" onClick={() => { const next = signup ? 'login' : 'signup'; setLocalMode(next); onModeChange?.(next); setMessage('') }}>{signup ? 'Já tenho uma conta' : 'Criar uma conta'}</button></p>
+  </div>
 }

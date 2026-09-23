@@ -1,0 +1,77 @@
+# Design do produto
+
+Escolha a direção visual a partir do público, conteúdo e tarefa principal. Registre
+aqui marca, densidade e hierarquia antes de expandir telas. A base é personalizável;
+não transforme todos os produtos no mesmo dashboard.
+
+## Componentes disponíveis
+
+Os componentes em `src/components/ui` pertencem ao projeto. Button, Card, Input,
+Textarea, Select nativo, Field, Alert, Table, Skeleton e EmptyState formam a base.
+Label, Separator, Tabs, DropdownMenu, Tooltip e Dialog completam as interações comuns.
+Tabs, menus, tooltips e diálogos usam primitivas Radix para teclado, foco e ARIA.
+
+- Button aceita `variant="default|primary|secondary|outline|ghost|link|danger|destructive"`,
+  `size="default|md|sm|lg|icon"`, `loading` e `asChild`. `primary`, `md` e `danger`
+  mantêm os nomes anteriores. `loading` anuncia ocupado e bloqueia a ativação.
+- Para navegação, use `<Button asChild><Link to="/app">Abrir app</Link></Button>`
+  com Link de `@tanstack/react-router`, ou Link com `buttonClass()`. Nunca aninhe
+  botão em link. `asChild` recebe exatamente um elemento e preserva seus props.
+- Card já inclui padding. CardHeader, CardTitle, CardDescription, CardContent e
+  CardFooter organizam seu conteúdo; não acrescente padding duplicado sem intenção.
+- Field associa label ao id informado. Passe `required`, `aria-invalid` e
+  `aria-describedby` no controle: `${id}-error` para erro e `${id}-hint` para ajuda.
+  Label independente aceita `htmlFor`. Não use placeholder como único rótulo.
+- Tabs recebe `defaultValue` ou `value/onValueChange`. Use TabsList com nome
+  acessível, TabsTrigger e TabsContent com `value` correspondente. Escolha
+  `activationMode="manual"` quando trocar de aba exige uma operação custosa.
+- DropdownMenu compõe Trigger, Content, Item, CheckboxItem e RadioGroup/RadioItem.
+  Use `onSelect` nos itens, `disabled` para indisponíveis e Trigger `asChild` para
+  reutilizar Button. Separe ações destrutivas com Separator e rótulo explícito.
+- Tooltip precisa de TooltipProvider, Tooltip, TooltipTrigger e TooltipContent.
+  Tooltip acrescenta ajuda; o controle continua precisando de nome acessível.
+  Informações necessárias à tarefa devem aparecer também no conteúdo normal.
+- Dialog compõe Trigger, Content, Header, Title, Description, Footer e Close.
+  Title fornece o nome do diálogo. Passe `aria-describedby={undefined}` em Content
+  se não houver descrição. O modo modal mantém foco dentro do diálogo, fecha com
+  Escape e devolve foco ao gatilho. A API anterior `open/onClose/title/description`
+  continua disponível. Controle consultas, autorização e mutações no servidor.
+- Separator é decorativo por padrão. Use `decorative={false}` quando a divisão
+  tiver significado e `orientation="vertical"` para separadores verticais.
+- Table precisa de caption e cabeçalhos com scope. Em telas pequenas, priorize
+  colunas essenciais e restrinja rolagem horizontal à tabela.
+
+## Tema e estados
+
+Centralize cores, superfícies e tipografia em `src/styles.css`. Use tokens como
+`bg-background`, `bg-surface`, `bg-elevated`, `text-foreground`, `text-muted`,
+`bg-primary`/`text-primary-foreground`, `border-border` e `outline-ring`.
+`text-muted` permanece o token de texto legado; superfícies discretas usam
+`bg-elevated`. Os aliases card, popover, secondary e destructive permitem adaptar
+componentes familiares sem espalhar cores literais. O tema segue o sistema;
+as classes `light` e `dark` no elemento raiz permitem preferência explícita.
+
+Mantenha títulos com hierarquia, corpo legível e uma ação principal por seção.
+Considere carregando, vazio, preenchido, erro recuperável, sem permissão e envio.
+Preserve o que a pessoa digitou em caso de erro e evite envios duplicados.
+Alert comunica resultados, EmptyState sugere o próximo passo e Skeleton reserva
+espaço; a região dona do carregamento anuncia `aria-busy`. Ícones de ações sem
+texto precisam de `aria-label`. Respeite a preferência por movimento reduzido.
+
+Validação do formulário melhora a interação; a decisão final permanece no
+servidor. Nunca exponha credenciais ou cliente administrativo na UI. Os componentes
+não alteram autorização, RLS, CSP nem os protocolos de checkpoint e validação.
+
+## Verificação e personalização
+
+Use a galeria local `/design-system` para verificar composição, responsividade,
+teclado e temas. Ela responde 404 em produção normal e fica disponível em
+desenvolvimento ou com `SUPREMO_PREVIEW=1`. A rota pública `/examples` mantém
+o exemplo de saudação e a demonstração de SSR e funções do servidor.
+Os testes em `src/components/ui/interactions.test.tsx` verificam foco, teclado,
+estados bloqueados e a compatibilidade do diálogo. Preserve o preview saudável
+e siga o fluxo de validação definido em AGENTS e nos arquivos locais do projeto.
+
+Adapte os componentes à identidade do produto. Acrescente primitivas quando
+uma interação concreta precisar delas; não instale bibliotecas apenas para
+aumentar o catálogo. O app não depende do Supremo nem do editor Lovable em runtime.

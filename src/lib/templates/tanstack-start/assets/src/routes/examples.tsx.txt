@@ -1,0 +1,9 @@
+import { createFileRoute } from '@tanstack/react-router'
+import { SiteFrame } from '@/components/site-frame'
+import { GreetingForm } from '@/features/example/greeting-form'
+import { Card, CardTitle, CardDescription } from '@/components/ui/card'
+
+export const Route = createFileRoute('/examples')({ component: ExamplePage })
+function ExamplePage() {
+  return <SiteFrame><div className="mx-auto my-auto w-full max-w-lg py-8"><h1 className="mb-8 text-3xl font-semibold tracking-tight">Um primeiro olá</h1><Card><CardTitle>Como podemos chamar você?</CardTitle><CardDescription>Escreva seu nome para receber uma saudação.</CardDescription><div className="mt-6"><GreetingForm /></div></Card></div></SiteFrame>
+}

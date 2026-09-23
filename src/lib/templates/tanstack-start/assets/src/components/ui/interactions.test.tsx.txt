@@ -1,0 +1,168 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { createRef, useState, type MouseEvent } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import { Button } from './button'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from './dialog'
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './dropdown-menu'
+import { Label } from './label'
+import { Separator } from './separator'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './tabs'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip'
+
+describe('composable UI interactions', () => {
+  it('keeps native button defaults, ref and loading semantics', () => {
+    const onClick = vi.fn()
+    const ref = createRef<HTMLButtonElement>()
+    const { rerender } = render(<Button ref={ref} variant="primary" onClick={onClick}>Salvar</Button>)
+    const button = screen.getByRole('button', { name: 'Salvar' })
+    expect(ref.current).toBe(button)
+    expect(button).toHaveAttribute('type', 'button')
+    fireEvent.click(button)
+    expect(onClick).toHaveBeenCalledOnce()
+    rerender(<Button loading onClick={onClick}>Salvar</Button>)
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    fireEvent.click(button)
+    expect(onClick).toHaveBeenCalledOnce()
+  })
+
+  it('composes one link and blocks navigation and child handlers while loading', () => {
+    const onClick = vi.fn((event: MouseEvent<HTMLAnchorElement>) => event.preventDefault())
+    const { rerender } = render(<Button asChild variant="outline"><a href="/app" onClick={onClick}>Abrir</a></Button>)
+    const link = screen.getByRole('link', { name: 'Abrir' })
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(link).not.toHaveAttribute('type')
+    fireEvent.click(link)
+    expect(onClick).toHaveBeenCalledOnce()
+    rerender(<Button asChild loading><a href="/app" onClick={onClick}>Abrir</a></Button>)
+    expect(link).toHaveAttribute('aria-busy', 'true')
+    expect(link).toHaveAttribute('aria-disabled', 'true')
+    expect(link).toHaveAttribute('tabindex', '-1')
+    expect(fireEvent.click(link)).toBe(false)
+    expect(fireEvent.keyDown(link, { key: 'Enter' })).toBe(false)
+    expect(onClick).toHaveBeenCalledOnce()
+  })
+
+  it('names modal content, traps focus, closes with Escape and restores the trigger', async () => {
+    render(<Dialog>
+      <DialogTrigger asChild><Button>Editar</Button></DialogTrigger>
+      <DialogContent>
+        <DialogTitle>Editar perfil</DialogTitle>
+        <DialogDescription>Altere os dados de exibição.</DialogDescription>
+        <Label htmlFor="name">Nome</Label><input id="name" />
+        <DialogClose asChild><Button>Concluir</Button></DialogClose>
+      </DialogContent>
+    </Dialog>)
+    const trigger = screen.getByRole('button', { name: 'Editar' })
+    act(() => trigger.focus())
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: 'Editar perfil' })
+    expect(dialog).toHaveAccessibleDescription('Altere os dados de exibição.')
+    const input = screen.getByRole('textbox', { name: 'Nome' })
+    await waitFor(() => expect(input).toHaveFocus())
+    const close = screen.getByRole('button', { name: 'Fechar diálogo' })
+    act(() => close.focus())
+    fireEvent.keyDown(close, { key: 'Tab' })
+    expect(input).toHaveFocus()
+    fireEvent.keyDown(input, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('preserves controlled open/onClose/title dialogs and focus without a Radix trigger', async () => {
+    function LegacyExample() {
+      const [open, setOpen] = useState(false)
+      return <><Button onClick={() => setOpen(true)}>Abrir legado</Button>
+        <Dialog open={open} onClose={() => setOpen(false)} title="Confirmação">
+          <p>Revise antes de continuar.</p>
+        </Dialog></>
+    }
+    render(<LegacyExample />)
+    const trigger = screen.getByRole('button', { name: 'Abrir legado' })
+    act(() => trigger.focus())
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog', { name: 'Confirmação' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Fechar diálogo' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('navigates tabs with arrow keys while skipping disabled tabs', async () => {
+    render(<Tabs defaultValue="overview">
+      <TabsList aria-label="Seções">
+        <TabsTrigger value="overview">Resumo</TabsTrigger>
+        <TabsTrigger value="blocked" disabled>Restrita</TabsTrigger>
+        <TabsTrigger value="details">Detalhes</TabsTrigger>
+      </TabsList>
+      <TabsContent value="overview">Visão geral</TabsContent>
+      <TabsContent value="details">Conteúdo detalhado</TabsContent>
+    </Tabs>)
+    const first = screen.getByRole('tab', { name: 'Resumo' })
+    const next = screen.getByRole('tab', { name: 'Detalhes' })
+    act(() => first.focus())
+    fireEvent.keyDown(first, { key: 'ArrowRight' })
+    await waitFor(() => expect(next).toHaveFocus())
+    expect(next).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel', { name: 'Detalhes' })).toHaveTextContent('Conteúdo detalhado')
+    expect(first).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('opens menus with the keyboard, skips disabled items, selects and restores focus', async () => {
+    const onSelect = vi.fn()
+    render(<DropdownMenu>
+      <DropdownMenuTrigger asChild><Button>Ações</Button></DropdownMenuTrigger>
+      {/* jsdom has no layout; these tests exercise keyboard and focus, not collision placement. */}
+      <DropdownMenuContent avoidCollisions={false}>
+        <DropdownMenuItem disabled>Indisponível</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onSelect}>Duplicar</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>)
+    const trigger = screen.getByRole('button', { name: 'Ações' })
+    act(() => trigger.focus())
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    const item = await screen.findByRole('menuitem', { name: 'Duplicar' })
+    await waitFor(() => expect(item).toHaveFocus())
+    fireEvent.keyDown(item, { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledOnce()
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('keeps a controlled checkbox menu item open when selection is prevented', async () => {
+    function Preferences() {
+      const [checked, setChecked] = useState(false)
+      return <DropdownMenu defaultOpen><DropdownMenuTrigger>Preferências</DropdownMenuTrigger>
+        <DropdownMenuContent avoidCollisions={false}><DropdownMenuCheckboxItem checked={checked} onCheckedChange={setChecked} onSelect={(event) => event.preventDefault()}>
+          Mostrar concluídos
+        </DropdownMenuCheckboxItem></DropdownMenuContent>
+      </DropdownMenu>
+    }
+    render(<Preferences />)
+    const item = await screen.findByRole('menuitemcheckbox', { name: 'Mostrar concluídos' })
+    expect(item).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(item)
+    expect(item).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+  })
+
+  it('describes a focused control with a tooltip and dismisses it with Escape', async () => {
+    render(<TooltipProvider delayDuration={0}><Tooltip>
+      <TooltipTrigger asChild><Button aria-label="Ajuda">?</Button></TooltipTrigger>
+      <TooltipContent avoidCollisions={false}>Explica este campo.</TooltipContent>
+    </Tooltip></TooltipProvider>)
+    const trigger = screen.getByRole('button', { name: 'Ajuda' })
+    act(() => trigger.focus())
+    const tooltip = await screen.findByRole('tooltip')
+    expect(tooltip).toHaveTextContent('Explica este campo.')
+    expect(trigger).toHaveAccessibleDescription('Explica este campo.')
+    fireEvent.keyDown(trigger, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument())
+  })
+
+  it('exposes only semantic separators to assistive technology', () => {
+    render(<><Separator /><Separator decorative={false} orientation="vertical" /></>)
+    const separators = screen.getAllByRole('separator')
+    expect(separators).toHaveLength(1)
+    expect(separators[0]).toHaveAttribute('aria-orientation', 'vertical')
+  })
+})

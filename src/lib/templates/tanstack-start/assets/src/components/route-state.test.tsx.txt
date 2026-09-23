@@ -1,0 +1,55 @@
+import type { ComponentProps } from 'react'
+import { beforeEach, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { RouteError, RouteNotFound, RoutePending } from './route-state'
+import { SiteFrame } from './site-frame'
+
+const router = vi.hoisted(() => ({ invalidate: vi.fn() }))
+vi.mock('@tanstack/react-router', () => ({
+  useRouter: () => router,
+  Link: ({ to, ...props }: ComponentProps<'a'> & { to: string }) => <a href={to} {...props} />,
+}))
+beforeEach(() => { cleanup(); vi.clearAllMocks(); router.invalidate.mockResolvedValue(undefined) })
+
+it('retries data before resetting, with a recoverable message if loading still fails', async () => {
+  const reset = vi.fn()
+  router.invalidate.mockRejectedValueOnce(new Error('private backend detail'))
+  render(<RouteError reset={reset} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('tente de novo')
+  expect(screen.queryByText('private backend detail')).toBeNull()
+  expect(reset).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+  await waitFor(() => expect(reset).toHaveBeenCalledOnce())
+  expect(router.invalidate).toHaveBeenCalledTimes(2)
+})
+
+it('prevents another retry while the current request is pending', async () => {
+  let finish: () => void = () => { throw new Error('Retry has not started') }
+  router.invalidate.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+  const reset = vi.fn()
+  render(<RouteError reset={reset} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+  const pending = screen.getByRole('button', { name: 'Tentando novamente…' })
+  expect(pending).toBeDisabled()
+  fireEvent.click(pending)
+  expect(router.invalidate).toHaveBeenCalledOnce()
+  finish()
+  await waitFor(() => expect(reset).toHaveBeenCalledOnce())
+})
+
+it('announces loading and offers a working way home from an unknown route', () => {
+  const pending = render(<RoutePending />)
+  expect(screen.getByRole('status')).toHaveTextContent('carregando')
+  pending.unmount()
+  render(<RouteNotFound />)
+  expect(screen.getByRole('link', { name: 'Voltar ao início' })).toHaveAttribute('href', '/')
+})
+
+it('connects the keyboard skip link to the main region while preserving page actions', () => {
+  render(<SiteFrame actions={<button>Minha ação</button>}><p>Conteúdo</p></SiteFrame>)
+  const main = screen.getByRole('main')
+  expect(screen.getByRole('link', { name: 'Pular para o conteúdo' })).toHaveAttribute('href', `#${main.id}`)
+  expect(main).toHaveAttribute('tabindex', '-1')
+  expect(screen.getByRole('button', { name: 'Minha ação' })).toBeEnabled()
+})

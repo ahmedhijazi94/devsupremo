@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createServer } from 'node:net'
 import { performance } from 'node:perf_hooks'
-import { chromium, type Browser, type Request } from '@playwright/test'
+import { chromium, type Browser, type Page, type Request } from '@playwright/test'
 import { buildProjectFiles } from '../src/lib/templates/project-files'
 
 const workspace = mkdtempSync(join(tmpdir(), 'supremo-start-runtime-'))
@@ -83,6 +83,62 @@ function rpcHeaders(request: Request, origin: string) {
   return headers
 }
 
+async function experienceAcceptance(page: Page, url: string) {
+  const requests: string[] = []
+  page.on('request', request => requests.push(request.url()))
+  for (const width of [1440, 390]) for (const colorScheme of ['light', 'dark'] as const) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
+    await page.goto(url, { waitUntil: 'networkidle' })
+    await page.getByRole('heading', { level: 1 }).waitFor()
+    assert.equal(await page.locator('html').getAttribute('lang'), 'pt-BR')
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Home must fit its viewport')
+    assert((await page.evaluate(() => getComputedStyle(document.body).fontFamily)).includes('system-ui'), 'Start must resolve its font without a Next-only variable')
+    await page.screenshot({ path: join(workspace, `home-${width}-${colorScheme}.png`), fullPage: true })
+    await page.getByRole('link', { name: 'Criar minha conta', exact: true }).click()
+    await page.getByRole('heading', { name: 'Crie sua conta', exact: true }).waitFor()
+    assert.equal(new URL(page.url()).searchParams.get('mode'), 'signup')
+    await page.getByLabel('Email', { exact: true }).fill('draft@example.invalid')
+    await page.getByRole('button', { name: 'Já tenho uma conta', exact: true }).click()
+    await page.getByRole('heading', { name: 'Entre na sua conta', exact: true }).waitFor()
+    assert.equal(await page.getByLabel('Email', { exact: true }).inputValue(), 'draft@example.invalid', 'Changing access mode must preserve the draft')
+    assert.equal(await page.getByLabel('Senha', { exact: true }).getAttribute('autocomplete'), 'current-password')
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Auth must fit its viewport')
+    await page.screenshot({ path: join(workspace, `login-${width}-${colorScheme}.png`), fullPage: true })
+  }
+  const response = await page.goto(`${url}/missing-experience-proof`)
+  assert.equal(response?.status(), 404)
+  await page.getByRole('link', { name: 'Voltar ao início', exact: true }).click()
+  await page.getByRole('heading', { level: 1 }).waitFor()
+  assert.equal(new URL(page.url()).pathname, '/')
+  assert(!requests.some(request => /fonts\.googleapis\.com|fonts\.gstatic\.com|__supremo\/browser-diagnostics/.test(request)), 'Production presentation must not request remote fonts or a dev collector')
+  checks.firstExperience = { desktopAndMobile: true, lightAndDark: true, localFont: true, signupLink: true, modePreservesDraft: true, notFoundRecovery: true }
+}
+
+async function componentAcceptance(page: Page, url: string) {
+  await page.goto(`${url}/runtime-components`, { waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: 'Abrir diálogo', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Exemplo acessível' })
+  await dialog.waitFor()
+  await page.getByLabel('Nome de exemplo').fill('Preservado')
+  await page.keyboard.press('Escape')
+  await dialog.waitFor({ state: 'hidden' })
+  assert.equal(await page.getByRole('button', { name: 'Abrir diálogo', exact: true }).evaluate(element => element === document.activeElement), true)
+  await page.getByRole('button', { name: 'Ações', exact: true }).focus()
+  await page.keyboard.press('ArrowDown')
+  await page.getByRole('menuitem', { name: 'Escolher' }).waitFor()
+  await page.keyboard.press('Enter')
+  await page.getByRole('status').filter({ hasText: 'Selecionado' }).waitFor()
+  await page.getByRole('tab', { name: 'Primeira' }).focus()
+  await page.keyboard.press('ArrowRight')
+  await page.getByRole('tabpanel', { name: 'Segunda' }).waitFor()
+  await page.getByRole('button', { name: 'Ajuda', exact: true }).focus()
+  await page.getByRole('tooltip').waitFor()
+  await page.screenshot({ path: join(workspace, 'components-mobile-dark.png'), fullPage: true })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true)
+  checks.accessibleComponents = { dialogFocusRestored: true, dropdownKeyboard: true, tabsKeyboard: true, tooltipFocus: true, productionCsp: true }
+}
+
 async function devAcceptance(cwd: string, stack: 'start' | 'next') {
   const uiPath = stack === 'start' ? 'src/features/example/greeting-form.tsx' : 'app/runtime-form.tsx'
   const originalUi = readFileSync(join(cwd, uiPath), 'utf8')
@@ -105,9 +161,10 @@ async function devAcceptance(cwd: string, stack: 'start' | 'next') {
   // Preserve each framework's existing dev origin policy: the frozen Next
   // fixture advertises localhost and deliberately rejects 127.0.0.1 assets.
   const url = `http://${stack === 'next' ? 'localhost' : '127.0.0.1'}:${status.port}`
+  const formUrl = stack === 'start' ? `${url}/examples` : url
   const page = await browser!.newPage()
   const hydrationStarted = performance.now()
-  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.goto(formUrl, { waitUntil: 'networkidle' })
   // Inputs exist in SSR HTML before the development client has hydrated. Prove
   // the RPC interaction first so draft preservation measures Fast Refresh,
   // not the initial hydration replacing an edited pre-hydration DOM node.
@@ -146,7 +203,7 @@ async function devAcceptance(cwd: string, stack: 'start' | 'next') {
     rmSync(join(cwd, routePath))
     await waitUntil(async () => { const response = await navigateDuringRouteUpdate(`${url}/runtime-new`); return response?.status() === 404 })
   }
-  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.goto(formUrl, { waitUntil: 'networkidle' })
   await page.getByLabel('Seu nome').fill('Servidor')
   const serverPath = stack === 'start' ? 'src/features/example/example.functions.ts' : 'app/runtime-action.ts'
   const serverOriginal = readFileSync(join(cwd, serverPath), 'utf8')
@@ -178,8 +235,28 @@ async function devAcceptance(cwd: string, stack: 'start' | 'next') {
   }
   await page.close()
   const reconnect = await browser!.newPage()
-  await reconnect.goto(url)
+  await reconnect.goto(formUrl)
   await reconnect.getByRole('heading', { name: 'Runtime marker 2', exact: true }).waitFor()
+  if (stack === 'start') {
+    const diagnosticFile = join(cwd, '.supremo/runtime/browser-diagnostics.json')
+    // The heading exists in SSR HTML before the client module/observer loads.
+    // A real RPC proves this reconnected page has hydrated before the event.
+    await reconnect.waitForLoadState('networkidle')
+    await reconnect.getByLabel('Seu nome').fill('DiagnosticReady')
+    await reconnect.getByRole('button', { name: 'Enviar saudação' }).click()
+    await reconnect.getByRole('status').filter({ hasText: 'Olá, DiagnosticReady!' }).waitFor()
+    await reconnect.evaluate(() => window.dispatchEvent(new ErrorEvent('error', {
+      error: new TypeError('synthetic-private-message-DO-NOT-PERSIST'),
+      filename: location.origin + '/src/router.tsx?secret=DO-NOT-PERSIST', lineno: 1, colno: 1,
+    })))
+    await waitUntil(async () => existsSync(diagnosticFile) && JSON.parse(readFileSync(diagnosticFile, 'utf8')).events.length > 0)
+    const diagnostic = readFileSync(diagnosticFile, 'utf8')
+    assert(!diagnostic.includes('DO-NOT-PERSIST'))
+    const event = JSON.parse(diagnostic).events.find((entry: { name: string }) => entry.name === 'TypeError')
+    assert.equal(event?.file, 'src/router.tsx')
+    assert.equal(event?.generatedLine, 1)
+    checks.localBrowserDiagnostics = { realHydratedBrowser: true, advisoryOnly: true, messageAndQueryOmitted: true }
+  }
   await reconnect.close()
   write(cwd, uiPath, originalUi)
   write(cwd, serverPath, serverOriginal)
@@ -190,12 +267,29 @@ async function devAcceptance(cwd: string, stack: 'start' | 'next') {
 try {
   const files = buildProjectFiles({ stack: 'tanstack-start-vite', kind: 'solo', projectName: 'Runtime proof', description: 'Disposable browser acceptance fixture' })
   for (const file of files) write(app, file.path, file.content)
+  // Synthetic local identity enables diagnostics without a device, credentials or remote calls.
+  write(app, '.supremo/project.json', JSON.stringify({ projectId: '9577816d-886a-466f-8bf2-0fcce3bd9272' }))
   timings.install = command(app, 'npm', ['ci', '--no-audit', '--no-fund'], 'npm-ci').elapsedMs
   timings.routes = command(app, 'npm', ['run', 'routes:generate'], 'route-generation').elapsedMs
   timings.typecheck = command(app, 'npm', ['run', 'typecheck'], 'typecheck').elapsedMs
   checks.originalGeneratedTypecheck = true
   // A fixture-only public button invokes the real protected profile RPC without a session.
   write(app, 'src/routes/runtime-private.tsx', `import {createFileRoute} from '@tanstack/react-router'\nimport {useServerFn} from '@tanstack/react-start'\nimport {useState} from 'react'\nimport {updateProfile} from '@/features/profile/profile.functions'\nexport const Route=createFileRoute('/runtime-private')({component:Probe})\nfunction Probe(){const call=useServerFn(updateProfile);const[state,setState]=useState('idle');return <><button onClick={async()=>{try{await call({data:{displayName:'Runtime proof'}});setState('ALLOWED')}catch{setState('DENIED')}}}>Protected RPC</button><p role="status">{state}</p></>}\n`)
+  write(app, 'src/routes/runtime-components.tsx', `import {createFileRoute} from '@tanstack/react-router'
+import {useState} from 'react'
+import {Button} from '@/components/ui/button'
+import {Dialog,DialogTrigger,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog'
+import {DropdownMenu,DropdownMenuTrigger,DropdownMenuContent,DropdownMenuItem} from '@/components/ui/dropdown-menu'
+import {Tabs,TabsList,TabsTrigger,TabsContent} from '@/components/ui/tabs'
+import {TooltipProvider,Tooltip,TooltipTrigger,TooltipContent} from '@/components/ui/tooltip'
+export const Route=createFileRoute('/runtime-components')({component:Probe})
+function Probe(){const[selected,setSelected]=useState(false);return <main className="space-y-6 p-8">
+<Dialog><DialogTrigger asChild><Button>Abrir diálogo</Button></DialogTrigger><DialogContent><DialogTitle>Exemplo acessível</DialogTitle><DialogDescription>Interação de teste.</DialogDescription><label>Nome de exemplo<input/></label></DialogContent></Dialog>
+<DropdownMenu><DropdownMenuTrigger asChild><Button>Ações</Button></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem onSelect={()=>setSelected(true)}>Escolher</DropdownMenuItem></DropdownMenuContent></DropdownMenu><p role="status">{selected?'Selecionado':'Aguardando'}</p>
+<Tabs defaultValue="one"><TabsList><TabsTrigger value="one">Primeira</TabsTrigger><TabsTrigger value="two">Segunda</TabsTrigger></TabsList><TabsContent value="one">Conteúdo um</TabsContent><TabsContent value="two">Conteúdo dois</TabsContent></Tabs>
+<TooltipProvider delayDuration={0}><Tooltip><TooltipTrigger asChild><Button>Ajuda</Button></TooltipTrigger><TooltipContent>Ajuda por foco</TooltipContent></Tooltip></TooltipProvider>
+</main>}
+`)
   timings.productionBuild = command(app, 'npm', ['run', 'build'], 'production-build').elapsedMs
   const port = await freePort(), url = `http://127.0.0.1:${port}`
   const startup = performance.now()
@@ -206,7 +300,8 @@ try {
   await waitUntil(async () => { assert.equal(production!.exitCode, null, productionOutput); return healthy(url) })
   timings.productionStart = Math.round(performance.now() - startup)
   const ssr = await fetch(url), html = await ssr.text()
-  assert(html.includes('Runtime proof') && html.includes('Enviar saudação'))
+  assert(html.includes('Runtime proof') && html.includes('Criar minha conta'))
+  assert((await (await fetch(`${url}/examples`)).text()).includes('Enviar saudação'))
   for (const canary of canaries) assert(!html.includes(canary))
   const csp = ssr.headers.get('content-security-policy')
   assert(csp?.includes('nonce-'))
@@ -217,7 +312,9 @@ try {
   page.on('pageerror', error => browserErrors.push(error.message))
   const securityErrors: string[] = []
   page.on('console', message => { if (message.type() === 'error' && /Content Security Policy|Refused to execute|hydration/i.test(message.text())) securityErrors.push(message.text()) })
-  await page.goto(url)
+  await experienceAcceptance(page, url)
+  await componentAcceptance(page, url)
+  await page.goto(`${url}/examples`)
   await page.getByLabel('Seu nome').fill('Supremo')
   const sent = page.waitForRequest(request => request.method() === 'POST' && request.url().includes('_serverFn'))
   await page.getByRole('button', { name: 'Enviar saudação' }).click()

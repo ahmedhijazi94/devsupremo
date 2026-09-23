@@ -1,8 +1,10 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
+import { LogOut, Mail, UserRound } from 'lucide-react'
 import { getCurrentUser } from '@/features/auth/auth.functions'
 import { ProfileForm } from '@/features/profile/profile-form'
 import { Button } from '@/components/ui/button'
 import { Card, CardTitle, CardDescription } from '@/components/ui/card'
+import { SiteFrame } from '@/components/site-frame'
 
 export const Route = createFileRoute('/app')({
   loader: async () => { const user = await getCurrentUser(); if (!user) throw redirect({ to: '/login' }); return { user } },
@@ -10,10 +12,11 @@ export const Route = createFileRoute('/app')({
 })
 function AppPage() {
   const { user } = Route.useLoaderData()
-  return <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-6 px-6 py-16">
-    <h1 className="text-3xl font-semibold">Olá, {user.email}</h1>
-    <Card><CardTitle>Seu espaço está pronto</CardTitle><CardDescription>Os dados são protegidos pelas permissões da sua conta.</CardDescription></Card>
-    <ProfileForm />
-    <form action="/auth/signout" method="post"><Button type="submit" variant="secondary">Sair</Button></form>
-  </main>
+  return <SiteFrame actions={<form action="/auth/signout" method="post"><Button type="submit" variant="secondary"><LogOut aria-hidden="true" className="size-4" />Sair</Button></form>}>
+    <div className="mb-10 max-w-2xl"><p className="mb-4 text-sm font-medium text-accent">Minha conta</p><h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Bem-vindo ao seu espaço.</h1><p className="mt-5 text-lg leading-relaxed text-muted">Que bom ter você de volta. Seus próximos passos começam por aqui.</p></div>
+    <div className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
+      <Card className="h-fit"><span aria-hidden="true" className="mb-6 flex size-12 items-center justify-center rounded-2xl bg-elevated text-accent"><UserRound className="size-6" /></span><CardTitle>Sua conta</CardTitle><CardDescription>Você está conectado com este email.</CardDescription><p className="mt-6 flex items-start gap-3 break-all text-sm font-medium"><Mail aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />{user.email}</p></Card>
+      <Card><CardTitle>Vamos nos conhecer</CardTitle><CardDescription>Escolha como você quer ser chamado por aqui.</CardDescription><div className="mt-7"><ProfileForm /></div></Card>
+    </div>
+  </SiteFrame>
 }

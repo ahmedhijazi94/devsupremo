@@ -22,6 +22,7 @@ export const PLATFORM_MANAGED_PATHS = [
   'tsconfig.json',
   'next.config.ts',
   'vite.config.mts',
+  'scripts/browser-diagnostics.ts',
   'vitest.config.mts',
   'scripts/generate-routes.mjs',
   'scripts/start-production.mjs',

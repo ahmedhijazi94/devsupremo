@@ -1,0 +1,45 @@
+import { useState, type ReactNode } from 'react'
+import { Link, useRouter } from '@tanstack/react-router'
+import { ArrowLeft, Compass, LoaderCircle, RotateCcw } from 'lucide-react'
+import { Button, buttonClass } from '@/components/ui/button'
+import { SiteFrame } from '@/components/site-frame'
+
+function StateLayout({ symbol, title, children }: { symbol: ReactNode; title: string; children: ReactNode }) {
+  return <SiteFrame><section className="mx-auto my-auto w-full max-w-lg py-12 text-center">
+    <div aria-hidden="true" className="mx-auto mb-7 flex size-16 items-center justify-center rounded-3xl bg-elevated text-accent">{symbol}</div>
+    <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{title}</h1>
+    {children}
+  </section></SiteFrame>
+}
+
+export function RoutePending() {
+  return <StateLayout symbol={<LoaderCircle className="size-7 motion-safe:animate-spin" />} title="Só um instante">
+    <p role="status" aria-live="polite" className="mt-4 text-muted">Estamos carregando esta página…</p>
+  </StateLayout>
+}
+
+export function RouteNotFound() {
+  return <StateLayout symbol={<Compass className="size-7" />} title="Não encontramos esta página">
+    <p className="mt-4 leading-relaxed text-muted">O endereço pode ter mudado. Você pode voltar ao início e continuar por lá.</p>
+    <Link to="/" className={`${buttonClass('secondary')} mt-8`}><ArrowLeft aria-hidden="true" className="size-4" />Voltar ao início</Link>
+  </StateLayout>
+}
+
+export function RouteError({ reset }: { reset: () => void }) {
+  const router = useRouter()
+  const [retrying, setRetrying] = useState(false)
+  const [retryFailed, setRetryFailed] = useState(false)
+  async function retry() {
+    if (retrying) return
+    setRetrying(true)
+    setRetryFailed(false)
+    try { await router.invalidate(); reset() }
+    catch { setRetryFailed(true) }
+    finally { setRetrying(false) }
+  }
+  return <StateLayout symbol={<RotateCcw className="size-7" />} title="Não foi possível carregar">
+    <p className="mt-4 leading-relaxed text-muted">Algo interrompeu o carregamento. Tente novamente ou volte à página inicial.</p>
+    {retryFailed && <p role="alert" className="mt-4 text-sm text-danger-foreground">Ainda não foi possível carregar. Aguarde um momento e tente de novo.</p>}
+    <div className="mt-8 flex flex-wrap justify-center gap-3"><Button onClick={() => void retry()} loading={retrying}>{retrying ? 'Tentando novamente…' : 'Tentar novamente'}</Button><Link to="/" className={buttonClass('secondary')}>Voltar ao início</Link></div>
+  </StateLayout>
+}

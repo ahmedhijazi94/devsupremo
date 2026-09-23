@@ -1,0 +1,234 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Plugin } from 'vite'
+import { z } from 'zod'
+
+const ENDPOINT = '/__supremo/browser-diagnostics'
+const MODULE = 'virtual:supremo-browser-diagnostics'
+const RESOLVED_MODULE = '\0' + MODULE
+const RETENTION_MS = 15 * 60 * 1000
+const MAX_BODY = 512
+const MAX_EVENTS = 20
+const names = ['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'URIError', 'EvalError', 'AggregateError', 'Unknown'] as const
+const eventSchema = z.object({
+  bootId: z.uuid(), kind: z.enum(['error', 'unhandled_rejection']), name: z.enum(names),
+  sourceId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  generatedLine: z.number().int().min(1).max(100000).optional(),
+  generatedColumn: z.number().int().min(1).max(10000).optional(),
+}).strict()
+type Observation = {
+  kind: 'error' | 'unhandled_rejection'; name: typeof names[number]
+  file?: string; generatedLine?: number; generatedColumn?: number
+  count: number; firstSeenAt: number; lastSeenAt: number
+}
+
+/** Only code module names enter diagnostics. Never accept a browser-supplied path. */
+function sourceFile(root: string, id: string): string | null {
+  const filename = path.relative(root, id.split('?')[0] ?? '').split(path.sep).join('/')
+  return filename.length <= 200 && /^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_$.-]+\.[cm]?[jt]sx?$/.test(filename) &&
+    !filename.split('/').some(part => part === '.' || part === '..') ? filename : null
+}
+
+/** The browser sends enums, integers and a hash only; messages, stacks and URLs stay in memory. */
+function browserModule(bootId: string): string {
+  return `
+const names = ${JSON.stringify(names)};
+const endpoint = ${JSON.stringify(ENDPOINT)};
+let attempts = 0, windowStarted = Date.now();
+function position(value, line, column) {
+  if (typeof value !== 'string' || value.length > 4096) return null;
+  try {
+    const url = new URL(value);
+    if (url.origin !== location.origin || !/^\\/src\\//.test(url.pathname)) return null;
+    return { path: url.pathname, line, column };
+  } catch { return null; }
+}
+async function report(kind, error, point) {
+  const now = Date.now();
+  if (now - windowStarted >= 60000) { attempts = 0; windowStarted = now; }
+  if (++attempts > 10) return;
+  const name = error instanceof Error && names.includes(error.name) ? error.name : 'Unknown';
+  const payload = { bootId: ${JSON.stringify(bootId)}, kind, name };
+  if (point && globalThis.crypto?.subtle) {
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(point.path));
+    payload.sourceId = [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    if (Number.isInteger(point.line) && point.line > 0 && point.line <= 100000) payload.generatedLine = point.line;
+    if (Number.isInteger(point.column) && point.column > 0 && point.column <= 10000) payload.generatedColumn = point.column;
+  }
+  await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', redirect: 'error',
+    body: JSON.stringify(payload), signal: AbortSignal.timeout(1500) });
+}
+const onError = event => { void report('error', event.error, position(event.filename, event.lineno, event.colno)).catch(() => undefined); };
+const onRejection = event => {
+  const error = event.reason;
+  let point = null;
+  if (error instanceof Error && typeof error.stack === 'string') {
+    for (const candidate of error.stack.slice(0, 4096).match(/https?:\\/\\/[^\\s)]+:\\d+:\\d+/g) ?? []) {
+      const match = /^(.*):(\\d+):(\\d+)$/.exec(candidate);
+      if (match) point = position(match[1], Number(match[2]), Number(match[3]));
+      if (point) break;
+    }
+  }
+  void report('unhandled_rejection', error, point).catch(() => undefined);
+};
+window.addEventListener('error', onError);
+window.addEventListener('unhandledrejection', onRejection);
+if (import.meta.hot) import.meta.hot.dispose(() => {
+  window.removeEventListener('error', onError);
+  window.removeEventListener('unhandledrejection', onRejection);
+});
+`
+}
+
+function readBody(request: IncomingMessage): Promise<string | null> {
+  return new Promise(resolve => {
+    let bytes = 0
+    const chunks: Buffer[] = []
+    const finish = (value: string | null) => {
+      clearTimeout(timer)
+      request.off('data', onData).off('end', onEnd).off('error', onError).off('aborted', onError)
+      request.resume()
+      resolve(value)
+    }
+    const onData = (chunk: Buffer) => {
+      bytes += chunk.length
+      if (bytes > MAX_BODY) finish(null)
+      else chunks.push(chunk)
+    }
+    const onEnd = () => finish(Buffer.concat(chunks).toString('utf8'))
+    const onError = () => finish(null)
+    const timer = setTimeout(() => finish(null), 1500)
+    request.on('data', onData).on('end', onEnd).on('error', onError).on('aborted', onError)
+  })
+}
+
+/** Advisory local telemetry. No production hooks, HTML injection, console patch, eval or remote commands. */
+export function browserDiagnosticsPlugin(): Plugin {
+  let enabled = false
+  let root = ''
+  let bootId = randomUUID()
+  const sources = new Map<string, string>()
+  return {
+    name: 'supremo-browser-diagnostics',
+    apply: (config, env) => env.command === 'serve' && env.mode === 'development' &&
+      config.mode !== 'production' && process.env.NODE_ENV !== 'production' && process.env.SUPREMO_VALIDATION !== '1',
+    configResolved(config) {
+      root = config.root
+      enabled = config.command === 'serve' && config.mode === 'development' && !config.isProduction &&
+        !config.server.https && ['127.0.0.1', 'localhost', '::1'].includes(String(config.server.host)) &&
+        process.env.SUPREMO_VALIDATION !== '1'
+    },
+    resolveId(id) { return enabled && id === MODULE ? RESOLVED_MODULE : undefined },
+    load(id, options) { return enabled && !options?.ssr && this.environment.config.consumer !== 'server' && id === RESOLVED_MODULE ? browserModule(bootId) : undefined },
+    transform(code, id, options) {
+      if (!enabled || options?.ssr || this.environment.config.consumer === 'server') return undefined
+      const file = sourceFile(root, id)
+      if (file && sources.size < 2000) sources.set(createHash('sha256').update('/' + file).digest('hex'), file)
+      // Import through the existing client module graph: the app's nonce/CSP remains unchanged.
+      // A static import can be last in the module; appending preserves existing source coordinates.
+      return file === 'src/router.tsx' ? { code: `${code}\nimport ${JSON.stringify(MODULE)};`, map: null } : undefined
+    },
+    configureServer(server) {
+      if (!enabled || !server.httpServer) return
+      bootId = randomUUID()
+      const currentBootId = bootId
+      sources.clear()
+      let projectId: string
+      const directory = path.join(root, '.supremo', 'runtime')
+      const filename = path.join(directory, 'browser-diagnostics.json')
+      const safeDirectories = () => ['.supremo', '.supremo/runtime'].every(part => {
+        const stat = fs.lstatSync(path.join(root, part))
+        return stat.isDirectory() && !stat.isSymbolicLink()
+      })
+      try {
+        const metadata = path.join(root, '.supremo', 'project.json')
+        const stat = fs.lstatSync(metadata)
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384 || fs.lstatSync(path.dirname(metadata)).isSymbolicLink()) { enabled = false; return }
+        const parsed = z.object({ projectId: z.uuid() }).parse(JSON.parse(fs.readFileSync(metadata, 'utf8')))
+        projectId = parsed.projectId
+        fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+        if (!safeDirectories()) { enabled = false; return }
+      } catch { enabled = false; return } // Optional collector must never stop the preview.
+      const startedAt = Date.now()
+      let events: Observation[] = []
+      let active = 0, requests = 0, windowStarted = startedAt
+      let warned = false
+      const persist = () => {
+        if (bootId !== currentBootId) return
+        const now = Date.now()
+        events = events.filter(event => now - event.lastSeenAt < RETENTION_MS)
+        const temporary = filename + '.' + randomUUID() + '.tmp'
+        let created = false
+        try {
+          if (!safeDirectories()) return
+          const descriptor = fs.openSync(temporary, 'wx', 0o600)
+          created = true
+          try { fs.writeFileSync(descriptor, JSON.stringify({ version: 1, projectId, bootId: currentBootId, startedAt, updatedAt: now, events }) + '\n') }
+          finally { fs.closeSync(descriptor) }
+          fs.renameSync(temporary, filename)
+        } catch {
+          if (!warned) { warned = true; server.config.logger.warn('Supremo: diagnóstico opcional do navegador indisponível; preview e validação continuam independentes.') }
+        } finally {
+          if (created) {
+            try { if (safeDirectories()) fs.rmSync(temporary, { force: true }) }
+            catch { /* Only this optional collector's own temporary file may be removed. */ }
+          }
+        }
+      }
+      persist() // Each boot resets previous observations; no old error becomes a current verdict.
+      const expiry = setInterval(persist, 60000)
+      expiry.unref()
+      server.httpServer.once('close', () => { clearInterval(expiry); events = []; persist() })
+      server.middlewares.use((request, response, next) => {
+        if (request.url?.split('?')[0] !== ENDPOINT) { next(); return }
+        const finish = (status: number) => {
+          response.statusCode = status
+          response.setHeader('Cache-Control', 'no-store')
+          response.setHeader('X-Content-Type-Options', 'nosniff')
+          response.removeHeader('Access-Control-Allow-Origin')
+          response.removeHeader('Access-Control-Allow-Credentials')
+          response.end()
+        }
+        const address = server.httpServer?.address()
+        const peer = request.socket.remoteAddress
+        if (!address || typeof address === 'string' || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address.address) ||
+            !peer || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer)) { finish(403); return }
+        const origins = ['127.0.0.1', 'localhost', '[::1]'].map(host => `http://${host}:${address.port}`)
+        const origin = request.headers.origin
+        if (!origin || !origins.includes(origin) || origin !== `http://${request.headers.host}` ||
+            (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin')) { finish(403); return }
+        if (request.url !== ENDPOINT) { finish(400); return }
+        if (request.method !== 'POST') { finish(405); return }
+        if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '') || request.headers['content-encoding']) { finish(415); return }
+        if (Number(request.headers['content-length'] ?? 0) > MAX_BODY) { finish(413); return }
+        const now = Date.now()
+        if (now - windowStarted >= 60000) { windowStarted = now; requests = 0 }
+        if (++requests > 20 || active >= 4) { finish(429); return }
+        active++
+        void collect(request, response).finally(() => { active-- })
+        async function collect(req: IncomingMessage, res: ServerResponse) {
+          try {
+            const body = await readBody(req)
+            if (body === null) { finish(413); return }
+            const parsed = eventSchema.safeParse(JSON.parse(body))
+            if (!parsed.success || parsed.data.bootId !== currentBootId) { finish(400); return }
+            const input = parsed.data
+            const file = input.sourceId ? sources.get(input.sourceId) : undefined
+            const identity = { kind: input.kind, name: input.name, ...(file ? { file,
+              ...(input.generatedLine ? { generatedLine: input.generatedLine } : {}), ...(input.generatedColumn ? { generatedColumn: input.generatedColumn } : {}) } : {}) }
+            const observedAt = Date.now()
+            events = events.filter(event => observedAt - event.lastSeenAt < RETENTION_MS)
+            const prior = events.find(event => event.kind === identity.kind && event.name === identity.name && event.file === identity.file && event.generatedLine === identity.generatedLine && event.generatedColumn === identity.generatedColumn)
+            if (prior) { prior.count = Math.min(99, prior.count + 1); prior.lastSeenAt = observedAt }
+            else events = [...events.slice(-(MAX_EVENTS - 1)), { ...identity, count: 1, firstSeenAt: observedAt, lastSeenAt: observedAt }]
+            persist()
+            finish(204)
+          } catch { if (!res.writableEnded) finish(400) } // Never echo untrusted bodies or exception details.
+        }
+      })
+    },
+  }
+}

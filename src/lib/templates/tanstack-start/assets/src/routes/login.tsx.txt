@@ -1,5 +1,21 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { LoginForm } from '@/features/auth/login-form'
+import { ArrowLeft } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { LoginForm, type LoginMode } from '@/features/auth/login-form'
+import { SiteFrame } from '@/components/site-frame'
 
-export const Route = createFileRoute('/login')({ component: LoginPage })
-function LoginPage() { return <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 px-6 py-16"><h1 className="text-3xl font-semibold">Entrar em __PROJECT_NAME_JSX__</h1><LoginForm /></main> }
+export const Route = createFileRoute('/login')({
+  validateSearch: (search: Record<string, unknown>): { mode?: LoginMode } => search.mode === 'signup' ? { mode: 'signup' } : {},
+  component: LoginPage,
+})
+function LoginPage() {
+  const { mode = 'login' } = Route.useSearch()
+  const navigate = Route.useNavigate()
+  return <SiteFrame><div className="grid flex-1 items-center gap-12 lg:grid-cols-2 lg:gap-20">
+    <div className="hidden max-w-md lg:block"><p className="mb-5 text-sm font-medium text-accent">Sinta-se em casa</p><h2 className="text-5xl font-semibold leading-tight tracking-tight">Seu próximo passo começa aqui.</h2><p className="mt-6 text-lg leading-relaxed text-muted">Um espaço para continuar de onde você parou. Entre na sua conta ou crie uma para começar.</p></div>
+    <section className="mx-auto w-full max-w-md rounded-[var(--radius-xl)] border border-border bg-surface p-6 shadow-lg shadow-foreground/5 sm:p-9">
+      <Link to="/" className="mb-8 inline-flex items-center gap-2 rounded text-sm text-muted hover:text-foreground"><ArrowLeft aria-hidden="true" className="size-4" />Voltar ao início</Link>
+      <LoginForm mode={mode} onModeChange={(next) => { void navigate({ search: next === 'signup' ? { mode: 'signup' } : {}, replace: true }) }} />
+    </section>
+  </div></SiteFrame>
+}

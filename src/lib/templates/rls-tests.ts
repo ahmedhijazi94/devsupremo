@@ -92,6 +92,7 @@ describe('RLS', () => {
   return `import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { isolationTest } from './isolation'
+import { createRlsTestUsers } from './test-users'
 
 /**
  * Testes de política RLS — gerados pelo Supremo.
@@ -125,54 +126,35 @@ if (!ANON_KEY || !SERVICE_KEY) {
   )
 }
 
-const ALICE = { email: \`alice-\${crypto.randomUUID()}@rls.test\`, password: 'test-password-123!' }
-const BOB = { email: \`bob-\${crypto.randomUUID()}@rls.test\`, password: 'test-password-123!' }
-
-let admin: SupabaseClient
+const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+})
+const testUsers = createRlsTestUsers({ admin, url: SUPABASE_URL, anonKey: ANON_KEY })
 let aliceClient: SupabaseClient
 let bobClient: SupabaseClient
 let anonClient: SupabaseClient
 let aliceId: string
 let bobId: string
+let aliceAccessToken: string
+let bobAccessToken: string
 
 beforeAll(async () => {
-  admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
-
-  aliceId = await createUser(ALICE)
-  bobId = await createUser(BOB)
-
-  aliceClient = await signIn(ALICE)
-  bobClient = await signIn(BOB)
+  const alice = await testUsers.create()
+  aliceId = alice.id
+  aliceClient = alice.client
+  aliceAccessToken = alice.accessToken
+  const bob = await testUsers.create()
+  bobId = bob.id
+  bobClient = bob.client
+  bobAccessToken = bob.accessToken
   anonClient = createClient(SUPABASE_URL, ANON_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 })
 
 afterAll(async () => {
-  await admin.auth.admin.deleteUser(aliceId).catch(() => undefined)
-  await admin.auth.admin.deleteUser(bobId).catch(() => undefined)
+  await testUsers.cleanup()
 })
-
-async function createUser(credentials: { email: string; password: string }) {
-  const { data, error } = await admin.auth.admin.createUser({
-    email: credentials.email,
-    password: credentials.password,
-    email_confirm: true,
-  })
-  if (error) throw new Error(\`Falha ao criar usuário de teste: \${error.message}\`)
-  return data.user.id
-}
-
-async function signIn(credentials: { email: string; password: string }) {
-  const client = createClient(SUPABASE_URL, ANON_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
-  const { error } = await client.auth.signInWithPassword(credentials)
-  if (error) throw new Error(\`Falha ao autenticar: \${error.message}\`)
-  return client
-}
 
 ${cases}`
 }
@@ -690,9 +672,6 @@ export function inferTablesFromMigration(sql: string): TableSpec[] {
 
 function isolationRegistration(table: string): string {
   return `isolationTest('public.${table}', async () => {
-    const owner = await aliceClient.auth.getSession()
-    const other = await bobClient.auth.getSession()
-    if (!owner.data.session || !other.data.session) throw new Error('Sessões da fixture ausentes.')
-    return { rowId, ownerAccessToken: owner.data.session.access_token, otherAccessToken: other.data.session.access_token }
+    return { rowId, ownerAccessToken: aliceAccessToken, otherAccessToken: bobAccessToken }
   })`
 }

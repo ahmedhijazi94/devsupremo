@@ -14,13 +14,39 @@ export interface AuthAdminProvider {
   management(path: 'config/auth' | 'database/query/read-only', method: 'GET' | 'POST' | 'PATCH', body?: object): Promise<unknown>
   user(method: 'POST' | 'PUT' | 'DELETE', userId: string | null, body?: object): Promise<unknown>
 }
+// Fixed provider templates avoid accepting HTML or credential-bearing configuration
+// through the device queue. Tokens are substituted by Supabase, never by Supremo.
+const recoveryEmails = {
+  code: {
+    subject: 'Seu código para redefinir a senha',
+    content: '<h2>Redefinir sua senha</h2><p>Use este código para continuar a recuperação da sua conta:</p><p><strong>{{ .Token }}</strong></p><p>Se você não pediu a recuperação, ignore este email.</p>',
+  },
+  link: {
+    subject: 'Redefina sua senha',
+    content: '<h2>Redefinir sua senha</h2><p>Abra o link abaixo para escolher uma nova senha:</p><p><a href="{{ .ConfirmationURL }}">Redefinir senha</a></p><p>Se você não pediu a recuperação, ignore este email.</p>',
+  },
+} as const
 const rawConfigSchema = z.object({ mailer_autoconfirm: z.boolean(), disable_signup: z.boolean(),
-  external_anonymous_users_enabled: z.boolean().optional(), site_url: z.string().optional() })
+  external_anonymous_users_enabled: z.boolean().optional(), site_url: z.string().optional(),
+  smtp_host: z.string().max(1000).nullable().optional(), smtp_user: z.string().max(1000).nullable().optional(),
+  smtp_admin_email: z.string().max(1000).nullable().optional(),
+  mailer_subjects_recovery: z.string().max(1000).nullable().optional(),
+  mailer_templates_recovery_content: z.string().max(100_000).nullable().optional(),
+})
+function recoveryMode(content: string | null): 'code' | 'link' | 'custom' {
+  if (content === recoveryEmails.code.content) return 'code'
+  if (content === recoveryEmails.link.content) return 'link'
+  return 'custom'
+}
 export function configView(raw: unknown) {
   const config = rawConfigSchema.parse(raw)
+  const smtpFields = [config.smtp_host, config.smtp_user, config.smtp_admin_email]
   return { emailConfirmation: !config.mailer_autoconfirm, signupsEnabled: !config.disable_signup,
     ...(config.external_anonymous_users_enabled !== undefined ? { anonymousSignIns: config.external_anonymous_users_enabled } : {}),
-    ...(config.site_url !== undefined ? { siteUrl: config.site_url } : {}) }
+    ...(config.site_url !== undefined ? { siteUrl: config.site_url } : {}),
+    ...(smtpFields.some(value => value !== undefined) ? { smtp: { configured: smtpFields.every(value => Boolean(value?.trim())) } } : {}),
+    ...(config.mailer_templates_recovery_content !== undefined ? { recoveryEmailMode: recoveryMode(config.mailer_templates_recovery_content) } : {}),
+  }
 }
 const userViewSchema = z.object({ id: z.string().uuid(), email: z.string().nullable().optional(),
   created_at: z.string().optional(), email_confirmed_at: z.string().nullable().optional(),
@@ -43,14 +69,18 @@ export async function runAuthAdmin(provider: AuthAdminProvider, raw: AuthOptions
   if (options.operation === 'auth-configure') {
     const before = configView(await provider.management('config/auth', 'GET'))
     const desired = options.config
+    const recovery = desired.recoveryEmailMode ? recoveryEmails[desired.recoveryEmailMode] : undefined
     await provider.management('config/auth', 'PATCH', {
       ...(desired.emailConfirmation !== undefined ? { mailer_autoconfirm: !desired.emailConfirmation } : {}),
       ...(desired.signupsEnabled !== undefined ? { disable_signup: !desired.signupsEnabled } : {}),
       ...(desired.anonymousSignIns !== undefined ? { external_anonymous_users_enabled: desired.anonymousSignIns } : {}),
       ...(desired.siteUrl !== undefined ? { site_url: desired.siteUrl } : {}),
+      ...(recovery ? { mailer_subjects_recovery: recovery.subject, mailer_templates_recovery_content: recovery.content } : {}),
     })
-    const after = configView(await provider.management('config/auth', 'GET'))
-    if (Object.entries(desired).some(([key, value]) => after[key as keyof typeof after] !== value))
+    const observed = rawConfigSchema.parse(await provider.management('config/auth', 'GET'))
+    const after = configView(observed)
+    if (Object.entries(desired).some(([key, value]) => after[key as keyof typeof after] !== value) ||
+      recovery && observed.mailer_subjects_recovery !== recovery.subject)
       throw new InspectionError('Alteração enviada, mas a configuração retornada pelo Supabase ainda não confirma o resultado. Consulte auth config antes de repetir.', 409)
     return { before, after, verified: true }
   }

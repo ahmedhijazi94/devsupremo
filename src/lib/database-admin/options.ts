@@ -14,6 +14,7 @@ const authUrl = z.url().max(2000).refine(value => {
 export const authConfigPatchSchema = z.object({
   emailConfirmation: z.boolean().optional(), signupsEnabled: z.boolean().optional(),
   anonymousSignIns: z.boolean().optional(), siteUrl: authUrl.optional(),
+  recoveryEmailMode: z.enum(['code', 'link']).optional(),
 }).strict().refine(nonempty, 'Informe pelo menos uma configuração.')
 export const authUserPatchSchema = z.object({
   email: z.email().max(320).optional(), emailConfirmed: z.literal(true).optional(),

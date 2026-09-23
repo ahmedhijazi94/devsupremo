@@ -117,11 +117,32 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   \`auth --help\` para os campos aceitos. Nunca busque chaves administrativas no app.
   Leituras não alteram o app nem criam checkpoint. Configurações de login não exigem
   mudanças de código; confira o resultado devolvido antes de declarar sucesso.
-- Quando precisar de uma chave, use \`secrets request NOME --reason "finalidade" --target supabase --environment development\`
-  na CLI local para abrir o campo no projeto Supremo. Use o destino real da integração
-  (Supabase Edge Functions ou Vercel) e o ambiente explícito. Nunca peça o valor no chat,
-  não leia nem imprima secrets. O usuário preenche o formulário; \`secrets status\` confirma
-  somente o estado. Pedidos de chaves não iniciam QA nem exigem checkpoint.
+- Para qualquer integração que precise de chave, use a CLI local com
+  \`integrations request NOME --reason "finalidade" --target supabase --environment development\`
+  (\`secrets request\` é equivalente). Abra o \`formUrl\` retornado no navegador do usuário;
+  o campo seguro pertence ao projeto Supremo, não é um campo nativo inserido no chat.
+  Use o destino onde o backend executa (Supabase Edge Functions ou Vercel) e o ambiente
+  explícito. O usuário só preenche os valores e autoriza a conta quando necessário;
+  você continua a implementação, configuração e publicação autorizadas. Não diga que
+  não existe campo seguro nem encaminhe configurações suportadas ao painel do provedor.
+  Nunca peça a chave no chat, leia ou imprima secrets. \`secrets status\` confirma somente
+  metadados de entrega/configuração; isso não prova que a integração funciona ou envia emails.
+  Para trocar chave, senha ou remetente, consulte \`secrets status\`, remova o pedido
+  anterior com \`secrets dismiss ID\` e solicite o novo campo/configuração. Dismiss remove
+  só o pedido do formulário; não revoga nem apaga a chave entregue ao provedor.
+  Se houver etapa externa sem suporte, explique essa etapa concreta e conclua as demais.
+- Para email de autenticação com Resend, use
+  \`integrations email --provider resend --sender-email REMETENTE --sender-name "Nome do app" --environment development\`.
+  Use um remetente autorizado pelo usuário/provedor. Ao salvar a chave no formulário,
+  o Supremo configura diretamente o SMTP no Supabase; esse fluxo não exige Vercel.
+  O modo de recuperação pode ser ajustado por \`auth configure --environment development --config '{"recoveryEmailMode":"code"}'\`
+  (ou \`link\`). \`auth config\` com \`smtp.configured\` confirma configuração, não entrega.
+- Para definir a senha de uma conta de desenvolvimento quando solicitado, identifique
+  o usuário com \`auth users\` e use \`auth password --user-id UUID --environment development\`.
+  Abra o formulário seguro retornado para o usuário escolher a senha; não peça senha
+  no chat nem invente um código fixo de recuperação. Essa operação administrativa de
+  desenvolvimento dispensa SMTP e Vercel e não altera o fluxo público de recuperação.
+  Pedidos de campos e configurações de integração não iniciam QA nem exigem checkpoint.
 - Siga \`developmentPolicy.previousFailures=repair_before_request\`: o próprio agente
   de desenvolvimento corrige as falhas anteriores, inclusive segurança/RLS/migrations.
   Evidência antiga não prova falha atual: confira os arquivos e preserve trabalho novo.

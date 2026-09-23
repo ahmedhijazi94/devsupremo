@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-const mocks = vi.hoisted(() => ({ owner: vi.fn(), store: vi.fn(), authorize: vi.fn(), find: vi.fn(), resolve: vi.fn(), deliver: vi.fn(), audit: vi.fn(), fulfill: vi.fn(), list: vi.fn(), dismiss: vi.fn() }))
+const mocks = vi.hoisted(() => ({ owner: vi.fn(), store: vi.fn(), authorize: vi.fn(), find: vi.fn(), resolve: vi.fn(), claim: vi.fn(), release: vi.fn(), deliver: vi.fn(), audit: vi.fn(), fulfill: vi.fn(), list: vi.fn(), dismiss: vi.fn() }))
 vi.mock('@/lib/auth', () => ({ requireProjectOwner: mocks.owner }))
 vi.mock('@/lib/supabase/admin', () => ({ createServiceClient: () => ({ service: true }) }))
 vi.mock('@/lib/secret-requests/store', () => ({ secretRequestStore: mocks.store }))
@@ -9,11 +9,13 @@ const projectId = '11111111-1111-4111-8111-111111111111'
 const requestId = '22222222-2222-4222-8222-222222222222'
 const binding = { target: 'supabase', environment: 'development', targetRef: 'projectref', accountId: 'account' }
 const row = { ...binding, id: requestId, name: 'PAYMENT_API_KEY', description: 'Backend', status: 'pending' }
+const claim = { id: '33333333-3333-4333-8333-333333333333', expiresAt: '2100-01-01T00:00:00.000Z' }
 beforeEach(() => {
   vi.resetAllMocks()
   mocks.owner.mockResolvedValue({ user: { id: 'owner' }, supabase: {} })
   mocks.authorize.mockResolvedValue(undefined)
   mocks.find.mockResolvedValue(row); mocks.resolve.mockResolvedValue(binding); mocks.list.mockResolvedValue([row])
+  mocks.claim.mockResolvedValue(claim)
   mocks.store.mockReturnValue(mocks)
 })
 describe('secret owner actions', () => {
@@ -36,8 +38,8 @@ describe('secret owner actions', () => {
     const result = await saveSecret({ projectId, requestId, value: 'private-value' })
     expect(result).toEqual({ ok: true }); expect(mocks.find).toHaveBeenCalledWith(requestId)
     expect(mocks.store).toHaveBeenCalledWith({ service: true }, 'owner', projectId)
-    expect(mocks.deliver).toHaveBeenCalledWith(row, binding, 'private-value')
-    expect(mocks.fulfill).toHaveBeenCalledWith(row)
+    expect(mocks.deliver).toHaveBeenCalledWith(row, binding, 'private-value', claim)
+    expect(mocks.fulfill).toHaveBeenCalledWith(row, claim)
     expect(await getSecretRequests(projectId)).toEqual({ requests: [{ id: requestId, name: row.name, description: row.description, target: row.target, environment: row.environment, targetRef: row.targetRef, status: 'pending' }] })
     expect(await dismissSecretRequest({ projectId, requestId })).toEqual({ ok: true })
     expect(mocks.dismiss).toHaveBeenCalledWith(requestId)

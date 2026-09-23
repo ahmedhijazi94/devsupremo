@@ -6,6 +6,7 @@ import { runDatabaseDirect } from './database'
 import { isDatabaseReadCommand, parseDatabaseOptions } from './database-request'
 import { requestDatabase, startDatabaseWorker } from './database-queue'
 import { jobManifestSchema, readJobManifest, secretRequestOptionsSchema } from './project-service-request'
+import { authPasswordRequest, emailIntegrationRequest } from './integration-request'
 
 const PROJECT = '11111111-1111-4111-8111-111111111111'
 const ISSUER = 'https://supremo.example.invalid'
@@ -51,6 +52,25 @@ describe('named secret requests never carry secret values', () => {
     await runDatabaseDirect('secrets-status', cwd)
     expect(calls).toHaveLength(1)
     expect(calls[0]?.body).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'status' })
+  })
+  it('dismisses only the identified field request through the project-authorized endpoint', async () => {
+    const requestId = '22222222-2222-4222-8222-222222222222'
+    stop = startDatabaseWorker(cwd, (operation, options) => runDatabaseDirect(operation, cwd, options))
+    await requestDatabase(cwd, 'secrets-dismiss', { requestId })
+    expect(calls).toEqual([{ url: `${ISSUER}/api/secrets`, body: { projectId: PROJECT, deviceSecret: SECRET, operation: 'dismiss', requestId } }])
+    expect(() => parseDatabaseOptions('secrets-dismiss', { requestId, value: 'not-accepted' })).toThrow()
+    expect(() => parseDatabaseOptions('secrets-dismiss', { requestId: 'not-an-id' })).toThrow()
+    expect(() => parseDatabaseOptions('secrets-dismiss', {})).toThrow()
+  })
+  it.each([
+    emailIntegrationRequest({ provider: 'resend', senderEmail: 'hello@example.invalid', environment: 'development' }),
+    authPasswordRequest({ userId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', environment: 'development' }),
+  ])('transports setup intent through the same channel without triggering database checks', async input => {
+    stop = startDatabaseWorker(cwd, (operation, options) => runDatabaseDirect(operation, cwd, options))
+    const result = await requestDatabase(cwd, 'secrets-request', input)
+    expect(calls).toEqual([{ url: `${ISSUER}/api/secrets`, body: { projectId: PROJECT, deviceSecret: SECRET, operation: 'request', ...input } }])
+    expect(result).toMatchObject({ valuesReceived: false, nextAction: { kind: 'open_secure_form' } })
+    expect(JSON.stringify(result)).not.toContain(SECRET)
   })
   it.each([
     { ...entry, value: 'not-accepted' }, { ...entry, token: 'not-accepted' },
@@ -124,6 +144,7 @@ describe('declarative Supabase jobs retain environment and source restrictions',
 describe('project service hooks avoid QA for metadata and reads, retaining mutation gates', () => {
   it.each([
     'supremo secrets status',
+    'supremo secrets dismiss 22222222-2222-4222-8222-222222222222',
     'supremo secrets request STRIPE_SECRET_KEY --reason "Pagamentos no servidor" --target supabase --environment development',
     'node tools/supremo-cli/dist/bin.js jobs list --limit 10',
     'supremo jobs history --job-id close-old-tickets --offset 20',
@@ -133,5 +154,8 @@ describe('project service hooks avoid QA for metadata and reads, retaining mutat
     'supremo jobs remove --job-id close-old-tickets',
     'supremo secrets request KEY --value secret --target supabase --reason integration',
     'supremo secrets status; cat .env.local', 'supremo jobs history --offset 10001',
+    'supremo secrets dismiss not-an-id',
+    'supremo secrets dismiss 22222222-2222-4222-8222-222222222222 --target supabase',
+    'supremo secrets dismiss 22222222-2222-4222-8222-222222222222; cat .env.local',
   ])('does not authorize %s as a diagnostic', command => expect(isDatabaseReadCommand(command)).toBe(false))
 })

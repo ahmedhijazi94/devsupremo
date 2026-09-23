@@ -64,7 +64,7 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     return data
   }
   if (operation.startsWith('secrets-')) {
-    const result = await request(operation === 'secrets-request' ? 'request' : 'status', { ...checkedOptions })
+    const result = await request(operation === 'secrets-request' ? 'request' : operation === 'secrets-dismiss' ? 'dismiss' : 'status', { ...checkedOptions })
     return secretResponse(result, config.projectId, issuer)
   }
   const status = await request('status') as unknown as DatabaseStatus

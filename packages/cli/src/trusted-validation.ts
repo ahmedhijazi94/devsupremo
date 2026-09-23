@@ -7,11 +7,15 @@ import { TRUSTED_VALIDATION_POLICIES_4_0_7 } from '../../../src/lib/github/valid
 import { TRUSTED_VALIDATION_POLICIES_4_0_8 } from '../../../src/lib/github/validation-policy-releases/4.0.8'
 import { TRUSTED_VALIDATION_POLICIES_4_0_9 } from '../../../src/lib/github/validation-policy-releases/4.0.9'
 import { TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0 } from '../../../src/lib/github/validation-policy-releases/4.0.10-5.0.0'
+import { TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1 } from '../../../src/lib/github/validation-policy-releases/4.0.11-5.0.1'
+import { TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0 } from '../../../src/lib/github/validation-policy-releases/4.0.12-5.1.0'
 import { blobHash, inspectValidationIntegrity, type PolicyTreeEntry } from './validation-integrity'
 import { readStableFile } from './stable-file'
 
 // Published project rails remain verifiable when only their engine is upgraded.
-const localPolicies = [...TRUSTED_VALIDATION_POLICIES, ...TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0, ...TRUSTED_VALIDATION_POLICIES_4_0_9, ...TRUSTED_VALIDATION_POLICIES_4_0_8, ...TRUSTED_VALIDATION_POLICIES_4_0_7, ...TRUSTED_VALIDATION_POLICIES_4_0_6, ...TRUSTED_VALIDATION_POLICIES_4_0_5]
+const localPolicies = [...TRUSTED_VALIDATION_POLICIES, ...TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0, ...TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1,
+  ...TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0, ...TRUSTED_VALIDATION_POLICIES_4_0_9, ...TRUSTED_VALIDATION_POLICIES_4_0_8,
+  ...TRUSTED_VALIDATION_POLICIES_4_0_7, ...TRUSTED_VALIDATION_POLICIES_4_0_6, ...TRUSTED_VALIDATION_POLICIES_4_0_5]
 
 /** No network on the editing path. Server approval also verifies its own copy. */
 export function verifyTrustedFiles(cwd: string): void {

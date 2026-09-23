@@ -40,6 +40,16 @@ describe('project secret form', () => {
     await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Conexão indisponível.'))
     expect(field.value).toBe('private-value')
   })
+  it('preserves multiline credentials pasted into a generic integration field', async () => {
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY')
+    const credential = '{\n  "fixture": "private-value"\n}'
+    fireEvent.paste(field, { clipboardData: { getData: () => credential } })
+    expect((screen.getByLabelText('PAYMENT_API_KEY') as HTMLInputElement).value).not.toContain('private-value')
+    expect(screen.getByText(/Credencial com várias linhas recebida/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: credential }))
+  })
   it('shows refresh failures and supports retry without discarding an existing draft', async () => {
     render(<SecretsCard projectId={projectId} />)
     const field = await screen.findByLabelText('PAYMENT_API_KEY') as HTMLInputElement; fireEvent.change(field, { target: { value: 'draft' } })
@@ -86,5 +96,30 @@ describe('project secret form', () => {
     render(<SecretsCard projectId={projectId} />)
     expect(await screen.findByText('configurado')).toBeTruthy()
     expect(screen.queryByPlaceholderText('Cole a chave')).toBeNull()
+  })
+  it('applies SMTP from one private field and shows the sender before submission', async () => {
+    mocks.get.mockResolvedValue({ requests: [{ ...request, configuration: { kind: 'supabase-smtp', provider: 'resend', senderEmail: 'login@example.com', senderName: 'Example' } }] })
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('Chave da API do Resend') as HTMLInputElement
+    expect(field.type).toBe('password')
+    expect(screen.getByText(/Remetente: Example/).textContent).toContain('login@example.com')
+    fireEvent.change(field, { target: { value: 'synthetic-private-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Configurar email' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'synthetic-private-key' }))
+    await waitFor(() => expect(field.value).toBe(''))
+    expect(mocks.success).toHaveBeenCalledWith('Configuração de email salva no Supabase. O envio ainda precisa ser testado.')
+  })
+  it('identifies the selected development user and submits the password only to the owner action', async () => {
+    const userId = '44444444-4444-4444-8444-444444444444'
+    mocks.get.mockResolvedValue({ requests: [{ ...request, configuration: { kind: 'supabase-user-password', userId } }] })
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('Nova senha de desenvolvimento') as HTMLInputElement
+    expect(screen.getByText(`Senha de desenvolvimento · Usuário ${userId} · projectref`)).toBeTruthy()
+    expect(field.type).toBe('password')
+    fireEvent.change(field, { target: { value: 'synthetic-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Definir senha' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'synthetic-password' }))
+    await waitFor(() => expect(field.value).toBe(''))
+    expect(JSON.stringify(mocks.success.mock.calls)).not.toContain('synthetic-password')
   })
 })

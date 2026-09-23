@@ -8,7 +8,21 @@ import { toast } from 'sonner'
 const environments = { development: 'Desenvolvimento', preview: 'Preview', production: 'Produção' }
 function destination(request: SecretRequestView): string {
   if (!request.target || !request.environment || !request.targetRef) return 'Pedido antigo sem destino confirmado. Dispense e peça ao agente para solicitar novamente.'
+  if (request.configuration?.kind === 'supabase-smtp') return `Email de autenticação · Resend · ${environments[request.environment]} · ${request.targetRef}`
+  if (request.configuration?.kind === 'supabase-user-password') return `Senha de desenvolvimento · Usuário ${request.configuration.userId} · ${request.targetRef}`
   return `${request.target === 'supabase' ? 'Supabase · Edge Functions' : 'Vercel'} · ${environments[request.environment]} · ${request.targetRef}`
+}
+
+function fieldLabel(request: SecretRequestView): string {
+  if (request.configuration?.kind === 'supabase-smtp') return 'Chave da API do Resend'
+  if (request.configuration?.kind === 'supabase-user-password') return 'Nova senha de desenvolvimento'
+  return request.name
+}
+
+function successMessage(request: SecretRequestView): string {
+  if (request.configuration?.kind === 'supabase-smtp') return 'Configuração de email salva no Supabase. O envio ainda precisa ser testado.'
+  if (request.configuration?.kind === 'supabase-user-password') return 'Senha de desenvolvimento atualizada.'
+  return request.target === 'vercel' ? `${request.name} enviado. Disponível no próximo deploy desse ambiente.` : `${request.name} enviado às Edge Functions do projeto.`
 }
 
 export function SecretsCard({ projectId }: { projectId: string }) {
@@ -37,11 +51,11 @@ export function SecretsCard({ projectId }: { projectId: string }) {
   if (!requests.length && !error) return null
   return (
     <section id="secrets" className="bg-surface rounded-[var(--radius-inner)] p-4">
-      <div className="mb-1 flex items-center gap-2"><KeyRound className="text-accent h-4 w-4 shrink-0" /><h2 className="text-sm font-semibold">Chaves solicitadas pelo agente</h2></div>
-      <p className="text-muted mb-3 text-xs">Cole cada chave aqui. O valor segue apenas para o destino indicado; não vai para o chat nem fica no histórico do Supremo.</p>
+      <div className="mb-1 flex items-center gap-2"><KeyRound className="text-accent h-4 w-4 shrink-0" /><h2 className="text-sm font-semibold">Configuração segura</h2></div>
+      <p className="text-muted mb-3 text-xs">Preencha o campo solicitado. O Supremo aplica a configuração no destino indicado, sem enviar o valor ao chat ou guardá-lo no histórico.</p>
       {error && <div role="alert" className="mb-3 text-xs">{error} <button type="button" onClick={() => setNonce((n) => n + 1)} className="underline">Tentar novamente</button></div>}
       <ul className="space-y-3">{requests.map((request) => <li key={request.id}>
-        {request.status === 'fulfilled' ? <div className="text-muted text-xs"><div className="flex items-center gap-2"><Check className="text-up-ink h-3.5 w-3.5" /><span className="font-mono">{request.name}</span><span>configurado</span></div><p className="mt-1 break-all">{destination(request)}</p></div>
+        {request.status === 'fulfilled' ? <div className="text-muted text-xs"><div className="flex items-center gap-2"><Check className="text-up-ink h-3.5 w-3.5" /><span>{fieldLabel(request)}</span><span>configurado</span></div><p className="mt-1 break-all">{destination(request)}</p></div>
           : <SecretForm projectId={projectId} request={request} onDone={() => setNonce((n) => n + 1)} />}
       </li>)}</ul>
     </section>
@@ -50,8 +64,11 @@ export function SecretsCard({ projectId }: { projectId: string }) {
 
 function SecretForm({ projectId, request, onDone }: { projectId: string; request: SecretRequestView; onDone: () => void }) {
   const [value, setValue] = useState('')
+  const [multiline, setMultiline] = useState(false)
   const [busy, setBusy] = useState(false)
   const inputId = `secret-${request.id}`
+  const password = request.configuration?.kind === 'supabase-user-password'
+  const smtp = request.configuration?.kind === 'supabase-smtp' ? request.configuration : null
   const configured = Boolean(request.target && request.environment && request.targetRef)
   async function save() {
     if (!value.trim() || busy) return
@@ -60,7 +77,8 @@ function SecretForm({ projectId, request, onDone }: { projectId: string; request
       const result = await saveSecret({ projectId, requestId: request.id, value })
       if (result.error || !result.ok) { toast.error(result.error ?? 'Envio não confirmado.'); return }
       setValue('')
-      toast.success(request.target === 'vercel' ? `${request.name} enviado. Disponível no próximo deploy desse ambiente.` : `${request.name} enviado às Edge Functions do projeto.`)
+      setMultiline(false)
+      toast.success(successMessage(request))
       onDone()
     } catch { toast.error('Não foi possível confirmar o envio. Tente novamente.') }
     finally { setBusy(false) }
@@ -72,22 +90,32 @@ function SecretForm({ projectId, request, onDone }: { projectId: string; request
       const result = await dismissSecretRequest({ projectId, requestId: request.id })
       if (result.error || !result.ok) { toast.error(result.error ?? 'Pedido não dispensado.'); return }
       setValue('')
+      setMultiline(false)
       onDone()
     } catch { toast.error('Não foi possível dispensar o pedido.') }
     finally { setBusy(false) }
   }
   return (
     <form onSubmit={(event) => { event.preventDefault(); void save() }} className="bg-sunken rounded-[var(--radius-control)] p-2.5">
-      <div className="mb-1.5 flex items-center gap-2"><label htmlFor={inputId} className="font-mono text-xs font-medium">{request.name}</label>
+      <div className="mb-1.5 flex items-center gap-2"><label htmlFor={inputId} className="text-xs font-medium">{fieldLabel(request)}</label>
         <button type="button" onClick={() => void dismiss()} disabled={busy} aria-label={`Dispensar pedido ${request.name}`} className="text-muted hover:text-ink ml-auto shrink-0"><X className="h-3.5 w-3.5" /></button></div>
       {request.description && <p className="text-muted mb-2 text-xs">{request.description}</p>}
       <p id={`${inputId}-destination`} className="text-muted mb-2 break-all text-xs">{destination(request)}</p>
+      {smtp && <p className="text-muted mb-2 text-xs">Remetente: {smtp.senderName} &lt;{smtp.senderEmail}&gt;. Ao salvar, o Supremo configura o envio de emails de autenticação. O domínio e as permissões de envio precisam estar liberados no Resend.</p>}
+      {multiline && <p className="text-muted mb-2 text-xs">Credencial com várias linhas recebida. Cole novamente para substituir.</p>}
       {configured && <div className="flex items-center gap-1.5">
-        <input id={inputId} name={request.name} type="password" value={value} disabled={busy} placeholder="Cole a chave" required maxLength={16384}
+        <input id={inputId} name={request.name} type="password" value={multiline ? 'Credencial recebida' : value} readOnly={multiline} disabled={busy} placeholder={password ? 'Digite a nova senha' : 'Cole a chave'} required maxLength={password ? 72 : 16384} minLength={password ? 8 : undefined}
           aria-describedby={`${inputId}-destination`} onChange={(event) => setValue(event.target.value)} autoComplete="new-password" spellCheck={false}
-          className="bg-surface min-w-0 flex-1 rounded px-2 py-1.5 font-mono text-xs outline-none" />
+          onPaste={(event) => {
+            const pasted = event.clipboardData.getData('text')
+            if (!request.configuration && (multiline || /[\r\n]/.test(pasted))) {
+              event.preventDefault()
+              setMultiline(/[\r\n]/.test(pasted))
+              setValue(pasted)
+            }
+          }} className="bg-surface min-w-0 flex-1 rounded px-2 py-1.5 font-mono text-xs outline-none" />
         <button type="submit" disabled={busy || !value.trim()} className="bg-accent text-accent-ink inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium disabled:opacity-50">
-          {busy ? <Loader2 aria-label="Enviando" className="h-3.5 w-3.5 animate-spin" /> : `Salvar no ${request.target === 'supabase' ? 'Supabase' : 'Vercel'}`}
+          {busy ? <Loader2 aria-label="Enviando" className="h-3.5 w-3.5 animate-spin" /> : password ? 'Definir senha' : smtp ? 'Configurar email' : `Salvar no ${request.target === 'supabase' ? 'Supabase' : 'Vercel'}`}
         </button>
       </div>}
     </form>

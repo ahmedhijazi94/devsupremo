@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -13,7 +13,7 @@ const valid = () => ({ version: 1, projectId, bootId: '22222222-2222-4222-8222-2
 let root: string
 function write(value: unknown) { fs.writeFileSync(path.join(root, BROWSER_DIAGNOSTICS_PATH), JSON.stringify(value)) }
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-browser-reader-')); fs.mkdirSync(path.join(root, '.supremo/runtime'), { recursive: true }) })
-afterEach(() => { fs.rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }) })
 
 it('exposes only a bounded, informational summary for the matching project', () => {
   write(valid())
@@ -53,6 +53,68 @@ it('ignores absent, oversized, symlinked and hardlinked artifacts', () => {
   fs.unlinkSync(path.join(root, BROWSER_DIAGNOSTICS_PATH))
   fs.linkSync(path.join(root, 'outside.json'), path.join(root, BROWSER_DIAGNOSTICS_PATH))
   expect(readBrowserDiagnostics(root, projectId, now)).toBeNull()
+})
+it('rejects directory artifacts and symlinked parent directories', () => {
+  fs.mkdirSync(path.join(root, BROWSER_DIAGNOSTICS_PATH))
+  expect(readBrowserDiagnostics(root, projectId, now)).toBeNull()
+  fs.rmSync(path.join(root, BROWSER_DIAGNOSTICS_PATH), { recursive: true })
+  write(valid())
+  fs.renameSync(path.join(root, '.supremo/runtime'), path.join(root, 'outside'))
+  fs.symlinkSync(path.join(root, 'outside'), path.join(root, '.supremo/runtime'))
+  expect(readBrowserDiagnostics(root, projectId, now)).toBeNull()
+})
+it('never reads a replacement symlink after inspecting the opened descriptor', () => {
+  write(valid())
+  const filename = path.join(root, BROWSER_DIAGNOSTICS_PATH)
+  const replacement = path.join(root, 'replacement.json')
+  fs.writeFileSync(replacement, JSON.stringify({ ...valid(), events: [{ ...observation, name: 'ReferenceError' }] }))
+  const originalFstat = fs.fstatSync
+  let swapped = false
+  vi.spyOn(fs, 'fstatSync').mockImplementation(descriptor => {
+    const stat = originalFstat(descriptor)
+    if (!swapped) {
+      swapped = true
+      fs.renameSync(filename, path.join(root, 'original.json'))
+      fs.symlinkSync(replacement, filename)
+    }
+    return stat
+  })
+  const read = vi.spyOn(fs, 'readSync')
+  const close = vi.spyOn(fs, 'closeSync')
+  // A rename can change ctime, in which case the advisory is discarded. It
+  // must never consume the ReferenceError in the replacement path.
+  const result = readBrowserDiagnostics(root, projectId, now)
+  expect(result === null || result.observations[0]?.name === 'TypeError').toBe(true)
+  expect(read).toHaveBeenCalled()
+  const descriptor = read.mock.calls[0]![0]
+  expect(typeof descriptor).toBe('number')
+  expect(close).toHaveBeenCalledWith(descriptor)
+})
+it('bounds reads even when the opened file grows after fstat', () => {
+  write(valid())
+  const filename = path.join(root, BROWSER_DIAGNOSTICS_PATH)
+  const originalFstat = fs.fstatSync
+  let grown = false
+  vi.spyOn(fs, 'fstatSync').mockImplementation(descriptor => {
+    const stat = originalFstat(descriptor)
+    if (!grown) { grown = true; fs.appendFileSync(filename, ' '.repeat(20000)) }
+    return stat
+  })
+  const read = vi.spyOn(fs, 'readSync')
+  const close = vi.spyOn(fs, 'closeSync')
+  expect(readBrowserDiagnostics(root, projectId, now)).toBeNull()
+  expect(read).toHaveBeenCalledTimes(1)
+  expect(read.mock.calls[0]![1].byteLength).toBe(16385)
+  expect(close).toHaveBeenCalledWith(read.mock.calls[0]![0])
+})
+it('closes the descriptor and stays advisory when the read fails', () => {
+  write(valid())
+  const open = vi.spyOn(fs, 'openSync')
+  vi.spyOn(fs, 'readSync').mockImplementation(() => { throw new Error('fixture read failure') })
+  const close = vi.spyOn(fs, 'closeSync')
+  expect(readBrowserDiagnostics(root, projectId, now)).toBeNull()
+  expect(open.mock.calls[0]![1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
+  expect(close).toHaveBeenCalledWith(open.mock.results[0]!.value)
 })
 it('never changes authorization, next action, validation or stored turn state', () => {
   write(valid())

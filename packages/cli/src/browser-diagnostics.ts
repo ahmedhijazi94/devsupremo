@@ -5,6 +5,7 @@ import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
 
 export const BROWSER_DIAGNOSTICS_PATH = '.supremo/runtime/browser-diagnostics.json'
 const RETENTION_MS = 15 * 60 * 1000
+const MAXIMUM_BYTES = 16384
 const timestamp = z.number().int().nonnegative()
 const recordSchema = z.object({
   version: z.literal(1), projectId: z.uuid(), bootId: z.uuid(), startedAt: timestamp, updatedAt: timestamp,
@@ -25,9 +26,27 @@ export function readBrowserDiagnostics(cwd: string, projectId: string, now = Dat
       if (!stat.isDirectory() || stat.isSymbolicLink()) return null
     }
     const filename = path.join(cwd, BROWSER_DIAGNOSTICS_PATH)
-    const stat = fs.lstatSync(filename)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384) return null
-    const parsed = recordSchema.safeParse(JSON.parse(fs.readFileSync(filename, 'utf8')))
+    // Inspect and read the same inode. A replaced pathname cannot redirect the
+    // read; NONBLOCK also avoids waiting on a FIFO before fstat rejects it.
+    const descriptor = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
+    let content: string
+    try {
+      const before = fs.fstatSync(descriptor)
+      if (!before.isFile() || before.nlink !== 1 || before.size > MAXIMUM_BYTES) return null
+      // The inode may grow after fstat. Read at most one byte past the budget.
+      const bytes = Buffer.alloc(MAXIMUM_BYTES + 1)
+      let length = 0
+      while (length < bytes.length) {
+        const count = fs.readSync(descriptor, bytes, length, bytes.length - length, length)
+        if (count === 0) break
+        length += count
+      }
+      const after = fs.fstatSync(descriptor)
+      if (length > MAXIMUM_BYTES || !after.isFile() || after.nlink !== 1 || length !== after.size ||
+          before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) return null
+      content = bytes.toString('utf8', 0, length)
+    } finally { fs.closeSync(descriptor) }
+    const parsed = recordSchema.safeParse(JSON.parse(content))
     if (!parsed.success) return null
     const data = parsed.data
     if (data.projectId !== projectId || data.startedAt > data.updatedAt || data.updatedAt > now + 5000 || now - data.updatedAt >= RETENTION_MS) return null

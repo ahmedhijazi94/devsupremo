@@ -82544,15 +82544,33 @@ var init_turn_runtime = __esm({
 function readBrowserDiagnostics(cwd, projectId, now = Date.now()) {
   try {
     for (const part of [".supremo", ".supremo/runtime"]) {
-      const stat2 = import_node_fs22.default.lstatSync(import_node_path24.default.join(cwd, part));
-      if (!stat2.isDirectory() || stat2.isSymbolicLink())
+      const stat = import_node_fs22.default.lstatSync(import_node_path24.default.join(cwd, part));
+      if (!stat.isDirectory() || stat.isSymbolicLink())
         return null;
     }
     const filename = import_node_path24.default.join(cwd, BROWSER_DIAGNOSTICS_PATH);
-    const stat = import_node_fs22.default.lstatSync(filename);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384)
-      return null;
-    const parsed = recordSchema.safeParse(JSON.parse(import_node_fs22.default.readFileSync(filename, "utf8")));
+    const descriptor = import_node_fs22.default.openSync(filename, import_node_fs22.default.constants.O_RDONLY | import_node_fs22.default.constants.O_NOFOLLOW | import_node_fs22.default.constants.O_NONBLOCK);
+    let content;
+    try {
+      const before = import_node_fs22.default.fstatSync(descriptor);
+      if (!before.isFile() || before.nlink !== 1 || before.size > MAXIMUM_BYTES)
+        return null;
+      const bytes = Buffer.alloc(MAXIMUM_BYTES + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const count = import_node_fs22.default.readSync(descriptor, bytes, length, bytes.length - length, length);
+        if (count === 0)
+          break;
+        length += count;
+      }
+      const after = import_node_fs22.default.fstatSync(descriptor);
+      if (length > MAXIMUM_BYTES || !after.isFile() || after.nlink !== 1 || length !== after.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs)
+        return null;
+      content = bytes.toString("utf8", 0, length);
+    } finally {
+      import_node_fs22.default.closeSync(descriptor);
+    }
+    const parsed = recordSchema.safeParse(JSON.parse(content));
     if (!parsed.success)
       return null;
     const data = parsed.data;
@@ -82575,7 +82593,7 @@ function readBrowserDiagnostics(cwd, projectId, now = Date.now()) {
     return null;
   }
 }
-var import_node_fs22, import_node_path24, BROWSER_DIAGNOSTICS_PATH, RETENTION_MS, timestamp, recordSchema;
+var import_node_fs22, import_node_path24, BROWSER_DIAGNOSTICS_PATH, RETENTION_MS, MAXIMUM_BYTES, timestamp, recordSchema;
 var init_browser_diagnostics = __esm({
   "src/browser-diagnostics.ts"() {
     "use strict";
@@ -82585,6 +82603,7 @@ var init_browser_diagnostics = __esm({
     init_feedback();
     BROWSER_DIAGNOSTICS_PATH = ".supremo/runtime/browser-diagnostics.json";
     RETENTION_MS = 15 * 60 * 1e3;
+    MAXIMUM_BYTES = 16384;
     timestamp = external_exports.number().int().nonnegative();
     recordSchema = external_exports.object({
       version: external_exports.literal(1),

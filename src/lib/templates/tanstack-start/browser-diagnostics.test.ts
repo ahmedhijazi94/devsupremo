@@ -14,7 +14,11 @@ const asset = path.join(__dirname, 'assets/scripts/browser-diagnostics.ts.txt')
 const source = fs.readFileSync(asset, 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText
 const exports: { browserDiagnosticsPlugin?: () => Plugin } = {}
-vm.runInNewContext(compiled, { exports, require: createRequire(import.meta.url), Buffer, process, Date, setTimeout, clearTimeout, setInterval, clearInterval })
+const fixtureBootId = '10000000-0000-4000-8000-000000000001'
+let currentBootId = fixtureBootId
+const requireDependency = createRequire(import.meta.url)
+const fixtureCrypto = { ...(requireDependency('node:crypto') as typeof import('node:crypto')), randomUUID: () => currentBootId }
+vm.runInNewContext(compiled, { exports, require: (name: string): unknown => name === 'node:crypto' ? fixtureCrypto : requireDependency(name), Buffer, process, Date, setTimeout, clearTimeout, setInterval, clearInterval })
 const plugin = () => exports.browserDiagnosticsPlugin!()
 const endpoint = '/__supremo/browser-diagnostics'
 let root: string, server: ViteDevServer, origin: string
@@ -22,9 +26,10 @@ function artifact() { return JSON.parse(fs.readFileSync(path.join(root, '.suprem
 async function send(body: unknown, headers: Record<string, string> = { Origin: origin }) {
   return fetch(origin + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
 }
-function event(overrides: Record<string, unknown> = {}) { return { bootId: artifact().bootId, kind: 'error', name: 'TypeError', ...overrides } }
+function event(overrides: Record<string, unknown> = {}) { return { bootId: currentBootId, kind: 'error', name: 'TypeError', ...overrides } }
 
 beforeEach(async () => {
+  currentBootId = fixtureBootId
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-browser-diagnostics-'))
   fs.mkdirSync(path.join(root, '.supremo'), { recursive: true })
   fs.mkdirSync(path.join(root, 'src'), { recursive: true })
@@ -118,9 +123,11 @@ describe('local browser diagnostics boundary', () => {
   it('clears observations on a new preview boot and rejects old browser markers', async () => {
     const old = event()
     await send(old)
+    currentBootId = '10000000-0000-4000-8000-000000000002'
     await server.restart()
     expect(artifact().events).toEqual([])
     expect((await send(old)).status).toBe(400)
+    expect((await send(event())).status).toBe(204)
   })
   it('does not follow a replaced runtime directory symlink', async () => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-no-write-'))

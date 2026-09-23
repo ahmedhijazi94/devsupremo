@@ -29,6 +29,8 @@ Não aplica mudanças ao v7 nem migra projetos existentes automaticamente.
 - O contexto do turno apresenta essas observações como informação, sem alterar
   autorização, checkpoints, recuperação ou gates. Ausência de eventos não
   comprova saúde. A configuração Vite e seu plugin têm integridade protegida.
+  O leitor inspeciona e lê o mesmo descritor, com limite de bytes e rejeição de
+  links ou alterações detectadas durante a leitura.
 - Diagnóstico de CI distingue etapa não executada, cancelada e tempo excedido.
   Indisponibilidade de ambiente só é atribuída quando há evidência da etapa.
 
@@ -52,7 +54,7 @@ Executada com Node 22.22.1 em cópias e projetos temporários:
 | --- | --- |
 | Supremo: tipos, lint, cobertura, auditoria estrita e build de produção | Aprovados |
 | Suíte do Supremo | 1.874 testes aprovados |
-| CLI, incluindo pacote sem geração dinâmica de código | 865 testes aprovados |
+| CLI, incluindo pacote sem geração dinâmica de código | 869 testes aprovados |
 | Start público: tipos, lint, cobertura, auditoria e build | Aprovados; 49 testes |
 | Start individual: mesmos gates | Aprovados; 66 testes |
 | Start multitenant: mesmos gates | Aprovados; 70 testes |
@@ -63,6 +65,7 @@ Executada com Node 22.22.1 em cópias e projetos temporários:
 | Importação de módulo servidor pelo cliente | Build rejeitado como esperado |
 | Preview: HMR, rascunho, rotas, RPC e recuperação de erro de compilação | Processo e porta preservados |
 | Diagnóstico local no navegador real | POST 204, mensagem/query omitidas, sem erros CSP |
+| Worker real: edição visual e falhas deliberadas | Fluxo adaptativo aprovado; tipos/testes/segurança reprovados corretamente; HEAD e staging preservados |
 
 Na amostra local de três repetições, a atualização de componente teve mediana
 de 176 ms; reutilizar o preview saudável teve mediana de 50 ms. São medidas

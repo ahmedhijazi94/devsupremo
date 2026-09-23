@@ -1,0 +1,58 @@
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+
+export interface RlsTestUser {
+  id: string
+  client: SupabaseClient
+  accessToken: string
+}
+
+/** Synthetic identities for the disposable RLS test database only.
+ * Register cleanup() in afterAll even when setup fails. Remove domain fixtures
+ * first; this helper owns only the users it creates, never tables or assertions.
+ * Credentials and sessions stay in memory and are never logged.
+ */
+export function createRlsTestUsers(options: {
+  admin: SupabaseClient
+  url: string
+  anonKey: string
+}): { create(): Promise<RlsTestUser>; cleanup(): Promise<void> } {
+  const created = new Set<string>()
+  return {
+    async create() {
+      const credentials = { email: `rls-${crypto.randomUUID()}@rls.test`, password: `Test-${crypto.randomUUID()}!` }
+      let id: string
+      try {
+        const { data, error } = await options.admin.auth.admin.createUser({ ...credentials, email_confirm: true })
+        // Track a partial creation before checking errors or authenticating it.
+        if (data.user?.id) created.add(data.user.id)
+        if (error || !data.user?.id) throw new Error('identity missing')
+        id = data.user.id
+      } catch {
+        throw new Error('Não foi possível criar a identidade sintética do teste RLS.')
+      }
+      try {
+        const client = createClient(options.url, options.anonKey, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        })
+        const { data, error } = await client.auth.signInWithPassword(credentials)
+        if (error || data.user?.id !== id || !data.session?.access_token) throw new Error('session missing')
+        return { id, client, accessToken: data.session.access_token }
+      } catch {
+        throw new Error('Não foi possível autenticar a identidade sintética do teste RLS. Execute cleanup() em afterAll.')
+      }
+    },
+    async cleanup() {
+      let failures = 0
+      for (const id of created) {
+        try {
+          const { error } = await options.admin.auth.admin.deleteUser(id)
+          if (error) failures++
+          else created.delete(id)
+        } catch {
+          failures++
+        }
+      }
+      if (failures) throw new Error(`Não foi possível remover ${failures} identidade(s) sintética(s) do teste RLS. Execute cleanup() novamente.`)
+    },
+  }
+}

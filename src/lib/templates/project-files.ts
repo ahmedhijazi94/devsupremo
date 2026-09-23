@@ -326,6 +326,7 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
 
     // ── Testes ────────────────────────────────────────────────
     ...isolationGateFiles(),
+    { path: 'supabase/test-users.ts', content: fs.readFileSync(path.join(process.cwd(), 'src/lib/templates/assets/rls/test-users.ts.txt'), 'utf8') },
     { path: 'lib/utils.test.ts', content: utilsTest() },
     { path: 'app/page.test.tsx', content: pageTest(projectName) },
     {
@@ -991,7 +992,7 @@ a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
   --radius-md: 0.625rem;
   --radius-sm: 0.375rem;
 
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
+  --font-sans: var(--font-inter, ui-sans-serif), system-ui, -apple-system,
     "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
@@ -2708,6 +2709,13 @@ explícitas do usuário, regras de segurança do host nem os gates de integraç�
   A resposta da CLI é compacta; \`turn status --full-state\` dá o diagnóstico completo.
 
 ${MIGRATION_GUIDE}
+
+Para preparar identidades nas suítes RLS, reutilize \`createRlsTestUsers\` de
+\`supabase/test-users.ts\`, como na suíte básica gerada. Passe o cliente administrativo,
+URL e chave pública do banco descartável de testes; \`create()\` retorna \`id\`, \`client\`
+autenticado e \`accessToken\`. Registre \`cleanup()\` em \`afterAll\`, inclusive se o setup
+falhar, depois de limpar as linhas da feature. O helper só gerencia usuários sintéticos;
+não substitui fixtures do domínio, assertions ou \`isolationTest\`, nem pertence ao app.
 
 ## Chaves de integrações
 

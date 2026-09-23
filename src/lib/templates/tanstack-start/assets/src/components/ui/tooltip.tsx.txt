@@ -1,0 +1,13 @@
+import * as React from 'react'
+import * as Primitive from '@radix-ui/react-tooltip'
+import { cn } from '@/lib/utils'
+
+export const TooltipProvider = Primitive.Provider
+export const Tooltip = Primitive.Root
+export const TooltipTrigger = Primitive.Trigger
+export const TooltipContent = React.forwardRef<React.ComponentRef<typeof Primitive.Content>, React.ComponentPropsWithoutRef<typeof Primitive.Content>>(
+  function TooltipContent({ className, sideOffset = 6, ...props }, ref) {
+    return <Primitive.Portal><Primitive.Content ref={ref} sideOffset={sideOffset}
+      className={cn('z-50 max-w-72 rounded-[var(--radius-sm)] border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md', className)} {...props} /></Primitive.Portal>
+  },
+)

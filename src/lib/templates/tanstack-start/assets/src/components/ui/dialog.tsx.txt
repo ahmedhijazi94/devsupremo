@@ -1,0 +1,59 @@
+import * as React from 'react'
+import * as Primitive from '@radix-ui/react-dialog'
+import { X } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+type RootProps = React.ComponentProps<typeof Primitive.Root>
+type LegacyProps = Omit<RootProps, 'open'> & { open: boolean; onClose: () => void; title: string; description?: string }
+export type DialogProps = RootProps | LegacyProps
+
+/** Both the existing open/onClose/title API and the composable Radix API remain available. */
+export function Dialog(props: DialogProps) {
+  return 'title' in props ? <LegacyDialog {...props} /> : <Primitive.Root {...props} />
+}
+function LegacyDialog({ open, onClose, title, description, children, onOpenChange, ...props }: LegacyProps) {
+  const returnFocus = React.useRef<HTMLElement | null>(null)
+  return <Primitive.Root {...props} open={open} onOpenChange={(next) => { onOpenChange?.(next); if (!next) onClose() }}>
+    <DialogContent {...(description ? {} : { 'aria-describedby': undefined })}
+      onOpenAutoFocus={() => { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null }}
+      onCloseAutoFocus={(event) => { event.preventDefault(); returnFocus.current?.focus() }}>
+      <DialogHeader><DialogTitle>{title}</DialogTitle>{description && <DialogDescription>{description}</DialogDescription>}</DialogHeader>
+      <div className="mt-6">{children}</div>
+    </DialogContent>
+  </Primitive.Root>
+}
+export const DialogTrigger = Primitive.Trigger
+export const DialogClose = Primitive.Close
+export const DialogPortal = Primitive.Portal
+export const DialogOverlay = React.forwardRef<React.ComponentRef<typeof Primitive.Overlay>, React.ComponentPropsWithoutRef<typeof Primitive.Overlay>>(
+  function DialogOverlay({ className, ...props }, ref) {
+    return <Primitive.Overlay ref={ref} className={cn('fixed inset-0 z-50 bg-black/45', className)} {...props} />
+  },
+)
+export const DialogContent = React.forwardRef<React.ComponentRef<typeof Primitive.Content>, React.ComponentPropsWithoutRef<typeof Primitive.Content> & { showCloseButton?: boolean }>(
+  function DialogContent({ className, children, showCloseButton = true, ...props }, ref) {
+    return <DialogPortal><DialogOverlay /><Primitive.Content ref={ref}
+      className={cn('fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-xl)] border border-border bg-surface p-6 text-foreground shadow-xl', className)} {...props}>
+      {children}
+      {showCloseButton && <Primitive.Close className="absolute right-4 top-4 rounded p-1 text-muted hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+        <X aria-hidden="true" className="size-4" /><span className="sr-only">Fechar diálogo</span>
+      </Primitive.Close>}
+    </Primitive.Content></DialogPortal>
+  },
+)
+export function DialogHeader({ className, ...props }: React.ComponentProps<'div'>) {
+  return <div className={cn('flex flex-col gap-2 pr-8', className)} {...props} />
+}
+export function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
+  return <div className={cn('mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end', className)} {...props} />
+}
+export const DialogTitle = React.forwardRef<React.ComponentRef<typeof Primitive.Title>, React.ComponentPropsWithoutRef<typeof Primitive.Title>>(
+  function DialogTitle({ className, ...props }, ref) {
+    return <Primitive.Title ref={ref} className={cn('text-xl font-semibold', className)} {...props} />
+  },
+)
+export const DialogDescription = React.forwardRef<React.ComponentRef<typeof Primitive.Description>, React.ComponentPropsWithoutRef<typeof Primitive.Description>>(
+  function DialogDescription({ className, ...props }, ref) {
+    return <Primitive.Description ref={ref} className={cn('text-sm text-muted', className)} {...props} />
+  },
+)

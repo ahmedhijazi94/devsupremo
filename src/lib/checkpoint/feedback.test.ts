@@ -29,6 +29,8 @@ describe('validation feedback', () => {
     ] })
     const result = withFeedbackEvidence(feedback, '### CI › Políticas RLS (failure)\npull public.ecr.aws image: toomanyrequests: Rate exceeded\n\n---\n\n### CI › coverage (failure)\n70% < 80%')
     expect(result.failures.map((f) => f.category)).toEqual(['infrastructure', 'code'])
+    expect(result.summary).toContain('Ambiente de testes indisponível: Políticas RLS.')
+    expect(result.summary).not.toContain('Ambiente de testes indisponível: coverage')
     expect(withFeedbackEvidence(feedback, 'unknown failure').failures[0]?.category).toBe('security')
   })
   it('keeps the failing gate, exact revision and actionable evidence', () => {
@@ -58,6 +60,7 @@ describe('validation feedback', () => {
     ] })
     expect(result.failures).toEqual([{ name: 'Políticas RLS token=[REDACTED]', category: 'security' }])
     expect(result.checks).toEqual([{ name: 'Políticas RLS token=[REDACTED]', status: 'failed' }])
+    expect(result.summary).not.toContain('cancelado')
   })
   it('requires all checks of the matching SHA; no checks or older green never approve', () => {
     expect(buildValidationFeedback({ ...base, checks: [] }).state).toBe('pending')
@@ -78,11 +81,64 @@ describe('validation feedback', () => {
     ]) expect(validationFeedbackSchema.safeParse({ ...passed, state, ...patch }).success).toBe(false)
     expect(validationFeedbackSchema.safeParse({ ...passed, state, checks: undefined }).success).toBe(true)
   })
-  it('distinguishes security and interrupted infrastructure gates', () => {
+  it('preserves security and interrupted-gate compatibility categories', () => {
     expect(buildValidationFeedback({ ...base, required: ['Políticas RLS'], checks: [{ name: 'Políticas RLS', status: 'completed', conclusion: 'failure' }] }).failures[0]?.category).toBe('security')
     for (const conclusion of ['cancelled', 'timed_out', 'skipped']) {
       expect(buildValidationFeedback({ ...base, checks: [{ name: base.required[0]!, status: 'completed', conclusion }] }).failures[0]?.category).toBe('infrastructure')
     }
+  })
+  it.each([
+    ['skipped', 'não executado'], ['cancelled', 'cancelado'], ['timed_out', 'tempo limite excedido'],
+  ])('describes %s without inventing an unavailable test environment', (conclusion, description) => {
+    const feedback = buildValidationFeedback({ ...base, evidence: '', checks: [
+      { name: base.required[0]!, status: 'completed', conclusion },
+    ] })
+    expect(feedback).toMatchObject({ state: 'failed', checks: [{ name: base.required[0], status: 'failed' }],
+      failures: [{ name: base.required[0], category: 'infrastructure' }] })
+    expect(feedback.summary).toContain(`${base.required[0]} (${description})`)
+    const result = withFeedbackEvidence(feedback, 'Nenhum job falhou para este commit.')
+    expect(result.summary).toBe(feedback.summary)
+    expect(result.summary).not.toMatch(/ambiente de testes indisponível|dependência|needs/i)
+    expect(result.state).toBe('failed')
+    expect(validationFeedbackSchema.safeParse(result).success).toBe(true)
+  })
+  it('keeps typecheck failure separate from unexecuted Build/E2E and retains successful gates', () => {
+    const required = ['Typecheck', 'Testes e cobertura', 'Políticas RLS', 'Auditoria de segurança', 'Build', 'E2E']
+    const feedback = buildValidationFeedback({ ...base, required, evidence: '', checks: required.map(name => ({
+      name, status: 'completed', conclusion: name === 'Typecheck' ? 'failure'
+        : name === 'Build' || name === 'E2E' ? 'skipped' : 'success',
+    })) })
+    const result = withFeedbackEvidence(feedback, '### CI › Typecheck (failure)\nsrc/expenses.server.ts(15,3): error TS2769: No overload matches this call.')
+    expect(result.state).toBe('failed')
+    expect(result.failures).toEqual([
+      { name: 'Typecheck', category: 'code' }, { name: 'Build', category: 'infrastructure' }, { name: 'E2E', category: 'infrastructure' },
+    ])
+    expect(result.checks?.filter(check => check.status === 'passed').map(check => check.name))
+      .toEqual(['Testes e cobertura', 'Políticas RLS', 'Auditoria de segurança'])
+    expect(result.summary).toContain('Typecheck, Build (não executado), E2E (não executado)')
+    expect(result.summary).not.toMatch(/ambiente de testes indisponível|dependência|needs/i)
+    expect(result.evidence).toContain('TS2769')
+    expect(result.checks?.filter(check => check.status === 'failed').map(check => check.name)).toEqual(['Typecheck', 'Build', 'E2E'])
+  })
+  it('requires job-local image/network evidence and preserves cancellation and timeout conclusions', () => {
+    const feedback = buildValidationFeedback({ ...base, evidence: '', required: ['Políticas RLS', 'Build', 'E2E'], checks: [
+      { name: 'Políticas RLS', status: 'completed', conclusion: 'failure' },
+      { name: 'Build', status: 'completed', conclusion: 'cancelled' },
+      { name: 'E2E', status: 'completed', conclusion: 'timed_out' },
+    ] })
+    const logs = '### CI › Políticas RLS (failure)\npull ghcr.io image: TLS handshake timeout\n\n---\n\n' +
+      '### CI › Build (cancelled)\nThe operation was canceled.\n\n---\n\n### CI › E2E (timed_out)\nJob exceeded its time limit.'
+    const result = withFeedbackEvidence(feedback, logs)
+    expect(result.summary).toContain('Build (cancelado), E2E (tempo limite excedido)')
+    expect(result.summary).toContain('Ambiente de testes indisponível: Políticas RLS.')
+    expect(result.summary).not.toMatch(/Ambiente de testes indisponível: (?:Build|E2E)/)
+    expect(result.state).toBe('failed')
+    expect(result.checks?.every(check => check.status === 'failed')).toBe(true)
+    expect(withFeedbackEvidence(result, logs).summary).toBe(result.summary)
+    const unbound = withFeedbackEvidence(feedback, 'pull ghcr.io image: TLS handshake timeout')
+    expect(unbound.summary).not.toMatch(/ambiente de testes indisponível/i)
+    const noImage = withFeedbackEvidence(feedback, '### CI › Políticas RLS (failure)\nTLS handshake timeout')
+    expect(noImage.summary).not.toMatch(/ambiente de testes indisponível/i)
   })
   it('does not let an older observation or a different project replace the current one', () => {
     const current = buildValidationFeedback({ ...base, checks: [] })

@@ -1,6 +1,15 @@
-# __PROJECT_NAME_JS__ — Supremo template 5.0.1 / TanStack Start 1.168.57
+# __PROJECT_NAME_JS__ — Supremo template 5.1.0 / TanStack Start 1.168.57
 
-Read `.supremo/DEVELOPMENT.md` for the mandatory workflow and `SECURITY.md` for isolation. Those rules override convenience. Never change gates, protected policies or their thresholds to make a check pass. A healthy preview is not validated/integrated code.
+Start with the development workflow appended below. Read the relevant section of `.supremo/DEVELOPMENT.md` only when the task needs its command details; use `SECURITY.md` for isolation changes. Those rules override convenience. Never change gates, protected policies or their thresholds to make a check pass. A healthy preview is not validated/integrated code.
+
+## Find the existing implementation first
+- Common UI and component APIs: `DESIGN.md` and `src/components/ui`; extend the existing kit rather than installing a second design system.
+- Public presentation: `src/routes/index.tsx`; common page frame and loading/error states: `src/components/site-frame.tsx` and `route-state.tsx`.
+- Validated server-function example: `/examples` and `src/features/example`. It is a reference implementation, not business functionality to copy into every screen.
+- Auth presentation: `src/features/auth/login-form.tsx`. Keep the session and server contracts below when changing its layout.
+- RLS test setup: `supabase/test-users.ts`; reuse synthetic identity fixtures, then add assertions for the feature's own permissions and rules. Infrastructure tests do not prove new business behavior.
+
+Read the files relevant to the requested change; do not re-audit every example or run the entire suite for an ordinary UI edit. Browser diagnostics, when included in turn context, are advisory local events, not approval or proof of a current failure. Confirm the problem before changing code. Their absence does not prove a healthy page.
 
 ## Canonical structure
 - `src/routes`: TanStack Router file routes and typed navigation. Do not introduce Next APIs, React Router, `use client`, `use server`, RSC, or `getServerSideProps`.

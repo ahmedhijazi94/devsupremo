@@ -1,0 +1,64 @@
+import * as React from 'react'
+import * as Primitive from '@radix-ui/react-dropdown-menu'
+import { Check, ChevronRight, Circle } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+export const DropdownMenu = Primitive.Root
+export const DropdownMenuTrigger = Primitive.Trigger
+export const DropdownMenuGroup = Primitive.Group
+export const DropdownMenuPortal = Primitive.Portal
+export const DropdownMenuSub = Primitive.Sub
+export const DropdownMenuRadioGroup = Primitive.RadioGroup
+
+const contentClass = 'z-50 max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-40 overflow-y-auto rounded-[var(--radius-md)] border border-border bg-popover p-1 text-popover-foreground shadow-lg'
+const itemClass = 'relative flex cursor-default select-none items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm outline-none focus:bg-elevated focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0'
+
+export const DropdownMenuContent = React.forwardRef<React.ComponentRef<typeof Primitive.Content>, React.ComponentPropsWithoutRef<typeof Primitive.Content>>(
+  function DropdownMenuContent({ className, sideOffset = 6, ...props }, ref) {
+    return <Primitive.Portal><Primitive.Content ref={ref} sideOffset={sideOffset} className={cn(contentClass, className)} {...props} /></Primitive.Portal>
+  },
+)
+export const DropdownMenuItem = React.forwardRef<React.ComponentRef<typeof Primitive.Item>, React.ComponentPropsWithoutRef<typeof Primitive.Item> & { inset?: boolean; variant?: 'default' | 'destructive' }>(
+  function DropdownMenuItem({ className, inset, variant = 'default', ...props }, ref) {
+    return <Primitive.Item ref={ref} className={cn(itemClass, inset && 'pl-8', variant === 'destructive' && 'text-destructive focus:text-destructive', className)} {...props} />
+  },
+)
+export const DropdownMenuCheckboxItem = React.forwardRef<React.ComponentRef<typeof Primitive.CheckboxItem>, React.ComponentPropsWithoutRef<typeof Primitive.CheckboxItem>>(
+  function DropdownMenuCheckboxItem({ className, children, ...props }, ref) {
+    return <Primitive.CheckboxItem ref={ref} className={cn(itemClass, 'pl-8', className)} {...props}>
+      <span className="absolute left-2 flex size-4 items-center justify-center"><Primitive.ItemIndicator><Check aria-hidden="true" className="size-4" /></Primitive.ItemIndicator></span>{children}
+    </Primitive.CheckboxItem>
+  },
+)
+export const DropdownMenuRadioItem = React.forwardRef<React.ComponentRef<typeof Primitive.RadioItem>, React.ComponentPropsWithoutRef<typeof Primitive.RadioItem>>(
+  function DropdownMenuRadioItem({ className, children, ...props }, ref) {
+    return <Primitive.RadioItem ref={ref} className={cn(itemClass, 'pl-8', className)} {...props}>
+      <span className="absolute left-2 flex size-4 items-center justify-center"><Primitive.ItemIndicator><Circle aria-hidden="true" className="size-2 fill-current" /></Primitive.ItemIndicator></span>{children}
+    </Primitive.RadioItem>
+  },
+)
+export const DropdownMenuLabel = React.forwardRef<React.ComponentRef<typeof Primitive.Label>, React.ComponentPropsWithoutRef<typeof Primitive.Label> & { inset?: boolean }>(
+  function DropdownMenuLabel({ className, inset, ...props }, ref) {
+    return <Primitive.Label ref={ref} className={cn('px-3 py-2 text-sm font-semibold', inset && 'pl-8', className)} {...props} />
+  },
+)
+export const DropdownMenuSeparator = React.forwardRef<React.ComponentRef<typeof Primitive.Separator>, React.ComponentPropsWithoutRef<typeof Primitive.Separator>>(
+  function DropdownMenuSeparator({ className, ...props }, ref) {
+    return <Primitive.Separator ref={ref} className={cn('-mx-1 my-1 h-px bg-border', className)} {...props} />
+  },
+)
+export const DropdownMenuSubTrigger = React.forwardRef<React.ComponentRef<typeof Primitive.SubTrigger>, React.ComponentPropsWithoutRef<typeof Primitive.SubTrigger> & { inset?: boolean }>(
+  function DropdownMenuSubTrigger({ className, inset, children, ...props }, ref) {
+    return <Primitive.SubTrigger ref={ref} className={cn(itemClass, 'data-[state=open]:bg-elevated', inset && 'pl-8', className)} {...props}>
+      {children}<ChevronRight aria-hidden="true" className="ml-auto size-4" />
+    </Primitive.SubTrigger>
+  },
+)
+export const DropdownMenuSubContent = React.forwardRef<React.ComponentRef<typeof Primitive.SubContent>, React.ComponentPropsWithoutRef<typeof Primitive.SubContent>>(
+  function DropdownMenuSubContent({ className, ...props }, ref) {
+    return <Primitive.Portal><Primitive.SubContent ref={ref} className={cn(contentClass, className)} {...props} /></Primitive.Portal>
+  },
+)
+export function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<'span'>) {
+  return <span className={cn('ml-auto text-xs text-muted', className)} {...props} />
+}

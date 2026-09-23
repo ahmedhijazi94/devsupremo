@@ -46,7 +46,7 @@ program
       const { hookInputSchema } = await import('./turn-runtime')
       const input = hookInputSchema.parse(raw.trim() ? JSON.parse(raw) as unknown : {})
       const output = await runTurnEvent(event, process.cwd(), { ...input, ...(options.summary !== undefined ? { summary: options.summary } : {}) }, options.host)
-      console.log(JSON.stringify(options.fullState ? output : turnAgentResponse(output)))
+      console.log(JSON.stringify(options.fullState ? output : turnAgentResponse(output, ['preflight', 'status'].includes(event) ? process.cwd() : undefined)))
     } catch (error) {
       const { sanitizeDiagnostic } = await import('../../../src/lib/checkpoint/feedback')
       console.log(JSON.stringify({ protocolVersion: 1, workerAvailable: true, allowed: false,

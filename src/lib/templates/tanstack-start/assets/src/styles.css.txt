@@ -1,0 +1,68 @@
+/* Familiar component tokens, backed by the existing palette in both themes.
+ * text-muted remains the original text color; use bg-elevated for muted surfaces.
+ * @theme inline resolves aliases at the element, including dark overrides.
+ */
+@theme inline {
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-accent-foreground);
+  --color-secondary: var(--color-elevated);
+  --color-secondary-foreground: var(--color-foreground);
+  --color-card: var(--color-surface);
+  --color-card-foreground: var(--color-foreground);
+  --color-popover: var(--color-surface);
+  --color-popover-foreground: var(--color-foreground);
+  --color-muted-foreground: var(--color-muted);
+  --color-destructive: var(--color-danger-foreground);
+  --color-destructive-foreground: var(--color-surface);
+  --color-ring: var(--color-accent);
+  --color-input: var(--color-border-strong);
+}
+
+/* Optional explicit preference; the default remains the operating-system theme. */
+:root.light {
+  color-scheme: light;
+  --color-background: oklch(98.5% 0.003 265);
+  --color-surface: oklch(100% 0 0);
+  --color-elevated: oklch(96.8% 0.004 265);
+  --color-foreground: oklch(21% 0.02 265);
+  --color-muted: oklch(55% 0.02 265);
+  --color-border: oklch(92% 0.005 265);
+  --color-border-strong: oklch(86% 0.008 265);
+  --color-accent: oklch(54% 0.2 267);
+  --color-accent-hover: oklch(49% 0.2 267);
+  --color-accent-foreground: oklch(99% 0 0);
+  --color-success: oklch(92% 0.09 150);
+  --color-success-foreground: oklch(42% 0.13 150);
+  --color-warning: oklch(94% 0.09 85);
+  --color-warning-foreground: oklch(50% 0.13 70);
+  --color-danger: oklch(93% 0.06 25);
+  --color-danger-foreground: oklch(51% 0.2 27);
+}
+
+:root.dark {
+  color-scheme: dark;
+  --color-background: oklch(17% 0.015 265);
+  --color-surface: oklch(21% 0.015 265);
+  --color-elevated: oklch(25% 0.016 265);
+  --color-foreground: oklch(96% 0.005 265);
+  --color-muted: oklch(70% 0.015 265);
+  --color-border: oklch(30% 0.012 265);
+  --color-border-strong: oklch(38% 0.014 265);
+  --color-accent: oklch(70% 0.17 270);
+  --color-accent-hover: oklch(75% 0.16 270);
+  --color-accent-foreground: oklch(17% 0.015 265);
+  --color-success: oklch(30% 0.08 150);
+  --color-success-foreground: oklch(85% 0.15 150);
+  --color-warning: oklch(32% 0.08 80);
+  --color-warning-foreground: oklch(88% 0.13 85);
+  --color-danger: oklch(30% 0.09 25);
+  --color-danger-foreground: oklch(84% 0.13 25);
+}
+
+@layer base {
+  :root { color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root:not(.light) { color-scheme: dark; }
+  }
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { cursor: pointer; }
+}

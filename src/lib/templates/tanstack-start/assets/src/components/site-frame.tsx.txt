@@ -1,0 +1,22 @@
+import type { ReactNode } from 'react'
+import { Link } from '@tanstack/react-router'
+
+export function SiteFrame({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
+  const name = '__PROJECT_NAME_JS__'
+  return <div className="flex min-h-dvh flex-col bg-background text-foreground">
+    <a href="#main-content" className="sr-only z-50 rounded-lg bg-surface px-4 py-3 shadow-lg focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Pular para o conteúdo</a>
+    <header className="border-b border-border/70">
+      <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-8">
+        <Link to="/" className="flex min-w-0 items-center gap-3 text-sm font-semibold tracking-tight sm:text-base">
+          <span aria-hidden="true" className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-lg text-accent-foreground">{Array.from(name.trim())[0]?.toLocaleUpperCase('pt-BR') || '·'}</span>
+          <span className="min-w-0 break-words">{name}</span>
+        </Link>
+        {actions && <div className="flex shrink-0 items-center gap-3">{actions}</div>}
+      </div>
+    </header>
+    <main id="main-content" tabIndex={-1} className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-5 py-10 outline-none sm:px-8 sm:py-16">{children}</main>
+    <footer className="border-t border-border/70 px-5 py-5 sm:px-8">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 text-sm text-muted"><span>{name}</span><Link to="/" className="rounded hover:text-foreground">Página inicial</Link></div>
+    </footer>
+  </div>
+}

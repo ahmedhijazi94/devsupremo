@@ -35,6 +35,19 @@ a CLI mostra ajuda. A antiga ponte MCP (`connect`/`mcp`) foi removida.
 Checkpoints são locais; envio e integração rodam em background, sem esperar
 CI para a próxima edição.
 
+### Diagnóstico local do navegador (1.9.0)
+
+Nos novos projetos TanStack Start, o preview pode registrar erros não tratados
+e rejeições do navegador em `.supremo/runtime/browser-diagnostics.json`.
+O contexto do próximo turno apresenta apenas tipo, contagem e localização no
+JavaScript servido, quando reconhecida. Mensagens, stacks, conteúdo da página,
+cookies e parâmetros da URL não são gravados.
+
+O coletor funciona apenas no desenvolvimento em loopback, com origem exata,
+limites de tamanho/frequência e retenção de 15 minutos. É desativado no build,
+na produção e na validação. As observações são informativas: não aprovam nem
+bloqueiam checkpoints, não mudam permissões e sua ausência não prova saúde.
+
 ### Primeiro pedido e preparação retomável (1.8.1)
 
 As instruções geradas pedem uma única autorização para preparar e desenvolver

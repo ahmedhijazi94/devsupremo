@@ -3,8 +3,9 @@ import path from 'node:path'
 import { withDevelopmentPolicy } from '../development-policy'
 import { harnessPackageScripts } from '../harness'
 import type { FileEntry, TemplateOptions } from '../project-files'
+import { START_TEMPLATE_VERSION } from '../stacks'
 
-export const TANSTACK_TEMPLATE_VERSION = '5.0.1'
+export const TANSTACK_TEMPLATE_VERSION = START_TEMPLATE_VERSION
 export const TANSTACK_STACK = 'tanstack-start-vite'
 
 interface PackageManifest {
@@ -46,13 +47,15 @@ export function adaptTanStackFiles(legacyFiles: readonly FileEntry[], options: T
     let content = fs.readFileSync(path.join(assets(), name), 'utf8')
       .replaceAll('__PROJECT_NAME_JSX__', encodedJsx(options.projectName))
       .replaceAll('__PROJECT_NAME_JS__', encodedJs(options.projectName))
-      .replaceAll('__DESCRIPTION_JSX__', encodedJsx(options.description || `${options.projectName} — criado com Supremo`))
+      .replaceAll('__DESCRIPTION_JSX__', encodedJsx(options.description || 'Seu espaço para organizar o que importa.'))
       .replaceAll('__SUPREMO_ORIGIN__', encodedJs(supremoOrigin))
-      .replaceAll('__AUTH_HOME_LINK__', auth ? '<Link to="/login" className="text-accent font-medium">Entrar na minha conta</Link>' : '')
-    if (!auth && outputPath === 'src/routes/index.tsx') content = content.replace('createFileRoute, Link', 'createFileRoute')
+      .replaceAll('__AUTH_HOME_LINK__', auth ? '<Link to="/login" search={{ mode: \'signup\' }} className={buttonClass(\'primary\', \'lg\')}>Criar minha conta</Link><Link to="/login" className={buttonClass(\'ghost\', \'lg\')}>Já tenho uma conta</Link>' : '')
+    if (!auth && outputPath === 'src/routes/index.tsx') content = content.replace('createFileRoute, Link', 'createFileRoute').replace("import { buttonClass } from '@/components/ui/button'\n", '')
     put(outputPath, content)
   }
-  put('src/styles.css', original.get('app/globals.css')?.content ?? '')
+  // Keep the established palette and append Start's semantic aliases. Assets
+  // never load remote fonts or require weaker content-security headers.
+  put('src/styles.css', (original.get('app/globals.css')?.content ?? '') + '\n' + (result.get('src/styles.css')?.content ?? ''))
   const examples = original.get('app/design-system/examples.tsx')
   if (examples) put('src/components/design-examples.tsx', examples.content.replace(/^["']use client["'];?\s*/m, ''))
   const legacyPackage = JSON.parse(original.get('package.json')?.content ?? '{}') as PackageManifest

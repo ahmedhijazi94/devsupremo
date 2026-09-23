@@ -18,6 +18,8 @@ for (const stack of ['nextjs', 'tanstack-start-vite'] as const) for (const kind 
   const paths = stack === 'nextjs' ? protectedPaths : [
     ...protectedPaths.filter(path => path !== 'vitest.config.ts'),
     'vitest.config.mts', 'vite.config.mts', 'scripts/generate-routes.mjs', 'scripts/start-production.mjs',
+    // Imported by Vite configuration even when the dev-only plugin is disabled.
+    'scripts/browser-diagnostics.ts',
   ]
   const scripts = stack === 'nextjs' ? protectedScripts : [...protectedScripts, 'routes:generate']
   const contents = new Map(files.map(file => [file.path, file.content]))

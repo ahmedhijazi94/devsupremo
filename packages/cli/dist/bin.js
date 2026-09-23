@@ -214,10 +214,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path28) {
-  if (!path28)
+function getElementAtPath(obj, path29) {
+  if (!path29)
     return obj;
-  return path28.reduce((acc, key) => acc?.[key], obj);
+  return path29.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -548,11 +548,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path28, issues) {
+function prefixIssues(path29, issues) {
   return issues.map((iss) => {
     var _a4;
     (_a4 = iss).path ?? (_a4.path = []);
-    iss.path.unshift(path28);
+    iss.path.unshift(path29);
     return iss;
   });
 }
@@ -1038,16 +1038,16 @@ function flattenError(error61, mapper = (issue2) => issue2.message) {
 }
 function formatError(error61, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error62, path28 = []) => {
+  const processError = (error62, path29 = []) => {
     for (const issue2 of error62.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path28, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path29, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path28, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path29, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path28, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path29, ...issue2.path]);
       } else {
-        const fullpath = [...path28, ...issue2.path];
+        const fullpath = [...path29, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -1086,17 +1086,17 @@ function formatError(error61, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error61, mapper = (issue2) => issue2.message) {
   const result2 = { errors: [] };
-  const processError = (error62, path28 = []) => {
+  const processError = (error62, path29 = []) => {
     var _a4;
     for (const issue2 of error62.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path28, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path29, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path28, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path29, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path28, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path29, ...issue2.path]);
       } else {
-        const fullpath = [...path28, ...issue2.path];
+        const fullpath = [...path29, ...issue2.path];
         if (fullpath.length === 0) {
           result2.errors.push(mapper(issue2));
           continue;
@@ -1135,8 +1135,8 @@ function treeifyError(error61, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path28 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path28) {
+  const path29 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path29) {
     if (typeof seg === "number")
       segs.push("[".concat(seg, "]"));
     else if (typeof seg === "symbol")
@@ -18315,13 +18315,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path28 = ref.slice(1).split("/").filter(Boolean);
-  if (path28.length === 0) {
+  const path29 = ref.slice(1).split("/").filter(Boolean);
+  if (path29.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path28[0] === defsKey) {
-    const key = path28[1] === void 0 ? void 0 : decodeJSONPointerSegment(path28[1]);
+  if (path29[0] === defsKey) {
+    const key = path29[1] === void 0 ? void 0 : decodeJSONPointerSegment(path29[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error("Reference not found: ".concat(ref));
     }
@@ -20308,8 +20308,8 @@ var require_command = __commonJS({
   "node_modules/commander/lib/command.js"(exports2) {
     var EventEmitter = require("node:events").EventEmitter;
     var childProcess = require("node:child_process");
-    var path28 = require("node:path");
-    var fs26 = require("node:fs");
+    var path29 = require("node:path");
+    var fs27 = require("node:fs");
     var process3 = require("node:process");
     var { Argument: Argument2, humanReadableArgName } = require_argument();
     var { CommanderError: CommanderError2 } = require_error();
@@ -21248,13 +21248,13 @@ var require_command = __commonJS({
         let launchWithNode = false;
         const sourceExt = [".js", ".ts", ".tsx", ".mjs", ".cjs"];
         function findFile(baseDir, baseName) {
-          const localBin = path28.resolve(baseDir, baseName);
-          if (fs26.existsSync(localBin))
+          const localBin = path29.resolve(baseDir, baseName);
+          if (fs27.existsSync(localBin))
             return localBin;
-          if (sourceExt.includes(path28.extname(baseName)))
+          if (sourceExt.includes(path29.extname(baseName)))
             return void 0;
           const foundExt = sourceExt.find(
-            (ext) => fs26.existsSync("".concat(localBin).concat(ext))
+            (ext) => fs27.existsSync("".concat(localBin).concat(ext))
           );
           if (foundExt)
             return "".concat(localBin).concat(foundExt);
@@ -21267,21 +21267,21 @@ var require_command = __commonJS({
         if (this._scriptPath) {
           let resolvedScriptPath;
           try {
-            resolvedScriptPath = fs26.realpathSync(this._scriptPath);
+            resolvedScriptPath = fs27.realpathSync(this._scriptPath);
           } catch (err) {
             resolvedScriptPath = this._scriptPath;
           }
-          executableDir = path28.resolve(
-            path28.dirname(resolvedScriptPath),
+          executableDir = path29.resolve(
+            path29.dirname(resolvedScriptPath),
             executableDir
           );
         }
         if (executableDir) {
           let localFile = findFile(executableDir, executableFile);
           if (!localFile && !subcommand._executableFile && this._scriptPath) {
-            const legacyName = path28.basename(
+            const legacyName = path29.basename(
               this._scriptPath,
-              path28.extname(this._scriptPath)
+              path29.extname(this._scriptPath)
             );
             if (legacyName !== this._name) {
               localFile = findFile(
@@ -21292,7 +21292,7 @@ var require_command = __commonJS({
           }
           executableFile = localFile || executableFile;
         }
-        launchWithNode = sourceExt.includes(path28.extname(executableFile));
+        launchWithNode = sourceExt.includes(path29.extname(executableFile));
         let proc;
         if (process3.platform !== "win32") {
           if (launchWithNode) {
@@ -22143,7 +22143,7 @@ var require_command = __commonJS({
        * @return {Command}
        */
       nameFromFilename(filename) {
-        this._name = path28.basename(filename, path28.extname(filename));
+        this._name = path29.basename(filename, path29.extname(filename));
         return this;
       }
       /**
@@ -22157,10 +22157,10 @@ var require_command = __commonJS({
        * @param {string} [path]
        * @return {(string|null|Command)}
        */
-      executableDir(path29) {
-        if (path29 === void 0)
+      executableDir(path30) {
+        if (path30 === void 0)
           return this._executableDir;
-        this._executableDir = path29;
+        this._executableDir = path30;
         return this;
       }
       /**
@@ -22639,6 +22639,11 @@ function buildValidationFeedback(input2) {
     const category = check2?.conclusion === "cancelled" || check2?.conclusion === "timed_out" || check2?.conclusion === "skipped" ? "infrastructure" : /RLS|segredo|vulnerabil|seguran/i.test(name) ? "security" : "code";
     return { name: sanitizeDiagnostic(name).slice(0, 200), category };
   });
+  const failureDescriptions = result2.failing.map((name) => {
+    const conclusion = latestChecks.get(name)?.conclusion;
+    const detail = conclusion === "skipped" ? "n\xE3o executado" : conclusion === "cancelled" ? "cancelado" : conclusion === "timed_out" ? "tempo limite excedido" : null;
+    return sanitizeDiagnostic(name).slice(0, 200) + (detail ? " (".concat(detail, ")") : "");
+  });
   return validationFeedbackSchema.parse({
     projectId: input2.projectId,
     checkpointId: input2.checkpointId,
@@ -22651,7 +22656,7 @@ function buildValidationFeedback(input2) {
       name: sanitizeDiagnostic(name).slice(0, 200),
       status: input2.checksSha !== input2.publishedSha || !latestChecks.has(name) || result2.pending.includes(name) ? "pending" : result2.failing.includes(name) ? "failed" : "passed"
     })),
-    summary: state === "integrated" ? "Vers\xE3o validada e integrada." : state === "passed" ? "Valida\xE7\xE3o aprovada. Aguardando integra\xE7\xE3o." : state === "pending" ? "Aguardando os resultados da valida\xE7\xE3o desta vers\xE3o." : "A valida\xE7\xE3o encontrou pend\xEAncias: ".concat(failures.map((f) => f.name).join(", ") || "configura\xE7\xE3o dos testes", ".").slice(0, 2e3),
+    summary: state === "integrated" ? "Vers\xE3o validada e integrada." : state === "passed" ? "Valida\xE7\xE3o aprovada. Aguardando integra\xE7\xE3o." : state === "pending" ? "Aguardando os resultados da valida\xE7\xE3o desta vers\xE3o." : "A valida\xE7\xE3o encontrou pend\xEAncias: ".concat(failureDescriptions.join(", ") || "configura\xE7\xE3o dos testes", ".").slice(0, 2e3),
     evidence: state === "failed" ? sanitizeDiagnostic(input2.evidence) : ""
   });
 }
@@ -22661,17 +22666,28 @@ function acceptsFeedback(current2, incoming, projectId) {
 function withFeedbackEvidence(feedback, raw) {
   const evidence = sanitizeDiagnostic(raw);
   const sections = evidence.split("\n\n---\n\n");
+  const unavailableEnvironments = [];
   const failures = feedback.failures.map((failure) => {
     const section = sections.find((part) => part.split("\n")[0]?.includes("\u203A ".concat(failure.name, " (")));
     const setupFailure = section && /toomanyrequests|rate exceeded|TLS handshake timeout/i.test(section) && /pull|image|registry|public\.ecr\.aws|ghcr\.io/i.test(section);
+    if (setupFailure)
+      unavailableEnvironments.push(failure.name);
     return setupFailure ? { ...failure, category: "infrastructure" } : failure;
   });
   const coverage = /Coverage for (functions|lines|branches|statements) \(([\d.]+)%\).*threshold \(([\d.]+)%\)/i.exec(evidence);
+  const coverageSummary = coverage ? "Cobertura insuficiente: ".concat(coverage[2], "%; m\xEDnimo exigido ").concat(coverage[3], "%.") : "";
+  const environmentSummary = unavailableEnvironments.length ? "Ambiente de testes indispon\xEDvel: ".concat(unavailableEnvironments.join(", "), ".") : "";
   return {
     ...feedback,
     evidence,
     failures,
-    summary: ((coverage ? "Cobertura insuficiente: ".concat(coverage[2], "%; m\xEDnimo exigido ").concat(coverage[3], "%. ") : "") + "Pend\xEAncias: ".concat(failures.map((f) => f.name + (f.category === "infrastructure" ? " (ambiente de testes indispon\xEDvel)" : "")).join(", "), ".")).slice(0, 2e3)
+    // Keep the check conclusions even when no logs exist for skipped jobs. The
+    // compatibility category alone is not evidence of environment unavailability.
+    summary: [
+      coverageSummary && !feedback.summary.includes(coverageSummary) ? coverageSummary : "",
+      feedback.summary,
+      environmentSummary && !feedback.summary.includes(environmentSummary) ? environmentSummary : ""
+    ].filter(Boolean).join(" ").slice(0, 2e3)
   };
 }
 var sha, validationFeedbackSchema, feedbackEnvelopeSchema;
@@ -24723,18 +24739,18 @@ function defaultCommitReader(cwd) {
         const status = parts[i++] ?? "";
         if (status.startsWith("R") || status.startsWith("C")) {
           const oldPath = parts[i++] ?? "";
-          const path28 = parts[i++] ?? "";
-          changes.push({ status, path: path28, oldPath });
+          const path29 = parts[i++] ?? "";
+          changes.push({ status, path: path29, oldPath });
         } else {
-          const path28 = parts[i++] ?? "";
-          changes.push({ status, path: path28 });
+          const path29 = parts[i++] ?? "";
+          changes.push({ status, path: path29 });
         }
       }
       return changes;
     },
-    content: (sha2, path28) => {
+    content: (sha2, path29) => {
       try {
-        return (0, import_node_child_process4.execFileSync)("git", ["show", "".concat(sha2, ":").concat(path28)], {
+        return (0, import_node_child_process4.execFileSync)("git", ["show", "".concat(sha2, ":").concat(path29)], {
           cwd,
           stdio: ["ignore", "pipe", "ignore"],
           maxBuffer: 64 * 1024 * 1024
@@ -24749,9 +24765,9 @@ function defaultCommitReader(cwd) {
       const authorEmail = text(["show", "-s", "--format=%ae", sha2]).trim();
       return { message: message || "checkpoint", authorName, authorEmail };
     },
-    executable: (sha2, path28) => {
+    executable: (sha2, path29) => {
       try {
-        const line = text(["ls-tree", sha2, path28]);
+        const line = text(["ls-tree", sha2, path29]);
         return line.slice(0, 6) === "100755";
       } catch {
         return false;
@@ -25156,7 +25172,7 @@ function stackForVersion(version2) {
     throw new Error("Vers\xE3o de template inv\xE1lida.");
   if (/^[1-4]\.\d+\.\d+$/.test(version2))
     return "nextjs";
-  if (version2 === "5.0.0" || version2 === "5.0.1")
+  if (version2 === "5.0.0" || version2 === "5.0.1" || version2 === "5.1.0")
     return "tanstack-start-vite";
   throw new Error("Vers\xE3o de template n\xE3o reconhecida: ".concat(version2, "."));
 }
@@ -25564,6 +25580,7 @@ var init_managed_paths = __esm({
       "tsconfig.json",
       "next.config.ts",
       "vite.config.mts",
+      "scripts/browser-diagnostics.ts",
       "vitest.config.mts",
       "scripts/generate-routes.mjs",
       "scripts/start-production.mjs",
@@ -25687,8 +25704,8 @@ function parseNameStatus(output3) {
     const status = parts[0];
     if (!/^[AMDRCT]\d*$/.test(status))
       continue;
-    const path28 = parts[parts.length - 1];
-    entries.push({ status, path: path28 });
+    const path29 = parts[parts.length - 1];
+    entries.push({ status, path: path29 });
   }
   return entries;
 }
@@ -25948,7 +25965,7 @@ var init_validation_policy = __esm({
     "use strict";
     TRUSTED_VALIDATION_POLICIES = [
       {
-        "version": "4.0.11",
+        "version": "4.0.12",
         "kind": "public",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -28864,12 +28881,12 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c58a97a891fa0a59d4d4f04c70b25a6dd6043dc7344bee5aa89356cc1ef0b935"
+            "bf75931eca193057fb504e9de4dacea3a3f533ff4539b895dcc00f17555cb40e"
           ]
         ]
       },
       {
-        "version": "4.0.11",
+        "version": "4.0.12",
         "kind": "solo",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -31785,12 +31802,12 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c58a97a891fa0a59d4d4f04c70b25a6dd6043dc7344bee5aa89356cc1ef0b935"
+            "bf75931eca193057fb504e9de4dacea3a3f533ff4539b895dcc00f17555cb40e"
           ]
         ]
       },
       {
-        "version": "4.0.11",
+        "version": "4.0.12",
         "kind": "team",
         "files": {
           ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -34706,12 +34723,12 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c58a97a891fa0a59d4d4f04c70b25a6dd6043dc7344bee5aa89356cc1ef0b935"
+            "bf75931eca193057fb504e9de4dacea3a3f533ff4539b895dcc00f17555cb40e"
           ]
         ]
       },
       {
-        "version": "5.0.1",
+        "version": "5.1.0",
         "kind": "public",
         "files": {
           ".github/workflows/ci.yml": "83d8ff4f567bfc4bba228e14cbcdbb257ae7c131",
@@ -34728,9 +34745,10 @@ var init_validation_policy = __esm({
           "eslint.config.mjs": "afbfbe668bec5859235367bcf7864ccc7b0815b8",
           "tsconfig.json": "5be84e0dd0b04869ffe3cb4402472d8c57ed02b4",
           "vitest.config.mts": "5d427ca3b4ad17974ecddd3475a03cca63f28544",
-          "vite.config.mts": "3c51225206870200f294e9c5301e2f515d059f0a",
+          "vite.config.mts": "33cc4b133c0f6a4e08def2422944c892d1d1d896",
           "scripts/generate-routes.mjs": "d2eb17ecc7edbcefc32f0b5238ea2dd06c0d1622",
-          "scripts/start-production.mjs": "0518fced74fdab16be826e206e180da9b31835c6"
+          "scripts/start-production.mjs": "0518fced74fdab16be826e206e180da9b31835c6",
+          "scripts/browser-diagnostics.ts": "fbb635f32868d954ef1bf05b86a7de4310288e20"
         },
         "scripts": {
           "typecheck": "npm run routes:generate && tsc --noEmit",
@@ -35038,6 +35056,22 @@ var init_validation_policy = __esm({
             "e361b834f9e8707abaaff828a11591b54c02e326c1b4980f04cf559b5d50d21f"
           ],
           [
+            "node_modules/@floating-ui/core",
+            "f14188a86700cfc9146443f9c3daa16e6dd4a9da340d24463be4262ef33d3a44"
+          ],
+          [
+            "node_modules/@floating-ui/dom",
+            "0727a51c095bd0ae14719d81e0d1b1b59976d1c4f1871d3077c37d5b6eca65f6"
+          ],
+          [
+            "node_modules/@floating-ui/react-dom",
+            "e8b5cecc735e4638483992411b29892ca8aa293660f6b1155e9a51f0f779f05c"
+          ],
+          [
+            "node_modules/@floating-ui/utils",
+            "9b87db6b056a3ea8ffd9326ea1e413b61ca8cdd42ac9f775e10dec5d8a6ebcb5"
+          ],
+          [
             "node_modules/@humanfs/core",
             "a7af7a4b8e15b2366f83cbe1a9ae3784e9bd81e4f1246baba8ceeb8320c18984"
           ],
@@ -35128,6 +35162,126 @@ var init_validation_policy = __esm({
           [
             "node_modules/@playwright/test",
             "cbff5f3e8b4b52f8c6dbaff314d157de32116441a3af0fa56a40f76820ffaa13"
+          ],
+          [
+            "node_modules/@radix-ui/primitive",
+            "2c25cd114be8b4a23ea96952a9475b8dd2128e57fd643aa3113adb3d567bde47"
+          ],
+          [
+            "node_modules/@radix-ui/react-arrow",
+            "fd96daa517556627068e2fe05db4a8b7814abd45cfad863f803d6dde25339d31"
+          ],
+          [
+            "node_modules/@radix-ui/react-collection",
+            "231d41e28b1dc6ecfc8e5e7c726950f054f76f41bf54037041192b74fbc7c891"
+          ],
+          [
+            "node_modules/@radix-ui/react-compose-refs",
+            "73d922af883563bf829277e4b96f8fda8d7b3eaf7a947a2c1c5d1c44a6113965"
+          ],
+          [
+            "node_modules/@radix-ui/react-context",
+            "e4a0ad14f882408a58745b911e6ce45dbc7119edc8ce210cd18c38fd119d5c50"
+          ],
+          [
+            "node_modules/@radix-ui/react-dialog",
+            "5b469b1d893808c1953fbd29bb3fcd8b659b2dbec724c8f4a3f3c4ba5093503b"
+          ],
+          [
+            "node_modules/@radix-ui/react-direction",
+            "47ac5562799a3f4c9d49098a9f2b4d1689bef0dfbb05329838bee002e34f904d"
+          ],
+          [
+            "node_modules/@radix-ui/react-dismissable-layer",
+            "c8656eaa738a1335894a807a2f897a6f84850320300c23de217eb242617875f1"
+          ],
+          [
+            "node_modules/@radix-ui/react-dropdown-menu",
+            "fade4bca5856549a60b35f189c071f3ad5e9c14e06d22af6b8954f1a8db59aab"
+          ],
+          [
+            "node_modules/@radix-ui/react-focus-guards",
+            "2c678f21662928a8577c0cf4399e8694df364a2f9ca48af624c318b73dbcab39"
+          ],
+          [
+            "node_modules/@radix-ui/react-focus-scope",
+            "4560302b0df525b09f6c508c5a4c0fd3afe6e0fe6ea3aca311098eca91dd29e4"
+          ],
+          [
+            "node_modules/@radix-ui/react-id",
+            "67e007a1f48c44a889a8b415151743fc654fd3c480802c2dd9ae5fcac6fce100"
+          ],
+          [
+            "node_modules/@radix-ui/react-menu",
+            "31369583d5ec1317ece8ea0ffb6c5734b5f593c9781d91f8869807290c87a0b4"
+          ],
+          [
+            "node_modules/@radix-ui/react-popper",
+            "45316a08228ebc9fa10f7eaefa08bac2ed6b3981341a836d2d1b79e3ef28f3ac"
+          ],
+          [
+            "node_modules/@radix-ui/react-portal",
+            "8c348085cc06b3bfc3efd93549088b399316c02ad4303f1bd97b263f5215dee0"
+          ],
+          [
+            "node_modules/@radix-ui/react-presence",
+            "724db57ca85cd8449830127aa3f207ac476f8f20874012a25dc559192352d611"
+          ],
+          [
+            "node_modules/@radix-ui/react-primitive",
+            "ad86434d7e1d362a944366899c1550eb219f33a309933ee2bdbdd20d789bbf89"
+          ],
+          [
+            "node_modules/@radix-ui/react-roving-focus",
+            "6a6a5beb7b402829873538f694467543f16304dd6550b5c829536ab37cdc40de"
+          ],
+          [
+            "node_modules/@radix-ui/react-slot",
+            "61bcf9973f5929cc9254663b37cc90944a2587cd65772bcc1a31521b649c85f2"
+          ],
+          [
+            "node_modules/@radix-ui/react-tabs",
+            "b8fadf32ca6fe49efa563b807931ec17289795fe4dffece0e3a31bae8b05d3d1"
+          ],
+          [
+            "node_modules/@radix-ui/react-tooltip",
+            "7fc3a4d806518525d9c9cc31e41990e97a3ccaa2724add842a2be10c300614a0"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-callback-ref",
+            "c2f14cc91ed3e4b4dfae4322fe913035c29aea1a5348073faaf172ad70946da5"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-controllable-state",
+            "a9bb6a96939855db97c312fb666f867de6566f3e4b6943d1f53465ce8719202b"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-effect-event",
+            "1f525dceb6c9ee90a867ba20466b3c0db698aeb4f20a9a03c1ac7c6b22f691bc"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-is-hydrated",
+            "324b88cf22c78c2ff8e155fc70dba2a9dc9ca9157e376ab3cdf3a69dccc0b816"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-layout-effect",
+            "4af98cdffafc41568c2a022a31973c828d6b566bb5c3cb66ee5b84a994eb945f"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-rect",
+            "f9fe10852ed340887a5dc17ebb1b2f16e1de6175c24c5db9f2a6e3a3c1a77623"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-size",
+            "58e712a3e93013685fafd4fdb62f356bad4738099516f0568962ed49eec462d0"
+          ],
+          [
+            "node_modules/@radix-ui/react-visually-hidden",
+            "feddf2f153c522d4a8027265caa1880f9ecd1771ae5de58f17b6a30fb046cfcd"
+          ],
+          [
+            "node_modules/@radix-ui/rect",
+            "d70e207420fc1d253fec5adb345fc49c6e367554ff8784c9e2135d18bf800543"
           ],
           [
             "node_modules/@rolldown/binding-android-arm-eabi",
@@ -35754,6 +35908,10 @@ var init_validation_policy = __esm({
             "3aa3e2885558f12344f258af7a6a2849ca4dc1d9882cf72eca11c77c46495e4a"
           ],
           [
+            "node_modules/aria-hidden",
+            "9cce3f70853efcd229a0dc007237ad20c52ad0ed79721db04980b46a9a785281"
+          ],
+          [
             "node_modules/aria-query",
             "7985887d2352a925b0012a39776b8ac03fac80b3f16dcf701684402e9b468f1a"
           ],
@@ -36008,6 +36166,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/detect-libc",
             "0245b29e46035effc856b1cee199a15cfed491a97756f3a91319ef765f2890e5"
+          ],
+          [
+            "node_modules/detect-node-es",
+            "6beb57fc9053462e300378177b115928820fef7db95c65aec63e9d20079a5b0f"
           ],
           [
             "node_modules/diff",
@@ -36268,6 +36430,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/get-intrinsic",
             "751f97b591ac92a7c0b0e6086d638d21971a920cb96fa62864189b0b0c575ffb"
+          ],
+          [
+            "node_modules/get-nonce",
+            "bd9179e02f5c8cd368fb5adbc44dab46c6aca031704843da4f3f0a8c6b47eac5"
           ],
           [
             "node_modules/get-proto",
@@ -36934,6 +37100,18 @@ var init_validation_policy = __esm({
             "754ed759ee1e233d19407b0ff507bc47fc98854f8289e39933b78f5d1a5bb557"
           ],
           [
+            "node_modules/react-remove-scroll",
+            "fda7a985af3c98bb55369bba5de4972dae7bdf64725401386fb2f045f008c1d6"
+          ],
+          [
+            "node_modules/react-remove-scroll-bar",
+            "300a2b7d63da310bd4b0737ce8b4e42a64af9b46206d51c056697052f5a25a74"
+          ],
+          [
+            "node_modules/react-style-singleton",
+            "c9b95bb34f5426f968fcfbf6292a7c7ac623c4b793c174dacc4f8c2a63280311"
+          ],
+          [
             "node_modules/readdirp",
             "ada1522c646fdf597d0ee2815d6bce7346c52b759d7c7272d7436d399b9a0172"
           ],
@@ -37314,6 +37492,14 @@ var init_validation_policy = __esm({
             "920edb8484087287e164f239879ff01cc829d79819eeae22f2ded28368638fe0"
           ],
           [
+            "node_modules/use-callback-ref",
+            "38a95f7a79fc9d919119e57c364672ddfb8197218cc81d9cb38e94b8a2ad9e85"
+          ],
+          [
+            "node_modules/use-sidecar",
+            "1483c121eefe18736b7de9ff27087a1cc51a8c7cfa242b1902a219ed14765bd0"
+          ],
+          [
             "node_modules/use-sync-external-store",
             "41ae40be8b518b4b449ae3b717e280c74df434da370db6cde67af050c03182b8"
           ],
@@ -37515,12 +37701,12 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c58a97a891fa0a59d4d4f04c70b25a6dd6043dc7344bee5aa89356cc1ef0b935"
+            "bf75931eca193057fb504e9de4dacea3a3f533ff4539b895dcc00f17555cb40e"
           ]
         ]
       },
       {
-        "version": "5.0.1",
+        "version": "5.1.0",
         "kind": "solo",
         "files": {
           ".github/workflows/ci.yml": "83d8ff4f567bfc4bba228e14cbcdbb257ae7c131",
@@ -37537,9 +37723,10 @@ var init_validation_policy = __esm({
           "eslint.config.mjs": "afbfbe668bec5859235367bcf7864ccc7b0815b8",
           "tsconfig.json": "5be84e0dd0b04869ffe3cb4402472d8c57ed02b4",
           "vitest.config.mts": "5d427ca3b4ad17974ecddd3475a03cca63f28544",
-          "vite.config.mts": "3c51225206870200f294e9c5301e2f515d059f0a",
+          "vite.config.mts": "33cc4b133c0f6a4e08def2422944c892d1d1d896",
           "scripts/generate-routes.mjs": "d2eb17ecc7edbcefc32f0b5238ea2dd06c0d1622",
-          "scripts/start-production.mjs": "0518fced74fdab16be826e206e180da9b31835c6"
+          "scripts/start-production.mjs": "0518fced74fdab16be826e206e180da9b31835c6",
+          "scripts/browser-diagnostics.ts": "fbb635f32868d954ef1bf05b86a7de4310288e20"
         },
         "scripts": {
           "typecheck": "npm run routes:generate && tsc --noEmit",
@@ -37847,6 +38034,22 @@ var init_validation_policy = __esm({
             "e361b834f9e8707abaaff828a11591b54c02e326c1b4980f04cf559b5d50d21f"
           ],
           [
+            "node_modules/@floating-ui/core",
+            "f14188a86700cfc9146443f9c3daa16e6dd4a9da340d24463be4262ef33d3a44"
+          ],
+          [
+            "node_modules/@floating-ui/dom",
+            "0727a51c095bd0ae14719d81e0d1b1b59976d1c4f1871d3077c37d5b6eca65f6"
+          ],
+          [
+            "node_modules/@floating-ui/react-dom",
+            "e8b5cecc735e4638483992411b29892ca8aa293660f6b1155e9a51f0f779f05c"
+          ],
+          [
+            "node_modules/@floating-ui/utils",
+            "9b87db6b056a3ea8ffd9326ea1e413b61ca8cdd42ac9f775e10dec5d8a6ebcb5"
+          ],
+          [
             "node_modules/@humanfs/core",
             "a7af7a4b8e15b2366f83cbe1a9ae3784e9bd81e4f1246baba8ceeb8320c18984"
           ],
@@ -37937,6 +38140,126 @@ var init_validation_policy = __esm({
           [
             "node_modules/@playwright/test",
             "cbff5f3e8b4b52f8c6dbaff314d157de32116441a3af0fa56a40f76820ffaa13"
+          ],
+          [
+            "node_modules/@radix-ui/primitive",
+            "2c25cd114be8b4a23ea96952a9475b8dd2128e57fd643aa3113adb3d567bde47"
+          ],
+          [
+            "node_modules/@radix-ui/react-arrow",
+            "fd96daa517556627068e2fe05db4a8b7814abd45cfad863f803d6dde25339d31"
+          ],
+          [
+            "node_modules/@radix-ui/react-collection",
+            "231d41e28b1dc6ecfc8e5e7c726950f054f76f41bf54037041192b74fbc7c891"
+          ],
+          [
+            "node_modules/@radix-ui/react-compose-refs",
+            "73d922af883563bf829277e4b96f8fda8d7b3eaf7a947a2c1c5d1c44a6113965"
+          ],
+          [
+            "node_modules/@radix-ui/react-context",
+            "e4a0ad14f882408a58745b911e6ce45dbc7119edc8ce210cd18c38fd119d5c50"
+          ],
+          [
+            "node_modules/@radix-ui/react-dialog",
+            "5b469b1d893808c1953fbd29bb3fcd8b659b2dbec724c8f4a3f3c4ba5093503b"
+          ],
+          [
+            "node_modules/@radix-ui/react-direction",
+            "47ac5562799a3f4c9d49098a9f2b4d1689bef0dfbb05329838bee002e34f904d"
+          ],
+          [
+            "node_modules/@radix-ui/react-dismissable-layer",
+            "c8656eaa738a1335894a807a2f897a6f84850320300c23de217eb242617875f1"
+          ],
+          [
+            "node_modules/@radix-ui/react-dropdown-menu",
+            "fade4bca5856549a60b35f189c071f3ad5e9c14e06d22af6b8954f1a8db59aab"
+          ],
+          [
+            "node_modules/@radix-ui/react-focus-guards",
+            "2c678f21662928a8577c0cf4399e8694df364a2f9ca48af624c318b73dbcab39"
+          ],
+          [
+            "node_modules/@radix-ui/react-focus-scope",
+            "4560302b0df525b09f6c508c5a4c0fd3afe6e0fe6ea3aca311098eca91dd29e4"
+          ],
+          [
+            "node_modules/@radix-ui/react-id",
+            "67e007a1f48c44a889a8b415151743fc654fd3c480802c2dd9ae5fcac6fce100"
+          ],
+          [
+            "node_modules/@radix-ui/react-menu",
+            "31369583d5ec1317ece8ea0ffb6c5734b5f593c9781d91f8869807290c87a0b4"
+          ],
+          [
+            "node_modules/@radix-ui/react-popper",
+            "45316a08228ebc9fa10f7eaefa08bac2ed6b3981341a836d2d1b79e3ef28f3ac"
+          ],
+          [
+            "node_modules/@radix-ui/react-portal",
+            "8c348085cc06b3bfc3efd93549088b399316c02ad4303f1bd97b263f5215dee0"
+          ],
+          [
+            "node_modules/@radix-ui/react-presence",
+            "724db57ca85cd8449830127aa3f207ac476f8f20874012a25dc559192352d611"
+          ],
+          [
+            "node_modules/@radix-ui/react-primitive",
+            "ad86434d7e1d362a944366899c1550eb219f33a309933ee2bdbdd20d789bbf89"
+          ],
+          [
+            "node_modules/@radix-ui/react-roving-focus",
+            "6a6a5beb7b402829873538f694467543f16304dd6550b5c829536ab37cdc40de"
+          ],
+          [
+            "node_modules/@radix-ui/react-slot",
+            "61bcf9973f5929cc9254663b37cc90944a2587cd65772bcc1a31521b649c85f2"
+          ],
+          [
+            "node_modules/@radix-ui/react-tabs",
+            "b8fadf32ca6fe49efa563b807931ec17289795fe4dffece0e3a31bae8b05d3d1"
+          ],
+          [
+            "node_modules/@radix-ui/react-tooltip",
+            "7fc3a4d806518525d9c9cc31e41990e97a3ccaa2724add842a2be10c300614a0"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-callback-ref",
+            "c2f14cc91ed3e4b4dfae4322fe913035c29aea1a5348073faaf172ad70946da5"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-controllable-state",
+            "a9bb6a96939855db97c312fb666f867de6566f3e4b6943d1f53465ce8719202b"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-effect-event",
+            "1f525dceb6c9ee90a867ba20466b3c0db698aeb4f20a9a03c1ac7c6b22f691bc"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-is-hydrated",
+            "324b88cf22c78c2ff8e155fc70dba2a9dc9ca9157e376ab3cdf3a69dccc0b816"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-layout-effect",
+            "4af98cdffafc41568c2a022a31973c828d6b566bb5c3cb66ee5b84a994eb945f"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-rect",
+            "f9fe10852ed340887a5dc17ebb1b2f16e1de6175c24c5db9f2a6e3a3c1a77623"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-size",
+            "58e712a3e93013685fafd4fdb62f356bad4738099516f0568962ed49eec462d0"
+          ],
+          [
+            "node_modules/@radix-ui/react-visually-hidden",
+            "feddf2f153c522d4a8027265caa1880f9ecd1771ae5de58f17b6a30fb046cfcd"
+          ],
+          [
+            "node_modules/@radix-ui/rect",
+            "d70e207420fc1d253fec5adb345fc49c6e367554ff8784c9e2135d18bf800543"
           ],
           [
             "node_modules/@rolldown/binding-android-arm-eabi",
@@ -38563,6 +38886,10 @@ var init_validation_policy = __esm({
             "3aa3e2885558f12344f258af7a6a2849ca4dc1d9882cf72eca11c77c46495e4a"
           ],
           [
+            "node_modules/aria-hidden",
+            "9cce3f70853efcd229a0dc007237ad20c52ad0ed79721db04980b46a9a785281"
+          ],
+          [
             "node_modules/aria-query",
             "7985887d2352a925b0012a39776b8ac03fac80b3f16dcf701684402e9b468f1a"
           ],
@@ -38817,6 +39144,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/detect-libc",
             "0245b29e46035effc856b1cee199a15cfed491a97756f3a91319ef765f2890e5"
+          ],
+          [
+            "node_modules/detect-node-es",
+            "6beb57fc9053462e300378177b115928820fef7db95c65aec63e9d20079a5b0f"
           ],
           [
             "node_modules/diff",
@@ -39077,6 +39408,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/get-intrinsic",
             "751f97b591ac92a7c0b0e6086d638d21971a920cb96fa62864189b0b0c575ffb"
+          ],
+          [
+            "node_modules/get-nonce",
+            "bd9179e02f5c8cd368fb5adbc44dab46c6aca031704843da4f3f0a8c6b47eac5"
           ],
           [
             "node_modules/get-proto",
@@ -39743,6 +40078,18 @@ var init_validation_policy = __esm({
             "754ed759ee1e233d19407b0ff507bc47fc98854f8289e39933b78f5d1a5bb557"
           ],
           [
+            "node_modules/react-remove-scroll",
+            "fda7a985af3c98bb55369bba5de4972dae7bdf64725401386fb2f045f008c1d6"
+          ],
+          [
+            "node_modules/react-remove-scroll-bar",
+            "300a2b7d63da310bd4b0737ce8b4e42a64af9b46206d51c056697052f5a25a74"
+          ],
+          [
+            "node_modules/react-style-singleton",
+            "c9b95bb34f5426f968fcfbf6292a7c7ac623c4b793c174dacc4f8c2a63280311"
+          ],
+          [
             "node_modules/readdirp",
             "ada1522c646fdf597d0ee2815d6bce7346c52b759d7c7272d7436d399b9a0172"
           ],
@@ -40123,6 +40470,14 @@ var init_validation_policy = __esm({
             "920edb8484087287e164f239879ff01cc829d79819eeae22f2ded28368638fe0"
           ],
           [
+            "node_modules/use-callback-ref",
+            "38a95f7a79fc9d919119e57c364672ddfb8197218cc81d9cb38e94b8a2ad9e85"
+          ],
+          [
+            "node_modules/use-sidecar",
+            "1483c121eefe18736b7de9ff27087a1cc51a8c7cfa242b1902a219ed14765bd0"
+          ],
+          [
             "node_modules/use-sync-external-store",
             "41ae40be8b518b4b449ae3b717e280c74df434da370db6cde67af050c03182b8"
           ],
@@ -40324,12 +40679,12 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c58a97a891fa0a59d4d4f04c70b25a6dd6043dc7344bee5aa89356cc1ef0b935"
+            "bf75931eca193057fb504e9de4dacea3a3f533ff4539b895dcc00f17555cb40e"
           ]
         ]
       },
       {
-        "version": "5.0.1",
+        "version": "5.1.0",
         "kind": "team",
         "files": {
           ".github/workflows/ci.yml": "83d8ff4f567bfc4bba228e14cbcdbb257ae7c131",
@@ -40346,9 +40701,10 @@ var init_validation_policy = __esm({
           "eslint.config.mjs": "afbfbe668bec5859235367bcf7864ccc7b0815b8",
           "tsconfig.json": "5be84e0dd0b04869ffe3cb4402472d8c57ed02b4",
           "vitest.config.mts": "5d427ca3b4ad17974ecddd3475a03cca63f28544",
-          "vite.config.mts": "3c51225206870200f294e9c5301e2f515d059f0a",
+          "vite.config.mts": "33cc4b133c0f6a4e08def2422944c892d1d1d896",
           "scripts/generate-routes.mjs": "d2eb17ecc7edbcefc32f0b5238ea2dd06c0d1622",
-          "scripts/start-production.mjs": "0518fced74fdab16be826e206e180da9b31835c6"
+          "scripts/start-production.mjs": "0518fced74fdab16be826e206e180da9b31835c6",
+          "scripts/browser-diagnostics.ts": "fbb635f32868d954ef1bf05b86a7de4310288e20"
         },
         "scripts": {
           "typecheck": "npm run routes:generate && tsc --noEmit",
@@ -40656,6 +41012,22 @@ var init_validation_policy = __esm({
             "e361b834f9e8707abaaff828a11591b54c02e326c1b4980f04cf559b5d50d21f"
           ],
           [
+            "node_modules/@floating-ui/core",
+            "f14188a86700cfc9146443f9c3daa16e6dd4a9da340d24463be4262ef33d3a44"
+          ],
+          [
+            "node_modules/@floating-ui/dom",
+            "0727a51c095bd0ae14719d81e0d1b1b59976d1c4f1871d3077c37d5b6eca65f6"
+          ],
+          [
+            "node_modules/@floating-ui/react-dom",
+            "e8b5cecc735e4638483992411b29892ca8aa293660f6b1155e9a51f0f779f05c"
+          ],
+          [
+            "node_modules/@floating-ui/utils",
+            "9b87db6b056a3ea8ffd9326ea1e413b61ca8cdd42ac9f775e10dec5d8a6ebcb5"
+          ],
+          [
             "node_modules/@humanfs/core",
             "a7af7a4b8e15b2366f83cbe1a9ae3784e9bd81e4f1246baba8ceeb8320c18984"
           ],
@@ -40746,6 +41118,126 @@ var init_validation_policy = __esm({
           [
             "node_modules/@playwright/test",
             "cbff5f3e8b4b52f8c6dbaff314d157de32116441a3af0fa56a40f76820ffaa13"
+          ],
+          [
+            "node_modules/@radix-ui/primitive",
+            "2c25cd114be8b4a23ea96952a9475b8dd2128e57fd643aa3113adb3d567bde47"
+          ],
+          [
+            "node_modules/@radix-ui/react-arrow",
+            "fd96daa517556627068e2fe05db4a8b7814abd45cfad863f803d6dde25339d31"
+          ],
+          [
+            "node_modules/@radix-ui/react-collection",
+            "231d41e28b1dc6ecfc8e5e7c726950f054f76f41bf54037041192b74fbc7c891"
+          ],
+          [
+            "node_modules/@radix-ui/react-compose-refs",
+            "73d922af883563bf829277e4b96f8fda8d7b3eaf7a947a2c1c5d1c44a6113965"
+          ],
+          [
+            "node_modules/@radix-ui/react-context",
+            "e4a0ad14f882408a58745b911e6ce45dbc7119edc8ce210cd18c38fd119d5c50"
+          ],
+          [
+            "node_modules/@radix-ui/react-dialog",
+            "5b469b1d893808c1953fbd29bb3fcd8b659b2dbec724c8f4a3f3c4ba5093503b"
+          ],
+          [
+            "node_modules/@radix-ui/react-direction",
+            "47ac5562799a3f4c9d49098a9f2b4d1689bef0dfbb05329838bee002e34f904d"
+          ],
+          [
+            "node_modules/@radix-ui/react-dismissable-layer",
+            "c8656eaa738a1335894a807a2f897a6f84850320300c23de217eb242617875f1"
+          ],
+          [
+            "node_modules/@radix-ui/react-dropdown-menu",
+            "fade4bca5856549a60b35f189c071f3ad5e9c14e06d22af6b8954f1a8db59aab"
+          ],
+          [
+            "node_modules/@radix-ui/react-focus-guards",
+            "2c678f21662928a8577c0cf4399e8694df364a2f9ca48af624c318b73dbcab39"
+          ],
+          [
+            "node_modules/@radix-ui/react-focus-scope",
+            "4560302b0df525b09f6c508c5a4c0fd3afe6e0fe6ea3aca311098eca91dd29e4"
+          ],
+          [
+            "node_modules/@radix-ui/react-id",
+            "67e007a1f48c44a889a8b415151743fc654fd3c480802c2dd9ae5fcac6fce100"
+          ],
+          [
+            "node_modules/@radix-ui/react-menu",
+            "31369583d5ec1317ece8ea0ffb6c5734b5f593c9781d91f8869807290c87a0b4"
+          ],
+          [
+            "node_modules/@radix-ui/react-popper",
+            "45316a08228ebc9fa10f7eaefa08bac2ed6b3981341a836d2d1b79e3ef28f3ac"
+          ],
+          [
+            "node_modules/@radix-ui/react-portal",
+            "8c348085cc06b3bfc3efd93549088b399316c02ad4303f1bd97b263f5215dee0"
+          ],
+          [
+            "node_modules/@radix-ui/react-presence",
+            "724db57ca85cd8449830127aa3f207ac476f8f20874012a25dc559192352d611"
+          ],
+          [
+            "node_modules/@radix-ui/react-primitive",
+            "ad86434d7e1d362a944366899c1550eb219f33a309933ee2bdbdd20d789bbf89"
+          ],
+          [
+            "node_modules/@radix-ui/react-roving-focus",
+            "6a6a5beb7b402829873538f694467543f16304dd6550b5c829536ab37cdc40de"
+          ],
+          [
+            "node_modules/@radix-ui/react-slot",
+            "61bcf9973f5929cc9254663b37cc90944a2587cd65772bcc1a31521b649c85f2"
+          ],
+          [
+            "node_modules/@radix-ui/react-tabs",
+            "b8fadf32ca6fe49efa563b807931ec17289795fe4dffece0e3a31bae8b05d3d1"
+          ],
+          [
+            "node_modules/@radix-ui/react-tooltip",
+            "7fc3a4d806518525d9c9cc31e41990e97a3ccaa2724add842a2be10c300614a0"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-callback-ref",
+            "c2f14cc91ed3e4b4dfae4322fe913035c29aea1a5348073faaf172ad70946da5"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-controllable-state",
+            "a9bb6a96939855db97c312fb666f867de6566f3e4b6943d1f53465ce8719202b"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-effect-event",
+            "1f525dceb6c9ee90a867ba20466b3c0db698aeb4f20a9a03c1ac7c6b22f691bc"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-is-hydrated",
+            "324b88cf22c78c2ff8e155fc70dba2a9dc9ca9157e376ab3cdf3a69dccc0b816"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-layout-effect",
+            "4af98cdffafc41568c2a022a31973c828d6b566bb5c3cb66ee5b84a994eb945f"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-rect",
+            "f9fe10852ed340887a5dc17ebb1b2f16e1de6175c24c5db9f2a6e3a3c1a77623"
+          ],
+          [
+            "node_modules/@radix-ui/react-use-size",
+            "58e712a3e93013685fafd4fdb62f356bad4738099516f0568962ed49eec462d0"
+          ],
+          [
+            "node_modules/@radix-ui/react-visually-hidden",
+            "feddf2f153c522d4a8027265caa1880f9ecd1771ae5de58f17b6a30fb046cfcd"
+          ],
+          [
+            "node_modules/@radix-ui/rect",
+            "d70e207420fc1d253fec5adb345fc49c6e367554ff8784c9e2135d18bf800543"
           ],
           [
             "node_modules/@rolldown/binding-android-arm-eabi",
@@ -41372,6 +41864,10 @@ var init_validation_policy = __esm({
             "3aa3e2885558f12344f258af7a6a2849ca4dc1d9882cf72eca11c77c46495e4a"
           ],
           [
+            "node_modules/aria-hidden",
+            "9cce3f70853efcd229a0dc007237ad20c52ad0ed79721db04980b46a9a785281"
+          ],
+          [
             "node_modules/aria-query",
             "7985887d2352a925b0012a39776b8ac03fac80b3f16dcf701684402e9b468f1a"
           ],
@@ -41626,6 +42122,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/detect-libc",
             "0245b29e46035effc856b1cee199a15cfed491a97756f3a91319ef765f2890e5"
+          ],
+          [
+            "node_modules/detect-node-es",
+            "6beb57fc9053462e300378177b115928820fef7db95c65aec63e9d20079a5b0f"
           ],
           [
             "node_modules/diff",
@@ -41886,6 +42386,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/get-intrinsic",
             "751f97b591ac92a7c0b0e6086d638d21971a920cb96fa62864189b0b0c575ffb"
+          ],
+          [
+            "node_modules/get-nonce",
+            "bd9179e02f5c8cd368fb5adbc44dab46c6aca031704843da4f3f0a8c6b47eac5"
           ],
           [
             "node_modules/get-proto",
@@ -42552,6 +43056,18 @@ var init_validation_policy = __esm({
             "754ed759ee1e233d19407b0ff507bc47fc98854f8289e39933b78f5d1a5bb557"
           ],
           [
+            "node_modules/react-remove-scroll",
+            "fda7a985af3c98bb55369bba5de4972dae7bdf64725401386fb2f045f008c1d6"
+          ],
+          [
+            "node_modules/react-remove-scroll-bar",
+            "300a2b7d63da310bd4b0737ce8b4e42a64af9b46206d51c056697052f5a25a74"
+          ],
+          [
+            "node_modules/react-style-singleton",
+            "c9b95bb34f5426f968fcfbf6292a7c7ac623c4b793c174dacc4f8c2a63280311"
+          ],
+          [
             "node_modules/readdirp",
             "ada1522c646fdf597d0ee2815d6bce7346c52b759d7c7272d7436d399b9a0172"
           ],
@@ -42932,6 +43448,14 @@ var init_validation_policy = __esm({
             "920edb8484087287e164f239879ff01cc829d79819eeae22f2ded28368638fe0"
           ],
           [
+            "node_modules/use-callback-ref",
+            "38a95f7a79fc9d919119e57c364672ddfb8197218cc81d9cb38e94b8a2ad9e85"
+          ],
+          [
+            "node_modules/use-sidecar",
+            "1483c121eefe18736b7de9ff27087a1cc51a8c7cfa242b1902a219ed14765bd0"
+          ],
+          [
             "node_modules/use-sync-external-store",
             "41ae40be8b518b4b449ae3b717e280c74df434da370db6cde67af050c03182b8"
           ],
@@ -43133,7 +43657,7 @@ var init_validation_policy = __esm({
           ],
           [
             "tools/supremo-cli",
-            "c58a97a891fa0a59d4d4f04c70b25a6dd6043dc7344bee5aa89356cc1ef0b935"
+            "bf75931eca193057fb504e9de4dacea3a3f533ff4539b895dcc00f17555cb40e"
           ]
         ]
       }
@@ -78861,28 +79385,28 @@ function lockEntryHash(value) {
 function record2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
-function binNames(path28, value) {
+function binNames(path29, value) {
   const bin = record2(value).bin;
-  const names = typeof bin === "string" ? [path28.split("/").at(-1) ?? ""] : Array.isArray(bin) ? bin.filter((name) => typeof name === "string") : Object.keys(record2(bin));
+  const names = typeof bin === "string" ? [path29.split("/").at(-1) ?? ""] : Array.isArray(bin) ? bin.filter((name) => typeof name === "string") : Object.keys(record2(bin));
   return names.map((name) => name.replace(/\\/g, "/").split("/").at(-1)?.toLowerCase() ?? "").filter(Boolean);
 }
 function inspectValidationIntegrity(manifest, tree, packageContent, lockContent) {
   const failures = [];
   const byPath = new Map(tree.map((entry) => [entry.path, entry]));
-  for (const [path28, sha2] of Object.entries(manifest.files)) {
-    const entry = byPath.get(path28);
+  for (const [path29, sha2] of Object.entries(manifest.files)) {
+    const entry = byPath.get(path29);
     if (!entry || entry.sha !== sha2 || !["100644", "100755"].includes(entry.mode))
-      failures.push("Validador ausente ou alterado: ".concat(path28));
+      failures.push("Validador ausente ou alterado: ".concat(path29));
   }
   for (const entry of tree) {
     if (entry.path.startsWith(".github/workflows/") && !manifest.files[entry.path] || /(^|\/)node_modules\//.test(entry.path) || /(^|\/)\.npmrc$/.test(entry.path))
       failures.push("Configura\xE7\xE3o de execu\xE7\xE3o n\xE3o autorizada: ".concat(entry.path));
   }
-  for (const path28 of ["package.json", "package-lock.json"]) {
-    const content = path28 === "package.json" ? packageContent : lockContent;
-    const entry = byPath.get(path28);
+  for (const path29 of ["package.json", "package-lock.json"]) {
+    const content = path29 === "package.json" ? packageContent : lockContent;
+    const entry = byPath.get(path29);
     if (!entry || entry.sha !== blobHash(content) || entry.mode !== "100644")
-      failures.push("Metadados n\xE3o correspondem ao snapshot: ".concat(path28));
+      failures.push("Metadados n\xE3o correspondem ao snapshot: ".concat(path29));
   }
   try {
     const pkg = record2(JSON.parse(packageContent));
@@ -78910,25 +79434,25 @@ function inspectValidationIntegrity(manifest, tree, packageContent, lockContent)
     if (lock.lockfileVersion !== 3)
       failures.push("Lockfile de valida\xE7\xE3o incompat\xEDvel.");
     const packages = record2(lock.packages);
-    for (const [path28, expected] of Object.entries(manifest.lock)) {
-      if (!packages[path28] || lockEntryHash(packages[path28]) !== expected)
-        failures.push("Depend\xEAncia protegida alterada: ".concat(path28));
+    for (const [path29, expected] of Object.entries(manifest.lock)) {
+      if (!packages[path29] || lockEntryHash(packages[path29]) !== expected)
+        failures.push("Depend\xEAncia protegida alterada: ".concat(path29));
     }
-    const protectedBins = new Set(Object.keys(manifest.lock).flatMap((path28) => binNames(path28, packages[path28])));
-    for (const path28 of Object.keys(packages)) {
-      if (path28 in manifest.lock)
+    const protectedBins = new Set(Object.keys(manifest.lock).flatMap((path29) => binNames(path29, packages[path29])));
+    for (const path29 of Object.keys(packages)) {
+      if (path29 in manifest.lock)
         continue;
-      if (binNames(path28, packages[path28]).some((name) => protectedBins.has(name))) {
-        failures.push("Execut\xE1vel colide com ferramenta protegida: ".concat(path28));
+      if (binNames(path29, packages[path29]).some((name) => protectedBins.has(name))) {
+        failures.push("Execut\xE1vel colide com ferramenta protegida: ".concat(path29));
       }
-      let ancestor = path28;
+      let ancestor = path29;
       for (; ; ) {
         const nested = ancestor.lastIndexOf("/node_modules/");
         if (nested < 0)
           break;
         ancestor = ancestor.slice(0, nested);
         if (ancestor in manifest.lock) {
-          failures.push("Depend\xEAncia sombreia ferramenta protegida: ".concat(path28));
+          failures.push("Depend\xEAncia sombreia ferramenta protegida: ".concat(path29));
           break;
         }
       }
@@ -78951,20 +79475,20 @@ function verifyTrustedFiles(cwd) {
   const tree = [];
   const contents = /* @__PURE__ */ new Map();
   const paths = new Set(localPolicies.flatMap((p) => Object.keys(p.files)));
-  for (const path28 of ["package.json", "package-lock.json", ".npmrc"])
-    paths.add(path28);
+  for (const path29 of ["package.json", "package-lock.json", ".npmrc"])
+    paths.add(path29);
   try {
-    for (const path28 of (0, import_node_fs14.readdirSync)((0, import_node_path16.join)(cwd, ".github/workflows")))
-      paths.add(".github/workflows/".concat(path28));
+    for (const path29 of (0, import_node_fs14.readdirSync)((0, import_node_path16.join)(cwd, ".github/workflows")))
+      paths.add(".github/workflows/".concat(path29));
   } catch (error61) {
     if (error61.code !== "ENOENT")
       throw error61;
   }
-  for (const path28 of paths) {
+  for (const path29 of paths) {
     try {
-      const file2 = readStableFile((0, import_node_path16.join)(cwd, path28), 16 * 1024 * 1024, cwd);
-      contents.set(path28, file2.content);
-      tree.push({ path: path28, sha: blobHash(file2.content), mode: file2.mode & 73 ? "100755" : "100644" });
+      const file2 = readStableFile((0, import_node_path16.join)(cwd, path29), 16 * 1024 * 1024, cwd);
+      contents.set(path29, file2.content);
+      tree.push({ path: path29, sha: blobHash(file2.content), mode: file2.mode & 73 ? "100755" : "100644" });
     } catch (error61) {
       if (error61.code !== "ENOENT")
         throw error61;
@@ -82016,6 +82540,91 @@ var init_turn_runtime = __esm({
   }
 });
 
+// src/browser-diagnostics.ts
+function readBrowserDiagnostics(cwd, projectId, now = Date.now()) {
+  try {
+    for (const part of [".supremo", ".supremo/runtime"]) {
+      const stat = import_node_fs22.default.lstatSync(import_node_path24.default.join(cwd, part));
+      if (!stat.isDirectory() || stat.isSymbolicLink())
+        return null;
+    }
+    const filename = import_node_path24.default.join(cwd, BROWSER_DIAGNOSTICS_PATH);
+    const descriptor = import_node_fs22.default.openSync(filename, import_node_fs22.default.constants.O_RDONLY | import_node_fs22.default.constants.O_NOFOLLOW | import_node_fs22.default.constants.O_NONBLOCK);
+    let content;
+    try {
+      const before = import_node_fs22.default.fstatSync(descriptor);
+      if (!before.isFile() || before.nlink !== 1 || before.size > MAXIMUM_BYTES)
+        return null;
+      const bytes = Buffer.alloc(MAXIMUM_BYTES + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const count = import_node_fs22.default.readSync(descriptor, bytes, length, bytes.length - length, length);
+        if (count === 0)
+          break;
+        length += count;
+      }
+      const after = import_node_fs22.default.fstatSync(descriptor);
+      if (length > MAXIMUM_BYTES || !after.isFile() || after.nlink !== 1 || length !== after.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs)
+        return null;
+      content = bytes.toString("utf8", 0, length);
+    } finally {
+      import_node_fs22.default.closeSync(descriptor);
+    }
+    const parsed = recordSchema.safeParse(JSON.parse(content));
+    if (!parsed.success)
+      return null;
+    const data = parsed.data;
+    if (data.projectId !== projectId || data.startedAt > data.updatedAt || data.updatedAt > now + 5e3 || now - data.updatedAt >= RETENTION_MS)
+      return null;
+    const observations = data.events.filter((event) => event.firstSeenAt >= data.startedAt && event.firstSeenAt <= event.lastSeenAt && event.lastSeenAt <= data.updatedAt && now - event.lastSeenAt < RETENTION_MS).slice(-8).map((event) => ({
+      ...event,
+      ...event.file ? { file: sanitizeDiagnostic(event.file, 200) } : {}
+    }));
+    if (!observations.length)
+      return null;
+    return {
+      informationalOnly: true,
+      evidenceIsUntrusted: true,
+      file: BROWSER_DIAGNOSTICS_PATH,
+      note: "Observa\xE7\xF5es recentes de erros n\xE3o tratados no navegador local. Coordenadas s\xE3o do JavaScript servido, n\xE3o do fonte original. Presen\xE7a ou aus\xEAncia n\xE3o comprova sa\xFAde, aprova\xE7\xE3o ou falha de gates. N\xE3o inicia repara\xE7\xE3o autom\xE1tica.",
+      observations
+    };
+  } catch {
+    return null;
+  }
+}
+var import_node_fs22, import_node_path24, BROWSER_DIAGNOSTICS_PATH, RETENTION_MS, MAXIMUM_BYTES, timestamp, recordSchema;
+var init_browser_diagnostics = __esm({
+  "src/browser-diagnostics.ts"() {
+    "use strict";
+    import_node_fs22 = __toESM(require("node:fs"));
+    import_node_path24 = __toESM(require("node:path"));
+    init_zod();
+    init_feedback();
+    BROWSER_DIAGNOSTICS_PATH = ".supremo/runtime/browser-diagnostics.json";
+    RETENTION_MS = 15 * 60 * 1e3;
+    MAXIMUM_BYTES = 16384;
+    timestamp = external_exports.number().int().nonnegative();
+    recordSchema = external_exports.object({
+      version: external_exports.literal(1),
+      projectId: external_exports.uuid(),
+      bootId: external_exports.uuid(),
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      events: external_exports.array(external_exports.object({
+        kind: external_exports.enum(["error", "unhandled_rejection"]),
+        name: external_exports.enum(["Error", "TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "AggregateError", "Unknown"]),
+        file: external_exports.string().max(200).regex(/^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_$.-]+\.[cm]?[jt]sx?$/).optional(),
+        generatedLine: external_exports.number().int().min(1).max(1e5).optional(),
+        generatedColumn: external_exports.number().int().min(1).max(1e4).optional(),
+        count: external_exports.number().int().min(1).max(99),
+        firstSeenAt: timestamp,
+        lastSeenAt: timestamp
+      }).strict()).max(20)
+    }).strict();
+  }
+});
+
 // src/turn-response.ts
 var turn_response_exports = {};
 __export(turn_response_exports, {
@@ -82030,12 +82639,13 @@ function bounded2(value, limit) {
   const safe = sanitizeDiagnostic(value, value.length);
   return safe.length <= limit ? safe : safe.slice(0, limit / 2) + "\n[\u2026 diagn\xF3stico completo no arquivo de estado \u2026]\n" + safe.slice(-limit / 2);
 }
-function turnAgentResponse(output3) {
+function turnAgentResponse(output3, cwd) {
   const state = output3.state;
   const supplied = object3(output3.context);
   const context = state?.context;
   const recovery = state?.turn.recovery;
   const diagnostic = object3(supplied.recoveryDiagnostic);
+  const browserDiagnostics = cwd && state ? readBrowserDiagnostics(cwd, state.turn.projectId) : null;
   return {
     protocolVersion: output3.protocolVersion,
     workerAvailable: output3.workerAvailable,
@@ -82071,7 +82681,8 @@ function turnAgentResponse(output3) {
           }) : [],
           summary: bounded2(diagnostic.summary, 400)
         } } : {},
-        evidenceIsUntrusted: true
+        evidenceIsUntrusted: true,
+        ...browserDiagnostics ? { browserDiagnostics } : {}
       },
       turn: {
         id: state.turn.turnId,
@@ -82089,6 +82700,7 @@ var init_turn_response = __esm({
   "src/turn-response.ts"() {
     "use strict";
     init_feedback();
+    init_browser_diagnostics();
   }
 });
 
@@ -82227,8 +82839,8 @@ var require_package = __commonJS({
 // node_modules/dotenv/lib/main.js
 var require_main = __commonJS({
   "node_modules/dotenv/lib/main.js"(exports2, module2) {
-    var fs26 = require("fs");
-    var path28 = require("path");
+    var fs27 = require("fs");
+    var path29 = require("path");
     var os3 = require("os");
     var crypto10 = require("crypto");
     var packageJson = require_package();
@@ -82336,7 +82948,7 @@ var require_main = __commonJS({
       if (options && options.path && options.path.length > 0) {
         if (Array.isArray(options.path)) {
           for (const filepath of options.path) {
-            if (fs26.existsSync(filepath)) {
+            if (fs27.existsSync(filepath)) {
               possibleVaultPath = filepath.endsWith(".vault") ? filepath : "".concat(filepath, ".vault");
             }
           }
@@ -82344,15 +82956,15 @@ var require_main = __commonJS({
           possibleVaultPath = options.path.endsWith(".vault") ? options.path : "".concat(options.path, ".vault");
         }
       } else {
-        possibleVaultPath = path28.resolve(process.cwd(), ".env.vault");
+        possibleVaultPath = path29.resolve(process.cwd(), ".env.vault");
       }
-      if (fs26.existsSync(possibleVaultPath)) {
+      if (fs27.existsSync(possibleVaultPath)) {
         return possibleVaultPath;
       }
       return null;
     }
     function _resolveHome(envPath) {
-      return envPath[0] === "~" ? path28.join(os3.homedir(), envPath.slice(1)) : envPath;
+      return envPath[0] === "~" ? path29.join(os3.homedir(), envPath.slice(1)) : envPath;
     }
     function _configVault(options) {
       const debug = Boolean(options && options.debug);
@@ -82369,7 +82981,7 @@ var require_main = __commonJS({
       return { parsed };
     }
     function configDotenv(options) {
-      const dotenvPath = path28.resolve(process.cwd(), ".env");
+      const dotenvPath = path29.resolve(process.cwd(), ".env");
       let encoding = "utf8";
       const debug = Boolean(options && options.debug);
       const quiet = options && "quiet" in options ? options.quiet : true;
@@ -82393,13 +83005,13 @@ var require_main = __commonJS({
       }
       let lastError;
       const parsedAll = {};
-      for (const path29 of optionPaths) {
+      for (const path30 of optionPaths) {
         try {
-          const parsed = DotenvModule.parse(fs26.readFileSync(path29, { encoding }));
+          const parsed = DotenvModule.parse(fs27.readFileSync(path30, { encoding }));
           DotenvModule.populate(parsedAll, parsed, options);
         } catch (e) {
           if (debug) {
-            _debug("Failed to load ".concat(path29, " ").concat(e.message));
+            _debug("Failed to load ".concat(path30, " ").concat(e.message));
           }
           lastError = e;
         }
@@ -82414,7 +83026,7 @@ var require_main = __commonJS({
         const shortPaths = [];
         for (const filePath2 of optionPaths) {
           try {
-            const relative = path28.relative(process.cwd(), filePath2);
+            const relative = path29.relative(process.cwd(), filePath2);
             shortPaths.push(relative);
           } catch (e) {
             if (debug) {
@@ -82516,23 +83128,23 @@ var require_main = __commonJS({
 
 // src/prepare-config.ts
 function writeSetupFile(cwd, relative, content) {
-  const file2 = import_node_path24.default.resolve(cwd, relative);
-  const segments = import_node_path24.default.relative(import_node_path24.default.resolve(cwd), file2).split(import_node_path24.default.sep);
-  if (!segments.length || segments.includes("..") || import_node_path24.default.isAbsolute(import_node_path24.default.relative(cwd, file2)))
+  const file2 = import_node_path25.default.resolve(cwd, relative);
+  const segments = import_node_path25.default.relative(import_node_path25.default.resolve(cwd), file2).split(import_node_path25.default.sep);
+  if (!segments.length || segments.includes("..") || import_node_path25.default.isAbsolute(import_node_path25.default.relative(cwd, file2)))
     throw new Error("Configura\xE7\xE3o fora do checkout.");
   for (let index = 0; index < segments.length; index++) {
-    const directory3 = import_node_path24.default.join(cwd, ...segments.slice(0, index));
-    const stat = import_node_fs22.default.lstatSync(directory3);
+    const directory3 = import_node_path25.default.join(cwd, ...segments.slice(0, index));
+    const stat = import_node_fs23.default.lstatSync(directory3);
     if (!stat.isDirectory() || stat.isSymbolicLink())
       throw new Error("Diret\xF3rio de configura\xE7\xE3o inv\xE1lido.");
   }
   optionalSetupFile(cwd, relative);
-  const temporary = import_node_path24.default.join(import_node_path24.default.dirname(file2), ".prepare-".concat((0, import_node_crypto13.randomUUID)(), ".tmp"));
+  const temporary = import_node_path25.default.join(import_node_path25.default.dirname(file2), ".prepare-".concat((0, import_node_crypto13.randomUUID)(), ".tmp"));
   try {
-    import_node_fs22.default.writeFileSync(temporary, content, { mode: 384, flag: "wx" });
-    import_node_fs22.default.renameSync(temporary, file2);
+    import_node_fs23.default.writeFileSync(temporary, content, { mode: 384, flag: "wx" });
+    import_node_fs23.default.renameSync(temporary, file2);
   } finally {
-    import_node_fs22.default.rmSync(temporary, { force: true });
+    import_node_fs23.default.rmSync(temporary, { force: true });
   }
 }
 function recordPreparationConsent(cwd, projectId, issuer) {
@@ -82580,12 +83192,12 @@ async function confirmPreparationDatabase(projectId, issuer, secret, expected) {
 }
 function optionalSetupFile(cwd, relative) {
   try {
-    return readStableFile(import_node_path24.default.join(cwd, relative), 1024 * 1024, cwd).content;
+    return readStableFile(import_node_path25.default.join(cwd, relative), 1024 * 1024, cwd).content;
   } catch (error61) {
     if (error61.code === "ENOENT") {
-      const candidate = import_node_path24.default.join(cwd, relative);
+      const candidate = import_node_path25.default.join(cwd, relative);
       try {
-        if (import_node_fs22.default.lstatSync(candidate).isSymbolicLink())
+        if (import_node_fs23.default.lstatSync(candidate).isSymbolicLink())
           throw new Error("Arquivo de configura\xE7\xE3o cont\xE9m link simb\xF3lico.");
       } catch (inspection) {
         if (inspection.code !== "ENOENT")
@@ -82624,7 +83236,7 @@ function githubRepository(remote) {
 }
 function verifyCheckoutRepository(cwd, repo) {
   const root = (0, import_node_child_process14.execFileSync)("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-  if (import_node_fs22.default.realpathSync(root) !== import_node_fs22.default.realpathSync(cwd))
+  if (import_node_fs23.default.realpathSync(root) !== import_node_fs23.default.realpathSync(cwd))
     throw new Error("Prepare deve ser executado na raiz do checkout.");
   const remote = (0, import_node_child_process14.execFileSync)("git", ["remote", "get-url", "origin"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const actual = githubRepository(remote);
@@ -82707,14 +83319,14 @@ function configureAuthorizedCheckout(cwd, stack, config2) {
     throw new Error("A autoriza\xE7\xE3o n\xE3o retornou a configura\xE7\xE3o p\xFAblica completa do development.");
   return existing ?? incoming;
 }
-var import_node_child_process14, import_node_crypto13, import_node_fs22, import_node_path24, import_dotenv, identitySchema2, databaseSchema, onboardingSchema, PreparationDeviceUnauthorizedError;
+var import_node_child_process14, import_node_crypto13, import_node_fs23, import_node_path25, import_dotenv, identitySchema2, databaseSchema, onboardingSchema, PreparationDeviceUnauthorizedError;
 var init_prepare_config = __esm({
   "src/prepare-config.ts"() {
     "use strict";
     import_node_child_process14 = require("node:child_process");
     import_node_crypto13 = require("node:crypto");
-    import_node_fs22 = __toESM(require("node:fs"));
-    import_node_path24 = __toESM(require("node:path"));
+    import_node_fs23 = __toESM(require("node:fs"));
+    import_node_path25 = __toESM(require("node:path"));
     import_dotenv = __toESM(require_main());
     init_zod();
     init_device_identity();
@@ -82777,8 +83389,8 @@ function projectNodePackage(platform, arch) {
 function projectRuntimeEnvironment(node2, npm2, source, platform = process.platform) {
   const result2 = { ...source };
   const key = platform === "win32" ? Object.keys(result2).find((name) => name.toLowerCase() === "path") ?? "PATH" : "PATH";
-  const paths = platform === "win32" ? import_node_path25.default.win32 : import_node_path25.default;
-  const separator = platform === "win32" ? ";" : import_node_path25.default.delimiter;
+  const paths = platform === "win32" ? import_node_path26.default.win32 : import_node_path26.default;
+  const separator = platform === "win32" ? ";" : import_node_path26.default.delimiter;
   result2[key] = [paths.dirname(node2), result2[key]].filter(Boolean).join(separator);
   result2.npm_node_execpath = node2;
   result2.npm_execpath = npm2;
@@ -82789,7 +83401,7 @@ function missing(error61) {
 }
 function optionalStat(file2) {
   try {
-    return import_node_fs23.default.lstatSync(file2);
+    return import_node_fs24.default.lstatSync(file2);
   } catch (error61) {
     if (missing(error61))
       return null;
@@ -82797,41 +83409,41 @@ function optionalStat(file2) {
   }
 }
 function assertScoped(root, file2, kind) {
-  const relative = import_node_path25.default.relative(root, file2);
-  if (!relative || relative === ".." || relative.startsWith("..".concat(import_node_path25.default.sep)) || import_node_path25.default.isAbsolute(relative))
+  const relative = import_node_path26.default.relative(root, file2);
+  if (!relative || relative === ".." || relative.startsWith("..".concat(import_node_path26.default.sep)) || import_node_path26.default.isAbsolute(relative))
     throw new Error("Runtime fora da pasta autorizada.");
   let current2 = root;
-  const segments = relative.split(import_node_path25.default.sep);
+  const segments = relative.split(import_node_path26.default.sep);
   for (let index = 0; index <= segments.length; index++) {
-    const stat = import_node_fs23.default.lstatSync(current2);
+    const stat = import_node_fs24.default.lstatSync(current2);
     const final = index === segments.length;
     if (stat.isSymbolicLink() || !(final && kind === "file" ? stat.isFile() : stat.isDirectory())) {
       throw new Error("A pasta do runtime cont\xE9m um link simb\xF3lico ou caminho inv\xE1lido.");
     }
     if (final)
       return stat;
-    current2 = import_node_path25.default.join(current2, segments[index]);
+    current2 = import_node_path26.default.join(current2, segments[index]);
   }
   throw new Error("Caminho do runtime inv\xE1lido.");
 }
 function ensureDirectory(root, directory3) {
   if (!optionalStat(directory3))
-    import_node_fs23.default.mkdirSync(directory3, { mode: 448 });
+    import_node_fs24.default.mkdirSync(directory3, { mode: 448 });
   assertScoped(root, directory3, "directory");
 }
 function resolveNpm(node2, environment2) {
-  const bin = import_node_path25.default.dirname(node2);
-  const candidates = [import_node_path25.default.resolve(bin, "../lib/node_modules/npm/bin/npm-cli.js"), import_node_path25.default.join(bin, "node_modules/npm/bin/npm-cli.js")];
-  if (environment2.npm_execpath && import_node_path25.default.isAbsolute(environment2.npm_execpath))
+  const bin = import_node_path26.default.dirname(node2);
+  const candidates = [import_node_path26.default.resolve(bin, "../lib/node_modules/npm/bin/npm-cli.js"), import_node_path26.default.join(bin, "node_modules/npm/bin/npm-cli.js")];
+  if (environment2.npm_execpath && import_node_path26.default.isAbsolute(environment2.npm_execpath))
     candidates.push(environment2.npm_execpath);
-  for (const directory3 of (environment2.PATH ?? environment2.Path ?? "").split(import_node_path25.default.delimiter)) {
-    if (import_node_path25.default.isAbsolute(directory3))
-      candidates.push(import_node_path25.default.join(directory3, "npm"), import_node_path25.default.join(directory3, "node_modules/npm/bin/npm-cli.js"));
+  for (const directory3 of (environment2.PATH ?? environment2.Path ?? "").split(import_node_path26.default.delimiter)) {
+    if (import_node_path26.default.isAbsolute(directory3))
+      candidates.push(import_node_path26.default.join(directory3, "npm"), import_node_path26.default.join(directory3, "node_modules/npm/bin/npm-cli.js"));
   }
   for (const candidate of candidates) {
     try {
-      const resolved = import_node_fs23.default.realpathSync(candidate);
-      if (import_node_path25.default.basename(resolved) === "npm-cli.js" && import_node_fs23.default.statSync(resolved).isFile())
+      const resolved = import_node_fs24.default.realpathSync(candidate);
+      if (import_node_path26.default.basename(resolved) === "npm-cli.js" && import_node_fs24.default.statSync(resolved).isFile())
         return resolved;
     } catch (error61) {
       if (!missing(error61) && error61.code !== "ENOTDIR")
@@ -82851,12 +83463,12 @@ async function nodeVersion(node2, cwd, io) {
 }
 async function projectRuntime(cwd, stack, install, supplied) {
   const io = supplied ?? { node: process.execPath, env: process.env, platform: process.platform, arch: process.arch, run };
-  const suppliedRoot = import_node_path25.default.resolve(cwd);
-  const rootStat = import_node_fs23.default.lstatSync(suppliedRoot);
+  const suppliedRoot = import_node_path26.default.resolve(cwd);
+  const rootStat = import_node_fs24.default.lstatSync(suppliedRoot);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
     throw new Error("A pasta do projeto deve ser um diret\xF3rio real.");
-  const root = import_node_fs23.default.realpathSync(suppliedRoot);
-  const currentNode = import_node_fs23.default.realpathSync(io.node);
+  const root = import_node_fs24.default.realpathSync(suppliedRoot);
+  const currentNode = import_node_fs24.default.realpathSync(io.node);
   const npm2 = resolveNpm(currentNode, io.env);
   const result2 = (node2, version2, source) => ({
     node: node2,
@@ -82869,8 +83481,8 @@ async function projectRuntime(cwd, stack, install, supplied) {
   if (compatibleProjectNode(stack, currentVersion))
     return result2(currentNode, currentVersion, "current");
   const packageName = projectNodePackage(io.platform, io.arch);
-  const supremo = import_node_path25.default.join(root, ".supremo");
-  const runtime = import_node_path25.default.join(supremo, "runtime");
+  const supremo = import_node_path26.default.join(root, ".supremo");
+  const runtime = import_node_path26.default.join(supremo, "runtime");
   for (const directory3 of [supremo, runtime]) {
     if (install)
       ensureDirectory(root, directory3);
@@ -82880,9 +83492,9 @@ async function projectRuntime(cwd, stack, install, supplied) {
       assertScoped(root, directory3, "directory");
     }
   }
-  const destination = import_node_path25.default.join(runtime, "node-".concat(PROJECT_NODE_VERSION, "-").concat(io.platform, "-").concat(io.arch));
-  const binaryRelative = import_node_path25.default.join("node_modules", packageName, "bin", io.platform === "win32" ? "node.exe" : "node");
-  const binary = import_node_path25.default.join(destination, binaryRelative);
+  const destination = import_node_path26.default.join(runtime, "node-".concat(PROJECT_NODE_VERSION, "-").concat(io.platform, "-").concat(io.arch));
+  const binaryRelative = import_node_path26.default.join("node_modules", packageName, "bin", io.platform === "win32" ? "node.exe" : "node");
+  const binary = import_node_path26.default.join(destination, binaryRelative);
   if (optionalStat(destination)) {
     assertScoped(root, destination, "directory");
     assertScoped(root, binary, "file");
@@ -82893,7 +83505,7 @@ async function projectRuntime(cwd, stack, install, supplied) {
   }
   if (!install)
     return null;
-  const staging = import_node_fs23.default.mkdtempSync(import_node_path25.default.join(runtime, ".install-"));
+  const staging = import_node_fs24.default.mkdtempSync(import_node_path26.default.join(runtime, ".install-"));
   const identity = assertScoped(root, staging, "directory");
   const assertStage = () => {
     const current2 = assertScoped(root, staging, "directory");
@@ -82901,18 +83513,18 @@ async function projectRuntime(cwd, stack, install, supplied) {
       throw new Error("A pasta do runtime mudou durante a prepara\xE7\xE3o.");
   };
   try {
-    import_node_fs23.default.writeFileSync(import_node_path25.default.join(staging, "package.json"), JSON.stringify({ name: "supremo-project-runtime", private: true }), { flag: "wx", mode: 384 });
+    import_node_fs24.default.writeFileSync(import_node_path26.default.join(staging, "package.json"), JSON.stringify({ name: "supremo-project-runtime", private: true }), { flag: "wx", mode: 384 });
     for (const filename of [".npmrc", "global.npmrc"])
-      import_node_fs23.default.writeFileSync(import_node_path25.default.join(staging, filename), "", { flag: "wx", mode: 384 });
+      import_node_fs24.default.writeFileSync(import_node_path26.default.join(staging, filename), "", { flag: "wx", mode: 384 });
     for (const directory3 of ["home", "tmp", "cache"])
-      import_node_fs23.default.mkdirSync(import_node_path25.default.join(staging, directory3), { mode: 448 });
+      import_node_fs24.default.mkdirSync(import_node_path26.default.join(staging, directory3), { mode: 448 });
     const installEnv = {
-      PATH: import_node_path25.default.dirname(currentNode),
-      HOME: import_node_path25.default.join(staging, "home"),
-      USERPROFILE: import_node_path25.default.join(staging, "home"),
-      TMPDIR: import_node_path25.default.join(staging, "tmp"),
-      TMP: import_node_path25.default.join(staging, "tmp"),
-      TEMP: import_node_path25.default.join(staging, "tmp")
+      PATH: import_node_path26.default.dirname(currentNode),
+      HOME: import_node_path26.default.join(staging, "home"),
+      USERPROFILE: import_node_path26.default.join(staging, "home"),
+      TMPDIR: import_node_path26.default.join(staging, "tmp"),
+      TMP: import_node_path26.default.join(staging, "tmp"),
+      TEMP: import_node_path26.default.join(staging, "tmp")
     };
     for (const name of ["SystemRoot", "SYSTEMROOT", "WINDIR"])
       if (io.env[name])
@@ -82927,11 +83539,11 @@ async function projectRuntime(cwd, stack, install, supplied) {
       "--registry",
       REGISTRY,
       "--userconfig",
-      import_node_path25.default.join(staging, ".npmrc"),
+      import_node_path26.default.join(staging, ".npmrc"),
       "--globalconfig",
-      import_node_path25.default.join(staging, "global.npmrc"),
+      import_node_path26.default.join(staging, "global.npmrc"),
       "--cache",
-      import_node_path25.default.join(staging, "cache"),
+      import_node_path26.default.join(staging, "cache"),
       "--ignore-scripts",
       "--no-bin-links",
       "--no-audit",
@@ -82943,7 +83555,7 @@ async function projectRuntime(cwd, stack, install, supplied) {
       "--loglevel=error"
     ], { cwd: staging, env: installEnv, timeout: 12e4 });
     assertStage();
-    const stagedBinary = import_node_path25.default.join(staging, binaryRelative);
+    const stagedBinary = import_node_path26.default.join(staging, binaryRelative);
     assertScoped(root, stagedBinary, "file");
     const version2 = await nodeVersion(stagedBinary, root, io);
     if (version2 !== "v".concat(PROJECT_NODE_VERSION))
@@ -82951,7 +83563,7 @@ async function projectRuntime(cwd, stack, install, supplied) {
     assertStage();
     if (optionalStat(destination))
       throw new Error("Outra prepara\xE7\xE3o criou o runtime local; retome a prepara\xE7\xE3o para reutiliz\xE1-lo.");
-    import_node_fs23.default.renameSync(staging, destination);
+    import_node_fs24.default.renameSync(staging, destination);
     assertScoped(root, binary, "file");
     return result2(binary, version2, "installed");
   } catch {
@@ -82959,7 +83571,7 @@ async function projectRuntime(cwd, stack, install, supplied) {
   } finally {
     if (optionalStat(staging)) {
       assertStage();
-      import_node_fs23.default.rmSync(staging, { recursive: true, force: true });
+      import_node_fs24.default.rmSync(staging, { recursive: true, force: true });
     }
   }
 }
@@ -82972,13 +83584,13 @@ async function ensureProjectRuntime(cwd, stack, supplied) {
     throw new Error("O runtime do projeto n\xE3o foi preparado.");
   return runtime;
 }
-var import_node_child_process15, import_node_fs23, import_node_path25, PROJECT_NODE_VERSION, REGISTRY;
+var import_node_child_process15, import_node_fs24, import_node_path26, PROJECT_NODE_VERSION, REGISTRY;
 var init_project_runtime = __esm({
   "src/project-runtime.ts"() {
     "use strict";
     import_node_child_process15 = require("node:child_process");
-    import_node_fs23 = __toESM(require("node:fs"));
-    import_node_path25 = __toESM(require("node:path"));
+    import_node_fs24 = __toESM(require("node:fs"));
+    import_node_path26 = __toESM(require("node:path"));
     init_framework_runtime();
     PROJECT_NODE_VERSION = "22.22.1";
     REGISTRY = "https://registry.npmjs.org/";
@@ -83015,7 +83627,7 @@ function buildEnvFile(env) {
 }
 function targetDir(repoFullName, baseDir) {
   const name = repoFullName.split("/").pop() || "projeto";
-  return import_node_path26.default.join(baseDir ?? process.cwd(), name);
+  return import_node_path27.default.join(baseDir ?? process.cwd(), name);
 }
 function cleanRemoteUrl(repoFullName) {
   return "https://github.com/".concat(repoFullName, ".git");
@@ -83184,18 +83796,18 @@ function gitHooksVerified(root) {
     return false;
   try {
     for (const [name, expected] of [["pre-commit", preCommitHook], ["pre-push", prePushHook]]) {
-      const file2 = import_node_path26.default.join(root, ".githooks", name);
-      const descriptor = import_node_fs24.default.openSync(file2, import_node_fs24.default.constants.O_RDONLY | import_node_fs24.default.constants.O_NOFOLLOW | import_node_fs24.default.constants.O_NONBLOCK);
+      const file2 = import_node_path27.default.join(root, ".githooks", name);
+      const descriptor = import_node_fs25.default.openSync(file2, import_node_fs25.default.constants.O_RDONLY | import_node_fs25.default.constants.O_NOFOLLOW | import_node_fs25.default.constants.O_NONBLOCK);
       try {
-        const stat = import_node_fs24.default.fstatSync(descriptor);
+        const stat = import_node_fs25.default.fstatSync(descriptor);
         if (!stat.isFile())
           return false;
         const userId = process.geteuid?.();
         const executeMask = userId === void 0 || userId === 0 ? 73 : userId === stat.uid ? 64 : [process.getegid?.(), ...process.getgroups?.() ?? []].includes(stat.gid) ? 8 : 1;
-        if ((stat.mode & executeMask) === 0 || import_node_fs24.default.readFileSync(descriptor, "utf8") !== expected)
+        if ((stat.mode & executeMask) === 0 || import_node_fs25.default.readFileSync(descriptor, "utf8") !== expected)
           return false;
       } finally {
-        import_node_fs24.default.closeSync(descriptor);
+        import_node_fs25.default.closeSync(descriptor);
       }
     }
     return true;
@@ -83205,7 +83817,7 @@ function gitHooksVerified(root) {
 }
 function checkNpmScriptsCompatible(dest, runtime) {
   return daemonCliOutputLooksValid(
-    tryExecOutIn(runtime.node, [import_node_path26.default.join(dest, "node_modules/supremo-cli/dist/bin.js"), "daemon", "--status"], dest, runtime.env)
+    tryExecOutIn(runtime.node, [import_node_path27.default.join(dest, "node_modules/supremo-cli/dist/bin.js"), "daemon", "--status"], dest, runtime.env)
   );
 }
 function checkNodeVersion(nodeVersion2) {
@@ -83270,11 +83882,11 @@ async function linkSupabaseRemote(dest, supabase) {
   ok("Conta correta");
   if (majorVersion) {
     try {
-      const cfgPath = import_node_path26.default.join(dest, "supabase", "config.toml");
-      const cfg = import_node_fs24.default.readFileSync(cfgPath, "utf8");
+      const cfgPath = import_node_path27.default.join(dest, "supabase", "config.toml");
+      const cfg = import_node_fs25.default.readFileSync(cfgPath, "utf8");
       const patched = patchConfigMajorVersion(cfg, majorVersion);
       if (patched !== cfg)
-        import_node_fs24.default.writeFileSync(cfgPath, patched);
+        import_node_fs25.default.writeFileSync(cfgPath, patched);
       ok("PostgreSQL/config alinhados");
     } catch {
     }
@@ -83304,12 +83916,12 @@ async function linkSupabaseRemote(dest, supabase) {
   return true;
 }
 function resolveSupabaseBin(dest) {
-  const localBin = import_node_path26.default.join(dest, "node_modules", ".bin", "supabase");
-  return import_node_fs24.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
+  const localBin = import_node_path27.default.join(dest, "node_modules", ".bin", "supabase");
+  return import_node_fs25.default.existsSync(localBin) ? { bin: localBin, local: true } : { bin: "supabase", local: false };
 }
 function readLinkedRef(dest) {
   try {
-    return import_node_fs24.default.readFileSync(import_node_path26.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
+    return import_node_fs25.default.readFileSync(import_node_path27.default.join(dest, "supabase", ".temp", "project-ref"), "utf8").trim();
   } catch {
     return null;
   }
@@ -83360,10 +83972,10 @@ async function runBootstrap(opts) {
   }
   console.log("  Projeto: ".concat(config2.project.name));
   const dest = targetDir(config2.repo.fullName, opts.dir);
-  if (import_node_fs24.default.existsSync(dest)) {
+  if (import_node_fs25.default.existsSync(dest)) {
     throw new Error("J\xE1 existe ".concat(dest, " \u2014 remova ou use --dir para outro caminho."));
   }
-  import_node_fs24.default.mkdirSync(import_node_path26.default.dirname(dest), { recursive: true });
+  import_node_fs25.default.mkdirSync(import_node_path27.default.dirname(dest), { recursive: true });
   run2("git", gitCloneArgs(config2.repo.fullName, config2.repo.branch, dest), void 0, {
     ...process.env,
     SUPREMO_GIT_TOKEN: config2.gitToken
@@ -83396,7 +84008,7 @@ async function runBootstrap(opts) {
   if (config2.daemon) {
     try {
       const { daemonStatus: daemonStatus2 } = await Promise.resolve().then(() => (init_daemon(), daemon_exports));
-      run2(runtime.node, [import_node_path26.default.join(dest, "node_modules/supremo-cli/dist/bin.js"), "daemon", "--ensure"], dest, runtime.env);
+      run2(runtime.node, [import_node_path27.default.join(dest, "node_modules/supremo-cli/dist/bin.js"), "daemon", "--ensure"], dest, runtime.env);
       daemonRunning = daemonStatus2(dest).running;
       if (daemonRunning) {
         ok("Checkpoint daemon no ar \u2014 push/PR em background (npm run daemon:status)");
@@ -83427,7 +84039,7 @@ async function runBootstrap(opts) {
   const selectedHost = opts.host ?? (process.env.CLAUDECODE ? "claude-code" : "codex");
   const selectedAdapter = adapters.adapters[selectedHost];
   const readiness = validateLocalReadiness({
-    projectJsonOk: projectIdentityValid(import_node_fs24.default.existsSync(import_node_path26.default.join(dest, ".supremo/project.json")) ? import_node_fs24.default.readFileSync(import_node_path26.default.join(dest, ".supremo/project.json"), "utf8") : null, config2.project.id),
+    projectJsonOk: projectIdentityValid(import_node_fs25.default.existsSync(import_node_path27.default.join(dest, ".supremo/project.json")) ? import_node_fs25.default.readFileSync(import_node_path27.default.join(dest, ".supremo/project.json"), "utf8") : null, config2.project.id),
     hasDaemonIdentity: Boolean(config2.daemon),
     daemonRunning,
     npmScriptsCompatible,
@@ -83440,7 +84052,7 @@ async function runBootstrap(opts) {
     integrationMode: selectedAdapter.integrationMode
   });
   readiness.issues.push(...selectedAdapter.issues);
-  import_node_fs24.default.writeFileSync(import_node_path26.default.join(dest, ".supremo/bootstrap-readiness.json"), JSON.stringify({
+  import_node_fs25.default.writeFileSync(import_node_path27.default.join(dest, ".supremo/bootstrap-readiness.json"), JSON.stringify({
     ...readiness,
     projectId: config2.project.id,
     checkedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -83461,13 +84073,13 @@ async function runBootstrap(opts) {
       throw new Error("Bootstrap incompleto: consulte .supremo/bootstrap-readiness.json.");
   }
 }
-var import_node_child_process16, import_node_fs24, import_node_path26, sleep2, run2, ok, tryExec, tryExecOut, tryExecOutIn, RECOMMENDED_NODE_MAJORS;
+var import_node_child_process16, import_node_fs25, import_node_path27, sleep2, run2, ok, tryExec, tryExecOut, tryExecOutIn, RECOMMENDED_NODE_MAJORS;
 var init_bootstrap = __esm({
   "src/bootstrap.ts"() {
     "use strict";
     import_node_child_process16 = require("node:child_process");
-    import_node_fs24 = __toESM(require("node:fs"));
-    import_node_path26 = __toESM(require("node:path"));
+    import_node_fs25 = __toESM(require("node:fs"));
+    import_node_path27 = __toESM(require("node:path"));
     init_auth();
     init_turn_validation();
     init_device_identity();
@@ -83522,7 +84134,7 @@ __export(runtime_entry_exports, {
 });
 function hasStartManifest(cwd) {
   try {
-    const source = JSON.parse(readStableFile(import_node_path27.default.join(cwd, "package.json"), 1024 * 1024, cwd).content);
+    const source = JSON.parse(readStableFile(import_node_path28.default.join(cwd, "package.json"), 1024 * 1024, cwd).content);
     if (!source || typeof source !== "object" || Array.isArray(source))
       return false;
     const manifest = source;
@@ -83581,12 +84193,12 @@ async function maybeRelaunchWithProjectRuntime(cwd, argv = process.argv) {
   const runtime = await lookupProjectRuntime(cwd, stack);
   if (!runtime || runtime.source === "current" || !compatibleProjectNode(stack, runtime.version))
     return false;
-  if (import_node_fs25.default.realpathSync(runtime.node) === import_node_fs25.default.realpathSync(process.execPath))
+  if (import_node_fs26.default.realpathSync(runtime.node) === import_node_fs26.default.realpathSync(process.execPath))
     return false;
   const entry = argv[1];
   if (!entry)
     throw new Error("A entrada da CLI n\xE3o est\xE1 dispon\xEDvel para o runtime local.");
-  await runInherited(cwd, runtime, [import_node_path27.default.resolve(entry), ...argv.slice(2)]);
+  await runInherited(cwd, runtime, [import_node_path28.default.resolve(entry), ...argv.slice(2)]);
   return true;
 }
 async function runPreviewWithProjectRuntime(cwd, args) {
@@ -83598,18 +84210,18 @@ async function runPreviewWithProjectRuntime(cwd, args) {
   if (!runtime || !compatibleProjectNode(stack, runtime.version)) {
     throw new Error("O runtime compat\xEDvel ainda n\xE3o foi preparado. Autorize a prepara\xE7\xE3o deste projeto e execute supremo prepare.");
   }
-  const script = import_node_path27.default.resolve(cwd, "scripts/preview.mjs");
+  const script = import_node_path28.default.resolve(cwd, "scripts/preview.mjs");
   readStableFile(script, 256 * 1024, cwd);
   await runInherited(cwd, runtime, [script, action]);
 }
-var import_node_child_process17, import_node_fs25, import_node_os3, import_node_path27;
+var import_node_child_process17, import_node_fs26, import_node_os3, import_node_path28;
 var init_runtime_entry = __esm({
   "src/runtime-entry.ts"() {
     "use strict";
     import_node_child_process17 = require("node:child_process");
-    import_node_fs25 = __toESM(require("node:fs"));
+    import_node_fs26 = __toESM(require("node:fs"));
     import_node_os3 = require("node:os");
-    import_node_path27 = __toESM(require("node:path"));
+    import_node_path28 = __toESM(require("node:path"));
     init_command_guard();
     init_framework_runtime();
     init_project_runtime();
@@ -83639,7 +84251,7 @@ function npm(cwd, runtime, args) {
   (0, import_node_child_process18.execFileSync)(runtime.node, [runtime.npm, ...args], { cwd, env: runtime.env, stdio: "inherit" });
 }
 async function runPrepare(opts) {
-  const cwd = import_node_path28.default.resolve(opts.cwd ?? process.cwd());
+  const cwd = import_node_path29.default.resolve(opts.cwd ?? process.cwd());
   const issuer = deviceIssuer(opts.url);
   const projectId = checkoutProject(cwd, issuer);
   verifyCheckoutRepository(cwd);
@@ -83730,7 +84342,7 @@ async function runPrepare(opts) {
   }
   let preview = output2(cwd, runtime, ["scripts/preview.mjs", "status"]);
   result2.previewUrl = previewStatusUrl(preview);
-  const dependenciesReady = import_node_fs26.default.existsSync(import_node_path28.default.join(cwd, "node_modules")) && output2(cwd, runtime, [runtime.npm, "ls", "--depth=0", "--offline"]) !== null;
+  const dependenciesReady = import_node_fs27.default.existsSync(import_node_path29.default.join(cwd, "node_modules")) && output2(cwd, runtime, [runtime.npm, "ls", "--depth=0", "--offline"]) !== null;
   if (dependenciesReady)
     result2.dependencies = "reused";
   else {
@@ -83768,7 +84380,7 @@ async function runPrepare(opts) {
   } catch {
     result2.issues.push("setup:local falhou; execute prepare novamente para retomar.");
   }
-  const cli = import_node_path28.default.join(cwd, "node_modules/supremo-cli/dist/bin.js");
+  const cli = import_node_path29.default.join(cwd, "node_modules/supremo-cli/dist/bin.js");
   const daemonBefore = output2(cwd, runtime, [cli, "daemon", "--status"]);
   const daemonRunning = (source) => {
     if (!daemonCliOutputLooksValid(source) || source === null)
@@ -83813,13 +84425,13 @@ async function runPrepare(opts) {
   }
   return finish();
 }
-var import_node_child_process18, import_node_fs26, import_node_path28;
+var import_node_child_process18, import_node_fs27, import_node_path29;
 var init_prepare = __esm({
   "src/prepare.ts"() {
     "use strict";
     import_node_child_process18 = require("node:child_process");
-    import_node_fs26 = __toESM(require("node:fs"));
-    import_node_path28 = __toESM(require("node:path"));
+    import_node_fs27 = __toESM(require("node:fs"));
+    import_node_path29 = __toESM(require("node:path"));
     init_bootstrap();
     init_device_identity();
     init_framework_runtime();
@@ -83855,7 +84467,7 @@ var {
 // package.json
 var package_default = {
   name: "supremo-cli",
-  version: "1.8.1",
+  version: "1.9.0",
   description: "CLI do Supremo: bootstrap, preview persistente e checkpoints em background.",
   license: "MIT",
   author: "Supremo",
@@ -83922,13 +84534,13 @@ program2.command("engine <action>").description("Controla o motor: status, pause
 program2.command("turn <event>").description("Protocolo execut\xE1vel de turnos e valida\xE7\xE3o em background").option("--host <name>", "Host que entregou o evento", "assisted").option("--full-state", "Inclui o estado completo para diagn\xF3stico interno").option("--summary <text>", "Descri\xE7\xE3o curta da altera\xE7\xE3o para identificar a vers\xE3o no hist\xF3rico").action(async (event, options) => {
   const { runTurnEvent: runTurnEvent2 } = await Promise.resolve().then(() => (init_turn_runtime(), turn_runtime_exports));
   const { turnAgentResponse: turnAgentResponse2 } = await Promise.resolve().then(() => (init_turn_response(), turn_response_exports));
-  const fs26 = await import("node:fs");
+  const fs27 = await import("node:fs");
   try {
-    const raw = process.stdin.isTTY ? "" : fs26.readFileSync(0, "utf8");
+    const raw = process.stdin.isTTY ? "" : fs27.readFileSync(0, "utf8");
     const { hookInputSchema: hookInputSchema2 } = await Promise.resolve().then(() => (init_turn_runtime(), turn_runtime_exports));
     const input2 = hookInputSchema2.parse(raw.trim() ? JSON.parse(raw) : {});
     const output3 = await runTurnEvent2(event, process.cwd(), { ...input2, ...options.summary !== void 0 ? { summary: options.summary } : {} }, options.host);
-    console.log(JSON.stringify(options.fullState ? output3 : turnAgentResponse2(output3)));
+    console.log(JSON.stringify(options.fullState ? output3 : turnAgentResponse2(output3, ["preflight", "status"].includes(event) ? process.cwd() : void 0)));
   } catch (error61) {
     const { sanitizeDiagnostic: sanitizeDiagnostic2 } = await Promise.resolve().then(() => (init_feedback(), feedback_exports));
     console.log(JSON.stringify({
@@ -83947,7 +84559,7 @@ program2.command("host <event>").description("Instala ou verifica adapters de li
   console.log(JSON.stringify(event === "install" ? adapter.installHostAdapters(process.cwd()) : adapter.inspectHostAdapters(process.cwd())));
 });
 program2.command("authorize").description("Reautoriza a identidade deste projeto no navegador, preservando arquivos e preview").requiredOption("-u, --url <url>", "Origem confi\xE1vel do Supremo que autorizar\xE1 o dispositivo").action(async (options) => {
-  const [{ authorizeDevice: authorizeDevice2 }, keychainModule, { readProjectConfig: readProjectConfig2 }, fs26, path28] = await Promise.all([
+  const [{ authorizeDevice: authorizeDevice2 }, keychainModule, { readProjectConfig: readProjectConfig2 }, fs27, path29] = await Promise.all([
     Promise.resolve().then(() => (init_bootstrap(), bootstrap_exports)),
     Promise.resolve().then(() => (init_keychain(), keychain_exports)),
     Promise.resolve().then(() => (init_daemon(), daemon_exports)),
@@ -83962,9 +84574,9 @@ program2.command("authorize").description("Reautoriza a identidade deste projeto
   if (!authorized.daemon)
     throw new Error("O servidor n\xE3o retornou uma identidade de dispositivo.");
   saveDeviceIdentity(keychainModule.resolveKeychain(), config2.projectId, issuer, authorized.daemon.deviceSecret);
-  const filename = path28.join(cwd, ".supremo/project.json");
-  const existing = JSON.parse(fs26.readFileSync(filename, "utf8"));
-  fs26.writeFileSync(filename, JSON.stringify({ ...existing, projectId: config2.projectId, supremoUrl: issuer }, null, 2) + "\n");
+  const filename = path29.join(cwd, ".supremo/project.json");
+  const existing = JSON.parse(fs27.readFileSync(filename, "utf8"));
+  fs27.writeFileSync(filename, JSON.stringify({ ...existing, projectId: config2.projectId, supremoUrl: issuer }, null, 2) + "\n");
   console.log("\u2713 Dispositivo reautorizado na origem confirmada. Reinicie somente o daemon no terminal autorizado; preserve o preview.");
 });
 program2.command("runtime-preview [args...]").description("Executa o supervisor existente com o Node j\xE1 preparado, sem instalar").allowUnknownOption().action(async (args) => {

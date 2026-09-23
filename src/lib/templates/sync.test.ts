@@ -48,6 +48,13 @@ describe('gitBlobSha', () => {
 })
 
 describe('computePlan', () => {
+  it('keeps the optional browser collector paired with its managed Vite configuration', () => {
+    const paths = ['vite.config.mts', 'scripts/browser-diagnostics.ts']
+    const plan = computePlan(paths.map(path => ({ path, content: 'current' })), new Set(paths), new Set())
+    expect(plan.updates.map(item => item.path)).toEqual(paths)
+    expect(isManagedPath('src/router.tsx')).toBe(false)
+    expect(isManagedPath('.supremo/runtime/browser-diagnostics.json')).toBe(false)
+  })
   const files: FileEntry[] = [
     { path: 'proxy.ts', content: 'NOVO' }, // rail
     { path: 'lib/supabase/server.ts', content: 'NOVO' }, // rail

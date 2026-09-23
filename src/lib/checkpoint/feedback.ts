@@ -91,6 +91,15 @@ export function buildValidationFeedback(input: {
         : /RLS|segredo|vulnerabil|seguran/i.test(name) ? 'security' : 'code'
     return { name: sanitizeDiagnostic(name).slice(0, 200), category }
   })
+  // A non-successful conclusion blocks its gate but does not establish why the
+  // runner stopped. In particular, skipped alone contains no dependency graph.
+  const failureDescriptions = result.failing.map((name) => {
+    const conclusion = latestChecks.get(name)?.conclusion
+    const detail = conclusion === 'skipped' ? 'não executado'
+      : conclusion === 'cancelled' ? 'cancelado'
+      : conclusion === 'timed_out' ? 'tempo limite excedido' : null
+    return sanitizeDiagnostic(name).slice(0, 200) + (detail ? ` (${detail})` : '')
+  })
   return validationFeedbackSchema.parse({
     projectId: input.projectId, checkpointId: input.checkpointId,
     commitSha: input.commitSha, publishedSha: input.publishedSha,
@@ -103,7 +112,7 @@ export function buildValidationFeedback(input: {
     summary: state === 'integrated' ? 'Versão validada e integrada.'
       : state === 'passed' ? 'Validação aprovada. Aguardando integração.'
       : state === 'pending' ? 'Aguardando os resultados da validação desta versão.'
-      : `A validação encontrou pendências: ${failures.map((f) => f.name).join(', ') || 'configuração dos testes'}.`.slice(0, 2000),
+      : `A validação encontrou pendências: ${failureDescriptions.join(', ') || 'configuração dos testes'}.`.slice(0, 2000),
     evidence: state === 'failed' ? sanitizeDiagnostic(input.evidence) : '',
   })
 }
@@ -117,16 +126,24 @@ export function acceptsFeedback(current: ValidationFeedback | null, incoming: Va
 export function withFeedbackEvidence(feedback: ValidationFeedback, raw: string): ValidationFeedback {
   const evidence = sanitizeDiagnostic(raw)
   const sections = evidence.split('\n\n---\n\n')
+  const unavailableEnvironments: string[] = []
   const failures = feedback.failures.map((failure) => {
       const section = sections.find((part) => part.split('\n')[0]?.includes(`› ${failure.name} (`))
       const setupFailure = section && /toomanyrequests|rate exceeded|TLS handshake timeout/i.test(section)
         && /pull|image|registry|public\.ecr\.aws|ghcr\.io/i.test(section)
+      if (setupFailure) unavailableEnvironments.push(failure.name)
       return setupFailure ? { ...failure, category: 'infrastructure' as const } : failure
     })
   const coverage = /Coverage for (functions|lines|branches|statements) \(([\d.]+)%\).*threshold \(([\d.]+)%\)/i.exec(evidence)
+  const coverageSummary = coverage ? `Cobertura insuficiente: ${coverage[2]}%; mínimo exigido ${coverage[3]}%.` : ''
+  const environmentSummary = unavailableEnvironments.length
+    ? `Ambiente de testes indisponível: ${unavailableEnvironments.join(', ')}.` : ''
   return {
     ...feedback, evidence, failures,
-    summary: ((coverage ? `Cobertura insuficiente: ${coverage[2]}%; mínimo exigido ${coverage[3]}%. ` : '') +
-      `Pendências: ${failures.map((f) => f.name + (f.category === 'infrastructure' ? ' (ambiente de testes indisponível)' : '')).join(', ')}.`).slice(0, 2000),
+    // Keep the check conclusions even when no logs exist for skipped jobs. The
+    // compatibility category alone is not evidence of environment unavailability.
+    summary: [coverageSummary && !feedback.summary.includes(coverageSummary) ? coverageSummary : '', feedback.summary,
+      environmentSummary && !feedback.summary.includes(environmentSummary) ? environmentSummary : '']
+      .filter(Boolean).join(' ').slice(0, 2000),
   }
 }

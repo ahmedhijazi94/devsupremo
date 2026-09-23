@@ -2719,8 +2719,10 @@ não substitui fixtures do domínio, assertions ou \`isolationTest\`, nem perten
 
 ## Chaves de integrações
 
-Quando uma integração precisar de segredo, registre o pedido pelo executável local:
-\`node node_modules/supremo-cli/dist/bin.js secrets request STRIPE_SECRET_KEY --reason "Cobrar pagamentos no backend" --target supabase --environment development\`.
+Para QUALQUER integração que precisar de segredo, registre os campos pelo executável local:
+\`node node_modules/supremo-cli/dist/bin.js integrations request STRIPE_SECRET_KEY --reason "Cobrar pagamentos no backend" --target supabase --environment development\`.
+\`secrets request\` é equivalente. O fluxo serve a chaves privadas de diferentes provedores;
+entregar uma chave não configura automaticamente todas as APIs de terceiros.
 Use o nome EXATO lido pelo backend e explique para que serve. O destino \`supabase\`
 é o secret das Edge Functions desse projeto; \`vercel\` é uma variável criptografada
 somente no ambiente escolhido (development, preview ou production). Escolha o destino
@@ -2728,12 +2730,52 @@ onde a função realmente executa; enviar para Supabase não injeta process.env 
 O ambiente Supabase precisa corresponder ao vínculo registrado; nenhuma chave segue para
 outro projeto ou ambiente por conveniência. Não use prefixos públicos como NEXT_PUBLIC_.
 
-A resposta contém o link do formulário do projeto Supremo. O usuário cola ali cada valor,
-nunca no chat. Não peça, leia, imprima, consulte no banco nem tente recuperar o valor da
+A resposta contém \`formUrl\` do formulário do projeto Supremo e \`nextAction\`.
+Abra essa URL no navegador já disponível ao usuário. O campo pertence ao Supremo;
+não prometa inserir um campo nativo no chat do agente. O usuário cola ali cada valor,
+nunca no chat. Não diga que não há campo seguro nem exija configuração manual no painel
+do provedor para uma operação que este canal suporta. Não peça, leia, imprima, consulte no banco nem tente recuperar o valor da
 chave. Não grave em código, arquivos env, argumentos, logs ou relatórios. A CLI aceita
 somente metadados; \`secrets status\` retorna nomes/destinos e pending/fulfilled. O valor
-preenchido vai ao provedor, não ao agente. Confirme status e continue a implementação;
-este pedido não inicia QA, checkpoint, migration ou instalação de ferramentas.
+preenchido vai ao provedor, não ao agente. Confirme status e continue a implementação,
+configuração e publicação autorizadas. O usuário só fornece valores privados e autoriza
+acesso à conta quando necessário. \`fulfilled\` confirma a entrega/configuração solicitada,
+não uma integração completa nem entrega de email. Conclua as partes suportadas e explique
+somente a etapa externa concreta que ainda depender do usuário. Não inicie QA, checkpoint,
+migration ou instalação de ferramentas apenas para configurar uma integração.
+
+Se o usuário pedir troca de chave/senha ou correção do remetente, consulte \`secrets status\`
+para obter o ID do pedido anterior e execute
+\`node node_modules/supremo-cli/dist/bin.js secrets dismiss ID\`, depois solicite o novo
+campo com a configuração atualizada. Dismiss remove somente o pedido do formulário;
+não revoga a chave no provedor nem altera a configuração já aplicada. Nenhum valor é lido.
+
+### Email de autenticação com Resend
+
+\`node node_modules/supremo-cli/dist/bin.js integrations email --provider resend --sender-email REMETENTE --sender-name "Nome do app" --environment development\`
+cria o formulário para a chave de Resend. Use o email remetente autorizado pelo usuário
+e pelo provedor; não invente domínio ou identidade. Ao salvar, o servidor configura
+diretamente o SMTP do Supabase, com host e porta conhecidos, no ambiente confirmado.
+Não é preciso conectar Vercel, criar endpoint de envio ou pedir configuração manual
+no painel Supabase para esse caminho. As restrições de domínio/remetente/destinatário
+do Resend continuam aplicáveis; uma chave salva não demonstra que um envio foi entregue.
+
+Para o email de recuperação, \`auth configure --environment development --config '{"recoveryEmailMode":"code"}'\`
+usa o template de código; \`recoveryEmailMode:"link"\` usa link. Os templates e o formulário
+do app precisam concordar. \`auth config\` retorna apenas metadados: \`smtp.configured\`
+informa que a configuração está presente, sem ler chave e sem certificar entrega.
+Produção exige ambiente explícito, projeto vinculado e autorização correspondentes.
+
+### Senha administrativa de desenvolvimento
+
+Quando o usuário pedir para definir a senha de uma conta de desenvolvimento, use
+\`auth users\` para identificar o UUID e
+\`node node_modules/supremo-cli/dist/bin.js auth password --user-id UUID --environment development\`.
+Abra o \`formUrl\` retornado; o usuário escolhe a senha ali e o servidor a aplica à conta
+solicitada. O valor nunca passa pela CLI, arquivos ou conversa. Essa operação legítima
+de desenvolvimento não precisa de SMTP ou Vercel; não invente um código fixo no app.
+Ela não substitui o fluxo público de recuperação por email e não aceita produção.
+O formulário identifica a conta e o ambiente. Confirme apenas o estado retornado.
 
 ## Consultas e relatórios sem alterar o banco
 

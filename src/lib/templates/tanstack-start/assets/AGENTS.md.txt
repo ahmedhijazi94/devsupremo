@@ -1,4 +1,4 @@
-# __PROJECT_NAME_JS__ — Supremo template 5.1.0 / TanStack Start 1.168.57
+# __PROJECT_NAME_JS__ — Supremo template 5.1.1 / TanStack Start 1.168.57
 
 Start with the development workflow appended below. Read the relevant section of `.supremo/DEVELOPMENT.md` only when the task needs its command details; use `SECURITY.md` for isolation changes. Those rules override convenience. Never change gates, protected policies or their thresholds to make a check pass. A healthy preview is not validated/integrated code.
 

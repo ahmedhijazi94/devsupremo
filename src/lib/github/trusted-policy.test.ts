@@ -14,6 +14,7 @@ import { TRUSTED_VALIDATION_POLICIES_4_0_8 } from './validation-policy-releases/
 import { TRUSTED_VALIDATION_POLICIES_4_0_9 } from './validation-policy-releases/4.0.9'
 import { TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0 } from './validation-policy-releases/4.0.10-5.0.0'
 import { TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1 } from './validation-policy-releases/4.0.11-5.0.1'
+import { TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0 } from './validation-policy-releases/4.0.12-5.1.0'
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'
@@ -67,6 +68,7 @@ describe('independent engine policy over actual generated candidates', () => {
       .toBe('73a1698a206c284dd66eaf835edf855e574a16abba9eea9774de8a1e73cba161')
   })
   it('pins the complete historical authority to its recorded immutable release contents', () => {
+    expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0)).digest('hex')).toBe('2d64da87947fcbda6437bee9125ce346ea979a972ad5ad3d2643f02a596e2102')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1)).digest('hex')).toBe('d4690c96401912958c7f6b0894f458f18ef450fce62cdae8c191a885eb47ba8d')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0)).digest('hex')).toBe('6d4101e5b7582fbd1d5dbcd88d8b42bc1edb36fad410ef1af0b454d9ca758200')
     expect(createHash('sha256').update(JSON.stringify(TRUSTED_VALIDATION_POLICIES_4_0_9)).digest('hex')).toBe('d45b2a79ab9869075760051d61ec73aa408ea7fe13e6b4f017ec13eb69a644cb')
@@ -157,7 +159,7 @@ describe('independent engine policy over actual generated candidates', () => {
     const current = candidate(kind)
     const cliVersion = (input: Candidate): string => (JSON.parse(input.lockContent) as { packages: Record<string, { version?: string }> }).packages['tools/supremo-cli']!.version!
     expect(cliVersion(previous)).toBe('1.7.2')
-    expect(cliVersion(current)).toBe('1.9.0')
+    expect(cliVersion(current)).toBe('1.10.0')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     expect(verifyCandidatePolicy(current)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })

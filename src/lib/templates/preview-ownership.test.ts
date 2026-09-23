@@ -28,20 +28,51 @@ function randomBasePort(): number {
   return 20000 + Math.floor(Math.random() * 20000)
 }
 
-/** Confirma por bind-e-solta (não só sorteio) que a porta está livre AGORA —
- * pros testes de heartbeat (teste-v3-17) que exigem que o probe HTTP direto
- * genuinamente falhe: sem isso, uma colisão rara com outro teste/serviço
- * fazia o probe direto SUCEDER por acaso, quebrando a premissa do teste. */
-function pickFreeTestPort(): Promise<number> {
-  return new Promise((resolve) => {
-    const probe = net.createServer()
-    probe.once('error', () => resolve(pickFreeTestPort()))
-    probe.listen(randomBasePort(), '127.0.0.1', () => {
-      const address = probe.address()
-      const port = typeof address === 'object' && address ? address.port : randomBasePort()
-      probe.close(() => resolve(port))
-    })
-  })
+async function closeServers(servers: readonly net.Server[]): Promise<void> {
+  await Promise.all(servers.filter((server) => server.listening).map((server) =>
+    new Promise<void>((resolve) => server.close(() => resolve())),
+  ))
+}
+
+/** Só entrega o bloco depois de reservar TODAS as portas. Em uma colisão,
+ * fecha apenas os servidores desta tentativa, sem tocar no ocupante alheio. */
+async function reservePortBlock<Server extends net.Server>(
+  count: number,
+  createServer: (port: number) => Server,
+  host = '127.0.0.1',
+): Promise<{ basePort: number; servers: Server[] }> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const basePort = randomBasePort()
+    const servers: Server[] = []
+    try {
+      for (let offset = 0; offset < count; offset++) {
+        const port = basePort + offset
+        const server = createServer(port)
+        servers.push(server)
+        await new Promise<void>((resolve, reject) => {
+          server.once('error', reject)
+          server.listen(port, host, () => {
+            server.off('error', reject)
+            resolve()
+          })
+        })
+      }
+      return { basePort, servers }
+    } catch (error) {
+      await closeServers(servers)
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EADDRINUSE') {
+        throw error
+      }
+    }
+  }
+  throw new Error(`Não foi possível reservar ${count} portas consecutivas após 20 tentativas`)
+}
+
+/** Confirma por bind-e-solta que nenhuma família responde na porta escolhida. */
+async function pickFreeTestPort(): Promise<number> {
+  const reservation = await reservePortBlock(1, () => net.createServer(), HAS_IPV6 ? '::' : '127.0.0.1')
+  await closeServers(reservation.servers)
+  return reservation.basePort
 }
 
 function writeFixtureProject(dir: string): void {
@@ -154,19 +185,15 @@ afterAll(async () => {
   )
 })
 
-function startForeignServer(
-  port: number,
-  body = 'FOREIGN-APP',
+async function reserveForeignServers(
+  count: number,
+  body: (port: number) => string = () => 'FOREIGN-APP',
   host = '127.0.0.1',
-): Promise<http.Server> {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((_, res) => res.end(body))
-    server.once('error', reject)
-    server.listen(port, host, () => {
-      foreignServers.push(server)
-      resolve(server)
-    })
-  })
+): Promise<{ basePort: number; servers: http.Server[] }> {
+  const reservation = await reservePortBlock(count, (port) =>
+    http.createServer((_, res) => res.end(body(port))), host)
+  foreignServers.push(...reservation.servers)
+  return reservation
 }
 
 // Guarda de portabilidade: se esta máquina não tiver IPv6 disponível de
@@ -194,8 +221,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       tempDirs.push(dir)
       writeFixtureProject(dir)
 
-      const foreignPort = randomBasePort()
-      await startForeignServer(foreignPort)
+      const { basePort: foreignPort } = await reserveForeignServers(1)
 
       const result = runPreview(dir, ['ensure'], { PORT: String(foreignPort) })
       expect(result.status).toBe(0)
@@ -236,10 +262,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
 
       // PORT_SEARCH_SPAN do script gerado é 20 — ocupa a preferida + as 19
       // seguintes, então não sobra NENHUMA porta livre no intervalo.
-      const basePort = randomBasePort()
-      for (let p = basePort; p < basePort + 20; p++) {
-        await startForeignServer(p, `FOREIGN-${p}`)
-      }
+      const { basePort } = await reserveForeignServers(20, (port) => `FOREIGN-${port}`)
 
       const result = runPreview(dir, ['ensure'], { PORT: String(basePort) })
       expect(result.status).not.toBe(0)
@@ -266,12 +289,13 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       tempDirs.push(dir)
       writeFixtureProject(dir)
 
-      const foreignPort = randomBasePort()
       // '::' = wildcard IPv6 — o MESMO que `python3 -m http.server` usou no
       // E2E real. NUNCA bindamos em 127.0.0.1 aqui — é exatamente a ausência
       // de qualquer ocupante IPv4 que fazia o probe antigo (IPv4-only)
       // reportar "livre" incorretamente.
-      await startForeignServer(foreignPort, 'FOREIGN-IPV6-APP', '::')
+      const { basePort: foreignPort, servers } = await reserveForeignServers(2, () => 'FOREIGN-IPV6-APP', '::')
+      // A próxima porta foi reservada junto à base; só ela é liberada para o preview.
+      await closeServers(servers.slice(1))
 
       const result = runPreview(dir, ['ensure'], { PORT: String(foreignPort) })
       expect(result.status).toBe(0)
@@ -309,7 +333,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       writeFixtureProject(dir)
       const shimPath = writeEpermShim(dir)
 
-      const port = randomBasePort()
+      const port = await pickFreeTestPort()
       const first = runPreview(dir, ['ensure'], { PORT: String(port) })
       expect(first.status).toBe(0)
       const realPid = readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()
@@ -374,7 +398,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       tempDirs.push(dir)
       writeFixtureProject(dir)
 
-      const port = randomBasePort()
+      const port = await pickFreeTestPort()
       const first = runPreview(dir, ['ensure'], { PORT: String(port) })
       expect(first.status).toBe(0)
       const realPid = readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()
@@ -430,7 +454,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       tempDirs.push(dir)
       writeFixtureProject(dir)
 
-      const port = randomBasePort()
+      const port = await pickFreeTestPort()
       const first = runPreview(dir, ['ensure'], { PORT: String(port) })
       expect(first.status).toBe(0)
       expect(first.stdout).toContain(`http://localhost:${port}`)
@@ -479,7 +503,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
         JSON.stringify({ name: 'preview-ipv6only-fixture', scripts: { dev: 'node dev-server.mjs' } }),
       )
 
-      const port = randomBasePort()
+      const port = await pickFreeTestPort()
       const ensureResult = runPreview(dir, ['ensure'], { PORT: String(port) })
       expect(ensureResult.status).toBe(0)
       // ensure() confirmou saudável ANTES de gravar o estado — se o health()
@@ -520,7 +544,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
 
-      const port = randomBasePort()
+      const port = await pickFreeTestPort()
       // Processo REAL e vivo, mas que não escuta porta nenhuma — running=true
       // vem de process.kill(pid,0); a prova real de saúde precisa vir do
       // healthcheck (as DUAS famílias tentadas, nenhuma responde), não do
@@ -627,7 +651,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-real-'))
       tempDirs.push(dir)
       writeFixtureProject(dir)
-      const port = randomBasePort()
+      const port = await pickFreeTestPort()
 
       const result = runPreview(dir, ['ensure'], {
         PORT: String(port),
@@ -1044,7 +1068,7 @@ net.Server.prototype.listen = function () {
       if (code === 'EPERM') {
         // Novo comando no contexto permitido, sem o shim: retoma a mesma pasta.
         const recovery = spawnSync(process.execPath, ['scripts/supremo-status.mjs', '--ensure'], {
-          cwd: dir, env: { ...process.env, PORT: String(randomBasePort()) }, encoding: 'utf8', timeout: 15_000,
+          cwd: dir, env: { ...process.env, PORT: String(await pickFreeTestPort()) }, encoding: 'utf8', timeout: 15_000,
         })
         expect(recovery.status).toBe(0)
         const recovered = JSON.parse(recovery.stdout) as { preview: { healthy: boolean; error?: string }; daemon: { healthy: boolean } }

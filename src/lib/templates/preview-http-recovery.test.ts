@@ -193,9 +193,9 @@ describe('automatic local preview HTTP recovery — actual Node parser', () => {
       const first = 'GET /first HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n'
       const second = overflowRequest('/second')
       const reply = await raw(port, mode === 'pipelined' ? [first + second] : [first, second])
-      expect(reply).not.toContain('307')
+      expect(reply).not.toMatch(/HTTP\/1\.1 307 [^\r\n]*\r\n/)
       expect(reply).not.toContain('Location:')
-      expect(reply).toContain('431')
+      expect(reply).toMatch(/HTTP\/1\.1 431 [^\r\n]*\r\n/)
       expect((await request(port)).headers['x-header-limit']).toBe(String(64 * 1024))
     })
   })
@@ -212,9 +212,9 @@ describe('automatic local preview HTTP recovery — actual Node parser', () => {
       const second = overflowRequest('/payments', 'POST')
       const reply = await raw(port, mode === 'pipelined' ? [first + second] : [first, second])
       expect(reply).toContain('expectation handled')
-      expect(reply).not.toContain('307')
+      expect(reply).not.toMatch(/HTTP\/1\.1 307 [^\r\n]*\r\n/)
       expect(reply).not.toContain('Location:')
-      expect(reply).toContain('431')
+      expect(reply).toMatch(/HTTP\/1\.1 431 [^\r\n]*\r\n/)
       const normal = await request(port)
       expect(JSON.parse(normal.body).count).toBe(1)
       expect(normal.headers['x-header-limit']).toBe(String(64 * 1024))
@@ -226,10 +226,10 @@ describe('automatic local preview HTTP recovery — actual Node parser', () => {
       const first = 'GET /first HTTP/1.1\r\nHost: localhost\r\nExpect: preview-unsupported\r\nConnection: keep-alive\r\n\r\n'
       const second = overflowRequest('/payments', 'POST')
       const reply = await raw(port, mode === 'pipelined' ? [first + second] : [first, second])
-      expect(reply).toContain('417')
-      expect(reply).not.toContain('307')
+      expect(reply).toMatch(/HTTP\/1\.1 417 [^\r\n]*\r\n/)
+      expect(reply).not.toMatch(/HTTP\/1\.1 307 [^\r\n]*\r\n/)
       expect(reply).not.toContain('Location:')
-      expect(reply).toContain('431')
+      expect(reply).toMatch(/HTTP\/1\.1 431 [^\r\n]*\r\n/)
       const normal = await request(port)
       expect(JSON.parse(normal.body).count).toBe(1)
       expect(normal.headers['x-header-limit']).toBe(String(64 * 1024))
@@ -240,7 +240,7 @@ describe('automatic local preview HTTP recovery — actual Node parser', () => {
     await withPreview({}, async ({ port }) => {
       for (const target of ['//evil.example/a', '/\\evil.example/a', 'http://evil.example/a', `/${'a'.repeat(2100)}`, '/bad\x7fpath']) {
         const reply = await raw(port, [overflowRequest(target)])
-        expect(reply).not.toContain('307')
+        expect(reply).not.toMatch(/HTTP\/1\.1 307 [^\r\n]*\r\n/)
         expect(reply).not.toContain('Location:')
         expect(reply).toMatch(/^HTTP\/1\.1 (?:400|431) /)
       }
@@ -263,8 +263,8 @@ describe('automatic local preview HTTP recovery — actual Node parser', () => {
       const firstSocket = await openSocket(port)
       const secondSocket = await openSocket(port)
       try {
-        expect(await raw(port, [overflowRequest('/first')], firstSocket)).toContain('307')
-        expect(await raw(port, [overflowRequest('/second')], secondSocket)).toContain('307')
+        expect(await raw(port, [overflowRequest('/first')], firstSocket)).toMatch(/HTTP\/1\.1 307 [^\r\n]*\r\n/)
+        expect(await raw(port, [overflowRequest('/second')], secondSocket)).toMatch(/HTTP\/1\.1 307 [^\r\n]*\r\n/)
         expect((await request(port, { cookie: largeCookie })).status).toBe(200)
       } finally {
         firstSocket.destroy()

@@ -592,17 +592,32 @@ describe('consultas reais pelo canal de leitura, sem ritual de entrega', () => {
 describe('secrets pelo formulário do projeto, sem valores no agente', () => {
   it('o comando completo gerado é aceito pelo guard real e orienta o destino correto', () => {
     const guide = file('.supremo/DEVELOPMENT.md')
-    const command = /`(node node_modules\/supremo-cli\/dist\/bin\.js secrets request[^`]+)`/.exec(guide)?.[1]
+    const command = /`(node node_modules\/supremo-cli\/dist\/bin\.js integrations request[^`]+)`/.exec(guide)?.[1]
     expect(command).toBeTruthy()
     expect(isDatabaseReadCommand(command!)).toBe(true)
     expect(isDatabaseReadCommand('node node_modules/supremo-cli/dist/bin.js secrets status')).toBe(true)
     expect(guide).toContain('nome EXATO')
     expect(guide).toContain('nunca no chat')
     expect(guide).toContain('enviar para Supabase não injeta process.env no Next local')
-    expect(guide).toContain('este pedido não inicia QA, checkpoint, migration')
+    expect(norm(guide)).toContain('Não inicie QA, checkpoint, migration ou instalação de ferramentas apenas para configurar uma integração')
     for (const target of ['AGENTS.md', 'CLAUDE.md']) {
       expect(file(target)).toContain('secrets request')
       expect(file(target)).toContain('secrets status')
+    }
+  })
+  it('os comandos de configuração e senha usam o formulário seguro e preservam o escopo real', () => {
+    const guide = file('.supremo/DEVELOPMENT.md')
+    const commands = [...guide.matchAll(/`(node node_modules\/supremo-cli\/dist\/bin\.js (?:integrations email|auth password)[^`]+)`/g)]
+      .map(match => match[1]!.replace('REMETENTE', 'hello@example.invalid').replace('UUID', '11111111-1111-4111-8111-111111111111'))
+    expect(commands).toHaveLength(2)
+    for (const command of commands) expect(isDatabaseReadCommand(command)).toBe(true)
+    for (const target of ['AGENTS.md', 'CLAUDE.md', '.supremo/DEVELOPMENT.md']) {
+      const content = norm(file(target))
+      expect(content).toContain('integrations email')
+      expect(content).toContain('auth password --user-id UUID --environment development')
+      expect(content).toContain('recoveryEmailMode')
+      expect(content).toContain('smtp.configured')
+      expect(content).toContain('formUrl')
     }
   })
   it('falhas confirmadas são corrigidas pelo agente antes do pedido; execução e integração continuam protegidas', () => {

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
-import { secretEntrySchema } from '../../../src/lib/secret-requests/contract'
+import { secretConfigurationSchema, secretEntrySchema } from '../../../src/lib/secret-requests/contract'
 import { jobsManifestSchema, jobManifestEntrySchema } from '../../../src/lib/database-jobs/policy'
 
 // CLI and server share the same pure declarative contracts.
@@ -39,6 +39,11 @@ export function secretResponse(raw: unknown, projectId: string, issuer: string):
     id: z.string().uuid(), name: z.string().max(128), description: z.string().max(1000).nullable(),
     target: z.enum(['supabase', 'vercel']), environment: z.enum(['development', 'preview', 'production']),
     targetRef: z.string().min(1).max(256), status: z.enum(['pending', 'fulfilled']),
+    configuration: secretConfigurationSchema.optional(),
   })).max(200) }).parse(raw)
-  return { ...parsed, formUrl: `${issuer}/projects/${projectId}#secrets`, valuesReceived: false }
+  const formUrl = `${issuer}/projects/${projectId}#secrets`
+  return { ...parsed, formUrl, valuesReceived: false,
+    nextAction: parsed.requests.some(request => request.status === 'pending')
+      ? { kind: 'open_secure_form', formUrl, userInput: 'secret_value' }
+      : { kind: 'continue_integration', configurationOnly: true, deliveryVerified: false } }
 }

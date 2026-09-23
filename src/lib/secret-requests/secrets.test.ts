@@ -9,12 +9,14 @@ const requestId = '22222222-2222-4222-8222-222222222222'
 const entry: SecretEntry = { name: 'PAYMENT_API_KEY', description: 'Cobrar pagamentos no backend', target: 'supabase', environment: 'development' }
 const binding: SecretBinding = { target: 'supabase', environment: 'development', accountId: 'account', targetRef: 'projectref' }
 const row: SecretRequestRecord = { ...entry, ...binding, id: requestId, status: 'pending' }
+const claim = { id: '33333333-3333-4333-8333-333333333333', expiresAt: '2100-01-01T00:00:00.000Z' }
 function fixture(records: SecretRequestRecord[] = [row]) {
   const state = [...records]
   const port: SecretRequestPort = {
     authorize: vi.fn().mockResolvedValue(undefined), resolve: vi.fn().mockResolvedValue(binding), list: vi.fn(async () => state),
     insert: vi.fn(async (entries: Array<SecretEntry & SecretBinding>) => { state.push(...entries.map((item) => ({ ...item, id: requestId, status: 'pending' as const }))) }),
     find: vi.fn(async (id) => state.find((item) => item.id === id) ?? null), audit: vi.fn().mockResolvedValue(undefined),
+    claim: vi.fn().mockResolvedValue(claim), release: vi.fn().mockResolvedValue(undefined),
     deliver: vi.fn().mockResolvedValue(undefined), fulfill: vi.fn().mockResolvedValue(undefined), dismiss: vi.fn().mockResolvedValue(undefined),
   }
   return port
@@ -34,12 +36,28 @@ describe('secret request policy', () => {
     expect(secretEntrySchema.safeParse({ ...entry, target: 'vercel', environment: 'preview' }).success).toBe(true)
     expect(secretsRequestSchema.safeParse({ projectId, deviceSecret: 'sup_dev_ckpt_fixture', operation: 'status' }).success).toBe(true)
     expect(secretsRequestSchema.safeParse({ projectId, deviceSecret: 'sup_dev_ckpt_fixture', operation: 'status', requests: [entry] }).success).toBe(false)
+    expect(secretsRequestSchema.safeParse({ projectId, deviceSecret: 'sup_dev_ckpt_fixture', operation: 'dismiss', requestId }).success).toBe(true)
+    for (const patch of [{ requestId: 'invalid' }, { value: 'private-value' }, { requests: [entry] }]) expect(secretsRequestSchema.safeParse({ projectId, deviceSecret: 'sup_dev_ckpt_fixture', operation: 'dismiss', requestId, ...patch }).success).toBe(false)
   })
   it('accepts a value only on the owner form, never a client-specified name/destination', () => {
     const input = { projectId, requestId, value: 'private-value' }
     expect(saveSecretSchema.safeParse(input).success).toBe(true)
     for (const extra of [{ name: 'OTHER_KEY' }, { target: 'vercel' }, { environment: 'production' }, { targetRef: 'foreign' }]) expect(saveSecretSchema.safeParse({ ...input, ...extra }).success).toBe(false)
     for (const value of ['', ' ', 'a\0b', 'a'.repeat(16385)]) expect(saveSecretSchema.safeParse({ ...input, value }).success).toBe(false)
+  })
+  it('accepts only allowlisted configuration metadata with the exact target and environment', () => {
+    const configuration = { kind: 'supabase-smtp', provider: 'resend', senderEmail: 'account@example.test', senderName: 'Example' }
+    expect(secretEntrySchema.safeParse({ ...entry, configuration }).success).toBe(true)
+    expect(secretEntrySchema.safeParse({ ...entry, environment: 'production', configuration }).success).toBe(true)
+    for (const patch of [{ target: 'vercel' }, { environment: 'preview' }, { configuration: { ...configuration, smtp_pass: 'private-value' } },
+      { configuration: { ...configuration, provider: 'other' } }, { configuration: { ...configuration, senderEmail: 'invalid' } },
+      { configuration: { ...configuration, senderName: 'a\nb' } }, { configuration: { ...configuration, senderName: 'a\0b' } },
+      { configuration: { ...configuration, senderName: '' } }, { configuration: { ...configuration, senderName: 'a'.repeat(101) } },
+      { configuration: { kind: 'unknown' } }]) expect(secretEntrySchema.safeParse({ ...entry, configuration, ...patch }).success).toBe(false)
+    const password = { kind: 'supabase-user-password', userId: projectId }
+    expect(secretEntrySchema.safeParse({ ...entry, configuration: password }).success).toBe(true)
+    for (const patch of [{ target: 'vercel' }, { environment: 'production' }, { environment: 'preview' }, { configuration: { ...password, userId: 'foreign' } }, { configuration: { ...password, password: 'private-value' } }])
+      expect(secretEntrySchema.safeParse({ ...entry, configuration: password, ...patch }).success).toBe(false)
   })
   it('pins Supabase only to the registered matching environment; Vercel uses the requested single environment', () => {
     const input = { ...binding, databaseEnvironment: { project_ref: binding.targetRef, environment: 'development', source: 'supremo_provisioned' } }
@@ -66,6 +84,84 @@ describe('secret request policy', () => {
 })
 
 describe('secret request service', () => {
+  it('rejects changed setup intent for both pending and fulfilled requests and within one batch', async () => {
+    const configuration = { kind: 'supabase-smtp' as const, provider: 'resend' as const, senderEmail: 'account@example.test', senderName: 'Example' }
+    const configured = { ...entry, configuration }
+    for (const status of ['pending', 'fulfilled'] as const) {
+      const port = fixture([{ ...row, configuration, status }])
+      await expect(requestSecrets(port, [{ ...configured, configuration: { ...configuration, senderEmail: 'other@example.test' } }])).rejects.toThrow('outra configuração')
+      expect(port.insert).not.toHaveBeenCalled()
+      await expect(requestSecrets(port, [entry])).rejects.toThrow('outra configuração')
+      expect(await requestSecrets(port, [configured])).toEqual([secretRequestView({ ...row, configuration, status })])
+    }
+    const batch = fixture([])
+    await expect(requestSecrets(batch, [entry, configured])).rejects.toThrow('outra configuração')
+    expect(batch.insert).not.toHaveBeenCalled()
+    const racing = fixture([])
+    vi.mocked(racing.insert).mockImplementation(async () => { vi.mocked(racing.list).mockResolvedValue([row]) })
+    await expect(requestSecrets(racing, [configured])).rejects.toThrow('pedido salvo não corresponde')
+  })
+  it('validates passwords on the server before audit/provider calls, including UTF-8 byte limits', async () => {
+    const configuration = { kind: 'supabase-user-password' as const, userId: projectId }
+    for (const value of ['short', 'a'.repeat(73), 'á'.repeat(37), 'abcdefgh\0', '        ']) {
+      const port = fixture([{ ...row, configuration }])
+      await expect(fulfillSecret(port, requestId, value)).rejects.toThrow()
+      expect(port.audit).not.toHaveBeenCalled(); expect(port.deliver).not.toHaveBeenCalled()
+    }
+    for (const value of ['abcdefgh', 'a'.repeat(72), 'á'.repeat(36)]) {
+      const port = fixture([{ ...row, configuration }])
+      await fulfillSecret(port, requestId, value)
+      expect(port.deliver).toHaveBeenCalledExactlyOnceWith({ ...row, configuration }, binding, value, claim)
+    }
+    const production = fixture([{ ...row, environment: 'production', configuration }])
+    await expect(fulfillSecret(production, requestId, 'private-value')).rejects.toThrow()
+    expect(production.deliver).not.toHaveBeenCalled()
+  })
+  it.each([true, false])('rejects resubmitting a completed request without ignoring the new value (configured=%s)', async (configured) => {
+    const configuration = { kind: 'supabase-user-password' as const, userId: projectId }
+    const port = fixture([{ ...row, ...(configured ? { configuration } : {}), status: 'fulfilled' }])
+    await expect(fulfillSecret(port, requestId, 'another-password')).rejects.toThrow('já foi concluído')
+    expect(port.claim).not.toHaveBeenCalled(); expect(port.deliver).not.toHaveBeenCalled()
+  })
+  it('claims before audit and consumes that claim only after a confirmed configured delivery', async () => {
+    const configuration = { kind: 'supabase-user-password' as const, userId: projectId }
+    const configured = { ...row, configuration }; const port = fixture([configured])
+    await fulfillSecret(port, requestId, 'private-value')
+    expect(port.claim).toHaveBeenCalledExactlyOnceWith(configured)
+    expect(port.fulfill).toHaveBeenCalledExactlyOnceWith(configured, claim)
+    expect(port.release).not.toHaveBeenCalled()
+    expect(vi.mocked(port.claim).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(port.audit).mock.invocationCallOrder[0]!)
+  })
+  it.each(['audit', 'deliver', 'fulfill'] as const)('releases only its claim when configured %s fails', async (method) => {
+    const configuration = { kind: 'supabase-user-password' as const, userId: projectId }
+    const configured = { ...row, configuration }; const port = fixture([configured])
+    vi.mocked(port[method]).mockRejectedValue(new Error('unavailable'))
+    await expect(fulfillSecret(port, requestId, 'private-value')).rejects.toThrow()
+    expect(port.release).toHaveBeenCalledExactlyOnceWith(configured, claim)
+    if (method === 'audit') expect(port.deliver).not.toHaveBeenCalled()
+    if (method === 'deliver') expect(port.fulfill).not.toHaveBeenCalled()
+  })
+  it.each([true, false])('refuses concurrent submissions before a second audit or provider mutation (configured=%s)', async (configured) => {
+    const configuration = { kind: 'supabase-user-password' as const, userId: projectId }
+    const port = fixture([{ ...row, ...(configured ? { configuration } : {}) }])
+    let reserved = false
+    let finish: (() => void) | undefined
+    const delivery = new Promise<void>((resolve) => { finish = resolve })
+    vi.mocked(port.claim).mockImplementation(async () => {
+      if (reserved) throw new SecretRequestError('Envio em andamento')
+      reserved = true
+      return claim
+    })
+    vi.mocked(port.deliver).mockImplementation(async () => delivery)
+    const first = fulfillSecret(port, requestId, 'first-password')
+    await vi.waitFor(() => expect(port.deliver).toHaveBeenCalledTimes(1))
+    await expect(fulfillSecret(port, requestId, 'second-password')).rejects.toThrow('em andamento')
+    expect(port.audit).toHaveBeenCalledTimes(1)
+    expect(port.deliver).toHaveBeenCalledTimes(1)
+    expect(port.release).not.toHaveBeenCalled()
+    finish?.()
+    await first
+  })
   it('deduplicates exact destination requests and never resets fulfilled status on a retry', async () => {
     const port = fixture([])
     const result = await requestSecrets(port, [entry, entry])
@@ -91,9 +187,9 @@ describe('secret request service', () => {
   it('passes the submitted value only to the provider; audit and persistence receive metadata', async () => {
     const port = fixture()
     await fulfillSecret(port, requestId, 'private-value')
-    expect(port.deliver).toHaveBeenCalledExactlyOnceWith(row, binding, 'private-value')
+    expect(port.deliver).toHaveBeenCalledExactlyOnceWith(row, binding, 'private-value', claim)
     expect(port.audit).toHaveBeenCalledExactlyOnceWith(row)
-    expect(port.fulfill).toHaveBeenCalledExactlyOnceWith(row)
+    expect(port.fulfill).toHaveBeenCalledExactlyOnceWith(row, claim)
     expect(JSON.stringify([vi.mocked(port.audit).mock.calls, vi.mocked(port.fulfill).mock.calls])).not.toContain('private-value')
     expect(vi.mocked(port.audit).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(port.deliver).mock.invocationCallOrder[0]!)
   })
@@ -102,10 +198,10 @@ describe('secret request service', () => {
     await expect(fulfillSecret(port, requestId, 'private-value')).rejects.toThrow()
     expect(port.deliver).not.toHaveBeenCalled()
   })
-  it('refuses relinked destinations and treats a confirmed repeated save as idempotent', async () => {
+  it('refuses relinked destinations and rejects repeated values after confirmed delivery', async () => {
     const port = fixture(); vi.mocked(port.resolve).mockResolvedValue({ ...binding, targetRef: 'foreign' })
     await expect(fulfillSecret(port, requestId, 'private-value')).rejects.toThrow(/destino mudou/); expect(port.deliver).not.toHaveBeenCalled()
-    const done = fixture([{ ...row, status: 'fulfilled' }]); await fulfillSecret(done, requestId, 'private-value'); expect(done.deliver).not.toHaveBeenCalled()
+    const done = fixture([{ ...row, status: 'fulfilled' }]); await expect(fulfillSecret(done, requestId, 'private-value')).rejects.toThrow('já foi concluído'); expect(done.deliver).not.toHaveBeenCalled()
   })
   it('does not send when audit fails and never marks fulfilled when provider rejects', async () => {
     const port = fixture(); vi.mocked(port.audit).mockRejectedValue(new Error('db down'))

@@ -47,8 +47,8 @@ describe('upgrade of mixed user/platform instructions', () => {
 
   it('directs secret requests to the project form and assigns confirmed failures to the development agent', () => {
     const updated = withDevelopmentPolicy('# App\n')
-    expect(updated).toContain('secrets request NOME --reason "finalidade" --target supabase --environment development')
-    expect(updated).toContain('Nunca peça o valor no chat')
+    expect(updated).toContain('integrations request NOME --reason "finalidade" --target supabase --environment development')
+    expect(updated).toContain('Nunca peça a chave no chat')
     expect(updated).toContain('secrets status')
     expect(updated).toContain('não iniciam QA nem exigem checkpoint')
     expect(updated).toContain('inclusive segurança/RLS/migrations')

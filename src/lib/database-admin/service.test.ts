@@ -27,9 +27,12 @@ describe('owner-scoped auth administration', () => {
       { operation: 'auth-configure', config: { emailConfirmation: false } },
       { operation: 'auth-configure', environment: 'development', config: {} },
       { operation: 'auth-configure', environment: 'development', config: { smtp_pass: 'secret' } },
+      { operation: 'auth-configure', environment: 'development', config: { recoveryEmailMode: 'custom' } },
+      { operation: 'auth-configure', environment: 'development', config: { mailer_templates_recovery_content: '<p>custom</p>' } },
       { operation: 'auth-count', sql: 'select * from auth.users' },
       { operation: 'auth-users', limit: 201 },
       { operation: 'auth-update', environment: 'development', userId, user: { role: 'admin' } },
+      { operation: 'auth-update', environment: 'development', userId, user: { password: 'secret' } },
       { operation: 'auth-delete', environment: 'development', userId: '../users' },
       { operation: 'auth-create', environment: 'development', email: 'invalid' },
       { operation: 'auth-create', environment: 'development', email: 'a@example.test', password: 'secret' },
@@ -53,6 +56,55 @@ describe('owner-scoped auth administration', () => {
     const p = provider(); p.management.mockResolvedValue(config)
     expect(await runAuthAdmin(p, { operation: 'auth-config' })).toEqual({ emailConfirmation: true, signupsEnabled: true, anonymousSignIns: false, siteUrl: 'https://app.test' })
     expect(configView({ mailer_autoconfirm: true, disable_signup: true })).toEqual({ emailConfirmation: false, signupsEnabled: false })
+  })
+  it('reports SMTP readiness without returning credentials or treating metadata as delivery proof', () => {
+    const view = configView({ ...config, smtp_host: 'smtp.example.test', smtp_user: 'private-user', smtp_admin_email: 'sender@example.test',
+      smtp_pass: 'private-password', smtp_sender_name: 'private-label',
+      mailer_templates_recovery_content: '<p>custom-secret-content</p>', mailer_subjects_recovery: 'private-subject' })
+    expect(view).toEqual({ emailConfirmation: true, signupsEnabled: true, anonymousSignIns: false, siteUrl: 'https://app.test',
+      smtp: { configured: true }, recoveryEmailMode: 'custom' })
+    expect(JSON.stringify(view)).not.toMatch(/private|custom-secret|smtp\.example|sender@example/)
+  })
+  it.each([
+    { smtp_host: null, smtp_user: null, smtp_admin_email: null },
+    { smtp_host: '', smtp_user: 'user', smtp_admin_email: 'sender@example.test' },
+    { smtp_host: 'host', smtp_user: '   ', smtp_admin_email: 'sender@example.test' },
+    { smtp_host: 'host', smtp_user: 'user' },
+  ])('reports incomplete SMTP configuration without assuming a default credential', smtp => {
+    expect(configView({ ...config, ...smtp })).toMatchObject({ smtp: { configured: false } })
+  })
+  it('does not guess a recovery mode from unrecognized or unavailable template content', () => {
+    for (const content of [null, '', '<p>{{ .Token }}</p>', '<p>{{ .TokenHash }}</p>', '<a href="{{ .ConfirmationURL }}">Custom</a>']) {
+      expect(configView({ ...config, mailer_templates_recovery_content: content })).toMatchObject({ recoveryEmailMode: 'custom' })
+    }
+    expect(() => configView({ ...config, smtp_host: 'x'.repeat(1001) })).toThrow()
+    expect(() => configView({ ...config, mailer_templates_recovery_content: 'x'.repeat(100001) })).toThrow()
+  })
+  it.each(['code', 'link'] as const)('configures recovery by %s using a provider-issued token and confirms the exact template', async mode => {
+    const p = provider()
+    let state: Record<string, unknown> = { ...config, mailer_templates_recovery_content: '<p>old template</p>' }
+    p.management.mockImplementation(async (_path: string, method: string, patch?: object) => {
+      if (method === 'PATCH') { state = { ...state, ...patch }; return {} }
+      return state
+    })
+    const result = await runAuthAdmin(p, { operation: 'auth-configure', environment: 'development', config: { recoveryEmailMode: mode } })
+    const expected = mode === 'code'
+      ? { mailer_subjects_recovery: 'Seu código para redefinir a senha', mailer_templates_recovery_content: '<h2>Redefinir sua senha</h2><p>Use este código para continuar a recuperação da sua conta:</p><p><strong>{{ .Token }}</strong></p><p>Se você não pediu a recuperação, ignore este email.</p>' }
+      : { mailer_subjects_recovery: 'Redefina sua senha', mailer_templates_recovery_content: '<h2>Redefinir sua senha</h2><p>Abra o link abaixo para escolher uma nova senha:</p><p><a href="{{ .ConfirmationURL }}">Redefinir senha</a></p><p>Se você não pediu a recuperação, ignore este email.</p>' }
+    expect(p.management.mock.calls[1]).toEqual(['config/auth', 'PATCH', expected])
+    expect(result).toMatchObject({ before: { recoveryEmailMode: 'custom' }, after: { recoveryEmailMode: mode }, verified: true })
+    expect(p.user).not.toHaveBeenCalled()
+  })
+  it.each(['content', 'subject'] as const)('refuses to confirm recovery when the provider does not apply the %s', async field => {
+    const p = provider()
+    p.management.mockImplementation(async (_path: string, method: string, patch?: Record<string, unknown>) => {
+      if (method === 'PATCH') {
+        const changed = field === 'content' ? { mailer_templates_recovery_content: '<p>unchanged</p>' } : { mailer_subjects_recovery: 'unchanged' }
+        p.management.mockResolvedValue({ ...config, ...patch, ...changed })
+      }
+      return config
+    })
+    await expect(runAuthAdmin(p, { operation: 'auth-configure', environment: 'development', config: { recoveryEmailMode: 'code' } })).rejects.toThrow(/não confirma/)
   })
   it('changes only email confirmation and verifies the provider result', async () => {
     const p = provider(); p.management.mockResolvedValueOnce(config).mockResolvedValueOnce({}).mockResolvedValueOnce({ ...config, mailer_autoconfirm: true })

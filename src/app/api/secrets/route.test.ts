@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-const mocks = vi.hoisted(() => ({ auth: vi.fn(), authorize: vi.fn(), list: vi.fn(), resolve: vi.fn(), insert: vi.fn(), store: vi.fn() }))
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), authorize: vi.fn(), list: vi.fn(), resolve: vi.fn(), insert: vi.fn(), store: vi.fn(), dismiss: vi.fn() }))
 vi.mock('@/lib/supabase/admin', () => ({ createServiceClient: () => ({}) }))
 vi.mock('@/lib/checkpoint/devices', () => ({ authenticateDeviceSecret: mocks.auth }))
 vi.mock('@/lib/checkpoint/store', () => ({ supabaseCheckpointDeviceStore: () => ({}) }))
@@ -19,7 +19,7 @@ beforeEach(() => {
   mocks.list.mockResolvedValue([row])
   mocks.resolve.mockResolvedValue({ target: row.target, environment: row.environment, targetRef: row.targetRef, accountId: row.accountId })
   mocks.insert.mockResolvedValue(undefined)
-  mocks.store.mockReturnValue({ authorize: mocks.authorize, list: mocks.list, resolve: mocks.resolve, insert: mocks.insert })
+  mocks.store.mockReturnValue({ authorize: mocks.authorize, list: mocks.list, resolve: mocks.resolve, insert: mocks.insert, dismiss: mocks.dismiss })
 })
 describe('secret requests device endpoint', () => {
   it('rejects raw values, arbitrary destinations and oversized input before device lookup', async () => {
@@ -54,6 +54,16 @@ describe('secret requests device endpoint', () => {
     mocks.list.mockResolvedValueOnce([]).mockResolvedValueOnce([row])
     expect((await POST(request({ ...body, operation: 'request', requests: [entry] }))).status).toBe(200)
     expect(mocks.insert).toHaveBeenCalledWith([{ ...entry, targetRef: row.targetRef, accountId: row.accountId }])
+  })
+  it('allows the authorized agent to dismiss a form request for rotation without a provider value', async () => {
+    const response = await POST(request({ ...body, operation: 'dismiss', requestId: row.id }))
+    expect(response.status).toBe(200)
+    expect(mocks.dismiss).toHaveBeenCalledExactlyOnceWith(row.id)
+    expect(mocks.insert).not.toHaveBeenCalled()
+    mocks.dismiss.mockClear()
+    mocks.authorize.mockRejectedValue(new SecretRequestError('Projeto não autorizado.'))
+    expect((await POST(request({ ...body, operation: 'dismiss', requestId: row.id }))).status).toBe(409)
+    expect(mocks.dismiss).not.toHaveBeenCalled()
   })
   it('sanitizes infrastructure failures instead of returning provider credentials', async () => {
     mocks.list.mockRejectedValue(new Error('token=private-value'))

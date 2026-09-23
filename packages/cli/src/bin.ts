@@ -310,10 +310,9 @@ program
     console.log(JSON.stringify({ action: outcome.action.kind, message: outcome.message }))
   })
 
-program
-  .command('secrets')
-  .description('Solicita campos no formulário do projeto; valores nunca passam pela CLI')
-  .addCommand(new Command('request').argument('<names...>')
+function secretRequestCommand(): Command {
+  return new Command('request').argument('<names...>')
+    .description('Solicita os campos privados de qualquer integração no formulário do Supremo')
     .requiredOption('--reason <reason>', 'Por que o aplicativo precisa destes campos')
     .requiredOption('--target <target>', 'Destino: supabase (Edge Functions) ou vercel')
     .option('--environment <environment>', 'Ambiente do destino: development, preview ou production', 'development')
@@ -323,12 +322,40 @@ program
       const input = secretRequestOptionsSchema.parse({ requests: names.map(name => ({ name,
         description: options.reason, target: options.target, environment: options.environment })) })
       console.log(JSON.stringify(await runDatabase('secrets-request', process.cwd(), input)))
+    })
+}
+
+program
+  .command('integrations')
+  .description('Configura integrações pelo formulário seguro do Supremo')
+  .addCommand(secretRequestCommand())
+  .addCommand(new Command('email')
+    .description('Solicita a chave para configurar o SMTP do Supabase; dispensa Vercel')
+    .requiredOption('--provider <provider>', 'Provedor de email: resend')
+    .requiredOption('--sender-email <email>', 'Email remetente autorizado no provedor')
+    .option('--sender-name <name>', 'Nome público do remetente', 'Aplicativo')
+    .requiredOption('--environment <environment>', 'Ambiente confirmado: development ou production')
+    .action(async (options: Record<string, unknown>) => {
+      const { emailIntegrationRequest } = await import('./integration-request')
+      const { runDatabase } = await import('./database')
+      console.log(JSON.stringify(await runDatabase('secrets-request', process.cwd(), emailIntegrationRequest(options))))
     }))
+
+program
+  .command('secrets')
+  .description('Solicita campos no formulário do projeto; valores nunca passam pela CLI')
+  .addCommand(secretRequestCommand())
   .addCommand(new Command('status')
     .description('Mostra nomes e situação dos pedidos, sem valores')
     .action(async () => {
       const { runDatabase } = await import('./database')
       console.log(JSON.stringify(await runDatabase('secrets-status')))
+    }))
+  .addCommand(new Command('dismiss').argument('<request-id>')
+    .description('Remove apenas o pedido do formulário; preserva a chave já entregue ao provedor')
+    .action(async (requestId: string) => {
+      const { runDatabase } = await import('./database')
+      console.log(JSON.stringify(await runDatabase('secrets-dismiss', process.cwd(), { requestId })))
     }))
 
 program
@@ -377,16 +404,22 @@ program
 
 program
   .command('auth <operation>')
-  .description('Administração do Supabase: count, users, config, configure, create, update, delete')
+  .description('Administração do Supabase: count, users, config, configure, create, update, delete, password')
   .option('--environment <environment>', 'Ambiente esperado; obrigatório para alterações: development ou production')
   .option('--limit <number>', 'Quantidade de usuários por página (1–200)')
   .option('--offset <number>', 'Deslocamento da página (0–10000)')
   .option('--user-id <uuid>', 'Usuário específico a alterar ou excluir')
   .option('--email <email>', 'Email do usuário a criar')
   .option('--email-confirmed', 'Criar usuário com email confirmado, somente quando solicitado')
-  .option('--config <json>', 'Ajuste de login: emailConfirmation, signupsEnabled, anonymousSignIns, siteUrl')
+  .option('--config <json>', 'Ajuste de login: emailConfirmation, signupsEnabled, anonymousSignIns, siteUrl, recoveryEmailMode (code ou link)')
   .option('--user <json>', 'Ajuste do usuário: email, emailConfirmed:true, banHours (0 desbloqueia)')
   .action(async (operation: string, options: Record<string, unknown>) => {
+    if (operation === 'password') {
+      const { authPasswordRequest } = await import('./integration-request')
+      const { runDatabase } = await import('./database')
+      console.log(JSON.stringify(await runDatabase('secrets-request', process.cwd(), authPasswordRequest(options))))
+      return
+    }
     const { authOperationSchema } = await import('../../../src/lib/database-admin/options')
     const { parseDatabaseOptions } = await import('./database-request')
     const { runDatabase } = await import('./database')

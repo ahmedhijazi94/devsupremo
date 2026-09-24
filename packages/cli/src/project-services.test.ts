@@ -28,7 +28,7 @@ beforeEach(() => {
     expect(init.redirect).toBe('error')
     const body = JSON.parse(String(init.body)) as Record<string, unknown>; calls.push({ url: String(url), body })
     if (String(url).endsWith('/api/secrets')) return Response.json({ projectId: PROJECT,
-      requests: [{ id: '22222222-2222-4222-8222-222222222222', ...entry, targetRef: 'owned-ref', status: 'pending', value: 'must-never-reach-agent' }],
+      requests: [{ id: '22222222-2222-4222-8222-222222222222', ...(Array.isArray(body.requests) ? body.requests[0] : entry), targetRef: 'owned-ref', status: 'pending', value: 'must-never-reach-agent' }],
       value: 'must-never-reach-agent', formPath: 'https://attacker.example.invalid/form' })
     return Response.json(body.operation === 'status'
       ? { environment, projectRef: 'owned-ref', automaticMigrations: environment === 'development' }
@@ -38,6 +38,43 @@ beforeEach(() => {
 afterEach(() => { stop?.(); stop = undefined; vi.unstubAllGlobals(); fs.rmSync(cwd, { recursive: true, force: true }) })
 
 describe('named secret requests never carry secret values', () => {
+  it('lists and removes only safe credential metadata without local database access', async () => {
+    fs.rmSync(path.join(cwd, '.env.local'))
+    const credentialId = '33333333-3333-4333-8333-333333333333'
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ projectId: PROJECT, credentials: [{
+      id: credentialId, name: 'RESEND_API_KEY', environment: 'development',
+      createdAt: '2026-09-24T12:00:00Z', updatedAt: '2026-09-24T12:00:00Z', encryptedValue: 'never-return', value: 'never-return',
+    }] }))
+    vi.stubGlobal('fetch', fetcher)
+    const result = await runDatabaseDirect('secrets-credentials', cwd)
+    expect(JSON.stringify(result)).not.toContain('never-return')
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'credentials' })
+    fetcher.mockResolvedValue(Response.json({ projectId: PROJECT, credentials: [] }))
+    await runDatabaseDirect('secrets-revoke-credential', cwd, { credentialId })
+    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'revoke-credential', credentialId })
+  })
+  it('applies a vault reference through the server and reports only the targeted fulfilled receipt', async () => {
+    const requestId = '22222222-2222-4222-8222-222222222222', credentialId = '33333333-3333-4333-8333-333333333333'
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ projectId: PROJECT, requests: [
+      { id: requestId, ...entry, targetRef: 'owned-ref', status: 'fulfilled' },
+      { id: credentialId, ...entry, name: 'OTHER_KEY', targetRef: 'owned-ref', status: 'pending' },
+    ] }))
+    vi.stubGlobal('fetch', fetcher)
+    const result = await runDatabaseDirect('secrets-apply', cwd, { requestId, credentialId })
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'apply', requestId, credentialId })
+    expect(result).toMatchObject({ selectedRequestIds: [requestId], nextAction: { kind: 'continue_integration' },
+      requests: [{ receipt: { applied: true, kind: 'environment_secret_installed' } }, { receipt: { applied: false } }] })
+    fetcher.mockResolvedValue(Response.json({ projectId: PROJECT, requests: [
+      { id: requestId, ...entry, targetRef: 'owned-ref', status: 'fulfilled' },
+      { id: credentialId, ...entry, name: 'OTHER_KEY', targetRef: 'owned-ref', status: 'pending' },
+    ] }))
+    expect(await runDatabaseDirect('secrets-status', cwd, { requestId })).toMatchObject({
+      selectedRequestIds: [requestId], nextAction: { kind: 'continue_integration' },
+    })
+    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'status' })
+    fetcher.mockResolvedValue(Response.json({ projectId: PROJECT, requests: [{ id: requestId, ...entry, targetRef: 'owned-ref', status: 'pending' }] }))
+    await expect(runDatabaseDirect('secrets-apply', cwd, { requestId, credentialId })).rejects.toThrow('não confirmou')
+  })
   it('sends metadata through the daemon and returns a form URL pinned to the issuer', async () => {
     stop = startDatabaseWorker(cwd, (operation, options) => runDatabaseDirect(operation, cwd, options))
     const result = await requestDatabase(cwd, 'secrets-request', { requests: [entry] })

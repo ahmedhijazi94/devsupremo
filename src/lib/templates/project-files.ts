@@ -2719,7 +2719,23 @@ não substitui fixtures do domínio, assertions ou \`isolationTest\`, nem perten
 
 ## Chaves de integrações
 
-Para QUALQUER integração que precisar de segredo, registre os campos pelo executável local:
+Para QUALQUER integração que precisar de segredo, primeiro execute
+\`node node_modules/supremo-cli/dist/bin.js integrations credentials\`.
+A lista contém somente ID, nome, ambiente e datas das credenciais do cofre deste projeto;
+ela nunca retorna valores, ciphertext ou chaves de criptografia. Reutilize uma referência
+apenas quando sua finalidade/provedor e o ambiente forem conhecidos e corresponderem
+ao pedido. Não selecione por aproximação de nome, posição na lista ou por ser a única chave.
+O ID pode alimentar outro nome de destino quando se tratar comprovadamente da mesma
+credencial, por exemplo uma chave Resend usada como AUTH_SMTP_PASSWORD.
+
+Para instalar uma referência já conhecida, acrescente \`--credential-id UUID\` a
+\`integrations request\` com um único nome ou a \`integrations email\`. O motor cria o pedido
+e aplica a credencial por API. Para um pedido pendente existente, use
+\`integrations apply PEDIDO --credential-id UUID\`. O ID é apenas uma referência; o servidor
+revalida projeto, ambiente e autoridade. Nenhum navegador é necessário nesses caminhos.
+\`secrets credentials\` e \`secrets apply\` são equivalentes.
+
+Sem referência adequada, registre os campos pelo executável local:
 \`node node_modules/supremo-cli/dist/bin.js integrations request STRIPE_SECRET_KEY --reason "Cobrar pagamentos no backend" --target supabase --environment development\`.
 \`secrets request\` é equivalente. O fluxo serve a chaves privadas de diferentes provedores;
 entregar uma chave não configura automaticamente todas as APIs de terceiros.
@@ -2737,18 +2753,36 @@ nunca no chat. Não diga que não há campo seguro nem exija configuração manu
 do provedor para uma operação que este canal suporta. Não peça, leia, imprima, consulte no banco nem tente recuperar o valor da
 chave. Não grave em código, arquivos env, argumentos, logs ou relatórios. A CLI aceita
 somente metadados; \`secrets status\` retorna nomes/destinos e pending/fulfilled. O valor
-preenchido vai ao provedor, não ao agente. Confirme status e continue a implementação,
+preenchido vai ao provedor, não ao agente. O formulário pode guardar credenciais de
+integração criptografadas no cofre do mesmo projeto e ambiente para reutilização.
+Senhas de contas pessoais não são guardadas nem reutilizadas nesse cofre.
+Confirme status e continue a implementação,
 configuração e publicação autorizadas. O usuário só fornece valores privados e autoriza
 acesso à conta quando necessário. \`fulfilled\` confirma a entrega/configuração solicitada,
 não uma integração completa nem entrega de email. Conclua as partes suportadas e explique
 somente a etapa externa concreta que ainda depender do usuário. Não inicie QA, checkpoint,
 migration ou instalação de ferramentas apenas para configurar uma integração.
 
+Cada pedido retorna um \`receipt\` com a etapa aplicada e os próximos passos. Confira
+\`selectedRequestIds\` para acompanhar a integração pedida, sem confundir outros campos
+pendentes do projeto. Após o usuário salvar o formulário, consulte
+\`secrets status --request-id UUID\` com o ID daquele pedido. O próximo passo dessa
+resposta considera apenas o pedido selecionado. Um recibo \`smtp_configured\` significa que o servidor já configurou
+o SMTP por API; \`environment_secret_installed\` confirma a instalação no destino indicado.
+Não abra o painel Supabase/Vercel para repetir a configuração ou conferir/copiar valores.
+O navegador serve somente para o usuário preencher o formulário seguro ou autorizar
+uma conta quando necessário. Depois continue pelo motor, ajuste código/template e teste
+o comportamento autorizado. \`deliveryVerified:false\` não significa configuração manual
+pendente: significa que ainda falta uma prova de entrega real.
+
 Se o usuário pedir troca de chave/senha ou correção do remetente, consulte \`secrets status\`
 para obter o ID do pedido anterior e execute
 \`node node_modules/supremo-cli/dist/bin.js secrets dismiss ID\`, depois solicite o novo
 campo com a configuração atualizada. Dismiss remove somente o pedido do formulário;
 não revoga a chave no provedor nem altera a configuração já aplicada. Nenhum valor é lido.
+Um pedido fulfilled não aceita substituição silenciosa por outra credencial.
+Quando solicitado pelo usuário, \`integrations revoke-credential UUID\` remove somente
+a credencial do cofre; não revoga a chave nem desfaz sua instalação no provedor.
 
 ### Email de autenticação com Resend
 
@@ -2756,6 +2790,8 @@ não revoga a chave no provedor nem altera a configuração já aplicada. Nenhum
 cria o formulário para a chave de Resend. Use o email remetente autorizado pelo usuário
 e pelo provedor; não invente domínio ou identidade. Ao salvar, o servidor configura
 diretamente o SMTP do Supabase, com host e porta conhecidos, no ambiente confirmado.
+Se já existir no cofre uma chave Resend comprovadamente adequada ao mesmo ambiente,
+acrescente \`--credential-id UUID\` ao comando para aplicar pelo motor sem abrir formulário.
 Não é preciso conectar Vercel, criar endpoint de envio ou pedir configuração manual
 no painel Supabase para esse caminho. As restrições de domínio/remetente/destinatário
 do Resend continuam aplicáveis; uma chave salva não demonstra que um envio foi entregue.

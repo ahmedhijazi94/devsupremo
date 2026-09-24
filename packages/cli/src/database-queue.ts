@@ -10,6 +10,13 @@ const maxRequestBytes = 32 * 1024
 const timeoutMs = 90_000
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+function timeoutMessage(operation: DatabaseOperation, options: DatabaseOptions): string {
+  if (!operation.startsWith('secrets-')) return 'O daemon não confirmou a operação de banco a tempo. Consulte db status e repita migrate para verificar o histórico idempotente; não presuma sucesso.'
+  const check = operation === 'secrets-credentials' || operation === 'secrets-revoke-credential' ? 'integrations credentials'
+    : options.requestId && operation !== 'secrets-dismiss' ? `secrets status --request-id ${options.requestId}` : 'secrets status'
+  return `O daemon não confirmou a operação de integração a tempo. Consulte ${check} antes de tentar novamente: a operação pode ter concluído no servidor. Não repita o envio sem conferir o resultado e não presuma sucesso.`
+}
+
 function writeAtomic(file: string, value: unknown): void {
   const temporary = `${file}.${randomUUID()}.tmp`
   fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600, flag: 'wx' })
@@ -66,7 +73,7 @@ export async function requestDatabase(cwd: string, operation: DatabaseOperation,
       }
       await pause(100)
     }
-    throw new Error('O daemon não confirmou a operação de banco a tempo. Consulte db status e repita migrate para verificar o histórico idempotente; não presuma sucesso.')
+    throw new Error(timeoutMessage(selected, checkedOptions))
   } finally {
     fs.rmSync(request, { force: true })
     fs.rmSync(response, { force: true })

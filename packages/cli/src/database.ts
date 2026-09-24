@@ -7,7 +7,7 @@ import { requestDatabase } from './database-queue'
 import { parseDatabaseOptions, type DatabaseOperation, type DatabaseOptions } from './database-request'
 import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
 import { z } from 'zod'
-import { readJobManifest, secretResponse } from './project-service-request'
+import { credentialResponse, readJobManifest, secretResponse, secretResponseSchema, selectRequestedSecrets } from './project-service-request'
 import { readProjectStack } from './framework-runtime'
 export type { DatabaseOperation, DatabaseOptions } from './database-request'
 
@@ -64,8 +64,15 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     return data
   }
   if (operation.startsWith('secrets-')) {
-    const result = await request(operation === 'secrets-request' ? 'request' : operation === 'secrets-dismiss' ? 'dismiss' : 'status', { ...checkedOptions })
-    return secretResponse(result, config.projectId, issuer)
+    const result = await request(operation.slice('secrets-'.length), operation === 'secrets-status' ? {} : { ...checkedOptions })
+    if (operation === 'secrets-credentials' || operation === 'secrets-revoke-credential') return credentialResponse(result, config.projectId)
+    const parsed = secretResponseSchema.extend({ projectId: z.literal(config.projectId) }).parse(result)
+    const selected = operation === 'secrets-request' ? selectRequestedSecrets(parsed.requests, checkedOptions.requests ?? []).map(entry => entry.id)
+      : operation === 'secrets-apply' || (operation === 'secrets-status' && checkedOptions.requestId) ? [checkedOptions.requestId!] : undefined
+    if (operation === 'secrets-apply' && parsed.requests.find(entry => entry.id === checkedOptions.requestId)?.status !== 'fulfilled') {
+      throw new Error('O servidor não confirmou a aplicação da credencial ao pedido solicitado.')
+    }
+    return secretResponse(result, config.projectId, issuer, selected)
   }
   const status = await request('status') as unknown as DatabaseStatus
   // Snapshot informativo, jamais usado como autorização para uma escrita futura.

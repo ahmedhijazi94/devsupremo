@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { KeyRound, Check, Loader2, X } from 'lucide-react'
-import { getSecretRequests, saveSecret, dismissSecretRequest, type SecretRequestView } from '@/actions/secrets'
+import { getSecretRequests, saveSecret, dismissSecretRequest, getProjectCredentials, revokeProjectCredential, type SecretRequestView, type ProjectCredentialView } from '@/actions/secrets'
 import { toast } from 'sonner'
 
 const environments = { development: 'Desenvolvimento', preview: 'Preview', production: 'Produção' }
@@ -26,8 +26,14 @@ function successMessage(request: SecretRequestView): string {
 }
 
 export function SecretsCard({ projectId }: { projectId: string }) {
+  return <ProjectSecretsCard key={projectId} projectId={projectId} />
+}
+
+function ProjectSecretsCard({ projectId }: { projectId: string }) {
   const [requests, setRequests] = useState<SecretRequestView[]>([])
+  const [credentials, setCredentials] = useState<ProjectCredentialView[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [credentialsError, setCredentialsError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   useEffect(() => {
     let active = true
@@ -41,6 +47,13 @@ export function SecretsCard({ projectId }: { projectId: string }) {
         if (result.error) setError(result.error)
         else { setRequests(result.requests ?? []); setError(null) }
       } catch { if (active) setError('Não foi possível atualizar os pedidos de chaves. Tente novamente.') }
+      try {
+        if (!active) return
+        const result = await getProjectCredentials(projectId)
+        if (!active) return
+        if (result.error) setCredentialsError(result.error)
+        else { setCredentials(result.credentials ?? []); setCredentialsError(null) }
+      } catch { if (active) setCredentialsError('Não foi possível atualizar o cofre deste projeto. Tente novamente.') }
       finally { fetching = false }
     }
     void refresh()
@@ -48,24 +61,49 @@ export function SecretsCard({ projectId }: { projectId: string }) {
     window.addEventListener('focus', refresh)
     return () => { active = false; window.clearInterval(interval); window.removeEventListener('focus', refresh) }
   }, [projectId, nonce])
-  if (!requests.length && !error) return null
+  if (!requests.length && !credentials.length && !error && !credentialsError) return null
   return (
     <section id="secrets" className="bg-surface rounded-[var(--radius-inner)] p-4">
       <div className="mb-1 flex items-center gap-2"><KeyRound className="text-accent h-4 w-4 shrink-0" /><h2 className="text-sm font-semibold">Configuração segura</h2></div>
-      <p className="text-muted mb-3 text-xs">Preencha o campo solicitado. O Supremo aplica a configuração no destino indicado, sem enviar o valor ao chat ou guardá-lo no histórico.</p>
-      {error && <div role="alert" className="mb-3 text-xs">{error} <button type="button" onClick={() => setNonce((n) => n + 1)} className="underline">Tentar novamente</button></div>}
+      <p className="text-muted mb-3 text-xs">Preencha o campo solicitado. O Supremo aplica a configuração no destino indicado. O valor fica fora do chat e do histórico; você pode guardá-lo criptografado no cofre para reutilizar.</p>
+      {(error || credentialsError) && <div role="alert" className="mb-3 text-xs">{error && <p>{error}</p>}{credentialsError && <p>{credentialsError}</p>}<button type="button" onClick={() => setNonce((n) => n + 1)} className="underline">Tentar novamente</button></div>}
       <ul className="space-y-3">{requests.map((request) => <li key={request.id}>
-        {request.status === 'fulfilled' ? <div className="text-muted text-xs"><div className="flex items-center gap-2"><Check className="text-up-ink h-3.5 w-3.5" /><span>{fieldLabel(request)}</span><span>configurado</span></div><p className="mt-1 break-all">{destination(request)}</p></div>
+        {request.status === 'fulfilled' ? <div className="text-muted text-xs"><div className="flex items-center gap-2"><Check className="text-up-ink h-3.5 w-3.5" /><span>{fieldLabel(request)}</span><span>configurado</span></div><p className="mt-1 break-all">{destination(request)}</p><p className="mt-1">{successMessage(request)} Não é necessário preencher novamente no painel do provedor.</p></div>
           : <SecretForm projectId={projectId} request={request} onDone={() => setNonce((n) => n + 1)} />}
       </li>)}</ul>
+      {credentials.length > 0 && <div className="mt-4 border-t border-current/10 pt-3">
+        <h3 className="text-xs font-semibold">Cofre deste projeto</h3>
+        <p className="text-muted mt-1 mb-2 text-xs">O agente reutiliza estas credenciais sem ler seus valores. Remover do cofre impede novos usos por ele; não revoga a chave nem desfaz configurações no provedor.</p>
+        <ul className="space-y-2">{credentials.map((credential) => <li key={credential.id}><StoredCredential projectId={projectId} credential={credential} onDone={() => setNonce((n) => n + 1)} /></li>)}</ul>
+      </div>}
     </section>
   )
+}
+
+function StoredCredential({ projectId, credential, onDone }: { projectId: string; credential: ProjectCredentialView; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  async function remove() {
+    if (busy) return
+    setBusy(true)
+    try {
+      const result = await revokeProjectCredential({ projectId, credentialId: credential.id })
+      if (result.error || !result.ok) { toast.error(result.error ?? 'Remoção do cofre não confirmada.'); return }
+      toast.success('Credencial removida do cofre. As configurações no provedor foram mantidas.')
+      onDone()
+    } catch { toast.error('Não foi possível remover a credencial do cofre. Tente novamente.') }
+    finally { setBusy(false) }
+  }
+  return <div className="bg-sunken flex items-center gap-3 rounded-[var(--radius-control)] p-2.5 text-xs">
+    <div className="min-w-0 flex-1"><p className="break-all font-medium">{credential.name}</p><p className="text-muted">{environments[credential.environment]}</p></div>
+    <button type="button" onClick={() => void remove()} disabled={busy} aria-label={`Remover ${credential.name} de ${environments[credential.environment]} do cofre`} className="text-muted shrink-0 underline disabled:opacity-50">{busy ? 'Removendo…' : 'Remover do cofre'}</button>
+  </div>
 }
 
 function SecretForm({ projectId, request, onDone }: { projectId: string; request: SecretRequestView; onDone: () => void }) {
   const [value, setValue] = useState('')
   const [multiline, setMultiline] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [remember, setRemember] = useState(true)
   const inputId = `secret-${request.id}`
   const password = request.configuration?.kind === 'supabase-user-password'
   const smtp = request.configuration?.kind === 'supabase-smtp' ? request.configuration : null
@@ -74,11 +112,13 @@ function SecretForm({ projectId, request, onDone }: { projectId: string; request
     if (!value.trim() || busy) return
     setBusy(true)
     try {
-      const result = await saveSecret({ projectId, requestId: request.id, value })
+      const result = await saveSecret({ projectId, requestId: request.id, value, remember: !password && remember })
       if (result.error || !result.ok) { toast.error(result.error ?? 'Envio não confirmado.'); return }
       setValue('')
       setMultiline(false)
       toast.success(successMessage(request))
+      if (result.warning) toast.warning(result.warning)
+      else if (result.credentialSaved) toast.success('Credencial guardada no cofre deste projeto para reutilizar.')
       onDone()
     } catch { toast.error('Não foi possível confirmar o envio. Tente novamente.') }
     finally { setBusy(false) }
@@ -118,6 +158,10 @@ function SecretForm({ projectId, request, onDone }: { projectId: string; request
           {busy ? <Loader2 aria-label="Enviando" className="h-3.5 w-3.5 animate-spin" /> : password ? 'Definir senha' : smtp ? 'Configurar email' : `Salvar no ${request.target === 'supabase' ? 'Supabase' : 'Vercel'}`}
         </button>
       </div>}
+      {configured && !password && <label className="mt-2 flex items-start gap-2 text-xs">
+        <input type="checkbox" checked={remember} disabled={busy} onChange={(event) => setRemember(event.target.checked)} className="mt-0.5 shrink-0" />
+        <span>Guardar no cofre deste projeto para reutilizar</span>
+      </label>}
     </form>
   )
 }

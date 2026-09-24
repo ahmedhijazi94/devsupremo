@@ -5,6 +5,8 @@ import { boundedJson, InspectionError } from '@/lib/database-inspection/provider
 import { safeSecretFailure, secretsRequestSchema } from '@/lib/secret-requests/policy'
 import { secretRequestStore } from '@/lib/secret-requests/store'
 import { dismissRequestedSecret, listSecretRequests, requestSecrets } from '@/lib/secret-requests/service'
+import { credentialStore } from '@/lib/credentials/store'
+import { applyCredential, assertCredentialAvailable, listProjectCredentials, revokeCredential } from '@/lib/credentials/service'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -22,6 +24,17 @@ export async function POST(request: Request): Promise<Response> {
     const auth = await authenticateDeviceSecret(supabaseCheckpointDeviceStore(client), parsed.data.deviceSecret)
     if (!auth.ok) return Response.json({ error: 'Dispositivo não autorizado.' }, { status: 401, headers })
     const { projectId } = parsed.data
+    if (parsed.data.operation === 'credentials' || parsed.data.operation === 'revoke-credential') {
+      const vault = credentialStore(client, auth.device.ownerUserId, projectId)
+      if (parsed.data.operation === 'revoke-credential') await revokeCredential(vault, parsed.data.credentialId)
+      return Response.json({ projectId, credentials: await listProjectCredentials(vault) }, { headers })
+    }
+    if (parsed.data.operation === 'apply') {
+      const { requestId, credentialId } = parsed.data
+      const vault = credentialStore(client, auth.device.ownerUserId, projectId)
+      const delivery = secretRequestStore(client, auth.device.ownerUserId, projectId, () => assertCredentialAvailable(vault, credentialId))
+      await applyCredential(vault, delivery, requestId, credentialId)
+    }
     const port = secretRequestStore(client, auth.device.ownerUserId, projectId)
     if (parsed.data.operation === 'dismiss') await dismissRequestedSecret(port, parsed.data.requestId)
     const requests = parsed.data.operation === 'request' ? await requestSecrets(port, parsed.data.requests) : await listSecretRequests(port)

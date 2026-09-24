@@ -42,7 +42,7 @@ export async function requestSecrets(port: SecretRequestPort, input: SecretEntry
   }
   return saved.map(secretRequestView)
 }
-export async function fulfillSecret(port: SecretRequestPort, id: string, value: string): Promise<void> {
+export async function fulfillSecret(port: SecretRequestPort, id: string, value: string, validate?: (record: SecretRequestRecord) => void): Promise<SecretRequestRecord> {
   await port.authorize()
   const record = await port.find(id)
   if (!record || !record.target || !record.environment || !record.targetRef || !record.accountId) throw new SecretRequestError('Pedido não encontrado ou antigo sem destino confirmado. Solicite um novo pedido.')
@@ -52,6 +52,7 @@ export async function fulfillSecret(port: SecretRequestPort, id: string, value: 
   const binding = await port.resolve({ target: record.target, environment: record.environment })
   assertSameBinding(record, binding)
   if (record.status === 'fulfilled') throw new SecretRequestError('Este pedido já foi concluído. Solicite um novo campo seguro para enviar outro valor.')
+  validate?.(record)
   validateSecretValue(record.configuration, value)
   const claim = await port.claim(record)
   let completed = false
@@ -65,6 +66,7 @@ export async function fulfillSecret(port: SecretRequestPort, id: string, value: 
     // own claim; an expired worker cannot release a newer worker's reservation.
     if (!completed) await port.release(record, claim)
   }
+  return { ...record, status: 'fulfilled' }
 }
 export async function dismissRequestedSecret(port: SecretRequestPort, id: string): Promise<void> {
   await port.authorize()

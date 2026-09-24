@@ -620,6 +620,22 @@ describe('secrets pelo formulário do projeto, sem valores no agente', () => {
       expect(content).toContain('formUrl')
     }
   })
+  it('orienta reutilização por referência e configuração por API sem repetir painéis', () => {
+    for (const target of ['AGENTS.md', 'CLAUDE.md', '.supremo/DEVELOPMENT.md']) {
+      const content = norm(file(target))
+      for (const term of ['integrations credentials', '--credential-id UUID', 'receipt', 'selectedRequestIds', 'por API', 'cofre']) {
+        expect(content).toContain(term)
+      }
+      expect(content).toMatch(/não (?:abra o painel do provedor|abra o painel Supabase\/Vercel)/i)
+      expect(content).toMatch(/Senhas (?:pessoais|de contas pessoais) não são/i)
+    }
+    const guide = file('.supremo/DEVELOPMENT.md')
+    const command = /`(node node_modules\/supremo-cli\/dist\/bin\.js integrations credentials)`/.exec(guide)?.[1]
+    expect(command).toBeTruthy()
+    expect(isDatabaseReadCommand(command!)).toBe(true)
+    expect(norm(guide)).toContain('não significa configuração manual pendente')
+    expect(norm(guide)).toContain('não aceita substituição silenciosa')
+  })
   it('falhas confirmadas são corrigidas pelo agente antes do pedido; execução e integração continuam protegidas', () => {
     const guide = norm(file('.supremo/DEVELOPMENT.md'))
     expect(guide).toContain('developmentPolicy.previousFailures=repair_before_request')

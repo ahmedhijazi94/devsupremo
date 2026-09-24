@@ -9,9 +9,12 @@ export const secretsRequestSchema = z.discriminatedUnion('operation', [
   z.object({ ...identity, operation: z.literal('request'), requests: z.array(secretEntrySchema).min(1).max(20) }).strict(),
   z.object({ ...identity, operation: z.literal('status') }).strict(),
   z.object({ ...identity, operation: z.literal('dismiss'), requestId: z.string().uuid() }).strict(),
+  z.object({ ...identity, operation: z.literal('credentials') }).strict(),
+  z.object({ ...identity, operation: z.literal('apply'), requestId: z.string().uuid(), credentialId: z.string().uuid() }).strict(),
+  z.object({ ...identity, operation: z.literal('revoke-credential'), credentialId: z.string().uuid() }).strict(),
 ])
-export const saveSecretSchema = z.object({ projectId: z.string().uuid(), requestId: z.string().uuid(), value: z.string().min(1).max(16384).refine((value) => value.trim().length > 0 && !value.includes('\0')) }).strict()
-export const dismissSecretSchema = saveSecretSchema.omit({ value: true })
+export const saveSecretSchema = z.object({ projectId: z.string().uuid(), requestId: z.string().uuid(), value: z.string().min(1).max(16384).refine((value) => value.trim().length > 0 && !value.includes('\0')), remember: z.boolean().optional() }).strict()
+export const dismissSecretSchema = saveSecretSchema.pick({ projectId: true, requestId: true })
 export type SecretEntry = z.infer<typeof secretEntrySchema>
 export type SecretTarget = z.infer<typeof secretTargetSchema>
 export type SecretEnvironment = z.infer<typeof secretEnvironmentSchema>

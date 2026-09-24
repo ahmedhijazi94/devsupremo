@@ -25,7 +25,7 @@ function record(row: unknown): SecretRequestRecord {
     targetRef: parsed.target_ref, accountId: parsed.target_account_id, status: parsed.status,
     ...(parsed.configuration ? { configuration: parsed.configuration } : {}) }
 }
-export function secretRequestStore(client: SupabaseClient, userId: string, projectId: string): SecretRequestPort {
+export function secretRequestStore(client: SupabaseClient, userId: string, projectId: string, verifyCredential?: () => Promise<void>): SecretRequestPort {
   const owned = async () => {
     const result = await client.from('projects').select('id,supabase_account_id,supabase_project_ref,vercel_account_id,vercel_project_id').eq('id', projectId).eq('user_id', userId).maybeSingle()
     if (result.error || !result.data) throw new SecretRequestError('Projeto não encontrado ou não autorizado.')
@@ -34,6 +34,7 @@ export function secretRequestStore(client: SupabaseClient, userId: string, proje
   const scoped = () => client.from('secret_requests').select(columns).eq('project_id', projectId).eq('user_id', userId)
   const unclaimedOrExpired = () => `delivery_claim_id.is.null,delivery_claim_expires_at.lte.${new Date().toISOString()}`
   const assertClaim = async (row: SecretRequestRecord, claim: SecretDeliveryClaim) => {
+    await verifyCredential?.()
     const current = await scoped().eq('id', row.id).eq('status', 'pending').eq('delivery_claim_id', claim.id)
       .gt('delivery_claim_expires_at', new Date(Date.now() + deliveryDispatchMarginMs).toISOString()).maybeSingle()
     if (current.error) throw secretRequestStorageError(current.error)

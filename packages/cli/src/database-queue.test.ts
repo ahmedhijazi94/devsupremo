@@ -4,11 +4,13 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { drainDatabaseRequests, requestDatabase, startDatabaseWorker } from './database-queue'
+import type { DatabaseOperation, DatabaseOptions } from './database-request'
 
 const dirs: string[] = []
 const stops: Array<() => void> = []
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.useRealTimers()
   for (const stop of stops.splice(0)) stop()
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
 })
@@ -96,4 +98,33 @@ it('uma operação lenta não é executada novamente em cada tick', async () => 
   stops.push(startDatabaseWorker(cwd, execute))
   await requestDatabase(cwd, 'anonymous-auth')
   expect(execute).toHaveBeenCalledTimes(1)
+})
+
+it.each<{ operation: DatabaseOperation; options: DatabaseOptions; check: string }>([
+  { operation: 'secrets-apply', options: { requestId: '22222222-2222-4222-8222-222222222222', credentialId: '33333333-3333-4333-8333-333333333333' }, check: 'secrets status --request-id 22222222-2222-4222-8222-222222222222' },
+  { operation: 'secrets-status', options: { requestId: '22222222-2222-4222-8222-222222222222' }, check: 'secrets status --request-id 22222222-2222-4222-8222-222222222222' },
+  { operation: 'secrets-request', options: { requests: [{ name: 'CUSTOM_KEY', description: 'Provider', target: 'supabase', environment: 'development' }] }, check: 'secrets status' },
+  { operation: 'secrets-dismiss', options: { requestId: '22222222-2222-4222-8222-222222222222' }, check: 'secrets status' },
+  { operation: 'secrets-credentials', options: {}, check: 'integrations credentials' },
+  { operation: 'secrets-revoke-credential', options: { credentialId: '33333333-3333-4333-8333-333333333333' }, check: 'integrations credentials' },
+])('timeout de $operation orienta reconciliação sem migrar banco ou repetir configuração', async ({ operation, options, check }) => {
+  vi.useFakeTimers()
+  const cwd = workspace()
+  fs.writeFileSync(path.join(cwd, '.supremo/database-queue/heartbeat'), String(Date.now()))
+  const result = requestDatabase(cwd, operation, options).catch((error: unknown) => error)
+  await vi.advanceTimersByTimeAsync(90_000)
+  const error = await result
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toContain(check)
+  expect((error as Error).message).toContain('a operação pode ter concluído no servidor')
+  expect((error as Error).message).not.toMatch(/migrate|db status|--credential-id/)
+  expect(fs.readdirSync(path.join(cwd, '.supremo/database-queue'))).toEqual(['heartbeat'])
+})
+it('preserva a reconciliação transacional existente para timeout de migration', async () => {
+  vi.useFakeTimers()
+  const cwd = workspace()
+  fs.writeFileSync(path.join(cwd, '.supremo/database-queue/heartbeat'), String(Date.now()))
+  const result = requestDatabase(cwd, 'migrate').catch((error: unknown) => error)
+  await vi.advanceTimersByTimeAsync(90_000)
+  expect((await result as Error).message).toContain('Consulte db status e repita migrate')
 })

@@ -1,10 +1,10 @@
 import { z } from 'zod'
-import { jobIdSchema, secretRequestOptionsSchema, type RequestedSecret } from './project-service-request'
+import { credentialApplyOptionsSchema, credentialIdSchema, jobIdSchema, secretRequestOptionsSchema, type RequestedSecret } from './project-service-request'
 import { authOptionsSchema, authOperationSchema, type AuthOptions } from '../../../src/lib/database-admin/options'
-import { authPasswordRequest, emailIntegrationRequest } from './integration-request'
+import { authPasswordRequest, emailIntegrationRequest, validateCredentialReuse } from './integration-request'
 
 export const databaseOperationSchema = z.enum(['status', 'migrate', 'anonymous-auth', 'inspect', 'query', 'logs', 'report',
-  'secrets-request', 'secrets-status', 'secrets-dismiss', 'cron-list', 'cron-history', 'cron-apply', 'cron-pause', 'cron-resume', 'cron-remove', ...authOperationSchema.options])
+  'secrets-request', 'secrets-status', 'secrets-dismiss', 'secrets-credentials', 'secrets-apply', 'secrets-revoke-credential', 'cron-list', 'cron-history', 'cron-apply', 'cron-pause', 'cron-resume', 'cron-remove', ...authOperationSchema.options])
 export type DatabaseOperation = z.infer<typeof databaseOperationSchema>
 const target = { environment: z.enum(['development', 'production', 'unknown']).optional() }
 const bounded = { limit: z.number().int().min(1).max(200).default(50) }
@@ -18,7 +18,7 @@ export const databaseReadOptionsSchema = z.object({ ...target, ...bounded,
   minutes: logging.minutes.optional(), source: logging.source.optional(), level: logging.level.optional(),
 }).strict()
 type AuthFields = { config?: Extract<AuthOptions, { operation: 'auth-configure' }>['config']; user?: Extract<AuthOptions, { operation: 'auth-update' }>['user']; userId?: string; email?: string; emailConfirmed?: boolean }
-export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & { requests?: RequestedSecret[]; requestId?: string; jobId?: string | undefined }
+export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & { requests?: RequestedSecret[]; requestId?: string; credentialId?: string; jobId?: string | undefined }
 
 /** Scope selectors never include URLs, refs or credentials. Server authority is
  * checked again for every operation, including production reads. */
@@ -32,7 +32,13 @@ export function parseDatabaseOptions(operation: DatabaseOperation, options: unkn
   }
   if (operation === 'secrets-request') return secretRequestOptionsSchema.parse(options)
   if (operation === 'secrets-dismiss') return z.object({ requestId: z.string().uuid() }).strict().parse(options)
-  if (operation === 'secrets-status' || operation === 'cron-apply') return z.object({}).strict().parse(options)
+  if (operation === 'secrets-apply') return credentialApplyOptionsSchema.parse(options)
+  if (operation === 'secrets-revoke-credential') return z.object({ credentialId: credentialIdSchema }).strict().parse(options)
+  if (operation === 'secrets-status') {
+    const input = z.object({ requestId: z.string().uuid().optional() }).strict().parse(options)
+    return input.requestId ? { requestId: input.requestId } : {}
+  }
+  if (operation === 'secrets-credentials' || operation === 'cron-apply') return z.object({}).strict().parse(options)
   if (['cron-pause', 'cron-resume', 'cron-remove'].includes(operation)) return z.object({ jobId: jobIdSchema }).strict().parse(options)
   const cronPage = z.object({ ...target, ...page, limit: z.number().int().min(1).max(100).default(50) }).strict()
   if (operation === 'cron-list') return cronPage.parse(options)
@@ -64,32 +70,41 @@ export function isDatabaseReadCommand(command: string): boolean {
   const requestedOperation = tokens.shift()
   if ((family === 'integrations' && requestedOperation === 'email') || (family === 'auth' && requestedOperation === 'password')) {
     const fields: Record<string, string> = {}
-    const names: Record<string, string> = { '--provider': 'provider', '--sender-email': 'senderEmail', '--sender-name': 'senderName', '--environment': 'environment', '--user-id': 'userId' }
+    const names: Record<string, string> = { '--provider': 'provider', '--sender-email': 'senderEmail', '--sender-name': 'senderName', '--environment': 'environment', '--user-id': 'userId', '--credential-id': 'credentialId' }
     while (tokens.length) {
       const flag = tokens.shift()!, key = Object.hasOwn(names, flag) ? names[flag] : undefined
       if (!key || !tokens.length || Object.hasOwn(fields, key)) return false
       fields[key] = tokens.shift()!
     }
     try {
-      if (family === 'integrations') emailIntegrationRequest(fields)
+      if (family === 'integrations') {
+        const { credentialId, ...input } = fields
+        validateCredentialReuse(emailIntegrationRequest(input), credentialId)
+      }
       else authPasswordRequest(fields)
       return true
     } catch { return false }
   }
   if (family === 'secrets' || family === 'integrations') {
+    if (requestedOperation === 'credentials') return tokens.length === 0
+    if (requestedOperation === 'revoke-credential') return tokens.length === 1 && credentialIdSchema.safeParse(tokens[0]).success
+    if (requestedOperation === 'apply') return tokens.length === 3 && tokens[1] === '--credential-id'
+      && credentialApplyOptionsSchema.safeParse({ requestId: tokens[0], credentialId: tokens[2] }).success
     if (family === 'secrets' && requestedOperation === 'status') return tokens.length === 0
+      || (tokens.length === 2 && tokens[0] === '--request-id' && z.string().uuid().safeParse(tokens[1]).success)
     if (family === 'secrets' && requestedOperation === 'dismiss') return tokens.length === 1 && z.string().uuid().safeParse(tokens[0]).success
     if (requestedOperation !== 'request') return false
     const names: string[] = [], fields: Record<string, string> = {}
     while (tokens.length) {
       const token = tokens.shift()!
       if (!token.startsWith('--')) { names.push(token); continue }
-      if (!['--reason', '--target', '--environment'].includes(token) || !tokens.length || Object.hasOwn(fields, token)) return false
+      if (!['--reason', '--target', '--environment', '--credential-id'].includes(token) || !tokens.length || Object.hasOwn(fields, token)) return false
       fields[token] = tokens.shift()!
     }
     try {
-      secretRequestOptionsSchema.parse({ requests: names.map(name => ({ name, description: fields['--reason'],
+      const input = secretRequestOptionsSchema.parse({ requests: names.map(name => ({ name, description: fields['--reason'],
         target: fields['--target'], environment: fields['--environment'] ?? 'development' })) })
+      validateCredentialReuse(input, fields['--credential-id'])
       return true
     } catch { return false }
   }

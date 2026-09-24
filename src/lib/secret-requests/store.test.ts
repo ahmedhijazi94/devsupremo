@@ -7,7 +7,7 @@ vi.mock('@/lib/crypto', () => ({ decryptToken: mocks.decrypt }))
 vi.mock('./provider', () => ({ deliverSecret: mocks.deliver }))
 import { secretRequestStore } from './store'
 import { fulfillSecret } from './service'
-import type { SecretConfiguration, SecretRequestRecord } from './policy'
+import { SecretRequestError, type SecretConfiguration, type SecretRequestRecord } from './policy'
 const projectId = '11111111-1111-4111-8111-111111111111'
 const requestId = '22222222-2222-4222-8222-222222222222'
 const accountId = '33333333-3333-4333-8333-333333333333'
@@ -74,6 +74,45 @@ beforeEach(() => {
   mocks.decrypt.mockReturnValue('vercel-token')
 })
 describe('owner scoped secret request store', () => {
+  it.each(['generic', 'smtp'] as const)('stops %s dispatch if its vault credential is removed during provider credential lookup', async (kind) => {
+    const configuration = kind === 'smtp' ? { kind: 'supabase-smtp' as const, provider: 'resend' as const, senderEmail: 'account@example.test', senderName: 'Example' } : null
+    const fixture = configuredFixture(configuration)
+    let available = true
+    const verifyCredential = vi.fn(async () => { if (!available) throw new SecretRequestError('A credencial foi removida do cofre. Solicite um novo campo seguro.') })
+    const port = secretRequestStore(fixture.client, 'owner', projectId, verifyCredential)
+    mocks.credentials.mockImplementation(async () => {
+      available = false
+      return { projectRef: 'projectref', token: 'oauth-token' }
+    })
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    await expect(fulfillSecret(port, requestId, 'stored-private-value')).rejects.toThrow('removida do cofre')
+    expect(mocks.credentials).toHaveBeenCalledTimes(1)
+    expect(verifyCredential).toHaveBeenCalledTimes(2)
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(mocks.deliver).not.toHaveBeenCalled()
+    expect(fixture.state.row).toMatchObject({ status: 'pending', delivery_claim_id: null, delivery_claim_expires_at: null })
+    expect(fixture.calls.some((call) => call.method === 'update' && JSON.stringify(call.payload).includes('fulfilled'))).toBe(false)
+    expect(JSON.stringify(fixture.calls)).not.toMatch(/stored-private-value|oauth-token/)
+  })
+  it('rechecks the vault credential between SMTP update and verification instead of falsely confirming a revoked operation', async () => {
+    const configuration = { kind: 'supabase-smtp' as const, provider: 'resend' as const, senderEmail: 'account@example.test', senderName: 'Example' }
+    const fixture = configuredFixture(configuration)
+    let available = true
+    const verifyCredential = vi.fn(async () => { if (!available) throw new SecretRequestError('A credencial foi removida do cofre. Solicite um novo campo seguro.') })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      available = false
+      return Response.json({})
+    })
+    const port = secretRequestStore(fixture.client, 'owner', projectId, verifyCredential)
+    await expect(fulfillSecret(port, requestId, 'stored-private-value')).rejects.toThrow('removida do cofre')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ method: 'PATCH' })
+    expect(mocks.credentials).toHaveBeenCalledTimes(1)
+    expect(verifyCredential).toHaveBeenCalledTimes(3)
+    expect(fixture.state.row).toMatchObject({ status: 'pending', delivery_claim_id: null, delivery_claim_expires_at: null })
+    expect(fixture.calls.some((call) => call.method === 'update' && JSON.stringify(call.payload).includes('fulfilled'))).toBe(false)
+    expect(JSON.stringify(fixture.calls)).not.toMatch(/stored-private-value|oauth-token/)
+  })
   it('reserves ordinary API-key fields too, blocking dismissal and duplicate sends until confirmation', async () => {
     const fixture = configuredFixture(null); const port = secretRequestStore(fixture.client, 'owner', projectId)
     let finishCredentials: ((value: { projectRef: string; token: string }) => void) | undefined

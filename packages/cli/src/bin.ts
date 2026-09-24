@@ -316,18 +316,43 @@ function secretRequestCommand(): Command {
     .requiredOption('--reason <reason>', 'Por que o aplicativo precisa destes campos')
     .requiredOption('--target <target>', 'Destino: supabase (Edge Functions) ou vercel')
     .option('--environment <environment>', 'Ambiente do destino: development, preview ou production', 'development')
-    .action(async (names: string[], options: { reason: string; target: string; environment: string }) => {
+    .option('--credential-id <uuid>', 'Reutiliza uma credencial do cofre com um único campo; nenhum valor passa pela CLI')
+    .action(async (names: string[], options: { reason: string; target: string; environment: string; credentialId?: string }) => {
       const { secretRequestOptionsSchema } = await import('./project-service-request')
+      const { requestIntegration } = await import('./integration-request')
       const { runDatabase } = await import('./database')
       const input = secretRequestOptionsSchema.parse({ requests: names.map(name => ({ name,
         description: options.reason, target: options.target, environment: options.environment })) })
-      console.log(JSON.stringify(await runDatabase('secrets-request', process.cwd(), input)))
+      console.log(JSON.stringify(await requestIntegration(input, options.credentialId, (operation, fields) => runDatabase(operation, process.cwd(), fields))))
     })
 }
 
-program
+function credentialCommands(command: Command): Command {
+  return command
+    .addCommand(new Command('credentials')
+      .description('Lista referências do cofre deste projeto e seus ambientes, sem revelar valores')
+      .action(async () => {
+        const { runDatabase } = await import('./database')
+        console.log(JSON.stringify(await runDatabase('secrets-credentials')))
+      }))
+    .addCommand(new Command('apply').argument('<request-id>')
+      .description('Aplica uma credencial armazenada a um pedido pendente por API, sem navegador')
+      .requiredOption('--credential-id <uuid>', 'Referência da credencial no cofre do projeto')
+      .action(async (requestId: string, options: { credentialId: string }) => {
+        const { runDatabase } = await import('./database')
+        console.log(JSON.stringify(await runDatabase('secrets-apply', process.cwd(), { requestId, credentialId: options.credentialId })))
+      }))
+    .addCommand(new Command('revoke-credential').argument('<credential-id>')
+      .description('Remove a referência do cofre; não revoga a chave nem desfaz configurações no provedor')
+      .action(async (credentialId: string) => {
+        const { runDatabase } = await import('./database')
+        console.log(JSON.stringify(await runDatabase('secrets-revoke-credential', process.cwd(), { credentialId })))
+      }))
+}
+
+credentialCommands(program
   .command('integrations')
-  .description('Configura integrações pelo formulário seguro do Supremo')
+  .description('Configura integrações por API usando o cofre ou o formulário seguro do Supremo'))
   .addCommand(secretRequestCommand())
   .addCommand(new Command('email')
     .description('Solicita a chave para configurar o SMTP do Supabase; dispensa Vercel')
@@ -335,21 +360,25 @@ program
     .requiredOption('--sender-email <email>', 'Email remetente autorizado no provedor')
     .option('--sender-name <name>', 'Nome público do remetente', 'Aplicativo')
     .requiredOption('--environment <environment>', 'Ambiente confirmado: development ou production')
+    .option('--credential-id <uuid>', 'Referência da chave Resend no cofre deste ambiente')
     .action(async (options: Record<string, unknown>) => {
-      const { emailIntegrationRequest } = await import('./integration-request')
+      const { emailIntegrationRequest, requestIntegration } = await import('./integration-request')
       const { runDatabase } = await import('./database')
-      console.log(JSON.stringify(await runDatabase('secrets-request', process.cwd(), emailIntegrationRequest(options))))
+      const { credentialId, ...fields } = options
+      console.log(JSON.stringify(await requestIntegration(emailIntegrationRequest(fields), credentialId,
+        (operation, input) => runDatabase(operation, process.cwd(), input))))
     }))
 
-program
+credentialCommands(program
   .command('secrets')
-  .description('Solicita campos no formulário do projeto; valores nunca passam pela CLI')
+  .description('Gerencia referências e pedidos do projeto; valores nunca passam pela CLI'))
   .addCommand(secretRequestCommand())
   .addCommand(new Command('status')
     .description('Mostra nomes e situação dos pedidos, sem valores')
-    .action(async () => {
+    .option('--request-id <uuid>', 'Acompanha somente o pedido indicado para decidir o próximo passo')
+    .action(async (options: { requestId?: string }) => {
       const { runDatabase } = await import('./database')
-      console.log(JSON.stringify(await runDatabase('secrets-status')))
+      console.log(JSON.stringify(await runDatabase('secrets-status', process.cwd(), options.requestId ? { requestId: options.requestId } : undefined)))
     }))
   .addCommand(new Command('dismiss').argument('<request-id>')
     .description('Remove apenas o pedido do formulário; preserva a chave já entregue ao provedor')

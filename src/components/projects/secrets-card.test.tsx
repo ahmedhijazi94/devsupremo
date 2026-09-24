@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), dismiss: vi.fn(), error: vi.fn(), success: vi.fn() }))
-vi.mock('@/actions/secrets', () => ({ getSecretRequests: mocks.get, saveSecret: mocks.save, dismissSecretRequest: mocks.dismiss }))
-vi.mock('sonner', () => ({ toast: { error: mocks.error, success: mocks.success } }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), dismiss: vi.fn(), credentials: vi.fn(), revoke: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() }))
+vi.mock('@/actions/secrets', () => ({ getSecretRequests: mocks.get, saveSecret: mocks.save, dismissSecretRequest: mocks.dismiss, getProjectCredentials: mocks.credentials, revokeProjectCredential: mocks.revoke }))
+vi.mock('sonner', () => ({ toast: { error: mocks.error, success: mocks.success, warning: mocks.warning } }))
 import { SecretsCard } from './secrets-card'
 const projectId = '11111111-1111-4111-8111-111111111111'
 const request = { id: '22222222-2222-4222-8222-222222222222', name: 'PAYMENT_API_KEY', description: 'Cobrar no backend', target: 'supabase', environment: 'development', targetRef: 'projectref', status: 'pending' }
-beforeEach(() => { vi.resetAllMocks(); mocks.get.mockResolvedValue({ requests: [request] }); mocks.save.mockResolvedValue({ ok: true }); mocks.dismiss.mockResolvedValue({ ok: true }) })
+const credential = { id: '55555555-5555-4555-8555-555555555555', name: 'RESEND_API_KEY', environment: 'development', createdAt: '2026-09-24T10:00:00Z', updatedAt: '2026-09-24T10:00:00Z' }
+beforeEach(() => { vi.resetAllMocks(); mocks.get.mockResolvedValue({ requests: [request] }); mocks.save.mockResolvedValue({ ok: true }); mocks.dismiss.mockResolvedValue({ ok: true }); mocks.credentials.mockResolvedValue({ credentials: [] }); mocks.revoke.mockResolvedValue({ ok: true }) })
 afterEach(() => { cleanup(); vi.useRealTimers() })
 describe('project secret form', () => {
   it('shows an exact accessible name, a masked field, reason and the pinned target/environment', async () => {
@@ -19,12 +20,12 @@ describe('project secret form', () => {
     expect(screen.getByText('Supabase · Edge Functions · Desenvolvimento · projectref')).toBeTruthy()
     expect(document.getElementById('secrets')).toBeTruthy()
   })
-  it('submits the request ID only with the value, then clears the field after confirmed success', async () => {
+  it('submits the bound request with the storage preference, then clears the field after confirmed success', async () => {
     render(<SecretsCard projectId={projectId} />)
     const field = await screen.findByLabelText('PAYMENT_API_KEY') as HTMLInputElement
     fireEvent.change(field, { target: { value: 'private-value' } })
     fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'private-value' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'private-value', remember: true }))
     await waitFor(() => expect(field.value).toBe(''))
     expect(JSON.stringify(mocks.success.mock.calls)).not.toContain('private-value')
   })
@@ -48,7 +49,7 @@ describe('project secret form', () => {
     expect((screen.getByLabelText('PAYMENT_API_KEY') as HTMLInputElement).value).not.toContain('private-value')
     expect(screen.getByText(/Credencial com várias linhas recebida/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: credential }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: credential, remember: true }))
   })
   it('shows refresh failures and supports retry without discarding an existing draft', async () => {
     render(<SecretsCard projectId={projectId} />)
@@ -96,6 +97,7 @@ describe('project secret form', () => {
     render(<SecretsCard projectId={projectId} />)
     expect(await screen.findByText('configurado')).toBeTruthy()
     expect(screen.queryByPlaceholderText('Cole a chave')).toBeNull()
+    expect(screen.getByText(/Não é necessário preencher novamente no painel do provedor/)).toBeTruthy()
   })
   it('applies SMTP from one private field and shows the sender before submission', async () => {
     mocks.get.mockResolvedValue({ requests: [{ ...request, configuration: { kind: 'supabase-smtp', provider: 'resend', senderEmail: 'login@example.com', senderName: 'Example' } }] })
@@ -105,7 +107,7 @@ describe('project secret form', () => {
     expect(screen.getByText(/Remetente: Example/).textContent).toContain('login@example.com')
     fireEvent.change(field, { target: { value: 'synthetic-private-key' } })
     fireEvent.click(screen.getByRole('button', { name: 'Configurar email' }))
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'synthetic-private-key' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'synthetic-private-key', remember: true }))
     await waitFor(() => expect(field.value).toBe(''))
     expect(mocks.success).toHaveBeenCalledWith('Configuração de email salva no Supabase. O envio ainda precisa ser testado.')
   })
@@ -116,10 +118,111 @@ describe('project secret form', () => {
     const field = await screen.findByLabelText('Nova senha de desenvolvimento') as HTMLInputElement
     expect(screen.getByText(`Senha de desenvolvimento · Usuário ${userId} · projectref`)).toBeTruthy()
     expect(field.type).toBe('password')
+    expect(screen.queryByRole('checkbox')).toBeNull()
     fireEvent.change(field, { target: { value: 'synthetic-password' } })
     fireEvent.click(screen.getByRole('button', { name: 'Definir senha' }))
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'synthetic-password' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'synthetic-password', remember: false }))
     await waitFor(() => expect(field.value).toBe(''))
     expect(JSON.stringify(mocks.success.mock.calls)).not.toContain('synthetic-password')
+  })
+  it('lets the owner opt out of storing a credential while still configuring the destination', async () => {
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY')
+    const checkbox = screen.getByRole('checkbox', { name: 'Guardar no cofre deste projeto para reutilizar' }) as HTMLInputElement
+    expect(checkbox.checked).toBe(true)
+    fireEvent.click(checkbox)
+    fireEvent.change(field, { target: { value: 'one-time-value' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'one-time-value', remember: false }))
+    expect(mocks.success).not.toHaveBeenCalledWith('Credencial guardada no cofre deste projeto para reutilizar.')
+  })
+  it('clears an applied credential even if vault storage fails, without claiming it was stored', async () => {
+    mocks.save.mockResolvedValue({ ok: true, warning: 'Configuração aplicada, mas não foi possível guardar a credencial no cofre.', credentialSaved: false })
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY') as HTMLInputElement
+    fireEvent.paste(field, { clipboardData: { getData: () => 'private-line\nprivate-line-two' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
+    await waitFor(() => expect(field.value).toBe(''))
+    expect(screen.queryByText(/Credencial com várias linhas recebida/)).toBeNull()
+    expect(mocks.warning).toHaveBeenCalledWith('Configuração aplicada, mas não foi possível guardar a credencial no cofre.')
+    expect(mocks.success).toHaveBeenCalledWith('PAYMENT_API_KEY enviado às Edge Functions do projeto.')
+    expect(mocks.success).not.toHaveBeenCalledWith('Credencial guardada no cofre deste projeto para reutilizar.')
+    expect(mocks.error).not.toHaveBeenCalled()
+    expect(JSON.stringify([...mocks.success.mock.calls, ...mocks.warning.mock.calls])).not.toContain('private-line')
+  })
+  it('confirms vault storage only when the server attests it and refreshes its metadata', async () => {
+    mocks.save.mockResolvedValue({ ok: true, credentialSaved: true })
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY')
+    await waitFor(() => expect(mocks.credentials).toHaveBeenCalledTimes(1))
+    mocks.credentials.mockResolvedValue({ credentials: [credential] })
+    fireEvent.change(field, { target: { value: 'stored-value' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar no Supabase' }))
+    expect(await screen.findByText('RESEND_API_KEY')).toBeTruthy()
+    expect(mocks.success).toHaveBeenCalledWith('Credencial guardada no cofre deste projeto para reutilizar.')
+    expect(document.body.textContent).not.toContain('stored-value')
+  })
+  it('shows stored metadata without pending requests and removes only the vault reference', async () => {
+    mocks.get.mockResolvedValue({ requests: [] })
+    mocks.credentials.mockResolvedValue({ credentials: [credential] })
+    render(<SecretsCard projectId={projectId} />)
+    expect(await screen.findByText('Cofre deste projeto')).toBeTruthy()
+    expect(screen.getByText('RESEND_API_KEY')).toBeTruthy()
+    expect(screen.getByText('Desenvolvimento')).toBeTruthy()
+    expect(screen.getByText(/não revoga a chave nem desfaz configurações no provedor/)).toBeTruthy()
+    expect(screen.queryByPlaceholderText('Cole a chave')).toBeNull()
+    mocks.credentials.mockResolvedValue({ credentials: [] })
+    fireEvent.click(screen.getByRole('button', { name: 'Remover RESEND_API_KEY de Desenvolvimento do cofre' }))
+    await waitFor(() => expect(mocks.revoke).toHaveBeenCalledWith({ projectId, credentialId: credential.id }))
+    await waitFor(() => expect(screen.queryByText('RESEND_API_KEY')).toBeNull())
+    expect(mocks.success).toHaveBeenCalledWith('Credencial removida do cofre. As configurações no provedor foram mantidas.')
+    expect(mocks.dismiss).not.toHaveBeenCalled()
+  })
+  it('keeps stored metadata when removal is rejected and allows retry after a transport error', async () => {
+    mocks.get.mockResolvedValue({ requests: [] })
+    mocks.credentials.mockResolvedValue({ credentials: [credential] })
+    mocks.revoke.mockResolvedValueOnce({ error: 'Não foi possível remover do cofre.' }).mockRejectedValueOnce(new Error('transport'))
+    render(<SecretsCard projectId={projectId} />)
+    const remove = await screen.findByRole('button', { name: 'Remover RESEND_API_KEY de Desenvolvimento do cofre' }) as HTMLButtonElement
+    fireEvent.click(remove)
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Não foi possível remover do cofre.'))
+    expect(screen.getByText('RESEND_API_KEY')).toBeTruthy()
+    expect(remove.disabled).toBe(false)
+    fireEvent.click(remove)
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Não foi possível remover a credencial do cofre. Tente novamente.'))
+    expect(remove.disabled).toBe(false)
+    expect(mocks.success).not.toHaveBeenCalled()
+  })
+  it('reports vault metadata fetch errors without discarding a pending secret draft', async () => {
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY') as HTMLInputElement
+    await waitFor(() => expect(mocks.credentials).toHaveBeenCalledTimes(1))
+    fireEvent.change(field, { target: { value: 'draft' } })
+    mocks.credentials.mockRejectedValueOnce(new Error('transport'))
+    fireEvent(window, new Event('focus'))
+    expect((await screen.findByRole('alert')).textContent).toContain('Não foi possível atualizar o cofre deste projeto')
+    expect(field.value).toBe('draft')
+    mocks.credentials.mockResolvedValueOnce({ error: 'Cofre temporariamente indisponível.' })
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Cofre temporariamente indisponível.'))
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(field.value).toBe('draft')
+  })
+  it('ignores a stale metadata response after switching projects and clears old drafts immediately', async () => {
+    let resolveCredentials: (value: { credentials: typeof credential[] }) => void = () => { throw new Error('not initialized') }
+    mocks.credentials.mockImplementationOnce(() => new Promise<{ credentials: typeof credential[] }>((resolve) => { resolveCredentials = resolve }))
+    const { rerender } = render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText('PAYMENT_API_KEY')
+    fireEvent.change(field, { target: { value: 'old-project-draft' } })
+    await waitFor(() => expect(mocks.credentials).toHaveBeenCalledTimes(1))
+    const nextProjectId = '99999999-9999-4999-8999-999999999999'
+    mocks.get.mockResolvedValue({ requests: [] })
+    rerender(<SecretsCard projectId={nextProjectId} />)
+    expect(screen.queryByLabelText('PAYMENT_API_KEY')).toBeNull()
+    await waitFor(() => expect(mocks.credentials).toHaveBeenCalledWith(nextProjectId))
+    await act(async () => { resolveCredentials({ credentials: [credential] }) })
+    expect(screen.queryByText('RESEND_API_KEY')).toBeNull()
+    expect(document.getElementById('secrets')).toBeNull()
   })
 })

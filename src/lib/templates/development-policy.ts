@@ -117,7 +117,13 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   \`auth --help\` para os campos aceitos. Nunca busque chaves administrativas no app.
   Leituras não alteram o app nem criam checkpoint. Configurações de login não exigem
   mudanças de código; confira o resultado devolvido antes de declarar sucesso.
-- Para qualquer integração que precise de chave, use a CLI local com
+- Para qualquer integração que precise de chave, primeiro consulte \`integrations credentials\`:
+  a lista contém apenas referências do cofre deste projeto e o ambiente. Reutilize uma
+  referência com \`--credential-id UUID\` somente se souber que é a credencial adequada
+  ao provedor/finalidade e ao mesmo ambiente; nunca escolha por semelhança de nome.
+  \`integrations request\` e \`integrations email\` com essa opção aplicam a configuração
+  por API sem abrir navegador. Também existe \`integrations apply PEDIDO --credential-id UUID\`.
+  Sem referência adequada, use a CLI local com
   \`integrations request NOME --reason "finalidade" --target supabase --environment development\`
   (\`secrets request\` é equivalente). Abra o \`formUrl\` retornado no navegador do usuário;
   o campo seguro pertence ao projeto Supremo, não é um campo nativo inserido no chat.
@@ -127,14 +133,24 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   não existe campo seguro nem encaminhe configurações suportadas ao painel do provedor.
   Nunca peça a chave no chat, leia ou imprima secrets. \`secrets status\` confirma somente
   metadados de entrega/configuração; isso não prova que a integração funciona ou envia emails.
+  Após o usuário salvar, use \`secrets status --request-id UUID\` com o ID retornado
+  para confirmar este pedido pelo motor, sem visitar o painel do provedor.
+  Leia o \`receipt\` de cada pedido e \`selectedRequestIds\`: quando estiver fulfilled,
+  a etapa indicada já foi aplicada por API. Continue o código/template/teste necessário;
+  não abra o painel do provedor para repetir a configuração, inspecionar ou copiar chaves.
+  Um pedido pendente sem relação com esta integração não justifica abrir outro formulário.
   Para trocar chave, senha ou remetente, consulte \`secrets status\`, remova o pedido
   anterior com \`secrets dismiss ID\` e solicite o novo campo/configuração. Dismiss remove
   só o pedido do formulário; não revoga nem apaga a chave entregue ao provedor.
+  \`integrations revoke-credential UUID\` remove somente a referência do cofre e exige
+  pedido do usuário; não revoga a chave no provedor nem desfaz configurações aplicadas.
   Se houver etapa externa sem suporte, explique essa etapa concreta e conclua as demais.
 - Para email de autenticação com Resend, use
   \`integrations email --provider resend --sender-email REMETENTE --sender-name "Nome do app" --environment development\`.
   Use um remetente autorizado pelo usuário/provedor. Ao salvar a chave no formulário,
   o Supremo configura diretamente o SMTP no Supabase; esse fluxo não exige Vercel.
+  Se uma chave Resend adequada já estiver no cofre do ambiente, acrescente
+  \`--credential-id UUID\` e conclua pelo motor, sem formulário ou painel do Supabase.
   O modo de recuperação pode ser ajustado por \`auth configure --environment development --config '{"recoveryEmailMode":"code"}'\`
   (ou \`link\`). \`auth config\` com \`smtp.configured\` confirma configuração, não entrega.
 - Para definir a senha de uma conta de desenvolvimento quando solicitado, identifique
@@ -142,6 +158,7 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   Abra o formulário seguro retornado para o usuário escolher a senha; não peça senha
   no chat nem invente um código fixo de recuperação. Essa operação administrativa de
   desenvolvimento dispensa SMTP e Vercel e não altera o fluxo público de recuperação.
+  Senhas pessoais não são armazenadas nem reutilizadas pelo cofre de integrações.
   Pedidos de campos e configurações de integração não iniciam QA nem exigem checkpoint.
 - Siga \`developmentPolicy.previousFailures=repair_before_request\`: o próprio agente
   de desenvolvimento corrige as falhas anteriores, inclusive segurança/RLS/migrations.

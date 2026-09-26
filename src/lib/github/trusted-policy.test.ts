@@ -139,8 +139,12 @@ describe('independent engine policy over actual generated candidates', () => {
     const input = candidate(kind, {}, 'tanstack-start-vite')
     expect(verifyCandidatePolicy(input)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     for (const path of ['vite.config.mts', 'vitest.config.mts', 'scripts/generate-routes.mjs', 'scripts/start-production.mjs', 'scripts/browser-diagnostics.ts', 'scripts/security-audit.js', '.github/workflows/ci.yml']) {
-      expect(verifyCandidatePolicy(candidate(kind, { [path]: 'process.exit(0)' }, 'tanstack-start-vite')).approved).toBe(false)
-      expect(verifyCandidatePolicy(candidate(kind, { [path]: null }, 'tanstack-start-vite')).approved).toBe(false)
+      // Mutate the real generated tree rather than rebuilding and hashing the
+      // entire bundled CLI fourteen times per profile on shared CI runners.
+      expect(input.tree.some(entry => entry.path === path)).toBe(true)
+      const modified = input.tree.map(entry => entry.path === path ? { ...entry, sha: blobHash('process.exit(0)') } : entry)
+      expect(verifyCandidatePolicy({ ...input, tree: modified }).approved).toBe(false)
+      expect(verifyCandidatePolicy({ ...input, tree: input.tree.filter(entry => entry.path !== path) }).approved).toBe(false)
     }
     const pkg = JSON.parse(input.packageContent) as { scripts: Record<string, string> }
     pkg.scripts['routes:generate'] = 'echo bypass'
@@ -148,7 +152,10 @@ describe('independent engine policy over actual generated candidates', () => {
     const next = candidate(kind)
     const mixed = { ...input, tree: input.tree.map(entry => entry.path === 'scripts/security-audit.js' ? next.tree.find(file => file.path === entry.path)! : entry) }
     expect(verifyCandidatePolicy(mixed).approved).toBe(false)
-  })
+    // This integration case validates a generated project against every
+    // archived release plus sixteen tampered candidates. Shared CI runners
+    // need a bounded integration-test budget, not the 5s unit-test default.
+  }, 15_000)
   it.each(['public', 'solo', 'team'] as const)('accepts intact released %s validators', kind => {
     expect(verifyCandidatePolicy(candidate(kind))).toMatchObject({ approved: true, reasons: [] })
   })
@@ -159,7 +166,7 @@ describe('independent engine policy over actual generated candidates', () => {
     const current = candidate(kind)
     const cliVersion = (input: Candidate): string => (JSON.parse(input.lockContent) as { packages: Record<string, { version?: string }> }).packages['tools/supremo-cli']!.version!
     expect(cliVersion(previous)).toBe('1.7.2')
-    expect(cliVersion(current)).toBe('1.12.0')
+    expect(cliVersion(current)).toBe('1.12.1')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     expect(verifyCandidatePolicy(current)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })

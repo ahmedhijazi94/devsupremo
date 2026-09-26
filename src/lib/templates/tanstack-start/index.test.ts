@@ -30,7 +30,7 @@ describe('TanStack template boundary', () => {
     expect(pkg.devDependencies).toEqual(lock.packages['']!.devDependencies)
     for (const version of Object.values({ ...pkg.dependencies, ...pkg.devDependencies })) expect(version).toMatch(/^(?:\d+\.\d+\.\d+(?:-[\w.-]+)?|file:tools\/supremo-cli)$/)
     expect(pkg.dependencies).not.toHaveProperty('next')
-    expect(JSON.parse(files.get('.supremo/project.json')!)).toMatchObject({ stack: 'tanstack-start-vite', scaffoldVersion: '5.1.3' })
+    expect(JSON.parse(files.get('.supremo/project.json')!)).toMatchObject({ stack: 'tanstack-start-vite', scaffoldVersion: '5.1.4' })
     expect(files.get('vite.config.mts')).toContain('envPrefix: []')
     expect(files.get('vite.config.mts')).toContain("behavior: 'error'")
     expect(files.get('src/start.ts')).toContain('createCsrfMiddleware')

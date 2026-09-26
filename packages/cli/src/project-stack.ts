@@ -12,7 +12,7 @@ export function stackForVersion(version: unknown): ProjectStack | null {
   if (version === undefined || version === null || version === '') return null
   if (typeof version !== 'string') throw new Error('Versão de template inválida.')
   if (/^[1-4]\.\d+\.\d+$/.test(version)) return 'nextjs'
-  if (version === '5.0.0' || version === '5.0.1' || version === '5.1.0' || version === '5.1.1' || version === '5.1.2' || version === '5.1.3') return 'tanstack-start-vite'
+  if (version === '5.0.0' || version === '5.0.1' || version === '5.1.0' || version === '5.1.1' || version === '5.1.2' || version === '5.1.3' || version === '5.1.4') return 'tanstack-start-vite'
   throw new Error(`Versão de template não reconhecida: ${version}.`)
 }
 

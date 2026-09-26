@@ -50,7 +50,9 @@ export default defineConfig({
         'src/lib/checkpoint/publish.ts', // aplica changeset via Git Data API (I/O)
         // Contexto de requisição / factories finas / tipos
         'src/lib/auth.ts', // depende de cookies de requisição
-        'src/lib/supabase/**', // fábricas finas sobre o SDK
+        'src/lib/supabase/admin.ts', // fábricas finas sobre o SDK
+        'src/lib/supabase/client.ts',
+        'src/lib/supabase/server.ts',
       ],
       // Threshold que falha o build. Cobertura reportada e não exigida não é
       // gate — é decoração.

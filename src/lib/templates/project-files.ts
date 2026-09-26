@@ -784,6 +784,7 @@ supabase/.branches/
 .supremo/onboarding.json
 .supremo/runtime/
 .supremo/verify-result.json*
+.supremo/verify-progress.json*
 .claude/settings.local.json
 
 *.log

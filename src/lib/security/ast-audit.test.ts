@@ -274,6 +274,32 @@ describe('contratos de schema verificáveis', () => {
     const partial = audit({ 'supabase/migrations/001.sql': schema + ' CREATE INDEX ix ON tickets(user_id) WHERE user_id IS NOT NULL;' })
     expect(partial.category('SQL_INDEX')).toHaveLength(1)
   })
+  it('aceita correção forward-only das duas FKs reais mantendo NO ACTION e o histórico original', () => {
+    const original = `CREATE TABLE public.orgs (id uuid PRIMARY KEY);
+      ALTER TABLE public.orgs ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE public.orgs ADD COLUMN owner_id uuid REFERENCES auth.users(id);
+      CREATE UNIQUE INDEX orgs_one_owner ON public.orgs(owner_id);
+      CREATE TABLE public.team_invitations (id uuid PRIMARY KEY,
+        created_by uuid NOT NULL REFERENCES auth.users(id));
+      ALTER TABLE public.team_invitations ENABLE ROW LEVEL SECURITY;
+      CREATE INDEX team_invitations_created_by ON public.team_invitations(created_by);`
+    const files = { 'supabase/migrations/20260926224500_roles.sql': original }
+    expect(audit(files).category('SQL_CONTRACT').map((item) => item.code)).toEqual([
+      'orgs(owner_id)', 'team_invitations(created_by)',
+    ])
+    const corrected = audit({
+      ...files,
+      'supabase/migrations/20260926230000_explicit_delete_contracts.sql': `
+        ALTER TABLE public.orgs
+          DROP CONSTRAINT orgs_owner_id_fkey,
+          ADD CONSTRAINT orgs_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE NO ACTION;
+        ALTER TABLE public.team_invitations
+          DROP CONSTRAINT team_invitations_created_by_fkey,
+          ADD CONSTRAINT team_invitations_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE NO ACTION;`,
+    })
+    expect(corrected.findings).toEqual([])
+    expect(corrected.status).toBe(0)
+  })
   it('recusa índice removido e RLS desativado em migration posterior', () => {
     const result = audit({
       'supabase/migrations/001.sql': schema + ' CREATE INDEX ix ON tickets(user_id);',

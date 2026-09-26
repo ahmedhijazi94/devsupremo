@@ -668,6 +668,8 @@ export async function provisionSupabase(
 export function buildInitialMigrationQuery(
   migrationPath: string,
   migrationContent: string,
+  // Engine-generated catalog checks only. Never accept this from a request.
+  beforeApplySql = '',
 ): string {
   const filename = migrationPath.split('/').pop() ?? ''
   const base = filename.replace(/\.sql$/i, '')
@@ -681,12 +683,14 @@ export function buildInitialMigrationQuery(
   while (migrationContent.includes(blockTag)) blockTag = blockTag.replace(/\$$/, '_x$')
   return [
     'begin;',
+    ...(beforeApplySql ? ["set local lock_timeout = '5s';", "set local statement_timeout = '20s';"] : []),
     'create schema if not exists supabase_migrations;',
     'create table if not exists supabase_migrations.schema_migrations (',
     '  version text not null primary key, statements text[], name text);',
     "select pg_advisory_xact_lock(hashtext('supremo:provision:migrations'));",
     `do ${blockTag} begin`,
     `if not exists (select 1 from supabase_migrations.schema_migrations where version = ${quoteSqlLiteral(version)}) then`,
+    ...(beforeApplySql ? [`execute ${quoteSqlLiteral(beforeApplySql)};`] : []),
     `execute ${tag}${migrationContent.trim()}${tag};`,
     'insert into supabase_migrations.schema_migrations (version, name, statements)',
     `values (${quoteSqlLiteral(version)}, ${quoteSqlLiteral(name)}, array[${tag}${migrationContent}${tag}]::text[])`,

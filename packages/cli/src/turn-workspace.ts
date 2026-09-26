@@ -67,7 +67,7 @@ export function captureTree(cwd: string): { headSha: string; treeSha: string; di
       ...gitText(cwd, ['ls-files', '--cached', '-z'], env).split('\0'),
     ].filter(Boolean))]
     const runtimePath = (file: string): boolean => /^\.supremo\/(?:turns|validation|checkpoints|host-receipts|database-queue|acceptance-result)(?:\/|$)/.test(file)
-      || /^\.supremo\/(?:host-adapters|bootstrap-readiness|validation-feedback|turn-context|verify-result|database)\.json/.test(file)
+      || /^\.supremo\/(?:host-adapters|bootstrap-readiness|validation-feedback|turn-context|verify-result|verify-progress|database)\.json/.test(file)
     // Only HEAD/index-tracked paths and nonignored untracked paths reach this list.
     // -f honors already tracked bundled files under dist/; it never broadens discovery.
     const captured = paths.filter((file) => !runtimePath(file))

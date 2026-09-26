@@ -121,10 +121,10 @@ describe('scheduled functions orchestration', () => {
 describe('private signer provisioning', () => {
  it('reauthorizes every call, never places credentials in query text or probes, and leaves responses server-side', async () => {
    const resolve=vi.fn(async () => credential)
-   const fetcher=vi.fn().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([])).mockResolvedValueOnce(new Response(null,{status:201})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:204}))
+   const fetcher=vi.fn().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([])).mockResolvedValueOnce(new Response(null,{status:201})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:204})).mockResolvedValueOnce(Response.json([{name:scheduledFunctionNames(projectId,'daily-report').environment,value:digest}]))
    vi.stubGlobal('fetch',fetcher)
    await supabaseJobsProvider(resolve).prepareFunctionSigner!(projectId,'daily-report')
-   expect(resolve.mock.calls).toEqual([[false],[true],[false],[false],[false],[false],[false]])
+   expect(resolve.mock.calls).toEqual([[false],[true],[false],[false],[false],[false],[false],[true]])
    expect(String(fetcher.mock.calls[0]![1].body)).not.toContain(secret)
    expect(fetcher.mock.calls[2]![0]).toContain('/secrets')
    expect(String(fetcher.mock.calls[2]![1].body)).toContain(secret)
@@ -136,22 +136,22 @@ describe('private signer provisioning', () => {
  })
  it('reuses the exact existing secret; does not overwrite mismatches', async () => {
    const name=scheduledFunctionNames(projectId,'daily-report').environment
-   const fetcher=vi.fn().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([{name,digest}])).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:204}))
+   const fetcher=vi.fn().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([{name,value:digest,updated_at:"2026-09-26T12:00:00Z"}])).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:204})).mockResolvedValueOnce(Response.json([{name:scheduledFunctionNames(projectId,'daily-report').environment,value:digest}]))
    vi.stubGlobal('fetch',fetcher)
    await supabaseJobsProvider(async()=>credential).prepareFunctionSigner!(projectId,'daily-report')
-   expect(fetcher).toHaveBeenCalledTimes(6)
-   fetcher.mockReset().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([{name,digest:'other'}]))
+   expect(fetcher).toHaveBeenCalledTimes(7)
+   fetcher.mockReset().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([{name,value:'b'.repeat(64)}]))
    await expect(supabaseJobsProvider(async()=>credential).prepareFunctionSigner!(projectId,'daily-report')).rejects.toThrow('Nenhuma credencial foi sobrescrita')
    expect(fetcher).toHaveBeenCalledTimes(2)
  })
  it('requires denied unsigned probes and accepted signed probes; never invokes actual POST', async () => {
-   const fetcher=vi.fn().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([{name:scheduledFunctionNames(projectId,'daily-report').environment,digest}])).mockResolvedValueOnce(new Response(null,{status:200}))
+   const fetcher=vi.fn().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([{name:scheduledFunctionNames(projectId,'daily-report').environment,value:digest}])).mockResolvedValueOnce(new Response(null,{status:200}))
    vi.stubGlobal('fetch',fetcher)
    await expect(supabaseJobsProvider(async()=>credential).prepareFunctionSigner!(projectId,'daily-report')).rejects.toThrow('Nenhum job HTTP foi ativado')
    expect(fetcher).toHaveBeenCalledTimes(3)
  })
  it.each(['invalid', 'expired'] as const)('refuses a handler that accepts the %s signed challenge', async (accepted) => {
-   const fetcher=vi.fn().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([{name:scheduledFunctionNames(projectId,'daily-report').environment,digest}])).mockResolvedValueOnce(new Response(null,{status:401}))
+   const fetcher=vi.fn().mockResolvedValueOnce(Response.json([{secret}])).mockResolvedValueOnce(Response.json([{name:scheduledFunctionNames(projectId,'daily-report').environment,value:digest}])).mockResolvedValueOnce(new Response(null,{status:401}))
    if(accepted==='expired') fetcher.mockResolvedValueOnce(new Response(null,{status:401}))
    fetcher.mockResolvedValueOnce(new Response(null,{status:204}))
    vi.stubGlobal('fetch',fetcher)

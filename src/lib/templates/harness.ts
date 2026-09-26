@@ -710,6 +710,138 @@ void existsSync
 }
 
 /** O `scripts/verify.mjs` — classificador embutido a partir das regras do Supremo. */
+const VERIFY_PROGRESS_RUNTIME = String.raw`
+const CHECK_TYPES = { 'geração de rotas': 'typecheck', typecheck: 'typecheck', lint: 'lint', 'testes afetados': 'unit', 'unit + integração': 'unit', 'secret scan': 'security', 'rls / isolamento': 'rls', 'browser e2e': 'e2e', build: 'build' }
+const CHECK_LIMITS_MS = { 'geração de rotas': 60000, typecheck: 120000, lint: 90000, 'testes afetados': 180000, 'unit + integração': 180000, 'secret scan': 90000, 'rls / isolamento': 180000, 'browser e2e': 180000, build: 240000 }
+const activeChecks = new Map()
+const children = new Set()
+const progressFile = '.supremo/verify-progress.json'
+const resultFile = '.supremo/verify-result.json'
+const writeAtomic = (path, value) => {
+  const temporary = path + '.' + process.pid + '.tmp'
+  fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 })
+  fs.renameSync(temporary, path)
+}
+function saveEvidence(status) {
+  evidence.status = status
+  const failure = evidence.checks.find(check => check.status === 'failed' && ['code', 'security'].includes(check.failureReason))
+    ?? evidence.checks.find(check => check.status === 'failed')
+  if (failure?.failureReason) evidence.failureReason = failure.failureReason
+  if (!background) return
+  fs.mkdirSync('.supremo', { recursive: true })
+  const updatedAt = new Date().toISOString()
+  if (status !== 'running') evidence.completedAt = updatedAt
+  writeAtomic(progressFile, { version: 1, sha: evidence.sha, base: evidence.base, status, level: evidence.level,
+    checks: evidence.checks, activeChecks: [...activeChecks.values()], startedAt: evidence.startedAt, updatedAt,
+    ...(evidence.failureReason ? { failureReason: evidence.failureReason } : {}) })
+  // A partial receipt is never a result and cannot authorize publication.
+  if (status !== 'running') writeAtomic(resultFile, evidence)
+}
+function stopChild(child) {
+  if (!child.pid) return
+  try {
+    // Only the command's newly owned process group; never the preview's PID.
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', timeout: 2000 })
+    else process.kill(-child.pid, 'SIGKILL')
+  } catch (error) { if (error.code !== 'ESRCH') console.error('Não foi possível confirmar o encerramento da etapa de validação.') }
+}
+function interrupted(signal) {
+  for (const child of children) stopChild(child)
+  for (const stage of activeChecks.values()) evidence.checks.push({ ...stage, status: 'failed', completedAt: new Date().toISOString(), failureReason: 'interrupted' })
+  activeChecks.clear()
+  saveEvidence('failed')
+  console.error('Validação interrompida; resultados parciais não aprovam esta versão.')
+  process.exit(signal === 'SIGINT' ? 130 : 143)
+}
+process.once('SIGTERM', () => interrupted('SIGTERM'))
+process.once('SIGINT', () => interrupted('SIGINT'))
+process.once('exit', () => { for (const child of children) stopChild(child) })
+if (background) {
+  fs.mkdirSync('.supremo', { recursive: true })
+  fs.rmSync(resultFile, { force: true })
+}
+saveEvidence('running')
+function stageLimit(name) {
+  const limit = CHECK_LIMITS_MS[name]
+  const lowered = Number(process.env.SUPREMO_VERIFY_STAGE_TIMEOUT_MS)
+  // Diagnostic/test overrides may shorten a bound, never remove or raise it.
+  return Number.isSafeInteger(lowered) && lowered > 0 ? Math.min(limit, lowered) : limit
+}
+function executeCheck(command, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const direct = Array.isArray(command)
+    const spawnFailure = error => {
+      // Only OS resource exhaustion is retryable; missing binaries, permission
+      // errors and normal nonzero exits remain code/security failures.
+      if (['EAGAIN', 'EMFILE', 'ENFILE', 'ENOMEM'].includes(error.code)) error.failureReason = 'transient_infrastructure'
+      return error
+    }
+    let child
+    try { child = spawn(direct ? command[0] : command, direct ? command.slice(1) : [], { shell: !direct, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] }) }
+    catch (error) { reject(spawnFailure(error)); return }
+    children.add(child)
+    let stdout = '', stderr = '', bytes = 0, terminalError, settled = false
+    const finish = (code, signal) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      children.delete(child)
+      if (terminalError || code !== 0) reject(Object.assign(terminalError ?? new Error('Etapa reprovada.'), { code: terminalError?.code ?? code, exitCode: code, signal, stdout, stderr }))
+      else resolve({ stdout, stderr })
+    }
+    const terminate = (error) => {
+      if (settled) return
+      terminalError = error
+      stopChild(child)
+      finish(null, 'SIGKILL')
+    }
+    const timer = setTimeout(() => terminate(Object.assign(new Error('Limite de tempo da etapa excedido.'), { failureReason: 'timeout' })), timeoutMs)
+    const capture = (chunk, stream) => {
+      if (settled) return
+      bytes += Buffer.byteLength(chunk)
+      if (bytes > 10 * 1024 * 1024) { terminate(new Error('Saída da etapa excedeu o limite.')); return }
+      if (stream === 'stdout') stdout += chunk.toString()
+      else stderr += chunk.toString()
+    }
+    child.stdout.on('data', chunk => capture(chunk, 'stdout'))
+    child.stderr.on('data', chunk => capture(chunk, 'stderr'))
+    child.once('error', error => { terminalError = spawnFailure(error); finish(null, null) })
+    child.once('close', finish)
+  })
+}
+async function runCheck(name, command) {
+  const started = Date.now(), timeoutMs = stageLimit(name)
+  const stage = { name, type: CHECK_TYPES[name], status: 'running', startedAt: new Date(started).toISOString(), timeoutMs }
+  activeChecks.set(name, stage)
+  saveEvidence('running')
+  console.log('  • ' + name + '… iniciando (limite ' + (timeoutMs / 1000) + 's)')
+  let status = 'passed', failureReason, failure
+  try { await executeCheck(command, timeoutMs) }
+  catch (error) {
+    const output = String(error.stdout ?? '') + String(error.stderr ?? '')
+    if (!error.failureReason && name === 'testes afetados' && error.code === 1 && /No test files found/.test(output)
+      && !/Unhandled Error|Failed to load|Error:|SyntaxError/.test(output)) status = 'deferred'
+    else if (!error.failureReason && name === 'build' && isKnownEnvironmentalBuildFailure(output)) {
+      status = 'deferred'
+      console.log('  ℹ build DEFERIDO (limitação ambiental do sandbox) — a CI obrigatória continua pendente.')
+    } else {
+      status = 'failed'
+      failureReason = error.failureReason ?? (stage.type === 'security' ? 'security' : 'code')
+      failure = error
+      if (error.stdout) process.stderr.write(error.stdout)
+      if (error.stderr) process.stderr.write(error.stderr)
+      console.error('✗ verify ' + evidence.level + ' falhou em: ' + name + (failureReason === 'timeout' ? ' — tempo excedido; não confirma erro no código' : ''))
+    }
+  }
+  activeChecks.delete(name)
+  evidence.checks.push({ ...stage, status, completedAt: new Date().toISOString(), durationMs: Date.now() - started, ...(failureReason ? { failureReason } : {}) })
+  saveEvidence('running')
+  console.log('  • ' + name + '… ' + (status === 'passed' ? 'ok' : status === 'failed' ? 'FALHOU' : 'PENDENTE') + ' (' + ((Date.now() - started) / 1000).toFixed(1) + 's)')
+  if (failure) throw failure
+  return { status }
+}
+`
+
 export function verifyScript(stack: ProjectStack = 'nextjs'): string {
   const start = stack === 'tanstack-start-vite'
   return `#!/usr/bin/env node
@@ -718,9 +850,7 @@ export function verifyScript(stack: ProjectStack = 'nextjs'): string {
 //   node scripts/verify.mjs            → auto (git diff working+staged)
 //   node scripts/verify.mjs --staged   → auto, só staged (usado no pre-commit)
 //   node scripts/verify.mjs quick|security|full → força o nível
-import { exec, execSync, execFileSync } from 'node:child_process'
-import { promisify } from 'node:util'
-const execAsync = promisify(exec)
+import { spawn, execFileSync } from 'node:child_process'
 import fs, { readFileSync } from 'node:fs'
 const args = process.argv.slice(2)
 const baseIndex = args.indexOf('--base')
@@ -730,14 +860,7 @@ if (!base || !/^[a-f0-9]{40}(?:\\^)?$|^HEAD(?:\\^)?$/.test(base)) throw new Erro
 const validationBase = execFileSync('git', ['rev-parse', '--verify', base], { encoding: 'utf8' }).trim()
 const background = args.includes('--background')
 const evidence = { schemaVersion: 1, sha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), base: validationBase, status: 'running', level: null, checks: [], startedAt: new Date().toISOString() }
-const saveEvidence = (status) => {
-  if (!background) return
-  evidence.status = status
-  evidence.completedAt = new Date().toISOString()
-  fs.mkdirSync('.supremo', { recursive: true })
-  fs.writeFileSync('.supremo/verify-result.json.tmp', JSON.stringify(evidence, null, 2) + '\\n')
-  fs.renameSync('.supremo/verify-result.json.tmp', '.supremo/verify-result.json')
-}
+${VERIFY_PROGRESS_RUNTIME}
 const FULL_PATTERNS = ${serializePatterns(start ? [...FULL_PATTERNS, ...START_FULL_PATTERNS] : FULL_PATTERNS)}
 const SECURITY_PATTERNS = ${serializePatterns(start ? [...SECURITY_PATTERNS, ...START_SECURITY_PATTERNS] : SECURITY_PATTERNS)}
 const SECURITY_CONTENT_PATTERNS = ${serializePatterns(start ? [...SECURITY_CONTENT_PATTERNS, ...START_SECURITY_CONTENT_PATTERNS] : SECURITY_CONTENT_PATTERNS)}
@@ -917,79 +1040,25 @@ if (background && level !== 'quick' && !args.includes('--draft') && paths.some((
   STEPS[level].push(['browser e2e', 'playwright test e2e/smoke.spec.ts'])
 }
 const t0 = Date.now()
-let buildDeferred = false
-${start ? `// File-based routes are generated only in this workspace before concurrent checks.
-// A generation failure is a failed typecheck, never a skipped or approved gate.
-try { execFileSync(process.execPath, ['scripts/generate-routes.mjs'], { stdio: ['ignore', 'pipe', 'pipe'] }) }
-catch (error) {
-  evidence.checks.push({ name: 'typecheck', status: 'failed' })
-  if (error.stdout) process.stderr.write(error.stdout.toString())
-  if (error.stderr) process.stderr.write(error.stderr.toString())
-  saveEvidence('failed')
-  process.exit(1)
-}
-` : ''}// Verificações independentes em paralelo; build só começa após todas passarem.
+${start ? `// Generate routes in this isolated workspace before independent checks.
+try { await runCheck('geração de rotas', [process.execPath, 'scripts/generate-routes.mjs']) }
+catch { saveEvidence('failed'); process.exit(1) }
+` : ''}// Independent checks report immediately; build waits for all required checks.
 const checks = STEPS[level].filter(([label]) => label !== 'build')
-const results = await Promise.allSettled(checks.map(async ([label, cmd]) => {
-  const started = Date.now()
-  let status = 'passed'
-  try { await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 }) }
-  catch (error) {
-    const output = String(error.stdout ?? '') + String(error.stderr ?? '')
-    if (label === 'testes afetados' && error.code === 1 && /No test files found/.test(output)
-      && !/Unhandled Error|Failed to load|Error:|SyntaxError/.test(output)) status = 'deferred'
-    else throw error
-  }
-  return { label, status, seconds: ((Date.now() - started) / 1000).toFixed(1) }
-}))
-for (let index = 0; index < results.length; index++) {
-  const result = results[index]
-  const [label] = checks[index]
-  if (result.status === 'rejected') {
-    const err = result.reason
-    if (err.stdout) process.stderr.write(err.stdout.toString())
-    if (err.stderr) process.stderr.write(err.stderr.toString())
-    console.error(\`\\n✗ verify \${level} falhou em: \${label}\\n\`)
-  } else console.log(\`  • \${label}… \${result.value.status === 'deferred' ? 'PENDENTE: nenhum teste relacionado; a CI completa continua obrigatória' : 'ok'} (\${result.value.seconds}s)\`)
-}
-for (let index = 0; index < results.length; index++) evidence.checks.push({ name: checks[index][0], status: results[index].status === 'rejected' ? 'failed' : results[index].value.status })
+const results = await Promise.allSettled(checks.map(([label, cmd]) => runCheck(label, cmd)))
 if (results.some((result) => result.status === 'rejected')) { saveEvidence('failed'); process.exit(1) }
 for (const [label, cmd] of STEPS[level].filter(([label]) => label === 'build')) {
-  process.stdout.write(\`  • \${label}… \`)
-  try {
-    execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] })
-    console.log('ok')
-    evidence.checks.push({ name: label, status: 'passed' })
-  } catch (err) {
-    const output = \`\${err.stdout ?? ''}\${err.stderr ?? ''}\`.toString()
-    // SÓ o build pode ser deferido, e SÓ com uma assinatura CONHECIDA de
-    // limitação ambiental (porta/processo do sandbox, rede indisponível pra
-    // recurso externo). typecheck/lint/testes/secret scan NUNCA entram aqui
-    // — bloqueiam sempre. Na dúvida (assinatura não bate), cai no fail-closed
-    // de baixo: falha normal, checkpoint NÃO prossegue.
-    if (label === 'build' && isKnownEnvironmentalBuildFailure(output)) {
-      console.log('DEFERIDO (limitação ambiental do sandbox)')
-      console.log('  ℹ build falhou por limitação ambiental conhecida (porta/processo ocupado ou rede indisponível pra recurso externo) — não é erro de código. Deferido para a CI obrigatória (fail-closed lá); checkpoint local pode prosseguir.')
-      buildDeferred = true
-      evidence.checks.push({ name: label, status: 'deferred' })
-      continue
-    }
-    console.log('FALHOU')
-    if (err.stdout) process.stderr.write(err.stdout.toString())
-    if (err.stderr) process.stderr.write(err.stderr.toString())
-    console.error(\`\\n✗ verify \${level} falhou em: \${label}\\n\`)
-    evidence.checks.push({ name: label, status: 'failed' })
-    saveEvidence('failed')
-    process.exit(1)
-  }
+  try { await runCheck(label, cmd) }
+  catch { saveEvidence('failed'); process.exit(1) }
 }
 if (!hasLocalDb && (level === 'security' || level === 'full')) {
-  evidence.checks.push({ name: 'rls / isolamento', status: 'deferred' })
+  evidence.checks.push({ name: 'rls / isolamento', type: 'rls', status: 'deferred' })
   console.log('  ℹ RLS pendente (sem Supabase local) — exige aprovação do gate "Políticas RLS" do CI. Para rodar local: npm run local:start && npm run test:rls')
 }
-const deferredSuffix = buildDeferred ? ' — build DEFERIDO para a CI (limitação ambiental do sandbox; CI é fail-closed antes do merge)' : ''
-saveEvidence(evidence.checks.some((check) => check.status === 'deferred') ? 'deferred' : 'passed')
-console.log(\`\\n✓ verify \${level} passou em \${((Date.now() - t0) / 1000).toFixed(1)}s\${deferredSuffix}\\n\`)
+const deferred = evidence.checks.some(check => check.status === 'deferred')
+saveEvidence(deferred ? 'deferred' : 'passed')
+console.log('\\n' + (deferred ? '◷ verify ' + level + ' concluído com verificações pendentes' : '✓ verify ' + level + ' passou') + ' em ' + ((Date.now() - t0) / 1000).toFixed(1) + 's' + (evidence.checks.some(check => check.name === 'build' && check.status === 'deferred') ? ' — build DEFERIDO para a CI' : '') + '\\n')
+
 `
 }
 

@@ -10,13 +10,13 @@ const uri = 'https://dev-ref.supabase.co/functions/v1/send-email'
 const options = { operation: 'functions-hook-configure', environment: 'development', slug: 'send-email', secretName: FUNCTION_HOOK_SECRET_NAME } as const
 const disabled = { hook_send_email_enabled: false, hook_send_email_uri: '', hook_send_email_secrets: '', external_email_enabled: true }
 let config: typeof disabled
-let installed: { name: string; digest: string }[]
+let installed: { name: string; value: string; updated_at?: string }[]
 function fixture() {
   const provider = {
     list: vi.fn(async () => [functionRecord]), get: vi.fn(async () => ({ ...functionRecord })), deploy: vi.fn<FunctionProvider['deploy']>(async () => ({ ...functionRecord })),
     authConfig: vi.fn(async () => ({ ...config })), secrets: vi.fn(async () => [...installed]),
     configureHook: vi.fn(async (target: string, secret: string) => { config = { ...config, hook_send_email_enabled: true, hook_send_email_uri: target, hook_send_email_secrets: secret } }),
-    setSecret: vi.fn(async (name: string, secret: string) => { installed = [{ name, digest: hookSecretDigest(secret) }] }),
+    setSecret: vi.fn(async (name: string, secret: string) => { installed = [...installed.filter(row => row.name !== name), { name, value: hookSecretDigest(secret), updated_at: '2026-09-26T12:00:00Z' }] }),
     probe: vi.fn<FunctionProvider['probe']>(async (_slug, secret, validity) => secret && (!validity || validity === 'valid') ? 400 : 401),
   } satisfies FunctionProvider
   return provider
@@ -70,20 +70,51 @@ describe('signed email hook orchestration', () => {
   it('makes retries idempotent and retains a valid existing server-only signing key', async () => {
     const secret = `v1,whsec_${Buffer.alloc(32, 7).toString('base64')}`
     config = { ...config, hook_send_email_enabled: true, hook_send_email_uri: uri, hook_send_email_secrets: secret }
-    installed = [{ name: FUNCTION_HOOK_SECRET_NAME, digest: hookSecretDigest(secret) }]
+    installed = [{ name: FUNCTION_HOOK_SECRET_NAME, value: hookSecretDigest(secret) }]
     const p = fixture()
     await runFunctions(p, options, context)
     expect(p.setSecret).not.toHaveBeenCalled()
     expect(p.configureHook).not.toHaveBeenCalled()
     expect(p.probe).toHaveBeenLastCalledWith('send-email', secret)
   })
-  it('repairs only a missing/mismatched private env value using the same existing key', async () => {
+  it('repairs a missing private env value using the same existing key', async () => {
     const secret = `v1,whsec_${Buffer.alloc(32, 9).toString('base64')}`
     config = { ...config, hook_send_email_enabled: true, hook_send_email_uri: uri, hook_send_email_secrets: secret }
     const p = fixture()
     await runFunctions(p, options, context)
     expect(p.setSecret).toHaveBeenCalledWith(FUNCTION_HOOK_SECRET_NAME, secret)
     expect(p.configureHook).not.toHaveBeenCalled()
+  })
+  it('preserves unrelated real API secrets and verifies the newly installed fingerprint on read-back', async () => {
+    const unrelated = { name: 'RESEND_API_KEY', value: hookSecretDigest('unrelated-private-fixture'), updated_at: '2026-09-26T12:00:00Z' }
+    installed = [unrelated]
+    const p = fixture()
+    const result = await runFunctions(p, options, context)
+    expect(result).toMatchObject({ verified: true, deliveryVerified: false })
+    expect(installed).toContainEqual(unrelated)
+    expect(p.secrets).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(result)).not.toContain(unrelated.value)
+  })
+  it('refuses a different reserved fingerprint instead of overwriting the existing secret', async () => {
+    installed = [{ name: FUNCTION_HOOK_SECRET_NAME, value: hookSecretDigest('another-private-fixture') }]
+    const p = fixture()
+    await expect(runFunctions(p, options, context)).rejects.toThrow('Nenhuma credencial foi sobrescrita')
+    expect(p.setSecret).not.toHaveBeenCalled()
+    expect(p.configureHook).not.toHaveBeenCalled()
+    expect(p.probe).not.toHaveBeenCalled()
+  })
+  it.each(['duplicate', 'conflicting-alias', 'plaintext', 'missing-value'] as const)('refuses %s metadata before mutating the provider', async kind => {
+    const p = fixture()
+    const row = { name: FUNCTION_HOOK_SECRET_NAME, value: hookSecretDigest('fixture') }
+    const raw = kind === 'duplicate' ? [row, row] : kind === 'conflicting-alias' ? [{ ...row, digest: 'f'.repeat(64) }]
+      : kind === 'plaintext' ? [{ ...row, value: 'private-never' }] : [{ name: row.name, digest: row.value }]
+    p.secrets.mockResolvedValueOnce(raw as never)
+    const error: unknown = await runFunctions(p, options, context).catch((reason: unknown) => reason)
+    expect(error).toMatchObject({ status: 502, message: 'Metadados dos segredos da função não confirmados.' })
+    expect(String(error)).not.toContain('private-never')
+    expect(p.setSecret).not.toHaveBeenCalled()
+    expect(p.configureHook).not.toHaveBeenCalled()
+    expect(p.probe).not.toHaveBeenCalled()
   })
   it('does not reuse a key without a binding to this function', async () => {
     config = { ...config, hook_send_email_secrets: `v1,whsec_${Buffer.alloc(32, 8).toString('base64')}` }
@@ -134,14 +165,24 @@ describe('signed email hook orchestration', () => {
     await expect(runFunctions(p, options, context)).resolves.toMatchObject({ verified: true })
     expect(p.configureHook).not.toHaveBeenCalled()
   })
-  it.each(['auth', 'digest', 'function'])('does not certify changed final %s readback', async field => {
+  it.each(['auth', 'digest', 'function', 'missing-secret'])('does not certify changed final %s readback', async field => {
     const p = fixture()
     p.configureHook.mockImplementation(async (target, secret) => {
       config = { ...config, hook_send_email_enabled: true, hook_send_email_uri: target, hook_send_email_secrets: field === 'auth' ? 'changed' : secret }
-      if (field === 'digest') installed = []
+      if (field === 'digest') installed = [{ name: FUNCTION_HOOK_SECRET_NAME, value: hookSecretDigest('changed') }]
+      if (field === 'missing-secret') installed = []
       if (field === 'function') p.get.mockResolvedValue({ ...functionRecord, version: 5 })
     })
     await expect(runFunctions(p, options, context)).rejects.toThrow('resultado final')
+  })
+  it('refuses duplicate final metadata even after the signature challenge succeeds', async () => {
+    const p = fixture()
+    p.configureHook.mockImplementation(async (target, secret) => {
+      config = { ...config, hook_send_email_enabled: true, hook_send_email_uri: target, hook_send_email_secrets: secret }
+      installed.push({ ...installed[0]! })
+    })
+    await expect(runFunctions(p, options, context)).rejects.toThrow('Metadados')
+    expect(p.probe).toHaveBeenCalledTimes(4)
   })
   it('fails closed on malformed config or secret metadata without exposing content', async () => {
     const p = fixture()

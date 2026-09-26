@@ -6,9 +6,11 @@ export const enginePolicySchema = z.object({
   validation_mode: z.enum(['background_adaptive', 'on_request', 'background']).default('background_adaptive'),
   validation: z.object({
     debounce_ms: z.number().int().min(250).max(30_000).default(1500),
-    timeout_ms: z.number().int().min(1000).max(900_000).default(180_000),
+    timeout_ms: z.number().int().min(1000).max(900_000).default(600_000),
     max_output_bytes: z.number().int().min(4096).max(16 * 1024 * 1024).default(4 * 1024 * 1024),
-  }).default({ debounce_ms: 1500, timeout_ms: 180_000, max_output_bytes: 4 * 1024 * 1024 }),
+    max_attempts: z.number().int().min(1).max(3).default(2),
+    retry_backoff_ms: z.number().int().min(1000).max(60_000).default(15_000),
+  }).default({ debounce_ms: 1500, timeout_ms: 600_000, max_output_bytes: 4 * 1024 * 1024, max_attempts: 2, retry_backoff_ms: 15_000 }),
   auto_heal: z.object({
     // The development agent owns recovery at the next prompt. Unattended
     // inference is an explicit opt-in with a separate budget.

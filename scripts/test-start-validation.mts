@@ -41,7 +41,7 @@ try {
   const initialHead = gitText(root, ['rev-parse', 'HEAD'])
   const initialIndex = fs.readFileSync(path.join(root, '.git/index'))
   const originalHome = fs.readFileSync(path.join(root, 'src/routes/index.tsx'), 'utf8')
-  async function probe(name: string, expectedFailure?: 'typecheck' | 'unit' | 'security') {
+  async function probe(name: string, expectedFailure?: 'typecheck' | 'unit' | 'security', browser = false) {
     const record = captureTurnCheckpoint(root, { projectId, turnId: `start-validation-${name}`, summary: name, environment: 'development' })
     assert(record, 'Changed tree must produce a checkpoint')
     assert.equal(record.draft, undefined, 'Normal validation cannot rely on draft bypass')
@@ -61,7 +61,8 @@ try {
     } else {
       assert.notEqual(evidence.status, 'failed', evidence.logs)
       for (const type of ['typecheck', 'lint', 'security']) assert(evidence.checks.some(check => check.type === type && check.status === 'passed'), `Missing ${type} proof`)
-      assert(!evidence.checks.some(check => ['build', 'e2e'].includes(check.type ?? '')), 'Cosmetic edit must retain adaptive validation')
+      if (browser) assert(evidence.checks.some(check => check.type === 'e2e' && check.status === 'passed'), 'Sensitive edits require real browser proof from the private dependency tree')
+      else assert(!evidence.checks.some(check => ['build', 'e2e'].includes(check.type ?? '')), 'Cosmetic edit must retain adaptive validation')
       assert(evidence.checks.some(check => check.type === 'unit'), 'Related-test execution must produce evidence, even when no test is related')
     }
     ;(results.probes as Record<string, unknown>)[name] = { status: evidence.status, checks: evidence.checks, sha: evidence.sha, sourceHeadPreserved: true, stagingPreserved: true, snapshotPreserved: true }
@@ -78,6 +79,11 @@ try {
   write(helper, "export function readProbe(): number { eval('1 + 1'); return 1 }\n")
   await probe('security-finding', 'security')
   write(helper, originalHelper)
+  // Exercise Vite + Nitro + Playwright in the immutable worktree. Symlinked
+  // dependencies resolve outside Vite's boundary and leave the server at 500.
+  const authFile = 'src/features/auth/auth.server.ts'
+  write(authFile, fs.readFileSync(path.join(root, authFile), 'utf8') + '\n// Sensitive checkpoint isolation acceptance\n')
+  await probe('security-browser', undefined, true)
   command(['run', 'routes:generate'], 'direct-route-generation')
   assert(fs.readFileSync(path.join(root, 'src/routeTree.gen.ts'), 'utf8').includes('/auth/signout'))
   assert.equal(gitText(root, ['rev-parse', 'HEAD']), initialHead)

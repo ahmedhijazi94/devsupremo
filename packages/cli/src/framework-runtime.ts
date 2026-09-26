@@ -3,6 +3,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { resolveProjectStack, type ProjectStack } from './project-stack'
 import { readStableFile } from './stable-file'
+import { WorkerAbortedError, WorkerTimeoutError } from './worker-process'
 
 const packageEvidence = z.object({
   dependencies: z.record(z.string(), z.string()).optional(),
@@ -79,14 +80,74 @@ export function assertFrameworkNodeVersion(stack: ProjectStack | null, version: 
   }
 }
 
-/** Keep Vite's hidden caches private to the immutable worktree. Installed
- * dependencies may be reused; the live node_modules directory may not be. */
-export function linkIsolatedDependencies(cwd: string, scratch: string): void {
+/** Preserve the legacy Next/imported-project layout. Top-level build caches stay
+ * in the snapshot, while installed packages and their executable paths are reused. */
+export async function linkLegacyDependencies(cwd: string, scratch: string): Promise<void> {
   const source = path.join(cwd, 'node_modules'), target = path.join(scratch, 'node_modules')
-  fs.mkdirSync(target)
-  for (const name of fs.readdirSync(source)) {
-    if (!name.startsWith('.')) fs.symlinkSync(path.join(source, name), path.join(target, name))
+  await fs.promises.mkdir(target)
+  for (const name of await fs.promises.readdir(source)) {
+    if (!name.startsWith('.')) await fs.promises.symlink(path.join(source, name), path.join(target, name))
   }
+}
+
+/** Clone dependencies into the immutable worktree. Symlinked Start/Nitro entry
+ * modules resolve outside Vite's strict filesystem boundary and return HTTP 500.
+ * Reflinks avoid duplicating file data on supporting filesystems; ordinary copies
+ * remain safe elsewhere. Neither package writes nor caches can touch the preview.
+ * Binaries retain relative links into this private dependency tree. */
+export async function linkIsolatedDependencies(cwd: string, scratch: string, options: {
+  signal?: AbortSignal | undefined; deadline?: number | undefined
+} = {}): Promise<void> {
+  const budget = options.deadline === undefined ? undefined : Math.max(1, options.deadline - Date.now())
+  const checkBudget = (): void => {
+    if (options.signal?.aborted) throw new WorkerAbortedError()
+    if (options.deadline !== undefined && Date.now() >= options.deadline) throw new WorkerTimeoutError(budget ?? 1)
+  }
+  checkBudget()
+  const source = await fs.promises.realpath(path.join(cwd, 'node_modules')), target = path.join(scratch, 'node_modules')
+  checkBudget()
+  await fs.promises.mkdir(target)
+  for (const name of await fs.promises.readdir(source)) {
+    checkBudget()
+    if (!name.startsWith('.')) await fs.promises.cp(path.join(source, name), path.join(target, name), {
+      recursive: true, dereference: true, mode: fs.constants.COPYFILE_FICLONE,
+      // This callback also bounds large package trees and symbolic-link cycles.
+      // Async I/O lets the daemon receive cancellation while a copy is running.
+      filter: () => { checkBudget(); return true },
+    })
+  }
+  checkBudget()
+  const bins = path.join(source, '.bin')
+  let names: string[]
+  try { names = await fs.promises.readdir(bins) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    checkBudget()
+    return
+  }
+  checkBudget()
+  await fs.promises.mkdir(path.join(target, '.bin'))
+  for (const name of names) {
+    checkBudget()
+    const original = path.join(bins, name), destination = path.join(target, '.bin', name)
+    const stat = await fs.promises.lstat(original)
+    checkBudget()
+    if (stat.isFile()) {
+      await fs.promises.copyFile(original, destination, fs.constants.COPYFILE_FICLONE)
+      continue
+    }
+    if (!stat.isSymbolicLink()) throw new Error('Executável de validação não é um arquivo regular nem link simbólico.')
+    const resolved = await fs.promises.realpath(original)
+    checkBudget()
+    const relative = path.relative(source, resolved)
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+      // Local file dependencies (e.g. the bundled engine) need no validation
+      // executable. Do not link outside the private copy.
+      continue
+    }
+    await fs.promises.symlink(path.relative(path.join(target, '.bin'), path.join(target, relative)), destination)
+  }
+  checkBudget()
 }
 
 /** Exact allowlist. The script's bytes are validated by verifyTrustedFiles

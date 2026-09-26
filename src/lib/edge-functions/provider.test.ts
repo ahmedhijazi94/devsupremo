@@ -1,13 +1,64 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHmac } from 'node:crypto'
 import { supabaseFunctionProvider } from './provider'
-import { FunctionError } from './policy'
+import { FunctionError, hookSecretDigest } from './policy'
+import { runFunctions } from './service'
 const secret = `v1,whsec_${Buffer.alloc(32, 2).toString('base64')}`
 const ref = 'dev-ref'
 const token = 'private-management-token'
 beforeEach(() => vi.stubGlobal('fetch', vi.fn(async () => Response.json({}))))
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 describe('Supabase function Management API transport', () => {
+  it('configures the hook through real-format GET secrets responses and confirms them after the write', async () => {
+    const uri = `https://${ref}.supabase.co/functions/v1/send-email`
+    let config = { hook_send_email_enabled: false, hook_send_email_uri: uri, hook_send_email_secrets: secret, external_email_enabled: true }
+    const unrelated = { name: 'RESEND_API_KEY', value: hookSecretDigest('private-resend-fixture'), updated_at: '2026-09-26T12:00:00Z' }
+    let metadata = [unrelated]
+    const resolve = vi.fn(async () => ({ projectRef: ref, token }))
+    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      if (url.endsWith('/config/auth')) {
+        if (init?.method === 'PATCH') config = { ...config, ...JSON.parse(String(init.body)) }
+        return Response.json(config)
+      }
+      if (url.endsWith('/secrets')) {
+        if (init?.method === 'POST') {
+          const posted = JSON.parse(String(init.body)) as { name: string; value: string }[]
+          expect(posted).toEqual([{ name: 'AUTH_SEND_EMAIL_HOOK_SECRET', value: secret }])
+          metadata = [...metadata, { name: posted[0]!.name, value: hookSecretDigest(posted[0]!.value), updated_at: '2026-09-26T12:01:00Z' }]
+          return new Response(null, { status: 201 })
+        }
+        return Response.json(metadata)
+      }
+      if (url === uri) {
+        const headers = init?.headers as Record<string, string>
+        if (!headers['webhook-signature']) return new Response(null, { status: 401 })
+        const timestamp = Number(headers['webhook-timestamp'])
+        const signature = `v1,${createHmac('sha256', Buffer.alloc(32, 2)).update(`${headers['webhook-id']}.${timestamp}.${init?.body}`).digest('base64')}`
+        return new Response(null, { status: Math.abs(Date.now() / 1000 - timestamp) < 300 && headers['webhook-signature'] === signature ? 400 : 401 })
+      }
+      if (url.endsWith('/functions/send-email')) return Response.json({ id: 'function-fixture', slug: 'send-email', status: 'ACTIVE', version: 2, verify_jwt: false })
+      throw new Error('Unexpected fixture endpoint')
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const result = await runFunctions(supabaseFunctionProvider(resolve), { operation: 'functions-hook-configure', environment: 'development', slug: 'send-email', secretName: 'AUTH_SEND_EMAIL_HOOK_SECRET' },
+      { ownerId: 'owner-fixture', projectId: 'project-fixture', projectRef: ref, environment: 'development' })
+    expect(result).toMatchObject({ verified: true, signatureVerified: true, deliveryVerified: false })
+    expect(resolve).toHaveBeenCalledTimes(fetcher.mock.calls.length + 1) // configureHook also validates the fresh target before dispatch.
+    expect(fetcher.mock.calls.filter(([url, init]) => String(url).endsWith('/secrets') && init?.method === 'GET')).toHaveLength(2)
+    expect(metadata).toContainEqual(unrelated)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(JSON.stringify(result)).not.toContain(unrelated.value)
+  })
+  it('accepts the documented empty 201 for secret creation without relaxing JSON requirements for reads', async () => {
+    const p = supabaseFunctionProvider(async () => ({ projectRef: ref, token }))
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 201 }))
+    await expect(p.setSecret('AUTH_SEND_EMAIL_HOOK_SECRET', secret)).resolves.toBeUndefined()
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 200 }))
+    await expect(p.secrets()).rejects.toThrow('Resposta do Supabase')
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 201 }))
+    await expect(p.authConfig()).rejects.toThrow('Resposta do Supabase')
+  })
   it('sends repeated file parts with complete project-relative names and matching metadata', async () => {
     const resolve = vi.fn(async () => ({ projectRef: ref, token }))
     const provider = supabaseFunctionProvider(resolve)

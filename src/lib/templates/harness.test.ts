@@ -804,7 +804,7 @@ fs.writeFileSync('vite.built', 'ready');
       expect(() => execFileSync(process.execPath, [join(dir, 'verify.mjs'), 'full', '--background'], { cwd: dir, env, stdio: 'pipe' })).toThrow()
       const evidence = JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8')) as { status: string; checks: unknown[] }
       expect(evidence.status).toBe('failed')
-      expect(evidence.checks).toContainEqual({ name: 'typecheck', status: 'failed' })
+      expect(evidence.checks).toContainEqual(expect.objectContaining({ name: 'geração de rotas', type: 'typecheck', status: 'failed', failureReason: 'code' }))
       expect(existsSync(join(dir, 'tsc-started'))).toBe(false)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -867,7 +867,7 @@ fs.writeFileSync('vite.built', 'ready');
       status: string; checks: Array<{ name: string; status: string }>
     }
     expect(evidence.status).toBe('deferred')
-    expect(evidence.checks).toContainEqual({ name: 'testes afetados', status: 'deferred' })
+    expect(evidence.checks).toContainEqual(expect.objectContaining({ name: 'testes afetados', status: 'deferred' }))
     expect(verifyScript()).not.toContain('--passWithNoTests')
   }, 15000)
 
@@ -895,6 +895,139 @@ process.exit(['tsc', 'eslint', 'vitest'].every(n => fs.existsSync(n + '.done')) 
 `)
     expect(runVerifyFull(dir, env).status).toBe(0)
   }, 15000)
+
+  it.each(['EAGAIN', 'EMFILE', 'ENFILE', 'ENOMEM', 'ENOENT', 'EACCES'].flatMap(code =>
+    ['event', 'throw'].map(mode => ({ code, mode }))))('classifica falha de spawn $code ($mode) sem aprovar nem ampliar a lista de retry', ({ code, mode }) => {
+    const { dir, env } = setupProject(0, '')
+    // Inject only the OS spawn boundary; the generated verifier, evidence writer
+    // and parallel successful stages all execute unchanged in a real process.
+    const preload = join(dir, 'spawn-failure.cjs')
+    writeFileSync(preload, `
+const cp = require('node:child_process')
+const { EventEmitter } = require('node:events')
+const { PassThrough } = require('node:stream')
+const { syncBuiltinESMExports } = require('node:module')
+const original = cp.spawn
+let fixtureError
+process.once('exit', () => require('node:fs').writeFileSync('spawn-errno.json', JSON.stringify({ code: fixtureError?.code })))
+cp.spawn = (...args) => {
+  if (!String(args[0]).startsWith('vitest ')) return original(...args)
+  const error = Object.assign(new Error('OS fixture failure'), { code: ${JSON.stringify(code)} })
+  fixtureError = error
+  if (${JSON.stringify(mode)} === 'throw') throw error
+  const child = new EventEmitter()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  process.nextTick(() => { child.emit('error', error); child.emit('close', -1, null) })
+  return child
+}
+syncBuiltinESMExports()
+`)
+    try {
+      expect(() => execFileSync(process.execPath, ['--require', preload, 'verify.mjs', 'full', '--background'], { cwd: dir, env, stdio: 'pipe', timeout: 5000 })).toThrow()
+      const result = JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8')) as {
+        status: string; failureReason: string; checks: Array<{ name: string; status: string; failureReason?: string }>
+      }
+      const failureReason = ['EAGAIN', 'EMFILE', 'ENFILE', 'ENOMEM'].includes(code) ? 'transient_infrastructure' : 'code'
+      expect(result).toMatchObject({ status: 'failed', failureReason })
+      expect(result.checks).toContainEqual(expect.objectContaining({ name: 'unit + integração', status: 'failed', failureReason }))
+      expect(result.checks).toContainEqual(expect.objectContaining({ name: 'typecheck', status: 'passed' }))
+      expect(result.checks.some(check => check.name === 'build')).toBe(false)
+      expect(JSON.parse(readFileSync(join(dir, 'spawn-errno.json'), 'utf8'))).toEqual({ code })
+      expect(JSON.parse(readFileSync(join(dir, '.supremo/verify-progress.json'), 'utf8')).activeChecks).toEqual([])
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }, 10000)
+
+  it.each(['nextjs', 'tanstack-start-vite'] as const)('preserva etapas concluídas enquanto %s aguarda teste travado, depois identifica timeout sem aprovação', async stack => {
+    const { dir, env } = setupProject(0, '')
+    writeFileSync(join(dir, 'verify.mjs'), verifyScript(stack))
+    writeFileSync(join(dir, 'scripts/generate-routes.mjs'), '// fixture routes already generated')
+    writeFileSync(join(dir, 'bin/vitest'), '#!/usr/bin/env node\nsetInterval(() => {}, 1000)\n')
+    mkdirSync(join(dir, '.supremo'), { recursive: true })
+    writeFileSync(join(dir, '.supremo/verify-result.json'), JSON.stringify({ status: 'passed', sha: 'old' }))
+    const child = spawn(process.execPath, ['verify.mjs', 'full', '--background'], { cwd: dir, env: { ...env, SUPREMO_VERIFY_STAGE_TIMEOUT_MS: '3000' }, stdio: ['ignore', 'pipe', 'pipe'] })
+    const done = once(child, 'exit')
+    let output = ''
+    child.stdout.on('data', chunk => { output += chunk.toString() })
+    child.stderr.on('data', chunk => { output += chunk.toString() })
+    const progress = () => JSON.parse(readFileSync(join(dir, '.supremo/verify-progress.json'), 'utf8')) as { status: string; sha: string; base: string; checks: Array<{ name: string; status: string }>; activeChecks: Array<{ name: string; status: string; timeoutMs: number }> }
+    try {
+      await expect.poll(() => progress(), { timeout: 2500, interval: 20 }).toMatchObject({ status: 'running', checks: expect.arrayContaining([expect.objectContaining({ name: 'secret scan', status: 'passed' })]), activeChecks: expect.arrayContaining([expect.objectContaining({ name: 'unit + integração', status: 'running', timeoutMs: 3000 })]) })
+      expect(progress().sha).toBe(progress().base)
+      expect(existsSync(join(dir, '.supremo/verify-result.json'))).toBe(false)
+      await expect.poll(() => output, { timeout: 1000 }).toContain('secret scan… ok')
+      const [exitCode] = await done
+      expect(exitCode).toBe(1)
+      expect(progress()).toMatchObject({ status: 'failed', activeChecks: [] })
+      const result = JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8'))
+      expect(result).toMatchObject({ status: 'failed', failureReason: 'timeout', checks: expect.arrayContaining([expect.objectContaining({ name: 'unit + integração', status: 'failed', failureReason: 'timeout' })]) })
+      expect(result.checks).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'build' })]))
+      expect(output).toContain('tempo excedido; não confirma erro no código')
+    } finally {
+      if (child.exitCode === null) { child.kill('SIGTERM'); await done }
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 10000)
+
+  it('mantém erro real paralelo mesmo quando outra etapa excede tempo', () => {
+    const { dir, env } = setupProject(0, '')
+    try {
+      writeFileSync(join(dir, 'bin/vitest'), '#!/usr/bin/env node\nsetInterval(() => {}, 1000)\n')
+      writeShim(join(dir, 'bin'), 'tsc', 1, 'Type error: invalid fixture')
+      expect(() => execFileSync(process.execPath, ['verify.mjs', 'full', '--background'], { cwd: dir, env: { ...env, SUPREMO_VERIFY_STAGE_TIMEOUT_MS: '3000' }, stdio: 'pipe' })).toThrow()
+      const result = JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8'))
+      expect(result).toMatchObject({ status: 'failed', failureReason: 'code' })
+      expect(result.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'typecheck', failureReason: 'code' }), expect.objectContaining({ name: 'unit + integração', failureReason: 'timeout' })]))
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }, 10000)
+
+  it('registra interrupção e encerra somente filhos de validação, preservando processo independente', async () => {
+    const { dir, env } = setupProject(0, '')
+    writeFileSync(join(dir, 'bin/vitest'), '#!/usr/bin/env node\nrequire("node:fs").writeFileSync("validation-child.pid", String(process.pid)); setInterval(() => {}, 1000)\n')
+    const independent = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+    const independentDone = once(independent, 'exit')
+    const child = spawn(process.execPath, ['verify.mjs', 'full', '--background'], { cwd: dir, env, stdio: 'ignore' })
+    const done = once(child, 'exit')
+    try {
+      await expect.poll(() => existsSync(join(dir, 'validation-child.pid')), { timeout: 5000 }).toBe(true)
+      const pid = Number(readFileSync(join(dir, 'validation-child.pid'), 'utf8'))
+      child.kill('SIGTERM')
+      expect((await done)[0]).toBe(143)
+      expect(JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8'))).toMatchObject({ status: 'failed', checks: expect.arrayContaining([expect.objectContaining({ name: 'unit + integração', failureReason: 'interrupted' })]) })
+      await expect.poll(() => { try { process.kill(pid, 0); return true } catch { return false } }).toBe(false)
+      expect(independent.exitCode).toBeNull()
+      expect(() => process.kill(independent.pid!, 0)).not.toThrow()
+    } finally {
+      if (child.exitCode === null) { child.kill('SIGTERM'); await done }
+      independent.kill('SIGTERM'); await independentDone
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 10000)
+
+  it('Start limita geração de rotas e nunca libera typecheck ou outros checks após timeout', () => {
+    const { dir, env } = setupProject(0, '')
+    try {
+      writeFileSync(join(dir, 'verify.mjs'), verifyScript('tanstack-start-vite'))
+      writeFileSync(join(dir, 'scripts/generate-routes.mjs'), 'setInterval(() => {}, 1000)')
+      writeFileSync(join(dir, 'bin/tsc'), '#!/bin/sh\ntouch tsc-started\n')
+      expect(() => execFileSync(process.execPath, ['verify.mjs', 'full', '--background'], { cwd: dir, env: { ...env, SUPREMO_VERIFY_STAGE_TIMEOUT_MS: '500' }, stdio: 'pipe' })).toThrow()
+      expect(JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8'))).toMatchObject({ status: 'failed', failureReason: 'timeout', checks: [expect.objectContaining({ name: 'geração de rotas', type: 'typecheck', failureReason: 'timeout' })] })
+      expect(existsSync(join(dir, 'tsc-started'))).toBe(false)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('timeout de build não vira limitação ambiental deferida e o limite não pode ser removido', () => {
+    const { dir, env } = setupProject(0, '')
+    try {
+      writeFileSync(join(dir, 'bin/next'), '#!/usr/bin/env node\nconsole.error("ENOTFOUND registry.example"); setInterval(() => {}, 1000)\n')
+      expect(() => execFileSync(process.execPath, ['verify.mjs', 'full', '--background'], { cwd: dir, env: { ...env, SUPREMO_VERIFY_STAGE_TIMEOUT_MS: '3000' }, stdio: 'pipe' })).toThrow()
+      const result = JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8'))
+      expect(result).toMatchObject({ status: 'failed', failureReason: 'timeout', checks: expect.arrayContaining([expect.objectContaining({ name: 'build', type: 'build', failureReason: 'timeout' })]) })
+      writeShim(join(dir, 'bin'), 'next', 0)
+      execFileSync(process.execPath, ['verify.mjs', 'quick', '--background'], { cwd: dir, env: { ...env, SUPREMO_VERIFY_STAGE_TIMEOUT_MS: '999999999' }, stdio: 'pipe' })
+      expect(JSON.parse(readFileSync(join(dir, '.supremo/verify-result.json'), 'utf8')).checks).toContainEqual(expect.objectContaining({ name: 'typecheck', timeoutMs: 120000 }))
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }, 10000)
 
   it('build falha com assinatura CONHECIDA de limitação ambiental (porta ocupada) → DEFERE, verify sai com sucesso', () => {
     const { dir, env } = setupProject(1, 'Error: listen EADDRINUSE: address already in use :::3000')

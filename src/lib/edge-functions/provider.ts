@@ -35,7 +35,12 @@ export function supabaseFunctionProvider(resolve: () => Promise<{ projectRef: st
       await response.body?.cancel()
       throw new FunctionError(`Supabase recusou a operação de funções (HTTP ${response.status}). Confira as permissões da conexão.`, response.status === 401 || response.status === 403 ? response.status : 502)
     }
-    if (response.status === 204) return null
+    // POST secrets documents 201 with no response schema/body. Confirmation is
+    // a separate GET fingerprint read-back plus the signed handler probes.
+    if (response.status === 204 || (suffix === 'secrets' && method === 'POST' && response.status === 201)) {
+      await response.body?.cancel()
+      return null
+    }
     try { return await boundedJson(response, 512_000) }
     catch { throw new FunctionError('Resposta do Supabase não pôde ser confirmada. Consulte o status antes de repetir.', 502) }
   }

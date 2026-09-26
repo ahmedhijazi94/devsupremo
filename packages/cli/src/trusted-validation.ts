@@ -1,3 +1,4 @@
+import { TRUSTED_VALIDATION_POLICIES_4_0_15_5_1_3 } from '../../../src/lib/github/validation-policy-releases/4.0.15-5.1.3'
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { TRUSTED_VALIDATION_POLICIES } from './generated/validation-policy'
@@ -15,7 +16,7 @@ import { blobHash, inspectValidationIntegrity, type PolicyTreeEntry } from './va
 import { readStableFile } from './stable-file'
 
 // Published project rails remain verifiable when only their engine is upgraded.
-const localPolicies = [...TRUSTED_VALIDATION_POLICIES, ...TRUSTED_VALIDATION_POLICIES_4_0_14_5_1_2, ...TRUSTED_VALIDATION_POLICIES_4_0_13_5_1_1, ...TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0, ...TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1,
+const localPolicies = [...TRUSTED_VALIDATION_POLICIES, ...TRUSTED_VALIDATION_POLICIES_4_0_15_5_1_3, ...TRUSTED_VALIDATION_POLICIES_4_0_14_5_1_2, ...TRUSTED_VALIDATION_POLICIES_4_0_13_5_1_1, ...TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0, ...TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1,
   ...TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0, ...TRUSTED_VALIDATION_POLICIES_4_0_9, ...TRUSTED_VALIDATION_POLICIES_4_0_8,
   ...TRUSTED_VALIDATION_POLICIES_4_0_7, ...TRUSTED_VALIDATION_POLICIES_4_0_6, ...TRUSTED_VALIDATION_POLICIES_4_0_5]
 

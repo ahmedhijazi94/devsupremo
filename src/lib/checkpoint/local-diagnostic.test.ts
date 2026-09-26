@@ -32,6 +32,27 @@ describe('safe local checkpoint diagnostics', () => {
     expect(inferLocalDiagnostic({ logs: '', checks: [{ name: 'acceptance contract', status: 'passed' }] })).toBe('validation')
     expect(localDiagnosticCodeSchema.safeParse('password=private').success).toBe(false)
   })
+  it.each([
+    ['typecheck', 'typecheck_timeout'], ['lint', 'lint_timeout'], ['build', 'build_timeout'],
+    ['unit + integração', 'tests_timeout'], ['testes afetados', 'tests_timeout'], ['browser e2e', 'tests_timeout'],
+    ['secret scan', 'security_timeout'], ['rls / isolamento', 'rls_timeout'], ['geração de rotas', 'typecheck_timeout'],
+    ['private/path/password', 'validation_timeout'], ['toString', 'validation_timeout'],
+  ])('explains timed-out %s without misreporting a code error', (name, expected) => {
+    const code = inferLocalDiagnostic({ logs: 'private secret', checks: [{ name, type: 'external_dependency', status: 'failed', failureReason: 'timeout' }] })
+    expect(code).toBe(expected)
+    expect(presentLocalDiagnostic(code).cause).toContain('tempo')
+    expect(JSON.stringify(presentLocalDiagnostic(code))).not.toMatch(/private|secret|password/)
+  })
+  it('distinguishes interruption from timeout and preserves actual concurrent failures', () => {
+    expect(inferLocalDiagnostic({ logs: '', checks: [{ name: 'build', type: 'build', status: 'failed', failureReason: 'interrupted' }] })).toBe('validation_interrupted')
+    expect(inferLocalDiagnostic({ logs: '', checks: [{ name: 'unit', type: 'unit', status: 'failed', failureReason: 'timeout' }] })).toBe('tests_timeout')
+    expect(inferLocalDiagnostic({ logs: '', checks: [
+      { name: 'unit', type: 'external_dependency', status: 'failed', failureReason: 'timeout' },
+      { name: 'typecheck', type: 'typecheck', status: 'failed', failureReason: 'code' },
+    ] })).toBe('typecheck')
+    expect(inferLocalDiagnostic({ logs: '', checks: [{ name: 'typecheck', status: 'passed', failureReason: 'timeout' }] })).toBe('validation')
+    expect(inferLocalDiagnostic({ logs: '', checks: [{ name: 'private', type: 'toString', status: 'failed', failureReason: 'timeout' }] })).toBe('validation_timeout')
+  })
   it('only displays the current checkpoint revision, never a success or CI approval', () => {
     expect(readLocalDiagnostic(stored, current)?.stage).toBe('Contrato de testes')
     for (const patch of [{ revision: 5 }, { commitSha: 'b'.repeat(40) }, { validationStatus: 'passed' },

@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createServer } from 'node:net'
 import { performance } from 'node:perf_hooks'
-import { chromium, type Browser, type Page, type Request } from '@playwright/test'
+import { chromium, expect, type Browser, type Page, type Request } from '@playwright/test'
 import { buildProjectFiles } from '../src/lib/templates/project-files'
 
 const workspace = mkdtempSync(join(tmpdir(), 'supremo-start-runtime-'))
@@ -123,12 +123,17 @@ async function componentAcceptance(page: Page, url: string) {
   await page.getByLabel('Nome de exemplo').fill('Preservado')
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'hidden' })
-  assert.equal(await page.getByRole('button', { name: 'Abrir diálogo', exact: true }).evaluate(element => element === document.activeElement), true)
-  await page.getByRole('button', { name: 'Ações', exact: true }).focus()
+  await expect(page.getByRole('button', { name: 'Abrir diálogo', exact: true })).toBeFocused()
+  const actions = page.getByRole('button', { name: 'Ações', exact: true })
+  await actions.focus()
   await page.keyboard.press('ArrowDown')
   await page.getByRole('menuitem', { name: 'Escolher' }).waitFor()
   await page.keyboard.press('Enter')
   await page.getByRole('status').filter({ hasText: 'Selecionado' }).waitFor()
+  // Selection renders before Radix's deferred close autofocus. Wait for that
+  // accessible hand-off before testing tabs, or the menu can steal ArrowRight.
+  await page.getByRole('menu').waitFor({ state: 'hidden' })
+  await expect(actions).toBeFocused()
   await page.getByRole('tab', { name: 'Primeira' }).focus()
   await page.keyboard.press('ArrowRight')
   await page.getByRole('tabpanel', { name: 'Segunda' }).waitFor()
@@ -136,7 +141,7 @@ async function componentAcceptance(page: Page, url: string) {
   await page.getByRole('tooltip').waitFor()
   await page.screenshot({ path: join(workspace, 'components-mobile-dark.png'), fullPage: true })
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true)
-  checks.accessibleComponents = { dialogFocusRestored: true, dropdownKeyboard: true, tabsKeyboard: true, tooltipFocus: true, productionCsp: true }
+  checks.accessibleComponents = { dialogFocusRestored: true, dropdownKeyboard: true, dropdownFocusRestored: true, tabsKeyboard: true, tooltipFocus: true, productionCsp: true }
 }
 
 async function devAcceptance(cwd: string, stack: 'start' | 'next') {

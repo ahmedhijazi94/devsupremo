@@ -28,6 +28,12 @@ const fixture=(sql:string)=>sql.replace('CREATE EXTENSION IF NOT EXISTS pg_cron 
 const json=(sql:string)=>JSON.parse(run(`SELECT COALESCE(json_agg(x),'[]'::json) FROM (${sql}) x`)) as Record<string,unknown>[]
 execute(target,`CREATE ROLE ${owner} LOGIN PASSWORD 'isolated-password' CREATEROLE NOSUPERUSER NOBYPASSRLS;CREATE DATABASE ${name} OWNER ${owner};`)
 try {
+  // pg_cron preloaded by CI marks cron.timezone as a restricted setting. Mirror
+  // the read-only settings grant in the real scheduler proof; retain the
+  // NOSUPERUSER/NOBYPASSRLS role and execute the production timezone assertion.
+  admin(`GRANT pg_read_all_settings TO ${owner};`)
+  assert.equal(run("SELECT rolsuper::text||','||rolbypassrls::text||','||pg_has_role(current_user,'pg_read_all_settings','USAGE')::text FROM pg_roles WHERE rolname=current_user"),'false,false,true')
+  assert.equal(run("SELECT current_setting('data_directory') IS NOT NULL"),'t','The fixture can inspect restricted settings without superuser or RLS bypass')
   admin("DO $$BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN;END IF;IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN;END IF;END$$;")
   run(`CREATE SCHEMA cron;
  CREATE TABLE cron.job(jobid bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,jobname text NOT NULL UNIQUE,username text NOT NULL DEFAULT current_user,database text NOT NULL DEFAULT current_database(),schedule text NOT NULL,command text NOT NULL,active boolean NOT NULL DEFAULT true);ALTER TABLE cron.job ENABLE ROW LEVEL SECURITY;

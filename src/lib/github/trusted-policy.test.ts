@@ -152,7 +152,10 @@ describe('independent engine policy over actual generated candidates', () => {
     const next = candidate(kind)
     const mixed = { ...input, tree: input.tree.map(entry => entry.path === 'scripts/security-audit.js' ? next.tree.find(file => file.path === entry.path)! : entry) }
     expect(verifyCandidatePolicy(mixed).approved).toBe(false)
-  })
+    // This integration case validates a generated project against every
+    // archived release plus sixteen tampered candidates. Shared CI runners
+    // need a bounded integration-test budget, not the 5s unit-test default.
+  }, 15_000)
   it.each(['public', 'solo', 'team'] as const)('accepts intact released %s validators', kind => {
     expect(verifyCandidatePolicy(candidate(kind))).toMatchObject({ approved: true, reasons: [] })
   })

@@ -24,6 +24,41 @@ describe('autoridade do ambiente', () => {
   it('permite DDL aditivo com FK e RLS', () => {
     expect(() => validateAutomaticMigration('create table notes (id uuid primary key, user_id uuid references auth.users(id) on delete cascade); alter table notes enable row level security;')).not.toThrow()
   })
+  it('permite inserir o administrador confirmado de forma idempotente, sem confundir DO NOTHING com bloco DO', () => {
+    expect(() => validateAutomaticMigration(`
+      INSERT INTO public.platform_admins (user_id)
+      SELECT id FROM auth.users
+      WHERE id = '00000000-0000-4000-8000-000000000001'::uuid
+        AND email_confirmed_at IS NOT NULL
+      ON CONFLICT (user_id) DO NOTHING;
+    `)).not.toThrow()
+  })
+  it.each([
+    'ON CONFLICT DO NOTHING',
+    'on conflict (user_id) do nothing',
+    'ON\nCONFLICT (user_id, org_id)\nDO\nNOTHING',
+  ])('permite a cláusula idempotente estática: %s', (clause) => {
+    expect(() => validateAutomaticMigration(`INSERT INTO public.members (user_id, org_id) VALUES ('user', 'org') ${clause};`)).not.toThrow()
+  })
+  it.each([
+    'ON CONFLICT (user_id) DO UPDATE SET org_id = excluded.org_id;',
+    'ON CONFLICT (user_id) DO NOTHING; DO $$ SELECT 1; $$;',
+    'ON CONFLICT (user_id) DO NOTHING; DROP TABLE public.members;',
+    'ON CONFLICT (user_id) DO NOTHING; UPDATE public.members SET org_id = NULL;',
+    'ON CONFLICT (user_id) DO NOTHING; DELETE FROM public.members;',
+    'ON CONFLICT (user_id) DO NOTHING; COMMIT;',
+    "ON CONFLICT (user_id) DO NOTHING; EXECUTE 'SELECT 1';",
+    'ON CONFLICT (user_id) DO NOTHING; ALTER TABLE public.members DISABLE ROW LEVEL SECURITY;',
+    'ON CONFLICT (user_id) DO /* not a supported clause */ NOTHING;',
+    'ON CONFLICT (lower(user_id)) DO NOTHING;',
+  ])('a exceção idempotente não libera outros comandos ou sintaxe ambígua: %s', (suffix) => {
+    expect(() => validateAutomaticMigration(`INSERT INTO public.members (user_id) VALUES ('user') ${suffix}`)).toThrow()
+  })
+  it('não esconde comandos proibidos dentro da origem do INSERT ou de literais', () => {
+    expect(() => validateAutomaticMigration(`INSERT INTO public.notes (body) VALUES ('DROP TABLE notes') ON CONFLICT DO NOTHING;`)).toThrow()
+    expect(() => validateAutomaticMigration(`INSERT INTO public.notes (body) SELECT pg_read_file('/etc/passwd') ON CONFLICT DO NOTHING;`)).toThrow()
+    expect(() => validateAutomaticMigration(`INSERT INTO public.notes (body) VALUES ('ON CONFLICT DO NOTHING'); DO $$ SELECT 1; $$;`)).toThrow()
+  })
   it('permite o trigger de updated_at usado pela feature real do v3-21', () => {
     expect(() => validateAutomaticMigration('CREATE TRIGGER suggestions_updated_at BEFORE UPDATE ON public.suggestions FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();')).not.toThrow()
   })

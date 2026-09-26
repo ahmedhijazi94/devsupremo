@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { requireDevelopment, validateAutomaticMigration } from './policy'
 import { buildInitialMigrationQuery } from '@/lib/provisioning/provision'
+import { foreignKeyReplacementPreconditions, parseForeignKeyReplacements } from './foreign-key-replacement'
 
 export type Migration = { path: string; content: string }
 export type MigrationHistory = { version: string; statements: string[] | null }
@@ -39,7 +40,11 @@ export async function runDatabaseOperation(
       continue
     }
     if (history.some((row) => row.version > version)) throw new Error(`Migration fora de ordem: ${migration.path}. Use um timestamp novo.`)
-    validateAutomaticMigration(migration.content)
+    try { validateAutomaticMigration(migration.content) }
+    catch (error) {
+      if (!(error instanceof Error)) throw error
+      throw new Error(`${migration.path}: ${error.message}`)
+    }
     pending.push(migration)
   }
   const applied: string[] = []
@@ -49,8 +54,9 @@ export async function runDatabaseOperation(
     // conteúdo divergente dentro da transação, inclusive após timeout/retry.
     const version = migration.path.split('/').pop()!.split('_')[0]!
     const digest = createHash('sha256').update(migration.content).digest('hex')
-    const query = buildInitialMigrationQuery(migration.path, migration.content).replace(
-      'commit;',
+    const preconditions = foreignKeyReplacementPreconditions(parseForeignKeyReplacements(migration.content))
+    const query = buildInitialMigrationQuery(migration.path, migration.content, preconditions).replace(
+      /commit;$/,
       `do $supremo_verify$ begin if not exists (select 1 from supabase_migrations.schema_migrations where version = '${version}' and encode(sha256(convert_to(array_to_string(statements, E'\\n'), 'UTF8')), 'hex') = '${digest}') then raise exception 'Migration content conflict'; end if; end $supremo_verify$;\ncommit;`,
     )
     await deps.query(ref, query)

@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { assertSafeSql } from '@/lib/database/sql-guard'
 import { maskVerifiedTriggerSyntax } from './trigger-migration'
+import { assertExplicitForeignKeyDelete } from './foreign-key-contract'
+import { parseForeignKeyReplacements } from './foreign-key-replacement'
 
 export const environmentSchema = z.object({
   project_ref: z.string().min(1),
@@ -39,13 +41,30 @@ export const databaseRequestSchema = z.object({
   }).strict()).max(100).optional(),
 }).strict()
 
+/** Only the DO keyword in an idempotent INSERT clause is exempted. Keep
+ * the conflict target, source query and every other token under inspection;
+ * in particular this does not exempt DO UPDATE or anonymous DO blocks.
+ * Expressions, quoted targets and comments within the clause remain outside
+ * this deliberately narrow grammar and fail closed.
+ */
+function maskConflictDoNothing(sql: string): string {
+  return sql.replace(
+    /(\bon\s+conflict(?:\s*\(\s*[a-z_][a-z_0-9]*(?:\s*,\s*[a-z_][a-z_0-9]*)*\s*\))?\s+)do(?=\s+nothing\b)/gi,
+    '$1  ',
+  )
+}
+
 export function validateAutomaticMigration(sql: string): void {
   assertSafeSql(sql, { allowDdl: true })
+  assertExplicitForeignKeyDelete(sql)
+  // This grammar only authorizes a candidate. The service verifies equivalence
+  // against the locked catalog inside the migration transaction before applying.
+  if (parseForeignKeyReplacements(sql).length > 0) return
   // Conservador: operações destrutivas/dinâmicas seguem fora do caminho automático.
   // Examina também strings e comentários: falsos positivos falham explicitamente.
   // BEGIN de um corpo PL/pgSQL e EXECUTE FUNCTION de um gatilho verificado
   // não são transação nem SQL dinâmico. O restante do corpo continua inspecionado.
-  const checked = maskVerifiedTriggerSyntax(sql)
+  const checked = maskConflictDoNothing(maskVerifiedTriggerSyntax(sql))
     .replace(/\bon\s+delete\s+(cascade|restrict|set\s+null|no\s+action)\b/gi, '')
     .replace(/\bfor\s+delete\b/gi, '')
   if (/\b(drop|truncate|execute|do|commit|rollback|begin|call|copy|dblink|pg_read_file|pg_write_file)\b|\bdelete\s+from\b|\bupdate\s+[\w."]+\s+set\b/i.test(checked) || /\bsupabase_migrations\b/i.test(sql)) {

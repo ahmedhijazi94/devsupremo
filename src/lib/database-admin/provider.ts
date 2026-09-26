@@ -3,14 +3,35 @@ import { boundedJson, InspectionError } from '../database-inspection/provider'
 import type { AuthAdminProvider } from './service'
 import { readOnlyTransaction } from '../database-inspection/sql'
 
+async function authProviderError(response: Response, recoveryTemplate: boolean): Promise<InspectionError> {
+  const fallback = new InspectionError(`Supabase recusou a operação de autenticação (HTTP ${response.status}). ${response.status === 401 || response.status === 403 ? 'Confira as permissões da conexão; ' : ''}resultado não confirmado.`, response.status === 403 ? 403 : 502)
+  if (response.status !== 400 || !recoveryTemplate) {
+    await response.body?.cancel()
+    return fallback
+  }
+  // Classify only a bounded provider diagnostic. Never return its message: it
+  // may echo SMTP passwords, template contents or other private configuration.
+  let raw: unknown
+  try { raw = await boundedJson(response, 16_000) }
+  catch { return fallback }
+  const diagnostic = z.object({ message: z.union([z.string(), z.array(z.string())]).optional(), error: z.string().optional() }).safeParse(raw)
+  if (!diagnostic.success) return fallback
+  const text = [diagnostic.data.message, diagnostic.data.error].flat().filter(Boolean).join(' ')
+  // https://supabase.com/changelog/46599-changes-to-email-template-customisation-on-free-tier
+  if (/template/i.test(text) && /smtp|default email (?:provider|service)/i.test(text) && /custom|default|configur|required|enable|restrict|allow|edit/i.test(text)) {
+    return new InspectionError('Supabase bloqueou a edição do template de email com o provedor padrão (HTTP 400). Novos projetos Free exigem SMTP próprio para personalizar esses templates. Para envio pela API HTTP, publique e configure o Send Email Hook pelo motor; o código ou link deve ser renderizado pela função. Nenhuma configuração foi confirmada.', 409)
+  }
+  return fallback
+}
+
 /** All credentials stay in the control plane; re-authorize before every provider request. */
 export function supabaseAuthAdminProvider(resolve: () => Promise<{ projectRef: string; token: string }>, secrets: string[]): AuthAdminProvider {
   const send = async (url: string, method: string, headers: Record<string, string>, body?: object) => {
     const response = await fetch(url, { method, headers: { ...headers, 'Content-Type': 'application/json' },
       ...(body ? { body: JSON.stringify(body) } : {}), cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12000) })
     if (!response.ok) {
-      await response.body?.cancel()
-      throw new InspectionError(`Supabase recusou a operação de autenticação (HTTP ${response.status}). Confira as permissões da conexão; resultado não confirmado.`, response.status === 403 ? 403 : 502)
+      const recoveryTemplate = method === 'PATCH' && body !== undefined && Object.hasOwn(body, 'mailer_templates_recovery_content')
+      throw await authProviderError(response, recoveryTemplate)
     }
     return response.status === 204 ? null : boundedJson(response)
   }

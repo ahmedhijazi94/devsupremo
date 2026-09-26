@@ -32,6 +32,7 @@ const rawConfigSchema = z.object({ mailer_autoconfirm: z.boolean(), disable_sign
   smtp_admin_email: z.string().max(1000).nullable().optional(),
   mailer_subjects_recovery: z.string().max(1000).nullable().optional(),
   mailer_templates_recovery_content: z.string().max(100_000).nullable().optional(),
+  hook_send_email_enabled: z.boolean().nullable().optional(),
 })
 function recoveryMode(content: string | null): 'code' | 'link' | 'custom' {
   if (content === recoveryEmails.code.content) return 'code'
@@ -41,11 +42,20 @@ function recoveryMode(content: string | null): 'code' | 'link' | 'custom' {
 export function configView(raw: unknown) {
   const config = rawConfigSchema.parse(raw)
   const smtpFields = [config.smtp_host, config.smtp_user, config.smtp_admin_email]
+  const smtpKnown = smtpFields.some(value => value !== undefined)
+  const smtpConfigured = smtpFields.every(value => Boolean(value?.trim()))
+  const hookEnabled = config.hook_send_email_enabled === true
   return { emailConfirmation: !config.mailer_autoconfirm, signupsEnabled: !config.disable_signup,
     ...(config.external_anonymous_users_enabled !== undefined ? { anonymousSignIns: config.external_anonymous_users_enabled } : {}),
     ...(config.site_url !== undefined ? { siteUrl: config.site_url } : {}),
-    ...(smtpFields.some(value => value !== undefined) ? { smtp: { configured: smtpFields.every(value => Boolean(value?.trim())) } } : {}),
-    ...(config.mailer_templates_recovery_content !== undefined ? { recoveryEmailMode: recoveryMode(config.mailer_templates_recovery_content) } : {}),
+    ...(smtpKnown ? { smtp: { configured: smtpConfigured } } : {}),
+    ...(config.hook_send_email_enabled !== undefined ? { emailDelivery: {
+      transport: hookEnabled ? 'auth_hook' : smtpKnown ? smtpConfigured ? 'custom_smtp' : 'supabase_default' : 'unknown',
+      recoveryTemplateSource: hookEnabled ? 'auth_hook' : 'supabase', deliveryVerified: false,
+    } } : {}),
+    ...(hookEnabled || config.mailer_templates_recovery_content !== undefined ? {
+      recoveryEmailMode: hookEnabled ? 'custom' : recoveryMode(config.mailer_templates_recovery_content!),
+    } : {}),
   }
 }
 const userViewSchema = z.object({ id: z.string().uuid(), email: z.string().nullable().optional(),
@@ -70,6 +80,11 @@ export async function runAuthAdmin(provider: AuthAdminProvider, raw: AuthOptions
     const before = configView(await provider.management('config/auth', 'GET'))
     const desired = options.config
     const recovery = desired.recoveryEmailMode ? recoveryEmails[desired.recoveryEmailMode] : undefined
+    // A Send Email Hook renders its own email_data.token/token_hash; changing
+    // the SMTP template cannot configure (or prove) the hook's recovery mode.
+    if (recovery && before.emailDelivery?.transport === 'auth_hook') {
+      throw new InspectionError('O Send Email Hook está ativo e renderiza o próprio email. Configure código ou link na função de envio pelo motor; recoveryEmailMode altera somente o template do envio SMTP. Nenhuma configuração foi enviada.', 409)
+    }
     await provider.management('config/auth', 'PATCH', {
       ...(desired.emailConfirmation !== undefined ? { mailer_autoconfirm: !desired.emailConfirmation } : {}),
       ...(desired.signupsEnabled !== undefined ? { disable_signup: !desired.signupsEnabled } : {}),

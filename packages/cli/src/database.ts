@@ -9,6 +9,8 @@ import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
 import { z } from 'zod'
 import { credentialResponse, readJobManifest, secretResponse, secretResponseSchema, selectRequestedSecrets } from './project-service-request'
 import { readProjectStack } from './framework-runtime'
+import { readFunctionDeployment } from './functions-request'
+import { functionResponseSchema } from '../../../src/lib/edge-functions/contract'
 export type { DatabaseOperation, DatabaseOptions } from './database-request'
 
 export interface DatabaseStatus {
@@ -46,13 +48,14 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   const secret = readDeviceSecret(resolveKeychain(), config.projectId, config.apiBaseUrl)
   if (!secret) throw new Error('O daemon não conseguiu acessar a autorização deste dispositivo. Verifique o keychain na máquina que executou o bootstrap.')
   const issuer = deviceIssuer(config.apiBaseUrl)
-  const url = new URL(`${issuer}/api/${operation.startsWith('secrets-') ? 'secrets' : 'database'}`)
+  const url = new URL(`${issuer}/api/${operation.startsWith('secrets-') ? 'secrets' : operation.startsWith('functions-') ? 'functions' : 'database'}`)
   if (url.username || url.password || url.search || url.hash) throw new Error('Endpoint contém componentes não permitidos.')
   if (url.protocol !== 'https:' && !(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:')) {
     throw new Error('O endpoint do Supremo deve usar HTTPS.')
   }
   const request = async (op: string, extra: Record<string, unknown> = {}) => {
-    const res = await fetch(url, {
+    const endpoint = op === 'status' && operation.startsWith('functions-') ? new URL(`${issuer}/api/database`) : url
+    const res = await fetch(endpoint, {
       method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, operation: op, ...extra }),
       signal: AbortSignal.timeout(op === 'status' ? 15_000 : 60_000),
@@ -78,6 +81,17 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   // Snapshot informativo, jamais usado como autorização para uma escrita futura.
   fs.writeFileSync(path.join(cwd, '.supremo/database.json'), JSON.stringify(status, null, 2) + '\n')
   if (operation === 'status') return status
+  if (operation.startsWith('functions-')) {
+    const target = z.object({ environment: z.enum(['development', 'production']),
+      projectRef: z.string().regex(/^[a-z0-9_-]+$/).max(64) }).safeParse(status)
+    if (!target.success || checkedOptions.environment !== target.data.environment) throw new Error('Funções exigem o ambiente explicitamente selecionado e confirmado pelo Supremo.')
+    const deployment = operation === 'functions-deploy' ? readFunctionDeployment(cwd, checkedOptions) : checkedOptions
+    const result = functionResponseSchema.safeParse(await request(operation, { ...deployment, expectedRef: target.data.projectRef, environment: target.data.environment }))
+    if (!result.success || result.data.projectId !== config.projectId || result.data.projectRef !== target.data.projectRef || result.data.environment !== target.data.environment || result.data.operation !== operation) {
+      throw new Error('Resposta da operação de funções não corresponde ao projeto e à solicitação autorizados.')
+    }
+    return result.data
+  }
   if (operation.startsWith('auth-')) {
     const target = z.object({ environment: z.enum(['development', 'production', 'unknown']),
       projectRef: z.string().regex(/^[a-z0-9_-]+$/).max(64) }).parse(status)
@@ -92,9 +106,13 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     // a local .env file or a credential exposed to the agent.
     return request(operation, { ...checkedOptions, expectedRef: target.projectRef, environment: target.environment })
   }
+  if (operation.startsWith('cron-')) {
+    const target = z.object({ environment: z.enum(['development', 'production']), projectRef: z.string().regex(/^[a-z0-9_-]{1,64}$/) }).parse(status)
+    if ((checkedOptions.environment ?? 'development') !== target.environment) throw new Error('Jobs exigem o ambiente explicitamente selecionado e confirmado pelo Supremo.')
+    return request(operation, { ...checkedOptions, expectedRef: target.projectRef, environment: target.environment,
+      ...(operation === 'cron-apply' ? { manifest: readJobManifest(cwd) } : {}) })
+  }
   const expectedRef = validateLocalTarget(cwd, status)
-  if (operation.startsWith('cron-')) return request(operation, { ...checkedOptions, expectedRef, environment: 'development',
-    ...(operation === 'cron-apply' ? { manifest: readJobManifest(cwd) } : {}) })
   if (operation === 'anonymous-auth') return request(operation, { expectedRef })
   const directory = path.join(cwd, 'supabase/migrations')
   const migrations = fs.readdirSync(directory).filter((name) => name.endsWith('.sql')).sort().map((name) => ({

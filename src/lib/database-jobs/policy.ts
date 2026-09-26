@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { scheduledFunctionAction } from './function-contract'
 import { isSensitiveIdentifier } from '../database-inspection/sensitive'
 
 export const jobIdentifier = z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/)
@@ -99,10 +100,14 @@ export const jobManifestEntrySchema = z
       .strict(),
   })
   .strict()
+export const functionJobManifestEntrySchema = jobManifestEntrySchema.extend({ action: scheduledFunctionAction })
+export type FunctionJobDefinition = z.infer<typeof functionJobManifestEntrySchema>
+export type AnyJobDefinition = z.infer<typeof jobManifestEntrySchema> | FunctionJobDefinition
+export function isFunctionJob(job: AnyJobDefinition): job is FunctionJobDefinition { return job.action.type === 'function' }
 export const jobsManifestSchema = z
   .object({
     version: z.literal(1),
-    jobs: z.array(jobManifestEntrySchema).min(1).max(8),
+    jobs: z.array(z.union([jobManifestEntrySchema, functionJobManifestEntrySchema])).min(1).max(8),
   })
   .strict()
   .refine(

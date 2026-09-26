@@ -2,8 +2,8 @@ import { stackForVersion, type ProjectStack } from '../../../packages/cli/src/pr
 
 export { resolveProjectStack, stackForVersion, type ProjectStack } from '../../../packages/cli/src/project-stack'
 
-export const NEXT_TEMPLATE_VERSION = '4.0.14'
-export const START_TEMPLATE_VERSION = '5.1.2'
+export const NEXT_TEMPLATE_VERSION = '4.0.15'
+export const START_TEMPLATE_VERSION = '5.1.3'
 
 // Activation is a release decision after real acceptance, separate from legacy resolution.
 export const DEFAULT_NEW_PROJECT_STACK: ProjectStack = 'tanstack-start-vite'

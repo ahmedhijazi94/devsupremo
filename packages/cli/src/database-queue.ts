@@ -11,6 +11,11 @@ const timeoutMs = 90_000
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 function timeoutMessage(operation: DatabaseOperation, options: DatabaseOptions): string {
+  if (operation.startsWith('functions-')) {
+    const check = operation.startsWith('functions-hook-') ? 'functions hook-status'
+      : options.slug ? `functions status ${options.slug}` : 'functions list'
+    return `O daemon não confirmou a operação de funções a tempo. Consulte ${check} antes de repetir: a operação pode ter concluído no provedor. Não presuma sucesso.`
+  }
   if (!operation.startsWith('secrets-')) return 'O daemon não confirmou a operação de banco a tempo. Consulte db status e repita migrate para verificar o histórico idempotente; não presuma sucesso.'
   const check = operation === 'secrets-credentials' || operation === 'secrets-revoke-credential' ? 'integrations credentials'
     : options.requestId && operation !== 'secrets-dismiss' ? `secrets status --request-id ${options.requestId}` : 'secrets status'

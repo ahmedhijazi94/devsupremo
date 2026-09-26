@@ -123,7 +123,9 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   ao provedor/finalidade e ao mesmo ambiente; nunca escolha por semelhança de nome.
   \`integrations request\` e \`integrations email\` com essa opção aplicam a configuração
   por API sem abrir navegador. Também existe \`integrations apply PEDIDO --credential-id UUID\`.
-  Sem referência adequada, use a CLI local com
+  Sem referência adequada, confira o pedido anterior com \`secrets status\`: uma chave
+  já instalada no destino correto continua utilizável mesmo sem referência no cofre.
+  Se ainda faltar a chave, use a CLI local com
   \`integrations request NOME --reason "finalidade" --target supabase --environment development\`
   (\`secrets request\` é equivalente). Abra o \`formUrl\` retornado no navegador do usuário;
   o campo seguro pertence ao projeto Supremo, não é um campo nativo inserido no chat.
@@ -153,6 +155,18 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   \`--credential-id UUID\` e conclua pelo motor, sem formulário ou painel do Supabase.
   O modo de recuperação pode ser ajustado por \`auth configure --environment development --config '{"recoveryEmailMode":"code"}'\`
   (ou \`link\`). \`auth config\` com \`smtp.configured\` confirma configuração, não entrega.
+- Se o usuário escolheu envio de email por API HTTP, preserve essa escolha. Publique a
+  função pelo comando \`functions deploy\`, com entrada e dependências locais explícitas,
+  e conecte-a com \`functions hook-configure NOME --environment development\`.
+  Esse canal gera e instala a assinatura privada \`AUTH_SEND_EMAIL_HOOK_SECRET\` no servidor,
+  verifica a função e configura o Send Email Hook por API, sem painel nem chave no chat.
+  A função deve validar Standard Webhooks no corpo bruto; o prefixo de variável
+  \`SUPABASE_\` é reservado e não pode ser usado para o segredo personalizado.
+  Veja o exemplo e os limites em .supremo/DEVELOPMENT.md. Use \`functions status NOME\`
+  e \`functions hook-status\` para confirmar cada etapa; não confunda publicação com envio.
+  O hook monta o email com código/link no próprio código. Não tente editar templates
+  SMTP com \`recoveryEmailMode\` para ativar esse caminho. Preserve o preview e retome
+  a implementação/teste autorizado; as suítes completas continuam em background.
 - Para definir a senha de uma conta de desenvolvimento quando solicitado, identifique
   o usuário com \`auth users\` e use \`auth password --user-id UUID --environment development\`.
   Abra o formulário seguro retornado para o usuário escolher a senha; não peça senha
@@ -160,6 +174,18 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   desenvolvimento dispensa SMTP e Vercel e não altera o fluxo público de recuperação.
   Senhas pessoais não são armazenadas nem reutilizadas pelo cofre de integrações.
   Pedidos de campos e configurações de integração não iniciam QA nem exigem checkpoint.
+- Pedidos como "todo dia", "a cada hora" ou "automaticamente às 9h" exigem rotina
+  real do app no Supabase Cron, não uma promessa nem um workflow GitHub de manutenção.
+  Consulte \`jobs list\` e reaproveite o ID existente. Confirme o fuso necessário e
+  registre a expressão UTC em supabase/jobs.json. Para chamar API ou executar código,
+  use \`jobs scaffold --slug NOME\` como base autenticada, implemente tarefa/idempotência,
+  publique com \`functions deploy\` e aplique \`jobs apply\`. O motor gera e instala
+  a assinatura; não peça essa chave ao usuário. Veja os contratos em .supremo/DEVELOPMENT.md.
+  Confirme \`jobs history\`: envio HTTP agendado não comprova conclusão da tarefa.
+- Tabelas, editor SQL de leitura, usuários, arquivos, funções, rotinas, logs e métricas
+  também ficam em Dados e serviços no projeto Supremo. Resolva pelo canal do motor;
+  não encaminhe o usuário ao Supabase/GitHub para operações já suportadas. Conexões de
+  conta e credenciais externas ausentes ainda exigem autorização/entrada segura do usuário.
 - Siga \`developmentPolicy.previousFailures=repair_before_request\`: o próprio agente
   de desenvolvimento corrige as falhas anteriores, inclusive segurança/RLS/migrations.
   Evidência antiga não prova falha atual: confira os arquivos e preserve trabalho novo.

@@ -9,7 +9,7 @@ import {
   validateJobTable,
 } from '../src/lib/database-jobs/catalog'
 import { compileJob } from '../src/lib/database-jobs/compile'
-import { jobsManifestSchema } from '../src/lib/database-jobs/policy'
+import { jobsManifestSchema, isFunctionJob } from '../src/lib/database-jobs/policy'
 import {
   bootstrapJobsSql,
   applyJobsSql,
@@ -135,6 +135,7 @@ try {
       },
     ],
   }).jobs[0]!
+  if (isFunctionJob(definition)) throw new Error('Fixture exige atualização SQL.')
   const readTable = () => asJson(tableCatalogSql('tickets'))[0]
   const prepare = () =>
     compileJob(projectId, definition, validateJobTable(definition, readTable()))

@@ -7,6 +7,7 @@ import { Command } from 'commander'
 import pkg from '../package.json'
 import { isKnownOrGlobal, unknownCommandMessage } from './command-guard'
 import { readDeviceSecret, saveDeviceIdentity, deviceIssuer } from './device-identity'
+import { registerFunctionCommands } from './functions-command'
 
 const program = new Command()
 
@@ -389,12 +390,18 @@ credentialCommands(program
 
 program
   .command('jobs <operation>')
-  .description('Tarefas Supabase: list, history, apply, pause, resume ou remove; apply lê supabase/jobs.json')
+  .description('Tarefas Supabase: list, history, apply, pause, resume, remove ou scaffold; apply lê supabase/jobs.json')
   .option('--job-id <id>', 'Identificador da tarefa gerenciada')
   .option('--limit <number>', 'Máximo de linhas (1–100)')
   .option('--offset <number>', 'Deslocamento da página (0–10000)')
-  .option('--environment <environment>', 'Ambiente esperado nas leituras')
+  .option('--environment <environment>', 'Ambiente esperado; escritas em produção exigem production explícito')
+  .option('--slug <slug>', 'Função agendada para gerar um handler autenticado com scaffold')
   .action(async (operation: string, options: Record<string, unknown>) => {
+    if (operation === 'scaffold') {
+      const { cronScaffold } = await import('./jobs-scaffold')
+      console.log(JSON.stringify(cronScaffold(process.cwd(), options)))
+      return
+    }
     if (!['list', 'history', 'apply', 'pause', 'resume', 'remove'].includes(operation)) throw new Error('Operação de tarefas inválida.')
     const { databaseOperationSchema, parseDatabaseOptions } = await import('./database-request')
     const { runDatabase } = await import('./database')
@@ -418,7 +425,7 @@ program
     try {
       const { databaseOperationSchema, parseDatabaseOptions } = await import('./database-request')
       const selected = databaseOperationSchema.parse(operation)
-      if (selected.startsWith('cron-') || selected.startsWith('secrets-') || selected.startsWith('auth-')) throw new Error('Use os comandos jobs, secrets ou auth para esta operação.')
+      if (selected.startsWith('cron-') || selected.startsWith('secrets-') || selected.startsWith('auth-') || selected.startsWith('functions-')) throw new Error('Use os comandos jobs, secrets, auth ou functions para esta operação.')
       if (sql !== undefined && options.sql !== undefined) throw new Error('Forneça SQL por argumento ou --sql, uma única vez.')
       const args: Record<string, unknown> = { ...options, ...(sql !== undefined ? { sql } : {}) }
       for (const key of ['limit', 'offset', 'minutes']) if (args[key] !== undefined) args[key] = Number(args[key])
@@ -458,6 +465,7 @@ program
     console.log(JSON.stringify(await runDatabase(selected, process.cwd(), parseDatabaseOptions(selected, options))))
   })
 
+registerFunctionCommands(program)
 guardUnknownCommand(process.argv.slice(2))
 if (process.argv.length === 2) program.outputHelp()
 else void (async () => {

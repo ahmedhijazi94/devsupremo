@@ -137,17 +137,25 @@ describe('declarative Supabase jobs retain environment and source restrictions',
     expect(() => parseDatabaseOptions('cron-apply', { manifest })).toThrow()
     expect(() => parseDatabaseOptions('cron-apply', { sql: 'delete from tickets' })).toThrow()
   })
-  it.each(['production', 'unknown'])('refuses all job mutations in %s', async target => {
+  it.each(['production', 'unknown'])('refuses implicit job mutations in %s', async target => {
     environment = target
     for (const operation of ['cron-apply', 'cron-pause', 'cron-resume', 'cron-remove'] as const) {
-      await expect(runDatabaseDirect(operation, cwd, operation === 'cron-apply' ? {} : { jobId: 'close-old-tickets' })).rejects.toThrow('protegidos')
+      await expect(runDatabaseDirect(operation, cwd, operation === 'cron-apply' ? {} : { jobId: 'close-old-tickets' })).rejects.toThrow()
     }
     expect(calls.every(call => call.body.operation === 'status')).toBe(true)
   })
-  it('rejects stale local database bindings before changing a job', async () => {
+  it('uses current server authority rather than stale local selectors for named job control', async () => {
     fs.writeFileSync(path.join(cwd, 'supabase/.temp/project-ref'), 'foreign-ref')
-    await expect(runDatabaseDirect('cron-pause', cwd, { jobId: 'close-old-tickets' })).rejects.toThrow('diverge')
-    expect(calls).toHaveLength(1)
+    await runDatabaseDirect('cron-pause', cwd, { jobId: 'close-old-tickets' })
+    expect(calls[1]!.body).toMatchObject({ expectedRef: 'owned-ref', environment: 'development' })
+  })
+  it('allows explicit production jobs only when confirmed by the current server binding', async () => {
+    environment = 'production'; fs.rmSync(path.join(cwd, '.env.local'))
+    await runDatabaseDirect('cron-apply', cwd, { environment: 'production' })
+    expect(calls[1]!.body).toMatchObject({ expectedRef: 'owned-ref', environment: 'production', manifest })
+    environment = 'development'
+    await expect(runDatabaseDirect('cron-pause', cwd, { environment: 'production', jobId: 'close-old-tickets' })).rejects.toThrow('explicitamente')
+    expect(calls).toHaveLength(3)
   })
   it('refuses arbitrary SQL, tokens, duplicate IDs and symlinked manifests', () => {
     expect(() => jobManifestSchema.parse({ ...manifest, sql: 'select 1' })).toThrow()

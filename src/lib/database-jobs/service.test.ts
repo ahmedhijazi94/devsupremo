@@ -28,12 +28,17 @@ describe('jobs authority and confirmed orchestration', () => {
     expect(() => requireJobTarget(record, 'other-ref', options({ environment }))).toThrow('Vínculo')
     expect(() => requireJobTarget(record, 'dev-ref', options({ environment: environment === 'development' ? 'production' : 'development' }))).toThrow('Vínculo')
   })
-  it.each(['production', 'unknown'] as const)('denies every mutation in %s', (environment) => {
+  it.each(['unknown'] as const)('denies every mutation in %s', (environment) => {
     const record = environment === 'unknown' ? null : { project_ref: 'dev-ref', environment, source: 'supremo_provisioned' }
     for (const operation of ['cron-apply', 'cron-pause', 'cron-resume', 'cron-remove'] as const) {
       const request = options({ operation, environment, ...(operation === 'cron-apply' ? { manifest: { version: 1, jobs: [job] } } : { jobId: job.id }) })
       expect(() => requireJobTarget(record, 'dev-ref', request)).toThrow('development')
     }
+  })
+  it('permits mutations only for an explicitly selected and trusted production target', () => {
+    const record = { project_ref: 'dev-ref', environment: 'production', source: 'supremo_provisioned' }
+    expect(requireJobTarget(record, 'dev-ref', options({ environment: 'production', operation: 'cron-pause', jobId: job.id })).environment).toBe('production')
+    expect(() => requireJobTarget(record, 'dev-ref', options({ environment: 'development', operation: 'cron-pause', jobId: job.id }))).toThrow('Vínculo')
   })
   it.each(['cron-list', 'cron-history'])('%s reports unavailable without installing anything', async (operation) => {
     const port = provider([{ ...capability, registry: false }])

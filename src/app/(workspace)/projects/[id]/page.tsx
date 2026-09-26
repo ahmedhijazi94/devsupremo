@@ -41,8 +41,9 @@ import type { Project } from '@/types/database'
 /**
  * Página do projeto — control plane, NÃO IDE. Mostra o estado do projeto e a
  * única ação de desenvolvimento: o comando local. O desenvolvimento acontece na
- * máquina do dev (Claude/Codex + localhost), não aqui: por isso não há editor,
- * preview, terminal, companion nem controles de deploy.
+ * máquina do dev (Claude/Codex + localhost), não aqui: por isso não há editor de código,
+ * preview, terminal, companion nem controles de deploy. Dados e serviços do
+ * projeto conectado podem ser inspecionados no console de backend.
  */
 interface ProjectWithAccounts extends Project {
   github_accounts: { login: string; avatar_url: string | null } | null
@@ -234,6 +235,14 @@ export default async function ProjectPage({
             actionLabel="Conectar Supabase"
           />
         </div>
+
+        {project.supabase_project_ref && (
+          <Link href={`/projects/${project.id}/backend`} className="bg-surface hover:bg-sunken flex items-center gap-3 rounded-[var(--radius-inner)] p-4 transition-colors sm:p-5">
+            <Database aria-hidden="true" className="text-ink h-5 w-5 shrink-0" />
+            <div className="min-w-0 flex-1"><h2 className="text-sm font-semibold">Dados e serviços</h2><p className="text-muted mt-1 text-xs">Tabelas, SQL, funções, agendamentos, logs e uso do projeto.</p></div>
+            <span className="shrink-0 text-xs font-medium">Abrir →</span>
+          </Link>
+        )}
 
         {/* Identidade do scaffold: capabilities, perfil, versões */}
         {provisioned && (

@@ -67,8 +67,14 @@ describe('typed jobs device route', () => {
     expect(String(last[1]!.body)).toContain(identity.projectId)
     expect(last[1]).toMatchObject({ redirect: 'error', cache: 'no-store' })
   })
-  it.each(['production', 'unknown'] as const)('refuses automatic jobs writes in %s before accessing credentials', async (env) => {
-    vi.mocked(readEnvironment).mockResolvedValue(env === 'unknown' ? null : { ...environment, environment: env })
+  it.each(['cron-apply', 'cron-pause', 'cron-resume', 'cron-remove'])('%s permits explicitly selected trusted production', async operation => {
+    vi.mocked(readEnvironment).mockResolvedValue({ ...environment, environment: 'production' })
+    const response = await POST(request({ operation, environment: 'production', ...(operation === 'cron-apply' ? { manifest: { version: 1, jobs: [job] } } : { jobId: job.id }) }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ readOnly: false, environment: 'production', data: { applied: true } })
+  })
+  it.each(['unknown', 'development', 'production'] as const)('refuses unknown or mismatched %s mutations before accessing credentials', async env => {
+    vi.mocked(readEnvironment).mockResolvedValue(env === 'unknown' ? null : { ...environment, environment: env === 'production' ? 'development' : 'production' })
     for (const operation of ['cron-apply', 'cron-pause', 'cron-resume', 'cron-remove']) {
       expect((await POST(request({ operation, environment: env, ...(operation === 'cron-apply' ? { manifest: { version: 1, jobs: [job] } } : { jobId: job.id }) }))).status).toBe(409)
     }

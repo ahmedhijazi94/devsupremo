@@ -139,8 +139,12 @@ describe('independent engine policy over actual generated candidates', () => {
     const input = candidate(kind, {}, 'tanstack-start-vite')
     expect(verifyCandidatePolicy(input)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     for (const path of ['vite.config.mts', 'vitest.config.mts', 'scripts/generate-routes.mjs', 'scripts/start-production.mjs', 'scripts/browser-diagnostics.ts', 'scripts/security-audit.js', '.github/workflows/ci.yml']) {
-      expect(verifyCandidatePolicy(candidate(kind, { [path]: 'process.exit(0)' }, 'tanstack-start-vite')).approved).toBe(false)
-      expect(verifyCandidatePolicy(candidate(kind, { [path]: null }, 'tanstack-start-vite')).approved).toBe(false)
+      // Mutate the real generated tree rather than rebuilding and hashing the
+      // entire bundled CLI fourteen times per profile on shared CI runners.
+      expect(input.tree.some(entry => entry.path === path)).toBe(true)
+      const modified = input.tree.map(entry => entry.path === path ? { ...entry, sha: blobHash('process.exit(0)') } : entry)
+      expect(verifyCandidatePolicy({ ...input, tree: modified }).approved).toBe(false)
+      expect(verifyCandidatePolicy({ ...input, tree: input.tree.filter(entry => entry.path !== path) }).approved).toBe(false)
     }
     const pkg = JSON.parse(input.packageContent) as { scripts: Record<string, string> }
     pkg.scripts['routes:generate'] = 'echo bypass'

@@ -140,9 +140,13 @@ describe('controlled environment and preparations', () => {
     fs.writeFileSync(path.join(cwd, 'node_modules/.bin/tool'), shim, { mode: 0o755 })
     await linkIsolatedDependencies(cwd, scratch)
     const privateBin = path.join(scratch, 'node_modules/.bin/tool')
-    expect(fs.lstatSync(privateBin).isFile()).toBe(true)
-    expect(fs.readFileSync(privateBin, 'utf8')).toBe(shim)
-    expect(fs.statSync(privateBin).mode & 0o111).toBe(0o111)
+    const descriptor = fs.openSync(privateBin, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+    try {
+      const stat = fs.fstatSync(descriptor)
+      expect(stat.isFile()).toBe(true)
+      expect(fs.readFileSync(descriptor, 'utf8')).toBe(shim)
+      expect(stat.mode & 0o111).toBe(0o111)
+    } finally { fs.closeSync(descriptor) }
   })
   it.each(['abort', 'deadline'] as const)('stops before filesystem preparation on an expired %s budget', async (reason) => {
     const scratch = path.join(cwd, 'scratch'); fs.mkdirSync(scratch)

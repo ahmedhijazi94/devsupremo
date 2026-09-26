@@ -2,7 +2,7 @@
 import type { ValidationManifest } from '../validation-integrity'
 export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
   {
-    "version": "4.0.14",
+    "version": "4.0.15",
     "kind": "public",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -2918,12 +2918,12 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "0201dda761eaa756553676dfcf8eaaeea297a080b20d324385078cb93ac18e4b"
+        "e9e0e25f35b724a641e5f14b0510a22d4a116f58c3a0d9c8713047b61cb3e645"
       ]
     ]
   },
   {
-    "version": "4.0.14",
+    "version": "4.0.15",
     "kind": "solo",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -5839,12 +5839,12 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "0201dda761eaa756553676dfcf8eaaeea297a080b20d324385078cb93ac18e4b"
+        "e9e0e25f35b724a641e5f14b0510a22d4a116f58c3a0d9c8713047b61cb3e645"
       ]
     ]
   },
   {
-    "version": "4.0.14",
+    "version": "4.0.15",
     "kind": "team",
     "files": {
       ".github/workflows/ci.yml": "21dd4270f37dab0b90abe9875dc0538b384dc24a",
@@ -8760,16 +8760,16 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "0201dda761eaa756553676dfcf8eaaeea297a080b20d324385078cb93ac18e4b"
+        "e9e0e25f35b724a641e5f14b0510a22d4a116f58c3a0d9c8713047b61cb3e645"
       ]
     ]
   },
   {
-    "version": "5.1.2",
+    "version": "5.1.3",
     "kind": "public",
     "files": {
       ".github/workflows/ci.yml": "83d8ff4f567bfc4bba228e14cbcdbb257ae7c131",
-      "scripts/security-audit.js": "8d27ba9144ddb780f7874a3274e15f5eb29b5655",
+      "scripts/security-audit.js": "2b63e36e485c524f68cd275fa316ec2d1c6bd06e",
       "scripts/verify.mjs": "f2e69a18fb74fbd4f7699159fe78d1b42a267f0e",
       "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
       "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
@@ -11738,16 +11738,16 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "0201dda761eaa756553676dfcf8eaaeea297a080b20d324385078cb93ac18e4b"
+        "e9e0e25f35b724a641e5f14b0510a22d4a116f58c3a0d9c8713047b61cb3e645"
       ]
     ]
   },
   {
-    "version": "5.1.2",
+    "version": "5.1.3",
     "kind": "solo",
     "files": {
       ".github/workflows/ci.yml": "83d8ff4f567bfc4bba228e14cbcdbb257ae7c131",
-      "scripts/security-audit.js": "8d27ba9144ddb780f7874a3274e15f5eb29b5655",
+      "scripts/security-audit.js": "2b63e36e485c524f68cd275fa316ec2d1c6bd06e",
       "scripts/verify.mjs": "f2e69a18fb74fbd4f7699159fe78d1b42a267f0e",
       "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
       "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
@@ -14716,16 +14716,16 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "0201dda761eaa756553676dfcf8eaaeea297a080b20d324385078cb93ac18e4b"
+        "e9e0e25f35b724a641e5f14b0510a22d4a116f58c3a0d9c8713047b61cb3e645"
       ]
     ]
   },
   {
-    "version": "5.1.2",
+    "version": "5.1.3",
     "kind": "team",
     "files": {
       ".github/workflows/ci.yml": "83d8ff4f567bfc4bba228e14cbcdbb257ae7c131",
-      "scripts/security-audit.js": "8d27ba9144ddb780f7874a3274e15f5eb29b5655",
+      "scripts/security-audit.js": "2b63e36e485c524f68cd275fa316ec2d1c6bd06e",
       "scripts/verify.mjs": "f2e69a18fb74fbd4f7699159fe78d1b42a267f0e",
       "scripts/acceptance-rls.mjs": "60ed26289f8a1b8e088f2a631b3974a5b9bcd5e3",
       "scripts/rls-isolation-inventory.mjs": "56f6d8a38d8ef775d40f6606f6329384d315b2fd",
@@ -17694,7 +17694,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "0201dda761eaa756553676dfcf8eaaeea297a080b20d324385078cb93ac18e4b"
+        "e9e0e25f35b724a641e5f14b0510a22d4a116f58c3a0d9c8713047b61cb3e645"
       ]
     ]
   }

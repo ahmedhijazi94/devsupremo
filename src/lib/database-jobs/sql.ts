@@ -11,19 +11,19 @@ import { jobManifestEntrySchema } from './policy'
 const hash = (s: string) => createHash('sha256').update(s).digest('hex')
 const lock =
   "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('supremo:provision:migrations'));"
-const begin = `BEGIN; SET LOCAL statement_timeout='30s'; SET LOCAL lock_timeout='2s'; SET LOCAL idle_in_transaction_session_timeout='35s'; SET LOCAL search_path=pg_catalog; SET LOCAL timezone='UTC'; ${lock}`
+export const begin = `BEGIN; SET LOCAL statement_timeout='30s'; SET LOCAL lock_timeout='2s'; SET LOCAL idle_in_transaction_session_timeout='35s'; SET LOCAL search_path=pg_catalog; SET LOCAL timezone='UTC'; ${lock}`
 const project = (id: string) => z.string().uuid().parse(id)
 const slug = (id: string) => jobManifestEntrySchema.shape.id.parse(id)
-const assertSql = (condition: string, message: string) =>
+export const assertSql = (condition: string, message: string) =>
   `DO $supremo_assert$ BEGIN IF NOT (${condition}) THEN RAISE EXCEPTION USING MESSAGE=${ql(message)}; END IF; END $supremo_assert$;`
-export const cronCapabilitySql = `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_extension WHERE extname='pg_cron') AS installed,pg_catalog.to_regclass('supremo_jobs.managed_jobs') IS NOT NULL AS registry,COALESCE(pg_catalog.current_setting('cron.timezone',true),'GMT') AS timezone`
+export const cronCapabilitySql = `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_extension WHERE extname='pg_cron') AS installed,pg_catalog.to_regclass('supremo_jobs.managed_jobs') IS NOT NULL AS registry,COALESCE(pg_catalog.current_setting('cron.timezone',true),'GMT') AS timezone,(pg_catalog.to_regclass('supremo_jobs.function_requests') IS NOT NULL AND pg_catalog.to_regclass('net._http_response') IS NOT NULL AND pg_catalog.to_regclass('vault.decrypted_secrets') IS NOT NULL) AS functions`
 
-const registrySafe = () =>
+export const registrySafe = () =>
   assertSql(
     `EXISTS(SELECT 1 FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_roles r ON r.oid=n.nspowner WHERE n.nspname='supremo_jobs' AND r.rolname=CURRENT_USER) AND EXISTS(SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_roles r ON r.oid=c.relowner WHERE n.nspname='supremo_jobs' AND c.relname='managed_jobs' AND c.relkind='r' AND c.relrowsecurity AND r.rolname=CURRENT_USER AND pg_catalog.obj_description(c.oid,'pg_class')='supremo.jobs.v1')`,
     'Registro de jobs não pertence ao motor autorizado.',
   )
-const capabilitiesSafe = () =>
+export const capabilitiesSafe = () =>
   assertSql(
     `EXISTS(SELECT 1 FROM pg_catalog.pg_extension WHERE extname='pg_cron') AND COALESCE(pg_catalog.current_setting('cron.timezone',true),'GMT') IN ('UTC','GMT','Etc/UTC')`,
     'pg_cron indisponível ou timezone diferente de UTC.',
@@ -73,7 +73,7 @@ export function runtimeJobSql(projectId: string, job: CompiledJob): string {
 
 // Remove privileges from the previous immutable wrapper and target before an
 // update. No DROP OWNED/CASCADE: unrelated objects can never be destroyed.
-function revokePreviousSql(projectId: string, id: string): string {
+export function revokePreviousSql(projectId: string, id: string): string {
   return `DO $supremo_previous$ DECLARE m record; col record; BEGIN
  SELECT * INTO m FROM supremo_jobs.managed_jobs WHERE project_id=${ql(projectId)}::uuid AND job_id=${ql(id)} FOR UPDATE;
  IF FOUND THEN
@@ -91,6 +91,7 @@ function revokePreviousSql(projectId: string, id: string): string {
 export function applyJobsSql(
   projectId: string,
   jobs: readonly CompiledJob[],
+  transaction = true,
 ): string {
   project(projectId)
   if (
@@ -100,7 +101,7 @@ export function applyJobsSql(
   )
     throw new Error('Manifesto inválido.')
   const ids = jobs.map((j) => ql(slug(j.definition.id))).join(',')
-  return `${begin} ${registrySafe()} ${capabilitiesSafe()}
+  return `${transaction ? begin : ''} ${registrySafe()} ${capabilitiesSafe()}
  ${assertSql(`(SELECT count(*) FROM supremo_jobs.managed_jobs WHERE project_id=${ql(projectId)}::uuid AND job_id NOT IN (${ids}))+${jobs.length}<=8`, 'Limite de oito jobs por projeto.')}
  ${jobs
    .map((job) => {
@@ -131,7 +132,7 @@ export function applyJobsSql(
  ON CONFLICT(project_id,job_id) DO UPDATE SET cron_id=excluded.cron_id,role_name=excluded.role_name,wrapper_name=excluded.wrapper_name,table_name=excluded.table_name,manifest_hash=excluded.manifest_hash,source_fingerprint=excluded.source_fingerprint,command_hash=excluded.command_hash,updated_at=now();
  SELECT cron.alter_job(cron_id,active:=active) FROM supremo_jobs.managed_jobs WHERE project_id=${ql(projectId)}::uuid AND job_id=${ql(job.definition.id)};`
    })
-   .join('\n')} COMMIT; SELECT true AS applied,${jobs.length} AS job_count;`
+   .join('\n')} ${transaction ? `COMMIT; SELECT true AS applied,${jobs.length} AS job_count;` : ''}`
 }
 const whereOwn = (projectId: string, id?: string) =>
   `m.project_id=${ql(project(projectId))}::uuid${id ? ` AND m.job_id=${ql(slug(id))}` : ''}`
@@ -146,7 +147,7 @@ export function listJobsSql(
   offset: number,
   id?: string,
 ): string {
-  return `SELECT m.job_id,m.table_name,m.active,j.schedule,'UTC' AS timezone,m.created_at,m.updated_at,(j.jobid IS NOT NULL AND j.jobname=m.job_key AND j.username=CURRENT_USER AND j.database=current_database() AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.command,'UTF8')),'hex')=m.command_hash AND j.active=m.active) AS synchronized FROM supremo_jobs.managed_jobs m LEFT JOIN cron.job j ON j.jobid=m.cron_id WHERE ${whereOwn(projectId, id)} ORDER BY m.job_id ${pagination(limit, offset)}`
+  return `SELECT m.job_id,m.table_name,CASE WHEN m.role_name='' THEN 'function' ELSE 'update' END AS type,m.table_name AS target,m.active,j.schedule,'UTC' AS timezone,m.created_at,m.updated_at,(j.jobid IS NOT NULL AND j.jobname=m.job_key AND j.username=CURRENT_USER AND j.database=current_database() AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.command,'UTF8')),'hex')=m.command_hash AND j.active=m.active) AS synchronized FROM supremo_jobs.managed_jobs m LEFT JOIN cron.job j ON j.jobid=m.cron_id WHERE ${whereOwn(projectId, id)} ORDER BY m.job_id ${pagination(limit, offset)}`
 }
 export function historyJobsSql(
   projectId: string,

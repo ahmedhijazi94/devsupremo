@@ -11,6 +11,7 @@ import { TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0 } from './validation-policy-re
 import { TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1 } from './validation-policy-releases/4.0.11-5.0.1'
 import { TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0 } from './validation-policy-releases/4.0.12-5.1.0'
 import { TRUSTED_VALIDATION_POLICIES_4_0_13_5_1_1 } from './validation-policy-releases/4.0.13-5.1.1'
+import { TRUSTED_VALIDATION_POLICIES_4_0_14_5_1_2 } from './validation-policy-releases/4.0.14-5.1.2'
 import type { CheckRun } from './merge-policy'
 import type { FileOp } from '../checkpoint/changeset'
 
@@ -20,7 +21,8 @@ export interface ValidationAuthority { approved: boolean; headSha: string; reaso
 // policy by declaring a version, and future generator output is not implicitly
 // approved here. The archived release has no dependency on the current manifest.
 const releasedPolicies: readonly ValidationManifest[] = [
-  ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.14' || policy.version === '5.1.2'),
+  ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.15' || policy.version === '5.1.3'),
+  ...TRUSTED_VALIDATION_POLICIES_4_0_14_5_1_2,
   ...TRUSTED_VALIDATION_POLICIES_4_0_13_5_1_1,
   ...TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0,
   ...TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1,

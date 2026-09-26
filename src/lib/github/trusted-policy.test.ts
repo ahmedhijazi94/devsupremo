@@ -159,7 +159,7 @@ describe('independent engine policy over actual generated candidates', () => {
     const current = candidate(kind)
     const cliVersion = (input: Candidate): string => (JSON.parse(input.lockContent) as { packages: Record<string, { version?: string }> }).packages['tools/supremo-cli']!.version!
     expect(cliVersion(previous)).toBe('1.7.2')
-    expect(cliVersion(current)).toBe('1.11.0')
+    expect(cliVersion(current)).toBe('1.12.0')
     expect(verifyCandidatePolicy(previous)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
     expect(verifyCandidatePolicy(current)).toMatchObject({ approved: true, headSha: SHA, reasons: [] })
   })

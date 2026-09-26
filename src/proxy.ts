@@ -70,6 +70,13 @@ export async function proxy(request: NextRequest) {
   const protectedPaths = ['/dashboard', '/projects', '/settings', '/accounts']
   const isProtected = protectedPaths.some((p) => pathname.startsWith(p))
 
+  // Server Actions are POST endpoints too, including reads in the backend
+  // console. Bound authenticated actions independently of the API quota.
+  if (request.method === 'POST' && !pathname.startsWith('/api')) {
+    const allowed = rateLimit(user ? `action:${user.id}` : `action:${ip}`, 60, 60_000)
+    if (!allowed) return new NextResponse('Too Many Requests', { status: 429 })
+  }
+
   if (isProtected && !user) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'

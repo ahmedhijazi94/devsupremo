@@ -896,6 +896,7 @@ let xssFound = 0
 for (const file of tsFiles) {
   const source = fs.readFileSync(file, 'utf8')
   const clean = stripNoise(source)
+  const cleanLines = clean.split('\n')
   const lines = source.split('\n')
 
   const checks = [
@@ -920,7 +921,7 @@ for (const file of tsFiles) {
 
   for (const check of checks) {
     lines.forEach((line, index) => {
-      const cleanLine = clean.split('\n')[index] ?? ''
+      const cleanLine = cleanLines[index] ?? ''
       if (!check.pattern.test(cleanLine)) return
 
       xssFound++

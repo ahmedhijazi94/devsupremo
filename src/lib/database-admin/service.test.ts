@@ -80,6 +80,29 @@ describe('owner-scoped auth administration', () => {
     expect(() => configView({ ...config, smtp_host: 'x'.repeat(1001) })).toThrow()
     expect(() => configView({ ...config, mailer_templates_recovery_content: 'x'.repeat(100001) })).toThrow()
   })
+  it.each([
+    { hook: false, smtp: { smtp_host: 'smtp.example.test', smtp_user: 'private', smtp_admin_email: 'sender@example.test' }, transport: 'custom_smtp' },
+    { hook: false, smtp: { smtp_host: null, smtp_user: null, smtp_admin_email: null }, transport: 'supabase_default' },
+    { hook: null, smtp: {}, transport: 'unknown' },
+    { hook: true, smtp: { smtp_host: 'smtp.example.test', smtp_user: 'private', smtp_admin_email: 'sender@example.test' }, transport: 'auth_hook' },
+  ])('reports $transport as configuration only, without exposing hook credentials or claiming delivery', ({ hook, smtp, transport }) => {
+    const view = configView({ ...config, ...smtp, hook_send_email_enabled: hook,
+      hook_send_email_uri: 'https://user:private@hook.example.test/send?key=private', hook_send_email_secrets: 'private-signature' })
+    expect(view).toMatchObject({ emailDelivery: { transport, recoveryTemplateSource: hook ? 'auth_hook' : 'supabase', deliveryVerified: false } })
+    expect(JSON.stringify(view)).not.toMatch(/private|hook\.example|signature/)
+    if (hook) expect(view.recoveryEmailMode).toBe('custom')
+  })
+  it('does not infer hook recovery mode from an SMTP template or try to configure it there', async () => {
+    const p = provider()
+    p.management.mockResolvedValue({ ...config, hook_send_email_enabled: true,
+      mailer_templates_recovery_content: '<h2>Redefinir sua senha</h2><p>Use este código para continuar a recuperação da sua conta:</p><p><strong>{{ .Token }}</strong></p><p>Se você não pediu a recuperação, ignore este email.</p>' })
+    expect(await runAuthAdmin(p, { operation: 'auth-config' })).toMatchObject({ recoveryEmailMode: 'custom', emailDelivery: { transport: 'auth_hook' } })
+    p.management.mockClear()
+    await expect(runAuthAdmin(p, { operation: 'auth-configure', environment: 'development', config: { recoveryEmailMode: 'code', emailConfirmation: false } }))
+      .rejects.toThrow(/Send Email Hook está ativo/)
+    expect(p.management.mock.calls).toEqual([['config/auth', 'GET']])
+    expect(p.user).not.toHaveBeenCalled()
+  })
   it.each(['code', 'link'] as const)('configures recovery by %s using a provider-issued token and confirms the exact template', async mode => {
     const p = provider()
     let state: Record<string, unknown> = { ...config, mailer_templates_recovery_content: '<p>old template</p>' }

@@ -2,9 +2,11 @@ import { z } from 'zod'
 import { credentialApplyOptionsSchema, credentialIdSchema, jobIdSchema, secretRequestOptionsSchema, type RequestedSecret } from './project-service-request'
 import { authOptionsSchema, authOperationSchema, type AuthOptions } from '../../../src/lib/database-admin/options'
 import { authPasswordRequest, emailIntegrationRequest, validateCredentialReuse } from './integration-request'
+import { functionOperationSchema } from '../../../src/lib/edge-functions/contract'
+import { parseFunctionOptions, type FunctionFields } from './functions-request'
 
 export const databaseOperationSchema = z.enum(['status', 'migrate', 'anonymous-auth', 'inspect', 'query', 'logs', 'report',
-  'secrets-request', 'secrets-status', 'secrets-dismiss', 'secrets-credentials', 'secrets-apply', 'secrets-revoke-credential', 'cron-list', 'cron-history', 'cron-apply', 'cron-pause', 'cron-resume', 'cron-remove', ...authOperationSchema.options])
+  'secrets-request', 'secrets-status', 'secrets-dismiss', 'secrets-credentials', 'secrets-apply', 'secrets-revoke-credential', 'cron-list', 'cron-history', 'cron-apply', 'cron-pause', 'cron-resume', 'cron-remove', ...authOperationSchema.options, ...functionOperationSchema.options])
 export type DatabaseOperation = z.infer<typeof databaseOperationSchema>
 const target = { environment: z.enum(['development', 'production', 'unknown']).optional() }
 const bounded = { limit: z.number().int().min(1).max(200).default(50) }
@@ -18,12 +20,13 @@ export const databaseReadOptionsSchema = z.object({ ...target, ...bounded,
   minutes: logging.minutes.optional(), source: logging.source.optional(), level: logging.level.optional(),
 }).strict()
 type AuthFields = { config?: Extract<AuthOptions, { operation: 'auth-configure' }>['config']; user?: Extract<AuthOptions, { operation: 'auth-update' }>['user']; userId?: string; email?: string; emailConfirmed?: boolean }
-export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & { requests?: RequestedSecret[]; requestId?: string; credentialId?: string; jobId?: string | undefined }
+export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & Omit<FunctionFields, 'environment'> & { requests?: RequestedSecret[]; requestId?: string; credentialId?: string; jobId?: string | undefined }
 
 /** Scope selectors never include URLs, refs or credentials. Server authority is
  * checked again for every operation, including production reads. */
 export function parseDatabaseOptions(operation: DatabaseOperation, options: unknown = {}): DatabaseOptions {
   databaseOperationSchema.parse(operation)
+  if (functionOperationSchema.safeParse(operation).success) return parseFunctionOptions(operation, options)
   if (authOperationSchema.safeParse(operation).success) {
     const fields = z.record(z.string(), z.unknown()).parse(options)
     const { operation: selected, ...parsed } = authOptionsSchema.parse({ ...fields, operation })
@@ -38,8 +41,10 @@ export function parseDatabaseOptions(operation: DatabaseOperation, options: unkn
     const input = z.object({ requestId: z.string().uuid().optional() }).strict().parse(options)
     return input.requestId ? { requestId: input.requestId } : {}
   }
-  if (operation === 'secrets-credentials' || operation === 'cron-apply') return z.object({}).strict().parse(options)
-  if (['cron-pause', 'cron-resume', 'cron-remove'].includes(operation)) return z.object({ jobId: jobIdSchema }).strict().parse(options)
+  if (operation === 'secrets-credentials') return z.object({}).strict().parse(options)
+  const jobTarget = { environment: z.enum(['development', 'production']).optional() }
+  if (operation === 'cron-apply') return z.object(jobTarget).strict().parse(options)
+  if (['cron-pause', 'cron-resume', 'cron-remove'].includes(operation)) return z.object({ jobId: jobIdSchema, ...jobTarget }).strict().parse(options)
   const cronPage = z.object({ ...target, ...page, limit: z.number().int().min(1).max(100).default(50) }).strict()
   if (operation === 'cron-list') return cronPage.parse(options)
   if (operation === 'cron-history') return cronPage.extend({ jobId: jobIdSchema.optional() }).parse(options)
@@ -68,6 +73,14 @@ export function isDatabaseReadCommand(command: string): boolean {
   if (tokens.shift() !== 'supremo') return false
   const family = tokens.shift()
   const requestedOperation = tokens.shift()
+  if (family === 'functions') {
+    if (!['list', 'status', 'hook-status'].includes(requestedOperation ?? '')) return false
+    const fields: Record<string, unknown> = { environment: 'development' }
+    if (requestedOperation === 'status') fields.slug = tokens.shift()
+    if (tokens.length === 2 && tokens[0] === '--environment') fields.environment = tokens.splice(0, 2)[1]
+    if (tokens.length) return false
+    try { parseFunctionOptions(`functions-${requestedOperation}`, fields); return true } catch { return false }
+  }
   if ((family === 'integrations' && requestedOperation === 'email') || (family === 'auth' && requestedOperation === 'password')) {
     const fields: Record<string, string> = {}
     const names: Record<string, string> = { '--provider': 'provider', '--sender-email': 'senderEmail', '--sender-name': 'senderName', '--environment': 'environment', '--user-id': 'userId', '--credential-id': 'credentialId' }

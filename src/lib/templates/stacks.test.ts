@@ -11,19 +11,19 @@ const startDependencies = { '@tanstack/react-start': '1.168.57', '@tanstack/reac
 describe('framework selection is immutable after creation', () => {
   it('selects Start for new projects and respects an explicit future-creation rollback', () => {
     vi.stubEnv('SUPREMO_NEW_PROJECT_STACK', undefined)
-    expect(newProjectTemplateVersion()).toBe('5.1.2')
+    expect(newProjectTemplateVersion()).toBe('5.1.3')
     vi.stubEnv('SUPREMO_NEW_PROJECT_STACK', 'nextjs')
-    expect(newProjectTemplateVersion()).toBe('4.0.14')
+    expect(newProjectTemplateVersion()).toBe('4.0.15')
   })
 
   it('rollback changes only future insertions, not an already selected template', () => {
     const pinned = newProjectTemplateVersion('tanstack-start-vite')
     expect(pinned).toBe(START_TEMPLATE_VERSION)
-    expect(newProjectTemplateVersion('nextjs')).toBe('4.0.14')
-    expect(provisioningTemplate(pinned)).toEqual({ stack: 'tanstack-start-vite', version: '5.1.2' })
-    expect(provisioningTemplate(null)).toEqual({ stack: 'nextjs', version: '4.0.14' })
-    expect(latestTemplateVersion('4.0.8')).toBe('4.0.14')
-    expect(latestTemplateVersion('5.0.0')).toBe('5.1.2')
+    expect(newProjectTemplateVersion('nextjs')).toBe('4.0.15')
+    expect(provisioningTemplate(pinned)).toEqual({ stack: 'tanstack-start-vite', version: '5.1.3' })
+    expect(provisioningTemplate(null)).toEqual({ stack: 'nextjs', version: '4.0.15' })
+    expect(latestTemplateVersion('4.0.8')).toBe('4.0.15')
+    expect(latestTemplateVersion('5.0.0')).toBe('5.1.3')
     expect(() => newProjectTemplateVersion('vite --execute arbitrary')).toThrow()
   })
 
@@ -35,7 +35,7 @@ describe('framework selection is immutable after creation', () => {
   })
 
   it('requires version, declaration and installed framework evidence to agree', () => {
-    for (const scaffoldVersion of ['5.0.0', '5.0.1', '5.1.0', '5.1.1', '5.1.2']) {
+    for (const scaffoldVersion of ['5.0.0', '5.0.1', '5.1.0', '5.1.1', '5.1.2', '5.1.3']) {
       expect(resolveProjectStack({ dependencies: startDependencies, declaredStack: 'tanstack-start-vite', scaffoldVersion })).toBe('tanstack-start-vite')
     }
     expect(() => resolveProjectStack({ dependencies: { next: '16', ...startDependencies } })).toThrow(/ambígua/)
@@ -47,6 +47,6 @@ describe('framework selection is immutable after creation', () => {
     expect(() => stackForVersion('9.0.0')).toThrow(/reconhecida/)
     expect(() => stackForVersion(4)).toThrow(/inválida/)
     expect(stackForVersion('')).toBeNull()
-    expect(latestTemplateVersion(undefined)).toBe('4.0.14')
+    expect(latestTemplateVersion(undefined)).toBe('4.0.15')
   })
 })

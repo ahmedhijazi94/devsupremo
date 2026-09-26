@@ -4,6 +4,7 @@ import { cronSignature, scheduledFunctionNames, scheduledFunctionSlug } from './
 import { functionSecretSql } from './function-sql'
 import { boundedJson } from '../database-inspection/provider'
 import { readOnlyTransaction } from '../database-inspection/sql'
+import { parseSupabaseSecretMetadata } from '../supabase/secret-metadata'
 
 export class JobsError extends Error {
   constructor(message: string, readonly status = 409) {
@@ -51,11 +52,11 @@ export function supabaseJobsProvider(
       if (!secretResult.success) throw new JobsError('O segredo de assinatura cron não foi confirmado.', 502)
       const secret = secretResult.data[0].secret
       const expectedDigest = createHash('sha256').update(secret).digest('hex')
-      const existingSecrets = z.array(z.object({ name: z.string(), digest: z.string() })).max(1000).safeParse(await metadata('secrets'))
-      if (!existingSecrets.success) throw new JobsError('Metadados de segredo cron inválidos.', 502)
-      const existing = existingSecrets.data.filter(item => item.name === names.environment)
-      if (existing.length > 1 || existing.some(item => item.digest.toLowerCase() !== expectedDigest)) throw new JobsError('Já existe outro segredo reservado para essa função. Nenhuma credencial foi sobrescrita.')
-      if (!existing.length) await (await management('secrets', false, { method: 'POST', body: JSON.stringify([{ name: names.environment, value: secret }]) })).body?.cancel()
+      const existingSecrets = parseSupabaseSecretMetadata(await metadata('secrets'))
+      if (existingSecrets === null) throw new JobsError('Metadados de segredo cron inválidos.', 502)
+      const existing = existingSecrets.find(item => item.name === names.environment)
+      if (existing && existing.digest !== expectedDigest) throw new JobsError('Já existe outro segredo reservado para essa função. Nenhuma credencial foi sobrescrita.')
+      if (!existing) await (await management('secrets', false, { method: 'POST', body: JSON.stringify([{ name: names.environment, value: secret }]) })).body?.cancel()
       for (const probe of ['unsigned', 'invalid', 'expired', 'valid'] as const) {
         const { projectRef } = await resolve(false)
         if (!/^[a-z0-9_-]{1,64}(?![\s\S])/.test(projectRef)) throw new JobsError('Vínculo do banco inválido.')
@@ -70,6 +71,9 @@ export function supabaseJobsProvider(
         const status = response.status; await response.body?.cancel()
         if (status !== (probe === 'valid' ? 204 : 401)) throw new JobsError('Validação cron pendente: OPTIONS sem assinatura, com assinatura inválida ou expirada deve retornar 401; com assinatura válida, 204 sem executar trabalho. Nenhum job HTTP foi ativado.')
       }
+      const confirmed = parseSupabaseSecretMetadata(await metadata('secrets'))
+      if (confirmed === null || confirmed.find(item => item.name === names.environment)?.digest !== expectedDigest)
+        throw new JobsError('O segredo cron não foi confirmado na leitura final. Nenhum job HTTP foi ativado. Consulte o status antes de repetir.', 502)
     },
     async query(sql, { readOnly }) {
       const credentials = await resolve(readOnly)

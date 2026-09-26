@@ -3,13 +3,13 @@ import { z } from 'zod'
 import { FUNCTION_HOOK_SECRET_NAME, functionOptionsSchema, functionSlugSchema, functionViewSchema, type FunctionOptions } from './contract'
 import { deriveHookSecret, FunctionError, hookSecretDigest, isValidHookSecret, type FunctionSigningContext } from './policy'
 import type { FunctionProvider } from './provider'
+import { parseSupabaseSecretMetadata } from '../supabase/secret-metadata'
 
 const rawFunctionSchema = z.object({ id: z.string().min(1).max(200), slug: functionSlugSchema,
   status: z.enum(['ACTIVE', 'REMOVED', 'THROTTLED']), version: z.number().int().nonnegative(), verify_jwt: z.boolean().nullish() })
 const rawConfigSchema = z.object({ hook_send_email_enabled: z.boolean(), hook_send_email_uri: z.string().max(2000).nullish(),
   hook_send_email_secrets: z.string().max(2000).nullish(), external_email_enabled: z.boolean().optional() })
 type HookConfig = z.infer<typeof rawConfigSchema>
-const secretMetadataSchema = z.array(z.object({ name: z.string().max(128), digest: z.string().max(256) })).max(1000)
 const view = (raw: z.infer<typeof rawFunctionSchema>) => functionViewSchema.parse({ slug: raw.slug, status: raw.status, version: raw.version, verifyJwt: raw.verify_jwt ?? null })
 function parseFunction(raw: unknown, slug: string) {
   const parsed = rawFunctionSchema.safeParse(raw)
@@ -27,11 +27,14 @@ function targetSlug(config: HookConfig, projectRef: string): string | null {
   const parsed = functionSlugSchema.safeParse(config.hook_send_email_uri.slice(prefix.length))
   return parsed.success ? parsed.data : null
 }
-function secretInstalled(raw: unknown, value: string): boolean {
-  const parsed = secretMetadataSchema.safeParse(raw)
-  if (!parsed.success) throw new FunctionError('Metadados dos segredos da função não confirmados.', 502)
-  const matches = parsed.data.filter(row => row.name === FUNCTION_HOOK_SECRET_NAME)
-  return matches.length === 1 && matches[0]!.digest.toLowerCase() === hookSecretDigest(value)
+function secretInstalled(raw: unknown, value: string, rejectConflict = false): boolean {
+  const parsed = parseSupabaseSecretMetadata(raw)
+  if (parsed === null) throw new FunctionError('Metadados dos segredos da função não confirmados.', 502)
+  const installed = parsed.find(row => row.name === FUNCTION_HOOK_SECRET_NAME)
+  const matches = installed?.digest === hookSecretDigest(value)
+  if (rejectConflict && installed && !matches)
+    throw new FunctionError('Já existe outro segredo reservado para o hook. Nenhuma credencial foi sobrescrita. Consulte functions hook status antes de repetir.')
+  return matches
 }
 function hookView(config: HookConfig, projectRef: string, installed: boolean) {
   const slug = targetSlug(config, projectRef)
@@ -87,7 +90,7 @@ export async function runFunctions(provider: FunctionProvider, raw: FunctionOpti
   const current = parseConfig(await provider.authConfig())
   assertCompatible(current, uri)
   if (!unchanged(before, current)) throw new FunctionError('A configuração do hook mudou durante a operação. Consulte functions hook status antes de repetir.')
-  const alreadyInstalled = secretInstalled(await provider.secrets(), secret)
+  const alreadyInstalled = secretInstalled(await provider.secrets(), secret, true)
   if (!alreadyInstalled) await provider.setSecret(options.secretName, secret)
   // Harmless empty objects contain neither a recipient nor an OTP. Acceptance of
   // an invalid signature, or rejection of the valid signature, blocks activation.

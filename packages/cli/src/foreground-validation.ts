@@ -13,7 +13,7 @@ import { localEvidenceSchema, scanCheckpointForUpload, VALIDATION_DIR, type Loca
 import { captureTree, gitText, writeJson } from './turn-workspace'
 import { verifyTrustedFiles } from './trusted-validation'
 import { runWorkerProcess, WorkerAbortedError } from './worker-process'
-import { linkIsolatedDependencies, readProjectStack, routePreparation, syntheticValidationEnvironment } from './framework-runtime'
+import { linkIsolatedDependencies, linkLegacyDependencies, readProjectStack, routePreparation, syntheticValidationEnvironment } from './framework-runtime'
 
 const supportedType = z.enum(['typecheck', 'lint', 'unit', 'integration'])
 type SupportedType = z.infer<typeof supportedType>
@@ -57,12 +57,14 @@ export async function validateForegroundRecovery(
     verifyTrustedFiles(scratch)
     const stack = readProjectStack(scratch)
     failureType = 'external_dependency'
-    linkIsolatedDependencies(cwd, scratch)
+    if (stack === 'tanstack-start-vite') await linkIsolatedDependencies(cwd, scratch, { signal, deadline })
+    else await linkLegacyDependencies(cwd, scratch)
+    const dependencyWorkspace = stack === 'tanstack-start-vite' ? scratch : cwd
     const privateRoot = path.join(scratch, VALIDATION_DIR)
     const home = path.join(privateRoot, 'home'), temp = path.join(privateRoot, 'tmp')
     fs.mkdirSync(home, { recursive: true, mode: 0o700 }); fs.mkdirSync(temp, { recursive: true, mode: 0o700 })
     const env: NodeJS.ProcessEnv = {
-      PATH: `${path.join(cwd, 'node_modules/.bin')}${path.delimiter}${process.env.PATH ?? ''}`,
+      PATH: `${path.join(dependencyWorkspace, 'node_modules/.bin')}${path.delimiter}${process.env.PATH ?? ''}`,
       HOME: home, TMPDIR: temp, TMP: temp, TEMP: temp, CI: 'true',
       NEXT_TELEMETRY_DISABLED: '1', SUPREMO_VALIDATION: '1',
       ...syntheticValidationEnvironment(stack),
@@ -102,7 +104,7 @@ export async function validateForegroundRecovery(
       expectedTree = prepared.treeSha
     }
     const commands: { types: SupportedType[]; executable: string; args: string[] }[] = []
-    const executable = (file: string): string => path.join(cwd, 'node_modules', file)
+    const executable = (file: string): string => path.join(dependencyWorkspace, 'node_modules', file)
     if (selected.includes('typecheck')) commands.push({ types: ['typecheck'], executable: executable('typescript/bin/tsc'), args: ['--noEmit', '--incremental', 'false'] })
     if (selected.includes('lint')) commands.push({ types: ['lint'], executable: executable('eslint/bin/eslint.js'), args: ['.'] })
     const testTypes = selected.filter(type => type === 'unit' || type === 'integration')

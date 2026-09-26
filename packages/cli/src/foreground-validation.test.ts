@@ -50,6 +50,11 @@ describe('foreground recovery on immutable copies', () => {
     fs.appendFileSync(path.join(cwd, '.gitignore'), '\nsrc/routeTree.gen.ts\n.tanstack/\n.output/\n')
     fs.mkdirSync(path.join(cwd, 'scripts'))
     fs.writeFileSync(path.join(cwd, 'scripts/generate-routes.mjs'), generator)
+    // These preparation fixtures run a plain Node generator and real TypeScript.
+    // Copy only their installed dependency, not the unrelated platform app tree.
+    fs.unlinkSync(path.join(cwd, 'node_modules'))
+    fs.mkdirSync(path.join(cwd, 'node_modules'))
+    fs.symlinkSync(path.join(modules, 'typescript'), path.join(cwd, 'node_modules/typescript'), 'dir')
   }
 
   it('prepares Start route types in the snapshot with synthetic public env and preserves live artifacts', async () => {

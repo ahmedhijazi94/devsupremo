@@ -94,9 +94,13 @@ O registro do checkpoint é sincronizado mesmo com validação pendente ou falha
 `supremo turn status` mostra estado persistido. `repair-start` e
 `repair-complete` delimitam tentativas explícitas de reparo restrito.
 O próximo pedido recebe a pendência em um host ativo e com hooks confiados.
-Em desenvolvimento autorizado, falhas anteriores são diagnósticos e não bloqueiam
-edições ou checkpoints. O agente pode preparar correções de segurança, migrations
-versionadas e testes de regressão a pedido do usuário, sem iniciar reparo restrito.
+Em desenvolvimento autorizado, falhas anteriores não bloqueiam edições. Falhas
+confirmadas de tipos, lint ou testes exigem `turn recovery-check` antes de concluir
+o turno. Essa conferência é síncrona e isolada: executa as categorias que falharam;
+para testes unitários ou de integração, executa a suíte local com cobertura,
+excluindo RLS. Publicação e CI continuam independentes. O agente pode preparar
+correções de segurança, migrations versionadas e testes de regressão a pedido do
+usuário, sem iniciar reparo restrito.
 A autorização de operações no banco e os gates de publicação continuam obrigatórios.
 A correção só é resolvida com evidência da mesma revisão;
 não se apaga uma falha porque houve uma edição. A autocorreção pode chamar o

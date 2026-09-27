@@ -95,7 +95,7 @@ export interface TurnContext {
   databaseEnvironment: TurnEnvironment
   databaseAuthority: 'authorized' | 'blocked' | 'unknown'
   preview: { url: string | null; healthy: boolean }
-  daemon: { running: boolean }
+  daemon: { running: boolean; healthy?: boolean }
   latestCheckpoint: CheckpointLink | null
   pendingRecovery: RecoveryState | null
   pendingValidation: ValidationEvidence[]

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
+import { terminateManagedDaemon, withDaemonControl } from './daemon-lifecycle'
 import {
   defaultCheckpointDeps,
   classifyCheckpointRisk,
@@ -308,28 +309,38 @@ export function defaultDaemonHttp(apiBaseUrl: string, options: { publishTimeoutM
   // qualquer outro fluxo novo.
   const postJson = async (route: string, body: unknown, timeoutMs: number): Promise<unknown> => {
     const controller = new AbortController()
-    let timedOut = false
-    const timer = setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
-    const stop = (): void => { controller.abort() }
+    let rejectDeadline!: (error: NetworkError) => void
+    const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject })
+    // Abort releases the socket, but is not a guarantee that a transport/body
+    // promise settles. The loop must regain control even in that failure mode.
+    const timer = setTimeout(() => {
+      rejectDeadline(route === '/api/checkpoint/publish'
+        ? new PublishTimeoutError('publish_timeout') : new NetworkError('request_timeout'))
+      controller.abort()
+    }, timeoutMs)
+    const stop = (): void => { rejectDeadline(new NetworkError('request_cancelled')); controller.abort() }
     options.signal?.addEventListener('abort', stop, { once: true })
     if (options.signal?.aborted) stop()
     try {
-      // codeql[js/file-access-to-http] changeset do usuário → backend que ele configurou (ver nota acima)
-      const res = await fetch(`${base}${route}`, {
-        method: 'POST',
-        redirect: 'error',
-        headers: { 'Content-Type': 'application/json' },
-        // codeql[js/file-access-to-http] mesmo fluxo intencional (ver nota acima)
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      })
-      if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`)
-      if (res.status === 409) throw new ConflictError('conflict')
-      if (!res.ok) throw new NetworkError(`${res.status}`)
-      // Keep the deadline active while reading the body too, not only headers.
-      return await res.json()
+      const request = async (): Promise<unknown> => {
+        if (controller.signal.aborted) throw new NetworkError('request_cancelled')
+        // codeql[js/file-access-to-http] changeset do usuário → backend que ele configurou (ver nota acima)
+        const res = await fetch(`${base}${route}`, {
+          method: 'POST',
+          redirect: 'error',
+          headers: { 'Content-Type': 'application/json' },
+          // codeql[js/file-access-to-http] mesmo fluxo intencional (ver nota acima)
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+        if (res.status === 401 || res.status === 403) throw new AuthError(`${res.status}`)
+        if (res.status === 409) throw new ConflictError('conflict')
+        if (!res.ok) throw new NetworkError(`${res.status}`)
+        return await res.json()
+      }
+      // Includes headers AND body. Late responses cannot acknowledge a retry.
+      return await Promise.race([request(), deadline])
     } catch (error) {
-      if (timedOut && route === '/api/checkpoint/publish') throw new PublishTimeoutError('publish_timeout')
       if (error instanceof AuthError || error instanceof ConflictError || error instanceof NetworkError) throw error
       throw new NetworkError('response_unavailable')
     } finally {
@@ -462,7 +473,7 @@ function pidAlive(pid: number): boolean {
 function readPid(cwd: string): number | null {
   try {
     const pid = Number(fs.readFileSync(path.join(cwd, DAEMON_PID_FILE), 'utf8').trim())
-    return Number.isFinite(pid) && pid > 0 ? pid : null
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : null
   } catch {
     return null
   }
@@ -472,25 +483,48 @@ function readPid(cwd: string): number | null {
  * Garante UMA instância do daemon rodando (idempotente). Reusa se vivo; senão sobe
  * DESACOPLADO (detached + unref) para sobreviver aos turnos do agente.
  */
-export function ensureDaemon(cwd: string): 'reuse' | 'start' {
-  const existing = readPid(cwd)
-  if (existing && pidAlive(existing)) return 'reuse'
-
-  fs.mkdirSync(path.join(cwd, CHECKPOINT_DIR), { recursive: true })
-  const logPath = path.join(cwd, DAEMON_LOG_FILE)
-  const out = fs.openSync(logPath, 'a')
+function daemonBins(cwd: string): string[] {
   const localBin = path.join(cwd, 'node_modules/.bin/supremo')
-  const binPath = fs.existsSync(localBin) ? localBin : process.argv[1] ?? ''
-  const child = spawn(process.execPath, [binPath, 'daemon'], {
-    cwd,
-    detached: true,
-    stdio: ['ignore', out, out],
+  return [...(fs.existsSync(localBin) ? [localBin] : []), ...(process.argv[1] ? [path.resolve(process.argv[1])] : [])]
+}
+
+function staleUpload(cwd: string, pid: number): UploadProgress | null {
+  let value: unknown
+  try { value = readJson(path.join(cwd, DAEMON_PROGRESS_FILE)) } catch { return null }
+  const parsed = uploadProgressSchema.safeParse(value)
+  if (!parsed.success) return null
+  const progress = parsed.data
+  const updated = Date.parse(progress.updatedAt)
+  const deadline = Date.parse(progress.deadlineAt)
+  return progress.pid === pid && updated <= deadline && deadline < Date.now() - 5000
+    ? progress : null
+}
+
+export async function ensureDaemon(cwd: string): Promise<'reuse' | 'start'> {
+  return withDaemonControl(cwd, async () => {
+    const existing = readPid(cwd)
+    if (existing && pidState(existing) !== 'dead') {
+      const stale = staleUpload(cwd, existing)
+      if (pidState(existing) !== 'alive' || !stale) return 'reuse'
+      const stopped = await terminateManagedDaemon(cwd, existing, daemonBins(cwd),
+        () => readPid(cwd) === existing && staleUpload(cwd, existing)?.updatedAt === stale.updatedAt,
+        Date.parse(stale.updatedAt))
+      if (!stopped) return 'reuse'
+      // A concurrently rewritten pidfile is not ours to replace.
+      if (readPid(cwd) !== existing) return 'reuse'
+    }
+    const out = fs.openSync(path.join(cwd, DAEMON_LOG_FILE), 'a')
+    try {
+      const bin = daemonBins(cwd)[0]
+      if (!bin) throw new Error('Executável do daemon indisponível.')
+      const child = spawn(process.execPath, [bin, 'daemon'], { cwd, detached: true, stdio: ['ignore', out, out] })
+      await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+      if (!child.pid) throw new Error('O daemon não iniciou.')
+      fs.writeFileSync(path.join(cwd, DAEMON_PID_FILE), String(child.pid))
+      child.unref()
+      return 'start'
+    } finally { fs.closeSync(out) }
   })
-  child.unref()
-  if (child.pid) {
-    fs.writeFileSync(path.join(cwd, DAEMON_PID_FILE), String(child.pid))
-  }
-  return 'start'
 }
 
 export interface DaemonStatus {
@@ -526,21 +560,15 @@ export function daemonStatus(cwd: string): DaemonStatus {
   return { running, healthy: running && progressHealthy, pid, pendingCheckpoints, ...(upload ? { upload } : {}) }
 }
 
-export function stopDaemon(cwd: string): boolean {
-  const pid = readPid(cwd)
-  if (pid && pidAlive(pid)) {
-    try {
-      process.kill(pid)
-    } catch {
-      /* já morreu */
-    }
-  }
-  try {
-    fs.rmSync(path.join(cwd, DAEMON_PID_FILE))
-  } catch {
-    /* sem pidfile */
-  }
-  return true
+export async function stopDaemon(cwd: string): Promise<boolean> {
+  return withDaemonControl(cwd, async () => {
+    const pid = readPid(cwd)
+    if (!pid) return true
+    if (pidState(pid) !== 'dead' && !await terminateManagedDaemon(cwd, pid, daemonBins(cwd), () => readPid(cwd) === pid)) return false
+    if (readPid(cwd) !== pid) return false
+    fs.rmSync(path.join(cwd, DAEMON_PID_FILE), { force: true })
+    return true
+  })
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -739,9 +767,46 @@ export async function drainOnce(config: DaemonConfig, options: {
       fs.appendFileSync(queuePath, serializeQueue([{ ...next, validationStatus: 'pending' }]))
       break
     }
-    if (next.validationStatus) {
-      const evidence = evidenceFor(config.cwd, next)
-      if (!evidence || !['passed', 'deferred'].includes(evidence.status)) break
+    // An explicit revalidation may still carry an older proof. Wait for the
+    // worker to finish instead of publishing through that stale queue state.
+    if (next.validationStatus === 'pending' || next.validationStatus === 'running') break
+    let evidence: ReturnType<typeof evidenceFor> = null
+    try { evidence = evidenceFor(config.cwd, next) }
+    catch { /* A corrupt proof is unavailable, never permission to publish. */ }
+    if (!evidence || (evidence.status !== 'failed' && next.validatedSha !== next.commitSha)) {
+      const baseSha = next.changesetBaseSha ?? gitText(config.cwd, ['rev-parse', `${next.commitSha}^`])
+      const fingerprint = next.treeSha ?? gitText(config.cwd, ['rev-parse', `${next.commitSha}^{tree}`])
+      const identity = { projectId: next.projectId, checkpointId: next.checkpointId, sha: next.commitSha,
+        baseSha, fingerprint, environment: next.environment ?? 'unknown' }
+      const recoveryKey = createHash('sha256').update(JSON.stringify(identity)).digest('hex')
+      const recoveryFile = path.join(config.cwd, CHECKPOINT_DIR, 'evidence-recovery', `${recoveryKey}.json`)
+      // Persist the budget before scheduling. A restart or corrupt marker must
+      // not reset it and rerun the same snapshot indefinitely.
+      if (!fs.existsSync(recoveryFile)) {
+        writeJson(recoveryFile, { version: 1, ...identity, requestedAt: new Date().toISOString() })
+        const requested = { ...next, validationStatus: 'pending' as const }
+        delete requested.validationId
+        delete requested.validatedSha
+        fs.appendFileSync(queuePath, serializeQueue([requested]))
+        break
+      }
+      const now = new Date().toISOString()
+      const unavailable = { ...identity, id: defaultCheckpointDeps(config.cwd).uuid(), status: 'failed' as const,
+        startedAt: now, finishedAt: now, criterionIds: [], acceptanceCriteria: [], failureReason: 'invalid_evidence',
+        summary: 'Integridade da evidência: comprovante de validação ausente ou inválido após recuperação automática.',
+        logs: 'O motor não conseguiu recuperar a evidência deste snapshot. Isso não indica erro no código. Nenhum envio foi autorizado; solicite nova validação para tentar novamente.',
+        checks: [{ name: 'validation evidence', type: 'external_dependency', status: 'failed' }] }
+      writeJson(path.join(config.cwd, '.supremo/validation', `${unavailable.id}.json`), unavailable)
+      fs.appendFileSync(queuePath, serializeQueue([{ ...next, validationStatus: 'failed',
+        validationId: unavailable.id, validatedSha: next.commitSha }]))
+      continue
+    }
+    if (evidence.status === 'failed') {
+      // A genuine failed proof remains authoritative even if queue metadata is
+      // stale. Recovery must not replace it with an automatic passing attempt.
+      fs.appendFileSync(queuePath, serializeQueue([{ ...next, validationStatus: 'failed',
+        validationId: evidence.id, validatedSha: evidence.sha }]))
+      continue
     }
     const nextId = next.checkpointId
     const earlier = queue.slice(0, queue.findIndex((item) => item.checkpointId === nextId))

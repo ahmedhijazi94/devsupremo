@@ -27,14 +27,14 @@ async function until(check: () => boolean, timeoutMs = 8000): Promise<void> {
 }
 
 describe('saúde e recuperação do loop de envio', () => {
-  it('detecta progresso vencido mesmo com worker vivo, sem iniciar um daemon duplicado', () => {
+  it('detecta progresso vencido mesmo com worker vivo, sem iniciar um daemon duplicado', async () => {
     const cwd = workspace()
     const health = { pid: process.pid, phase: 'publishing', updatedAt: new Date(Date.now() - 200_000).toISOString(),
       deadlineAt: new Date(Date.now() - 1).toISOString(), recoveredTimeouts: 0 }
     writeJson(path.join(cwd, DAEMON_PROGRESS_FILE), health)
     writeJson(path.join(cwd, '.supremo/validation/worker-health.json'), { pid: process.pid, checkedAt: Date.now() })
     expect(daemonStatus(cwd)).toMatchObject({ running: true, healthy: false })
-    expect(ensureDaemon(cwd)).toBe('reuse')
+    expect(await ensureDaemon(cwd)).toBe('reuse')
     for (const phase of ['waiting', 'retrying']) {
       writeJson(path.join(cwd, DAEMON_PROGRESS_FILE), { ...health, phase, deadlineAt: new Date(Date.now() + 90_000).toISOString() })
       expect(daemonStatus(cwd)).toMatchObject({ running: true, healthy: true })

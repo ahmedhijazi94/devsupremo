@@ -104,8 +104,9 @@ function defaultRuntimeDeps(): RuntimeDeps {
     },
     reconcile: (projectId, apiBaseUrl) => fetchTurnContext(projectId, apiBaseUrl, (identity) => readDeviceSecret(resolveKeychain(), identity, apiBaseUrl)),
     ensureServices: async (cwd, options) => {
-      ensureDaemon(cwd)
-      if (options?.readOnly) return { preview: { healthy: false, url: null }, daemon: { running: daemonStatus(cwd).running } }
+      await ensureDaemon(cwd)
+      const daemon = daemonStatus(cwd)
+      if (options?.readOnly) return { preview: { healthy: false, url: null }, daemon: { running: daemon.running, healthy: daemon.healthy } }
       let preview: TurnContext['preview'] = { healthy: false, url: null }
       const script = path.join(cwd, 'scripts/preview.mjs')
       if (fs.existsSync(script)) {
@@ -122,7 +123,7 @@ function defaultRuntimeDeps(): RuntimeDeps {
           child.unref()
         }
       }
-      return { preview, daemon: { running: daemonStatus(cwd).running } }
+      return { preview, daemon: { running: daemon.running, healthy: daemon.healthy } }
     },
   }
 }

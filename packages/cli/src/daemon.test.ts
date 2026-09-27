@@ -582,12 +582,15 @@ describe('ensureDaemon/daemonStatus — EPERM nunca duplica um daemon vivo (macO
     }
   })
 
-  it('ensureDaemon: pid vivo mas EPERM → "reuse", NUNCA sobe uma segunda instância', () => {
+  it('ensureDaemon: pid vivo mas EPERM → "reuse", NUNCA sobe uma segunda instância', async () => {
     const dir = tempDaemonDir(process.pid)
     try {
-      withEpermFor(process.pid, () => {
-        expect(ensureDaemon(dir)).toBe('reuse')
-      })
+      const original = process.kill
+      process.kill = ((pid: number, signal?: string | number) => {
+        if (pid === process.pid && signal === 0) throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+        return original(pid, signal)
+      }) as typeof process.kill
+      try { expect(await ensureDaemon(dir)).toBe('reuse') } finally { process.kill = original }
       // pidfile intacto — nunca sobrescrito com o pid de uma instância nova
       expect(readFileSync(join(dir, DAEMON_PID_FILE), 'utf8').trim()).toBe(String(process.pid))
     } finally {

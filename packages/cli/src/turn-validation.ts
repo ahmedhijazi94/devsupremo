@@ -417,6 +417,9 @@ async function executeScheduledValidation(cwd: string, record: CheckpointRecord,
   // Never treat a failed run as a reusable proof, especially on an explicit request.
   if (cached.success && cached.data.status !== 'failed' && cached.data.projectId === record.projectId && cached.data.environment === record.environment
     && cached.data.fingerprint === transport.fingerprint && cached.data.checkpointId === record.checkpointId && cached.data.sha === record.commitSha && cached.data.baseSha === transport.baseSha) {
+    // The queue references this file, not the cache entry. Restore it when a
+    // lost/corrupt evidence file triggered recovery of the same snapshot.
+    writeJson(path.join(cwd, VALIDATION_DIR, `${cached.data.id}.json`), cached.data)
     writeJob(cwd, record, cached.data.status); return cached.data
   }
   const attemptFile = path.join(cwd, VALIDATION_DIR, 'attempts', `${key}.json`)

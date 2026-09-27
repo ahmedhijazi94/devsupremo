@@ -123,6 +123,24 @@ describe('structured interruption evidence', () => {
 })
 
 describe('bounded retry and durable launch accounting', () => {
+  it.each(['missing', 'corrupt'] as const)('restores %s evidence from the same valid cache without rerunning project code', async scenario => {
+    capture()
+    const worker = vi.spyOn(processWorker, 'runWorkerProcess')
+    expect(await drainLocalValidation(cwd)).toBe(1)
+    const completed = defaultCheckpointDeps(cwd).readQueue().at(-1)!
+    const original = evidenceFor(cwd, completed)
+    expect(original?.status).toBe('passed')
+    const file = path.join(cwd, '.supremo/validation', `${completed.validationId}.json`)
+    if (scenario === 'missing') fs.unlinkSync(file)
+    else fs.writeFileSync(file, '{')
+    defaultCheckpointDeps(cwd).appendQueue({ ...completed, validationStatus: 'pending' })
+
+    expect(await drainLocalValidation(cwd)).toBe(1)
+    expect(worker).toHaveBeenCalledTimes(1)
+    expect(latestEvidence()).toEqual(original)
+    expect(readJson(file)).toEqual(original)
+    expect(defaultCheckpointDeps(cwd).readQueue().at(-1)).toMatchObject({ validationStatus: 'passed', validationId: completed.validationId })
+  })
   it('automatically retries a stage timeout once, preserving its real type as infrastructure', async () => {
     capture(stageTimeout)
     const worker = vi.spyOn(processWorker, 'runWorkerProcess')

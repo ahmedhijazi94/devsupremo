@@ -176,7 +176,7 @@ program
       // Garante o daemon vivo (idempotente) antes de enfileirar — push assíncrono.
       const { ensureDaemon } = await import('./daemon')
       try {
-        ensureDaemon(cwd)
+        await ensureDaemon(cwd)
       } catch {
         // sem daemon: o checkpoint local ainda é válido; o daemon sobe depois
       }
@@ -233,12 +233,13 @@ program
         return
       }
       if (options.stop) {
-        daemon.stopDaemon(cwd)
-        console.log('daemon parado.')
+        const stopped = await daemon.stopDaemon(cwd)
+        console.log(stopped ? 'daemon parado.' : 'Não foi possível confirmar a parada do daemon; processo preservado.')
+        if (!stopped) process.exitCode = 1
         return
       }
       if (options.ensure) {
-        const r = daemon.ensureDaemon(cwd)
+        const r = await daemon.ensureDaemon(cwd)
         console.log(r === 'reuse' ? '✓ daemon já ativo' : '✓ daemon iniciado')
         return
       }

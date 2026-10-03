@@ -7,7 +7,7 @@ import path from 'node:path'
 import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
 import { designSystemFiles } from './design-system'
 import { withDevelopmentPolicy } from './development-policy'
-import { MIGRATION_GUIDE } from './migration-guide'
+import { DESTRUCTIVE_OPERATIONS_GUIDE, DESTRUCTIVE_OPERATIONS_SUMMARY, MIGRATION_GUIDE } from './migration-guide'
 import { harnessFiles, harnessPackageScripts } from './harness'
 import {
   capabilitiesForKind,
@@ -3253,13 +3253,7 @@ Use a CLI local pinada do projeto (\`npx supabase …\`, nunca a global).
 O agente continua criando enquanto CI e integração trabalham em background.
 Nenhum ciclo de CI deve bloquear o próximo pedido de desenvolvimento.
 
-### Operações destrutivas no remoto — PARE e confirme
-\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\` de estrutura existente,
-\`DELETE\` em massa e exclusões massivas são irreversíveis no banco online. Antes
-de rodar qualquer uma:
-1. **Mostre o \`project-ref\` alvo:** \`cat supabase/.temp/project-ref\`.
-2. **Peça confirmação explícita** ao humano, nomeando esse ref.
-3. Só então execute. Nunca rode uma operação destrutiva de forma autônoma.
+${DESTRUCTIVE_OPERATIONS_GUIDE}
 
 Credenciais (o token do \`supabase login\` e a senha do banco) vivem no **keychain
 do sistema**, gravadas pela própria CLI. Nunca as imprima, escreva em arquivo nem
@@ -3343,9 +3337,7 @@ Não carregue dumps em todo prompt nem procure credenciais em arquivos ou keycha
 Migration versionada, validada em development. \`npx supabase\` usa a CLI local pinada;
 o core verifica ambiente e autoridade antes de \`supremo db migrate\`.
 Nunca aplique SQL experimental em produção, apague migration aplicada ou use service
-role para resolver erro de autorização. Operação destrutiva remota exige confirmação
-explícita do humano e mostrar o \`project-ref\`: \`DROP\`, \`TRUNCATE\`, \`DELETE\` em massa,
-\`npx supabase db reset --linked\` e exclusão de dados não são auto-repair.
+role para resolver erro de autorização. ${DESTRUCTIVE_OPERATIONS_SUMMARY}
 Nunca \`git push\`/\`git branch\`/\`git merge\`/\`git rebase\`/force push/PR manual de entrega;
 o daemon/backend integram pelos required checks do HEAD atual. Nunca mexa em
 AGENTS.md/CLAUDE.md/tsconfig/CI/package.json/migrations/config numa microfeature LOW

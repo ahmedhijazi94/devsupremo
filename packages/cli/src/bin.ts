@@ -8,6 +8,7 @@ import pkg from '../package.json'
 import { isKnownOrGlobal, unknownCommandMessage } from './command-guard'
 import { readDeviceSecret, saveDeviceIdentity, deviceIssuer } from './device-identity'
 import { registerFunctionCommands } from './functions-command'
+import { registerDataDeleteCommands } from './data-delete-command'
 
 const program = new Command()
 
@@ -426,7 +427,7 @@ program
     try {
       const { databaseOperationSchema, parseDatabaseOptions } = await import('./database-request')
       const selected = databaseOperationSchema.parse(operation)
-      if (selected.startsWith('cron-') || selected.startsWith('secrets-') || selected.startsWith('auth-') || selected.startsWith('functions-')) throw new Error('Use os comandos jobs, secrets, auth ou functions para esta operação.')
+      if (selected.startsWith('cron-') || selected.startsWith('secrets-') || selected.startsWith('auth-') || selected.startsWith('functions-') || selected.startsWith('data-')) throw new Error('Use os comandos jobs, secrets, auth, functions ou data para esta operação.')
       if (sql !== undefined && options.sql !== undefined) throw new Error('Forneça SQL por argumento ou --sql, uma única vez.')
       const args: Record<string, unknown> = { ...options, ...(sql !== undefined ? { sql } : {}) }
       for (const key of ['limit', 'offset', 'minutes']) if (args[key] !== undefined) args[key] = Number(args[key])
@@ -467,6 +468,7 @@ program
   })
 
 registerFunctionCommands(program)
+registerDataDeleteCommands(program)
 guardUnknownCommand(process.argv.slice(2))
 if (process.argv.length === 2) program.outputHelp()
 else void (async () => {

@@ -129,6 +129,12 @@ jobs:
           SUPREMO_TEST_REAL_CRON: '1'
           SUPREMO_TEST_CRON_DATABASE: supremo_jobs_ci
 
+      - name: Exclusão autorizada em banco descartável
+        run: npx vitest run src/lib/database-delete/sql.test.ts
+        env:
+          SUPREMO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          SUPREMO_DELETE_TEST_PG: '1'
+
   template:
     name: O template gerado compila
     runs-on: ubuntu-latest

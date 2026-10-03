@@ -4,9 +4,10 @@ import { authOptionsSchema, authOperationSchema, type AuthOptions } from '../../
 import { authPasswordRequest, emailIntegrationRequest, validateCredentialReuse } from './integration-request'
 import { functionOperationSchema } from '../../../src/lib/edge-functions/contract'
 import { parseFunctionOptions, type FunctionFields } from './functions-request'
+import { deleteOperationSchema, deleteOptionsSchema, type DeleteOptions } from '../../../src/lib/database-delete/contract'
 
 export const databaseOperationSchema = z.enum(['status', 'migrate', 'anonymous-auth', 'inspect', 'query', 'logs', 'report',
-  'secrets-request', 'secrets-status', 'secrets-dismiss', 'secrets-credentials', 'secrets-apply', 'secrets-revoke-credential', 'cron-list', 'cron-history', 'cron-apply', 'cron-pause', 'cron-resume', 'cron-remove', ...authOperationSchema.options, ...functionOperationSchema.options])
+  'secrets-request', 'secrets-status', 'secrets-dismiss', 'secrets-credentials', 'secrets-apply', 'secrets-revoke-credential', 'cron-list', 'cron-history', 'cron-apply', 'cron-pause', 'cron-resume', 'cron-remove', ...authOperationSchema.options, ...functionOperationSchema.options, ...deleteOperationSchema.options])
 export type DatabaseOperation = z.infer<typeof databaseOperationSchema>
 const target = { environment: z.enum(['development', 'production', 'unknown']).optional() }
 const bounded = { limit: z.number().int().min(1).max(200).default(50) }
@@ -20,12 +21,19 @@ export const databaseReadOptionsSchema = z.object({ ...target, ...bounded,
   minutes: logging.minutes.optional(), source: logging.source.optional(), level: logging.level.optional(),
 }).strict()
 type AuthFields = { config?: Extract<AuthOptions, { operation: 'auth-configure' }>['config']; user?: Extract<AuthOptions, { operation: 'auth-update' }>['user']; userId?: string; email?: string; emailConfirmed?: boolean }
-export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & Omit<FunctionFields, 'environment'> & { requests?: RequestedSecret[]; requestId?: string; credentialId?: string; jobId?: string | undefined }
+type DeleteFields = { targets?: Extract<DeleteOptions, { operation: 'data-delete-plan' }>['targets']; planToken?: string; authorization?: string }
+export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & DeleteFields & Omit<FunctionFields, 'environment'> & { requests?: RequestedSecret[]; requestId?: string; credentialId?: string; jobId?: string | undefined }
 
 /** Scope selectors never include URLs, refs or credentials. Server authority is
  * checked again for every operation, including production reads. */
 export function parseDatabaseOptions(operation: DatabaseOperation, options: unknown = {}): DatabaseOptions {
   databaseOperationSchema.parse(operation)
+  if (deleteOperationSchema.safeParse(operation).success) {
+    const fields = z.record(z.string(), z.unknown()).parse(options)
+    const { operation: selected, ...parsed } = deleteOptionsSchema.parse({ ...fields, operation })
+    void selected
+    return parsed
+  }
   if (functionOperationSchema.safeParse(operation).success) return parseFunctionOptions(operation, options)
   if (authOperationSchema.safeParse(operation).success) {
     const fields = z.record(z.string(), z.unknown()).parse(options)
@@ -73,6 +81,17 @@ export function isDatabaseReadCommand(command: string): boolean {
   if (tokens.shift() !== 'supremo') return false
   const family = tokens.shift()
   const requestedOperation = tokens.shift()
+  if (family === 'data') {
+    if (requestedOperation !== 'delete-plan') return false
+    const fields: Record<string, string> = {}
+    while (tokens.length) {
+      const flag = tokens.shift()!
+      if (!['--file', '--environment', '--output'].includes(flag) || !tokens.length || Object.hasOwn(fields, flag)) return false
+      fields[flag] = tokens.shift()!
+    }
+    return fields['--environment'] === 'development' && Boolean(fields['--file']) && fields['--file']!.length <= 4096
+      && (fields['--output'] === undefined || fields['--output'].length > 0 && fields['--output'].length <= 4096)
+  }
   if (family === 'functions') {
     if (!['list', 'status', 'hook-status'].includes(requestedOperation ?? '')) return false
     const fields: Record<string, unknown> = { environment: 'development' }

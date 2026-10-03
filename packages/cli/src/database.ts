@@ -11,6 +11,7 @@ import { credentialResponse, readJobManifest, secretResponse, secretResponseSche
 import { readProjectStack } from './framework-runtime'
 import { readFunctionDeployment } from './functions-request'
 import { functionResponseSchema } from '../../../src/lib/edge-functions/contract'
+import { deleteResponseSchema } from '../../../src/lib/database-delete/contract'
 export type { DatabaseOperation, DatabaseOptions } from './database-request'
 
 export interface DatabaseStatus {
@@ -18,6 +19,10 @@ export interface DatabaseStatus {
   projectRef: string | null
   automaticMigrations: boolean
 }
+
+// Only a parsed HTTP error returned by Supremo carries a server diagnostic.
+// Network/body/JSON failures leave a sent mutation's outcome unknown.
+class DatabaseServerError extends Error {}
 
 export function validateLocalTarget(cwd: string, status: DatabaseStatus): string {
   if (status.environment !== 'development' || !status.automaticMigrations || !status.projectRef) {
@@ -53,7 +58,7 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   if (url.protocol !== 'https:' && !(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:')) {
     throw new Error('O endpoint do Supremo deve usar HTTPS.')
   }
-  const request = async (op: string, extra: Record<string, unknown> = {}) => {
+  const transport = async (op: string, extra: Record<string, unknown> = {}) => {
     const endpoint = op === 'status' && operation.startsWith('functions-') ? new URL(`${issuer}/api/database`) : url
     const res = await fetch(endpoint, {
       method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
@@ -63,8 +68,27 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     const text = await res.text()
     if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error('Resposta de banco excede o limite; reduza paginação ou intervalo.')
     const data = JSON.parse(text) as { error?: string }
-    if (!res.ok) throw new Error(sanitizeDiagnostic(data.error ?? `Banco indisponível (HTTP ${res.status}).`))
+    if (!res.ok) throw new DatabaseServerError(sanitizeDiagnostic(data.error ?? `Banco indisponível (HTTP ${res.status}).`))
     return data
+  }
+  const request = async (op: string, extra: Record<string, unknown> = {}) => {
+    if (!operation.startsWith('data-delete-')) return transport(op, extra)
+    // Even an HTTP adapter that ignores AbortSignal must release the worker.
+    // This deadline covers response-body reads as well and never retries writes.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(op === 'data-delete-apply'
+        ? 'A confirmação da exclusão excedeu o prazo. Não repita delete-apply; consulte os registros com db query antes de gerar outro plano.'
+        : 'A inspeção de exclusão excedeu o prazo; nenhum pedido de exclusão foi enviado.')), op === 'status' ? 15_000 : 60_000)
+    })
+    try { return await Promise.race([transport(op, extra), deadline]) }
+    catch (error) {
+      if (op === 'data-delete-apply' && !(error instanceof DatabaseServerError)) {
+        throw new Error('Resultado da exclusão não confirmado; o pedido pode ter sido executado. Não repita delete-apply. Consulte os registros com db query antes de gerar outro plano.')
+      }
+      throw error
+    }
+    finally { if (timer !== undefined) clearTimeout(timer) }
   }
   if (operation.startsWith('secrets-')) {
     const result = await request(operation.slice('secrets-'.length), operation === 'secrets-status' ? {} : { ...checkedOptions })
@@ -81,6 +105,15 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   // Snapshot informativo, jamais usado como autorização para uma escrita futura.
   fs.writeFileSync(path.join(cwd, '.supremo/database.json'), JSON.stringify(status, null, 2) + '\n')
   if (operation === 'status') return status
+  if (operation.startsWith('data-delete-')) {
+    const expectedRef = validateLocalTarget(cwd, status)
+    const result = deleteResponseSchema.safeParse(await request(operation, { ...checkedOptions, expectedRef }))
+    if (!result.success || result.data.projectId !== config.projectId || result.data.projectRef !== expectedRef
+      || result.data.environment !== checkedOptions.environment || result.data.operation !== operation) {
+      throw new Error('Resposta da exclusão não corresponde ao projeto e à operação solicitados. Confira os registros antes de tentar novamente.')
+    }
+    return result.data
+  }
   if (operation.startsWith('functions-')) {
     const target = z.object({ environment: z.enum(['development', 'production']),
       projectRef: z.string().regex(/^[a-z0-9_-]+$/).max(64) }).safeParse(status)

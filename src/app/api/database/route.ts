@@ -18,18 +18,21 @@ import { requireJobTarget, runJobs } from '@/lib/database-jobs/service'
 import { authRequestSchema, authOperationSchema, authOptionsSchema, isAuthRead, type AuthRequest } from '@/lib/database-admin/options'
 import { requireAuthTarget, runAuthAdmin } from '@/lib/database-admin/service'
 import { supabaseAuthAdminProvider } from '@/lib/database-admin/provider'
+import { DataDeleteError, deleteRequestSchema, deleteOperationSchema, deleteOptionsSchema, type DeleteRequest } from '@/lib/database-delete/contract'
+import { runAuthorizedDelete } from '@/lib/database-delete/server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 const isJobsRequest = (body: { operation: string }): body is JobsRequest => jobOperationSchema.safeParse(body.operation).success
 const isAuthRequest = (body: { operation: string }): body is AuthRequest => authOperationSchema.safeParse(body.operation).success
+const isDeleteRequest = (body: { operation: string }): body is DeleteRequest => deleteOperationSchema.safeParse(body.operation).success
 
 export async function POST(request: NextRequest): Promise<Response> {
   const headers = { 'Cache-Control': 'no-store' }
   let json: unknown
   try { json = await boundedJson(request, 1_000_000) }
   catch (error) { return Response.json({ error: error instanceof InspectionError && error.status === 413 ? 'Payload excede o limite.' : 'JSON inválido.' }, { status: error instanceof InspectionError && error.status === 413 ? 413 : 400, headers }) }
-  const parsed = z.union([databaseRequestSchema, inspectionRequestSchema, jobsRequestSchema, authRequestSchema]).safeParse(json)
+  const parsed = z.union([databaseRequestSchema, inspectionRequestSchema, jobsRequestSchema, authRequestSchema, deleteRequestSchema]).safeParse(json)
   if (!parsed.success) return Response.json({ error: 'Payload inválido.' }, { status: 400 })
   const body = parsed.data
   const client = createServiceClient()
@@ -44,6 +47,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     const state = await verify()
     if (body.operation === 'status') {
       return Response.json(describeEnvironment(state.record, state.linkedRef), { headers: { 'Cache-Control': 'no-store' } })
+    }
+    if (isDeleteRequest(body)) {
+      const { deviceSecret, projectId, expectedRef, ...rawOptions } = body
+      return Response.json(await runAuthorizedDelete({ client, ownerId, projectId, expectedRef, verifyIdentity: async () => {
+        const fresh = await authenticateDeviceSecret(supabaseCheckpointDeviceStore(client), deviceSecret)
+        if (!fresh.ok) throw new DataDeleteError('Dispositivo não autorizado.', 401)
+        return fresh.device.ownerUserId
+      } }, deleteOptionsSchema.parse(rawOptions)), { headers })
     }
     if (isAuthRequest(body)) {
       const { deviceSecret, projectId, expectedRef, ...rawOptions } = body
@@ -161,6 +172,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     }, body.expectedRef, body.operation, body.migrations)
     return Response.json(result)
   } catch (error) {
+    if (isDeleteRequest(body)) return Response.json({ error: error instanceof DataDeleteError ? error.message : 'Exclusão não confirmada. Confira o vínculo e os registros antes de preparar outro plano.' }, { status: error instanceof DataDeleteError ? error.status : 409, headers })
     if (isAuthRequest(body)) return Response.json({ error: error instanceof InspectionError ? error.message : 'Administração de autenticação não confirmada. Verifique o vínculo, o ambiente e as permissões do projeto.' }, { status: error instanceof InspectionError ? error.status : 409, headers })
     if (isJobsRequest(body)) return Response.json({ error: error instanceof JobsError ? error.message : 'Operação de jobs não autorizada ou vínculo/ambiente alterado. Consulte db status e verifique as permissões do projeto.' }, { status: error instanceof JobsError ? error.status : 409, headers })
     if ('environment' in body) return Response.json({ error: error instanceof InspectionError || error instanceof UnsafeSqlError ? error.message : 'Leitura não autorizada ou vínculo/ambiente alterado. Consulte db status e verifique as permissões do projeto.' }, { status: error instanceof InspectionError ? error.status : 409, headers })

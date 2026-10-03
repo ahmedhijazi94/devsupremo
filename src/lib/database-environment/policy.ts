@@ -68,6 +68,6 @@ export function validateAutomaticMigration(sql: string): void {
     .replace(/\bon\s+delete\s+(cascade|restrict|set\s+null|no\s+action)\b/gi, '')
     .replace(/\bfor\s+delete\b/gi, '')
   if (/\b(drop|truncate|execute|do|commit|rollback|begin|call|copy|dblink|pg_read_file|pg_write_file)\b|\bdelete\s+from\b|\bupdate\s+[\w."]+\s+set\b/i.test(checked) || /\bsupabase_migrations\b/i.test(sql)) {
-    throw new Error('Migration exige revisão: operação destrutiva, dinâmica ou controle de transação não permitido no fluxo automático.')
+    throw new Error('Migration recusada: operação destrutiva, dinâmica ou controle de transação não permitido no fluxo automático. Para excluir linhas específicas autorizadas em development, use data delete-plan e data delete-apply. SQL destrutivo arbitrário não é suportado por esse canal; salvar um arquivo para revisão não enfileira sua aplicação.')
   }
 }

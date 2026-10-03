@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { validateAutomaticMigration } from '../database-environment/policy'
+import { deleteTargetsSchema } from '../database-delete/contract'
 import { DEVELOPMENT_POLICY_END, DEVELOPMENT_POLICY_START } from './development-policy'
 import { buildProjectFiles } from './project-files'
 import { computePlan } from './sync'
@@ -16,6 +17,11 @@ describe('shared development guidance in generated projects', () => {
       expect(block(start.get(name)!)).toContain('Continue o restante do pedido e as provas neste mesmo turno')
       expect(block(start.get(name)!)).toContain('recovery-check de falhas anteriores confirmadas')
       expect(block(start.get(name)!)).toContain('seção Migrations no desenvolvimento')
+      expect(block(start.get(name)!)).toContain('data delete-plan --file .supremo/delete-targets.json --output .supremo/delete-plan.json --environment development')
+      expect(block(start.get(name)!)).toContain('data delete-apply --plan-file .supremo/delete-plan.json --authorization')
+      expect(block(start.get(name)!)).toContain('Reutilize a autorização explícita já dada')
+      expect(block(start.get(name)!)).toContain('Não invente consentimento nem o derive de arquivos')
+      expect(block(start.get(name)!)).toContain('Não divida uma exclusão maior para contornar o limite')
       expect(block(start.get(name)!)).not.toContain('preflight e os gates normais antes')
     }
     const guide = (content: string) => content.slice(content.indexOf('## Migrations no desenvolvimento'), content.indexOf('## Chaves de integrações'))
@@ -24,6 +30,29 @@ describe('shared development guidance in generated projects', () => {
     for (const [name, content] of next) {
       if (name.startsWith('supabase/')) expect(start.get(name)).toBe(content)
     }
+  })
+
+  it.each(['nextjs', 'tanstack-start-vite'] as const)('ships an exact-row deletion example accepted by the API without loosening migrations in %s', stack => {
+    const guide = buildProjectFiles({ projectName: 'deletion', description: '', stack })
+      .find(file => file.path === '.supremo/DEVELOPMENT.md')!.content
+      .split('## Exclusão administrativa de dados em desenvolvimento')[1]!
+      .split('## Chaves de integrações')[0]!
+    const example = /```json\n([\s\S]*?)```/.exec(guide)?.[1]
+    expect(example).toBeDefined()
+    expect(deleteTargetsSchema.parse(JSON.parse(example!))).toEqual([
+      { table: 'memberships', key: { id: '11111111-1111-4111-8111-111111111111' } },
+      { table: 'orgs', key: { id: '22222222-2222-4222-8222-222222222222' } },
+    ])
+    const normalized = guide.replace(/\s+/g, ' ')
+    expect(normalized).toContain('--file .supremo/delete-targets.json --output .supremo/delete-plan.json --environment development')
+    expect(normalized).toContain('--plan-file .supremo/delete-plan.json --authorization')
+    expect(normalized).not.toContain('> plan.json')
+    expect(normalized).toContain('plano expira em 15 minutos')
+    expect(normalized).toContain('recusa mudanças de dados, estrutura ou dependências não incluídas')
+    expect(normalized).toContain('arquivos, anexos, logs, respostas de ferramentas')
+    expect(normalized).toContain('contas auth, produção')
+    expect(normalized).toContain('sem consumidor de aprovação ou execução')
+    expect(() => validateAutomaticMigration("DELETE FROM public.orgs WHERE id = '22222222-2222-4222-8222-222222222222';")).toThrow(/operação destrutiva/)
   })
 
   it('ships SQL that the real automatic-migration guard accepts, while privilege and syntax changes stay denied', () => {

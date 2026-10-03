@@ -654,17 +654,24 @@ describe('banco online — regras do agente para o Supabase via CLI', () => {
     expect(agents).toContain('supabase/.temp/project-ref')
   })
 
-  it('AGENTS.md exige confirmação + ref antes de operação destrutiva remota', () => {
+  it('AGENTS.md exige escopo confirmado e autorização explícita, reutilizando a que já foi dada', () => {
     const agents = file('AGENTS.md')
     expect(agents).toMatch(/destrutiv/i)
     expect(agents).toContain('supabase db reset')
     expect(agents).toContain('confirmação explícita')
+    expect(agents).toContain('Reutilize a autorização explícita já dada')
+    expect(agents).toContain('data delete-plan')
+    expect(agents).toContain('data delete-apply')
+    expect(agents).not.toContain('Só então execute. Nunca rode uma operação destrutiva de forma autônoma.')
   })
 
-  it('CLAUDE.md proíbe destrutivo no remoto sem confirmação', () => {
+  it('CLAUDE.md distingue o canal de exclusões específicas de SQL destrutivo sem suporte', () => {
     const claude = file('CLAUDE.md')
     expect(claude).toContain('supabase db reset')
     expect(claude).toMatch(/project-ref/)
+    expect(claude).toContain('data delete-plan')
+    expect(claude).toContain('data delete-apply')
+    expect(claude).toContain('não são suportados por esse canal')
   })
 
   it('config.toml nasce no Postgres 17 (casa com o default do Supabase)', () => {

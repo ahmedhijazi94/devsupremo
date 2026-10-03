@@ -24,6 +24,33 @@ describe('upgrade of mixed user/platform instructions', () => {
     expect(withDevelopmentPolicy(updated)).toBe(updated)
   })
 
+  it.each(['\n', '\r\n'])('replaces only exact obsolete destructive-operation defaults, including existing managed files (%j)', newline => {
+    const oldAgents = `### Operações destrutivas no remoto — PARE e confirme
+\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\` de estrutura existente,
+\`DELETE\` em massa e exclusões massivas são irreversíveis no banco online. Antes
+de rodar qualquer uma:
+1. **Mostre o \`project-ref\` alvo:** \`cat supabase/.temp/project-ref\`.
+2. **Peça confirmação explícita** ao humano, nomeando esse ref.
+3. Só então execute. Nunca rode uma operação destrutiva de forma autônoma.`.replaceAll('\n', newline)
+    const oldClaude = `Operação destrutiva remota exige confirmação
+explícita do humano e mostrar o \`project-ref\`: \`DROP\`, \`TRUNCATE\`, \`DELETE\` em massa,
+\`npx supabase db reset --linked\` e exclusão de dados não são auto-repair.`.replaceAll('\n', newline)
+    for (const legacy of [oldAgents, oldClaude]) {
+      const custom = '# Minha regra\nNunca exclua contas reais.\n'
+      const existingBlock = `${DEVELOPMENT_POLICY_START}\nold\n${DEVELOPMENT_POLICY_END}`
+      const updated = withDevelopmentPolicy(custom + legacy + '\n' + existingBlock)
+      expect(updated).toContain(custom)
+      expect(updated).not.toContain(legacy)
+      expect(updated).toContain('data delete-plan')
+      expect(updated).toContain('data delete-apply')
+      expect(updated).toContain('Reutilize')
+      expect(withDevelopmentPolicy(updated)).toBe(updated)
+      // A similar instruction written by the owner is not a generated default.
+      const personal = legacy.replace('confirmação', 'autorização adicional')
+      expect(withDevelopmentPolicy(personal)).toContain(personal)
+    }
+  })
+
   it('updates only the marked block, preserving custom instructions before and after it', () => {
     const prefix = '# Regras próprias\n'
     const suffix = '\n## Preferências\nValide quando solicitado.\n'

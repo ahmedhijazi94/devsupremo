@@ -24,6 +24,10 @@ describe('autoridade do ambiente', () => {
   it('permite DDL aditivo com FK e RLS', () => {
     expect(() => validateAutomaticMigration('create table notes (id uuid primary key, user_id uuid references auth.users(id) on delete cascade); alter table notes enable row level security;')).not.toThrow()
   })
+  it('direciona a exclusão delimitada ao canal implementado, sem prometer revisão de SQL arbitrário', () => {
+    expect(() => validateAutomaticMigration("DELETE FROM public.orgs WHERE id = '00000000-0000-4000-8000-000000000001';"))
+      .toThrow('Migration recusada: operação destrutiva, dinâmica ou controle de transação não permitido no fluxo automático. Para excluir linhas específicas autorizadas em development, use data delete-plan e data delete-apply. SQL destrutivo arbitrário não é suportado por esse canal; salvar um arquivo para revisão não enfileira sua aplicação.')
+  })
   it('permite inserir o administrador confirmado de forma idempotente, sem confundir DO NOTHING com bloco DO', () => {
     expect(() => validateAutomaticMigration(`
       INSERT INTO public.platform_admins (user_id)

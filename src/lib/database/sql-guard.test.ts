@@ -228,8 +228,8 @@ describe('assertSafeSql — furos encontrados atacando o guard', () => {
       ).toThrow(new UnsafeSqlError(
         'SECURITY DEFINER não é permitido neste canal em qualquer schema, inclusive public e private. ' +
         'Mover ou renomear o schema não libera a operação. Use SECURITY INVOKER com RLS. ' +
-        'Se privilégio elevado for indispensável, interrompa a aplicação automática e encaminhe ' +
-        'a mudança para revisão e autorização explícita pelo fluxo oficial do Supremo. ' +
+        'Este canal não oferece aprovação genérica de funções privilegiadas. ' +
+        'Se privilégio elevado for indispensável, informe essa limitação; a aplicação automática permanece bloqueada. ' +
         'Não contorne a recusa com SQL direto ou credenciais privilegiadas.',
       ))
     })

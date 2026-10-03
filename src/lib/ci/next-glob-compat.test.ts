@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -67,7 +68,7 @@ describe('Next ESLint directory glob compatibility', () => {
   it('matches relative and brace-list roots, excludes files and hidden roots, and keeps negatives empty', () => {
     const root = fixture()
     const expected = [join(root, 'admin'), join(root, 'web')].sort()
-    for (const pattern of [join(root, '*'), join(root, '{web,admin}'), relative(process.cwd(), join(root, '*'))]) {
+    for (const pattern of [join(root, '*'), join(root, '{web,admin}'), join(root, '{web,{admin,missing}}'), relative(process.cwd(), join(root, '*'))]) {
       expect(adapter.globSync(pattern, { onlyDirectories: true }).map((directory) => resolve(directory)).sort())
         .toEqual(expected)
     }
@@ -76,12 +77,32 @@ describe('Next ESLint directory glob compatibility', () => {
     expect(adapter.globSync(join(root, 'readme.txt'), { onlyDirectories: true })).toEqual([])
   })
 
-  it.each(['{1..12}', '{01..03}', '{1..5..2}', '{-1..2}', '{a..z}'])(
+  it.each(['{1..12}', '{01..03}', '{1..5..2}', '{-1..2}', '{a..z}', '{web,{1..12}}', '{web}{1..12}'])(
     'fails visibly for unsupported brace ranges: %s',
     (range) => {
       expect(() => adapter.globSync(`packages/${range}`, { onlyDirectories: true })).toThrow('brace ranges are unsupported')
     },
   )
+
+  it('rejects ranges after long malformed and nested braces without backtracking', () => {
+    // Isolate the adversarial inputs so a regression times out instead of
+    // blocking the entire test runner in a synchronous regex evaluation.
+    const result = spawnSync(process.execPath, ['-e', `
+      const assert = require('node:assert/strict')
+      const { globSync } = require(process.argv[1])
+      const patterns = [
+        '{' + '.'.repeat(250_000) + '{1..12}}',
+        '{'.repeat(250_000) + '1..12' + '}'.repeat(250_000),
+        '{}'.repeat(250_000) + '{1..12}',
+      ]
+      for (const pattern of patterns) {
+        assert.throws(() => globSync(pattern, { onlyDirectories: true }), /brace ranges are unsupported/)
+      }
+    `, adapterPath], { encoding: 'utf8', timeout: 5_000 })
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(0)
+    expect(result.stderr).toBe('')
+  })
 
   it.each([
     ['web', undefined],

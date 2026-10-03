@@ -20,7 +20,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       "eslint.config.mjs": "42fe347c89ba48a3ad45d6e18eb47f6caaf9665a",
       "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4",
       "tools/next-eslint-glob/package.json": "f5436c67e25e481027acb4e180eff890c0ad8e55",
-      "tools/next-eslint-glob/index.cjs": "14cdb8f0f6b1fea5b3af4f7cf186d95a03e0ef07"
+      "tools/next-eslint-glob/index.cjs": "9f9744d1d435ee620e1d476a209c20ddebb507c4"
     },
     "scripts": {
       "typecheck": "tsc --noEmit",
@@ -2893,7 +2893,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       "eslint.config.mjs": "42fe347c89ba48a3ad45d6e18eb47f6caaf9665a",
       "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4",
       "tools/next-eslint-glob/package.json": "f5436c67e25e481027acb4e180eff890c0ad8e55",
-      "tools/next-eslint-glob/index.cjs": "14cdb8f0f6b1fea5b3af4f7cf186d95a03e0ef07"
+      "tools/next-eslint-glob/index.cjs": "9f9744d1d435ee620e1d476a209c20ddebb507c4"
     },
     "scripts": {
       "typecheck": "tsc --noEmit",
@@ -5766,7 +5766,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       "eslint.config.mjs": "42fe347c89ba48a3ad45d6e18eb47f6caaf9665a",
       "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4",
       "tools/next-eslint-glob/package.json": "f5436c67e25e481027acb4e180eff890c0ad8e55",
-      "tools/next-eslint-glob/index.cjs": "14cdb8f0f6b1fea5b3af4f7cf186d95a03e0ef07"
+      "tools/next-eslint-glob/index.cjs": "9f9744d1d435ee620e1d476a209c20ddebb507c4"
     },
     "scripts": {
       "typecheck": "tsc --noEmit",

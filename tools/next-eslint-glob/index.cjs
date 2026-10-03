@@ -26,8 +26,22 @@ function globSync(pattern, options) {
 
   // Picomatch cannot faithfully expand numeric, padded, or stepped ranges.
   // Explicit lists such as {web,admin} retain supported rootDir glob behavior.
-  if (/\{[^{}]*\.\.[^{}]*\}/.test(pattern)) {
-    throw new TypeError('Next ESLint rootDir brace ranges are unsupported; use an explicit brace list or rootDir array')
+  // Scan once: ambiguous repetitions in a regex can backtrack quadratically.
+  let insideBrace = false
+  let containsRange = false
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index]
+    if (character === '{') {
+      insideBrace = true
+      containsRange = false
+    } else if (character === '}') {
+      if (insideBrace && containsRange) {
+        throw new TypeError('Next ESLint rootDir brace ranges are unsupported; use an explicit brace list or rootDir array')
+      }
+      insideBrace = false
+    } else if (insideBrace && character === '.' && pattern[index + 1] === '.') {
+      containsRange = true
+    }
   }
 
   return directoryGlobSync(pattern, {

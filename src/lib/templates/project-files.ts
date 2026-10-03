@@ -142,7 +142,7 @@ const DEPENDENCIES = {
   'class-variance-authority': '^0.7.1',
   clsx: '^2.1.1',
   'lucide-react': '^1.35.0',
-  next: '16.3.3',
+  next: '16.3.8',
   react: '19.2.8',
   'react-dom': '19.2.8',
   'tailwind-merge': '^3.6.0',
@@ -174,7 +174,8 @@ const DEV_DEPENDENCIES = {
   '@vitejs/plugin-react': '^6.1.1',
   '@vitest/coverage-v8': '^3.2.7',
   eslint: '^9.39.5',
-  'eslint-config-next': '16.3.3',
+  'eslint-config-next': '16.3.8',
+  'fast-glob': 'file:tools/next-eslint-glob',
   jsdom: '^25.0.1',
   // CLI do Supabase PINADA no projeto: o bootstrap e o agente usam esta versão
   // local (node_modules/.bin/supabase), nunca uma instalação global arbitrária —
@@ -403,7 +404,14 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
       content: generateRlsTest(inferTablesFromMigration(migration).filter((table) => table.tenant?.isSelf)),
     })
   }
-  return options.stack === 'tanstack-start-vite' ? adaptTanStackFiles(files, options) : files
+  if (options.stack === 'tanstack-start-vite') return adaptTanStackFiles(files, options)
+  // Next's ESLint plugin uses directory globbing through this engine-owned
+  // adapter. Keep the copied implementation identical to the one we validate.
+  files.push(
+    { path: 'tools/next-eslint-glob/package.json', content: fs.readFileSync(path.join(process.cwd(), 'tools/next-eslint-glob/package.json'), 'utf8') },
+    { path: 'tools/next-eslint-glob/index.cjs', content: fs.readFileSync(path.join(process.cwd(), 'tools/next-eslint-glob/index.cjs'), 'utf8') },
+  )
+  return files
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -423,6 +431,7 @@ function packageJson(projectName: string): string {
       scripts,
       dependencies: DEPENDENCIES,
       devDependencies: DEV_DEPENDENCIES,
+      overrides: { '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob' } },
     },
     null,
     2,

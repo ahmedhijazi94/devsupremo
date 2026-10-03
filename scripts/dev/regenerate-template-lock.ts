@@ -24,7 +24,9 @@ try {
   const pkg = files.find((f) => f.path === 'package.json')
   if (!pkg) throw new Error('package.json não está no manifesto.')
 
-  for (const file of files.filter((f) => f.path === 'package.json' || f.path.startsWith('tools/supremo-cli/'))) {
+  // Seed npm with the released lock so a focused dependency correction does
+  // not upgrade unrelated packages throughout the generated application.
+  for (const file of files.filter((f) => f.path === 'package.json' || f.path === 'package-lock.json' || f.path.startsWith('tools/supremo-cli/') || f.path.startsWith('tools/next-eslint-glob/'))) {
     const target = path.join(workdir, file.path)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.writeFileSync(target, file.content)

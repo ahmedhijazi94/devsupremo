@@ -25202,6 +25202,8 @@ var init_managed_paths = __esm({
     PLATFORM_MANAGED_PATHS = [
       "tools/supremo-cli/package.json",
       "tools/supremo-cli/dist/bin.js",
+      "tools/next-eslint-glob/package.json",
+      "tools/next-eslint-glob/index.cjs",
       // Ferramentas e configuração
       "tsconfig.json",
       "next.config.ts",
@@ -79302,7 +79304,9 @@ var init_validation_policy = __esm({
           "playwright.config.ts": "00862f7365ef877397dbdbcd561a014d684cc38b",
           "e2e/smoke.spec.ts": "896ece4397321635cc1c1815c993f8d4bc27153f",
           "eslint.config.mjs": "42fe347c89ba48a3ad45d6e18eb47f6caaf9665a",
-          "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4"
+          "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4",
+          "tools/next-eslint-glob/package.json": "f5436c67e25e481027acb4e180eff890c0ad8e55",
+          "tools/next-eslint-glob/index.cjs": "14cdb8f0f6b1fea5b3af4f7cf186d95a03e0ef07"
         },
         "scripts": {
           "typecheck": "tsc --noEmit",
@@ -79331,13 +79335,19 @@ var init_validation_policy = __esm({
           "@vitejs/plugin-react": "^6.1.1",
           "@vitest/coverage-v8": "^3.2.7",
           "eslint": "^9.39.5",
-          "eslint-config-next": "16.3.3",
+          "eslint-config-next": "16.3.8",
+          "fast-glob": "file:tools/next-eslint-glob",
           "jsdom": "^25.0.1",
           "supabase": "2.116.0",
           "supremo-cli": "file:tools/supremo-cli",
           "tailwindcss": "^4.3.3",
           "typescript": "^5.9.3",
           "vitest": "^3.2.7"
+        },
+        "overrides": {
+          "@next/eslint-plugin-next": {
+            "fast-glob": "$fast-glob"
+          }
         },
         "lock": [
           [
@@ -79778,11 +79788,11 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@next/env",
-            "adca1dd37a42c46318aed99eb94b4c3cc735bc0e5101b845448e52d783d130b5"
+            "07d7ff6a2ce8ea884d6cfc331f85aaadcc6e8d0c1b0dfe2ba1bb01feb5ad053b"
           ],
           [
             "node_modules/@next/eslint-plugin-next",
-            "0c88e0592f760e9aadf6dacbd50ce1a50a2354836919e6ad916982f6c59b3739"
+            "3840f14656d8cdaa8d8900f280f4abde89086e19fc040d929f13b90b48f2c793"
           ],
           [
             "node_modules/@next/eslint-plugin-next/node_modules/@eslint-community/eslint-utils",
@@ -79794,35 +79804,35 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@next/swc-darwin-arm64",
-            "417ff020071c0251b1aa1c9fb5c4f327d07a43a69d405262c6fd954f861ba434"
+            "7ad795c67f0aed46065cda9089adc67a26ffa237a84c29a02c339216fffe5701"
           ],
           [
             "node_modules/@next/swc-darwin-x64",
-            "e4122f6dead56783d8bcfc149aac8f65efddb7df56dcbcd7e3cde1a69babccf0"
+            "0110adcbfd5fc4fb188a3e7cbb0cf2f4e9863072a76b64c01336a5ae343d5d58"
           ],
           [
             "node_modules/@next/swc-linux-arm64-gnu",
-            "6ba0a65b03309f8ac76e02567463195ccb1f07627533ba4c002407a9d97e1bc5"
+            "df7ef7c9f62f9653b64c48aab284167f8564d85b30d4d62bbd6077da563c8ac7"
           ],
           [
             "node_modules/@next/swc-linux-arm64-musl",
-            "2aceb7471288aacfdeefd234aa67e23b744d2b940a117db76540a6785d4f13b7"
+            "dd5ab4ad15b534847a4aeb3bd9ccdd52b7f4eef0d4de4f113f92276b74d2f4e8"
           ],
           [
             "node_modules/@next/swc-linux-x64-gnu",
-            "e4b3c1f4f9754e2dc3f4d199d23ebf13b22ab5e0ccf23b8d1598cb04188de406"
+            "c8d3b78c8b5e6d8b2939ed4ac547356670805de4141ed02beaeb0ad1f6471452"
           ],
           [
             "node_modules/@next/swc-linux-x64-musl",
-            "3d239b574445c8696d8d26b2ae64003408c8515f6613af3d671679374e48acb9"
+            "6541fabde81bc4b7fc7816291c68144688a502d96765fc6131e3895228c26f37"
           ],
           [
             "node_modules/@next/swc-win32-arm64-msvc",
-            "5d2d04f7568c506220a25455b6dc64cd02b4b5fc720e190a5857b67014a86541"
+            "a284bb3ffd8f2a8755618074d3a405faa620c2b346ce01a3f613fd000aae4e65"
           ],
           [
             "node_modules/@next/swc-win32-x64-msvc",
-            "8918a6c12f827cd398229b0a205b89d3ff59bba6de8cdf1ada61369ce1a253eb"
+            "d63b45c4b04554fdd5bc20bebdc0924000f1e10c1ff65812c624b3ffbf865af4"
           ],
           [
             "node_modules/@noble/ciphers",
@@ -79835,18 +79845,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/@noble/hashes",
             "6860045ea9bc127bb13658c8f8619e8b5a6d18f594bd3c95cc2d5f1857f36ff6"
-          ],
-          [
-            "node_modules/@nodelib/fs.scandir",
-            "52a532a49fbec3948957f0c676487d6e6e0fa60df0e667ce4068a64b08f75fd2"
-          ],
-          [
-            "node_modules/@nodelib/fs.stat",
-            "9c003ff21d3f2abf4cd1eed005f4fbcc24b10b19f2584d5644ce40377fbf4c4e"
-          ],
-          [
-            "node_modules/@nodelib/fs.walk",
-            "22ef3a6b5929d14877de413f47f798d9e17e721c3235a45b1ecb6adeecadeffd"
           ],
           [
             "node_modules/@nolyfill/is-core-module",
@@ -80282,7 +80280,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@typescript-eslint/typescript-estree/node_modules/brace-expansion",
-            "fdbea9c59b458b2bfb415345a0e68466bb50d5370465a5448c7042e1a4ae7b09"
+            "85116c5073ee21e20e4138fbde2d1654e8e8d5a8a134e822e4dcce9f79468766"
           ],
           [
             "node_modules/@typescript-eslint/typescript-estree/node_modules/minimatch",
@@ -80538,11 +80536,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/brace-expansion",
-            "00460adaa527c261e070cc199993d22640fb2808630a9357438b1351c00ad612"
-          ],
-          [
-            "node_modules/braces",
-            "573421cfdbed9e81f32cc01bdc95c6208c18b7d892bb88034285e26e65111c12"
+            "5bd0813e71a3a61bfe63ae4057927b9a4ec9b77d1c1f8bb164b9deb0a3d6e4ac"
           ],
           [
             "node_modules/browserslist",
@@ -80790,7 +80784,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/eslint-config-next",
-            "3c1ac4092c5da221d4bddb7d48138dfedff3f8a73d584d05d669679e8c8e77a9"
+            "17aecc9abb93ab14682ce8ac1dabd287d6eae856ca5f720c462b3591294ba263"
           ],
           [
             "node_modules/eslint-config-next/node_modules/globals",
@@ -80882,11 +80876,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/fast-glob",
-            "92659a5e1598d2ea915a4773ce67a5c9efa5a31d8b09f42b93a8c6751448961c"
-          ],
-          [
-            "node_modules/fast-glob/node_modules/glob-parent",
-            "0fe60fe188a1eef83a92ffa781ce28f55750fe85c18183c92b8f837faf5dbf1c"
+            "ce444fdea7d3189c338f4a9df6a737d1c9ed6ce162480ba4f059853e53b8daff"
           ],
           [
             "node_modules/fast-json-stable-stringify",
@@ -80897,16 +80887,8 @@ var init_validation_policy = __esm({
             "bfce071effe2311f6e6da903ee8c6145144820f80dd9a912723f455c4304abce"
           ],
           [
-            "node_modules/fastq",
-            "053679e940e93ac48ead74885e23236e2a897223f8a414bbb112936a810a44ae"
-          ],
-          [
             "node_modules/file-entry-cache",
             "6548e25b9cfa8655a8400a4f2c8f45121d94ade187aa58852b730039ea0793a8"
-          ],
-          [
-            "node_modules/fill-range",
-            "c51cb058570f3159722c47d919537d5744883a65b8f14447f67b85fee9dcbd89"
           ],
           [
             "node_modules/find-up",
@@ -80982,7 +80964,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/glob/node_modules/brace-expansion",
-            "56c47ee279b42d221613b2031590598582afb458521049c3786d0b741afb1831"
+            "43dd96c58de2925594bab609c3331e1b9ec823fb01aca181806bfb43825cc888"
           ],
           [
             "node_modules/glob/node_modules/minimatch",
@@ -81155,10 +81137,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/is-negative-zero",
             "4df0f27c382d829782f596ddb93ea0f8332e3f63264222c197cf3a693a477449"
-          ],
-          [
-            "node_modules/is-number",
-            "b1e580381181a9dfaa74d8ff3ff7af4958496aa369ebccfd015b61eab1da0a1c"
           ],
           [
             "node_modules/is-number-object",
@@ -81393,14 +81371,6 @@ var init_validation_policy = __esm({
             "cf60adddc6f187f71b8beab525aa1a038a5d09b97f5579ab85c162ba969b0867"
           ],
           [
-            "node_modules/merge2",
-            "f43d4096e9b4542e2a2b65ac91114e91231d70bedc7eb5c4dfaa99d74c35d1e5"
-          ],
-          [
-            "node_modules/micromatch",
-            "776221798a2a61824efa69d3669fcf6433a395419d992a02284c9c5e6ea6d2ed"
-          ],
-          [
             "node_modules/mime-db",
             "65d2f921b91adbb6345d5bfd4a80d2dd57f81fa275724ff07788c7eeff0ccfc9"
           ],
@@ -81442,7 +81412,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/next",
-            "ecd31875f57497b0ee69f3c9b82b7d4108896508b3517afcfc0acafa02f7cdaf"
+            "82452dec55947a1fc8c6afbad8cdd6510f8c9de4d7d9f9fb7ae792577a93c4fc"
           ],
           [
             "node_modules/next/node_modules/postcss",
@@ -81553,10 +81523,6 @@ var init_validation_policy = __esm({
             "d758e140b69949e56ba5237fb4e215a5843286f0c64e195449dc0a7535afe8a6"
           ],
           [
-            "node_modules/picomatch",
-            "56ef804009c8abf45729050318cea54c8a807a3d1b95ca36ad688a1f02cb54cd"
-          ],
-          [
             "node_modules/playwright",
             "05bc5aa0f9559550af2bc8daa88a78effe8f08b57b87f463393d1ca8b60cce08"
           ],
@@ -81597,10 +81563,6 @@ var init_validation_policy = __esm({
             "85e50e372134fea83b1c4626fb881af43e82ae0469177b7ed3d4b89c72f81fe7"
           ],
           [
-            "node_modules/queue-microtask",
-            "e65b73d7f94e408014f7aeb84e5141a60db7f7237973486f5f1361119eb8ad4c"
-          ],
-          [
             "node_modules/react",
             "6e0fabc2f80eb4f49288e3d6d44a953389eb9b96923708189c06b220313df909"
           ],
@@ -81637,10 +81599,6 @@ var init_validation_policy = __esm({
             "c7aa283f80078550b77f3b96d25347ae41f89f8990364c5e2abc4f3dd742feae"
           ],
           [
-            "node_modules/reusify",
-            "9604a4248c7a0461345a0c417ea65b6a3e0c96f690a14b58170598433a720a32"
-          ],
-          [
             "node_modules/rolldown",
             "28035a6cf81f019fdf30626655818fc7da003329356d202aee903487322fdf68"
           ],
@@ -81651,10 +81609,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/rrweb-cssom",
             "1fe5dc6f8fb25edaefef5a6c4d8488543c941025e8252dbed403691850cdea6d"
-          ],
-          [
-            "node_modules/run-parallel",
-            "ab53f00b63ba2e38eb707449ce28c7c6addd124587fa90f5e7653098c741a70f"
           ],
           [
             "node_modules/safe-array-concat",
@@ -81874,7 +81828,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/test-exclude/node_modules/brace-expansion",
-            "fdbea9c59b458b2bfb415345a0e68466bb50d5370465a5448c7042e1a4ae7b09"
+            "85116c5073ee21e20e4138fbde2d1654e8e8d5a8a134e822e4dcce9f79468766"
           ],
           [
             "node_modules/test-exclude/node_modules/minimatch",
@@ -81919,10 +81873,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/tldts-core",
             "cc5e0cd70f327b88333cd6514520f05afb23ee6eb7764482d1f149f2c21fc3f9"
-          ],
-          [
-            "node_modules/to-regex-range",
-            "e386219ecd51c93563619449fe492a712ae05faccd79b88359e7c5b66f22411c"
           ],
           [
             "node_modules/tough-cookie",
@@ -82199,6 +82149,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/zod-validation-error",
             "d8acdbd7d55b76dbd97d5e078ccb6f5fc6654dcb37ce99e35edbbd95ff8cfed9"
+          ],
+          [
+            "tools/next-eslint-glob",
+            "3ecae546b18979ffd72947a2dd04ccf6e651a56e3a9b4c3dbeea30f19aa44bd7"
           ],
           [
             "tools/supremo-cli",
@@ -82223,7 +82177,9 @@ var init_validation_policy = __esm({
           "playwright.config.ts": "00862f7365ef877397dbdbcd561a014d684cc38b",
           "e2e/smoke.spec.ts": "1cbc9274efb10b61602139ca8bda68c9224a5b9b",
           "eslint.config.mjs": "42fe347c89ba48a3ad45d6e18eb47f6caaf9665a",
-          "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4"
+          "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4",
+          "tools/next-eslint-glob/package.json": "f5436c67e25e481027acb4e180eff890c0ad8e55",
+          "tools/next-eslint-glob/index.cjs": "14cdb8f0f6b1fea5b3af4f7cf186d95a03e0ef07"
         },
         "scripts": {
           "typecheck": "tsc --noEmit",
@@ -82252,13 +82208,19 @@ var init_validation_policy = __esm({
           "@vitejs/plugin-react": "^6.1.1",
           "@vitest/coverage-v8": "^3.2.7",
           "eslint": "^9.39.5",
-          "eslint-config-next": "16.3.3",
+          "eslint-config-next": "16.3.8",
+          "fast-glob": "file:tools/next-eslint-glob",
           "jsdom": "^25.0.1",
           "supabase": "2.116.0",
           "supremo-cli": "file:tools/supremo-cli",
           "tailwindcss": "^4.3.3",
           "typescript": "^5.9.3",
           "vitest": "^3.2.7"
+        },
+        "overrides": {
+          "@next/eslint-plugin-next": {
+            "fast-glob": "$fast-glob"
+          }
         },
         "lock": [
           [
@@ -82699,11 +82661,11 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@next/env",
-            "adca1dd37a42c46318aed99eb94b4c3cc735bc0e5101b845448e52d783d130b5"
+            "07d7ff6a2ce8ea884d6cfc331f85aaadcc6e8d0c1b0dfe2ba1bb01feb5ad053b"
           ],
           [
             "node_modules/@next/eslint-plugin-next",
-            "0c88e0592f760e9aadf6dacbd50ce1a50a2354836919e6ad916982f6c59b3739"
+            "3840f14656d8cdaa8d8900f280f4abde89086e19fc040d929f13b90b48f2c793"
           ],
           [
             "node_modules/@next/eslint-plugin-next/node_modules/@eslint-community/eslint-utils",
@@ -82715,35 +82677,35 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@next/swc-darwin-arm64",
-            "417ff020071c0251b1aa1c9fb5c4f327d07a43a69d405262c6fd954f861ba434"
+            "7ad795c67f0aed46065cda9089adc67a26ffa237a84c29a02c339216fffe5701"
           ],
           [
             "node_modules/@next/swc-darwin-x64",
-            "e4122f6dead56783d8bcfc149aac8f65efddb7df56dcbcd7e3cde1a69babccf0"
+            "0110adcbfd5fc4fb188a3e7cbb0cf2f4e9863072a76b64c01336a5ae343d5d58"
           ],
           [
             "node_modules/@next/swc-linux-arm64-gnu",
-            "6ba0a65b03309f8ac76e02567463195ccb1f07627533ba4c002407a9d97e1bc5"
+            "df7ef7c9f62f9653b64c48aab284167f8564d85b30d4d62bbd6077da563c8ac7"
           ],
           [
             "node_modules/@next/swc-linux-arm64-musl",
-            "2aceb7471288aacfdeefd234aa67e23b744d2b940a117db76540a6785d4f13b7"
+            "dd5ab4ad15b534847a4aeb3bd9ccdd52b7f4eef0d4de4f113f92276b74d2f4e8"
           ],
           [
             "node_modules/@next/swc-linux-x64-gnu",
-            "e4b3c1f4f9754e2dc3f4d199d23ebf13b22ab5e0ccf23b8d1598cb04188de406"
+            "c8d3b78c8b5e6d8b2939ed4ac547356670805de4141ed02beaeb0ad1f6471452"
           ],
           [
             "node_modules/@next/swc-linux-x64-musl",
-            "3d239b574445c8696d8d26b2ae64003408c8515f6613af3d671679374e48acb9"
+            "6541fabde81bc4b7fc7816291c68144688a502d96765fc6131e3895228c26f37"
           ],
           [
             "node_modules/@next/swc-win32-arm64-msvc",
-            "5d2d04f7568c506220a25455b6dc64cd02b4b5fc720e190a5857b67014a86541"
+            "a284bb3ffd8f2a8755618074d3a405faa620c2b346ce01a3f613fd000aae4e65"
           ],
           [
             "node_modules/@next/swc-win32-x64-msvc",
-            "8918a6c12f827cd398229b0a205b89d3ff59bba6de8cdf1ada61369ce1a253eb"
+            "d63b45c4b04554fdd5bc20bebdc0924000f1e10c1ff65812c624b3ffbf865af4"
           ],
           [
             "node_modules/@noble/ciphers",
@@ -82756,18 +82718,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/@noble/hashes",
             "6860045ea9bc127bb13658c8f8619e8b5a6d18f594bd3c95cc2d5f1857f36ff6"
-          ],
-          [
-            "node_modules/@nodelib/fs.scandir",
-            "52a532a49fbec3948957f0c676487d6e6e0fa60df0e667ce4068a64b08f75fd2"
-          ],
-          [
-            "node_modules/@nodelib/fs.stat",
-            "9c003ff21d3f2abf4cd1eed005f4fbcc24b10b19f2584d5644ce40377fbf4c4e"
-          ],
-          [
-            "node_modules/@nodelib/fs.walk",
-            "22ef3a6b5929d14877de413f47f798d9e17e721c3235a45b1ecb6adeecadeffd"
           ],
           [
             "node_modules/@nolyfill/is-core-module",
@@ -83203,7 +83153,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@typescript-eslint/typescript-estree/node_modules/brace-expansion",
-            "fdbea9c59b458b2bfb415345a0e68466bb50d5370465a5448c7042e1a4ae7b09"
+            "85116c5073ee21e20e4138fbde2d1654e8e8d5a8a134e822e4dcce9f79468766"
           ],
           [
             "node_modules/@typescript-eslint/typescript-estree/node_modules/minimatch",
@@ -83459,11 +83409,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/brace-expansion",
-            "00460adaa527c261e070cc199993d22640fb2808630a9357438b1351c00ad612"
-          ],
-          [
-            "node_modules/braces",
-            "573421cfdbed9e81f32cc01bdc95c6208c18b7d892bb88034285e26e65111c12"
+            "5bd0813e71a3a61bfe63ae4057927b9a4ec9b77d1c1f8bb164b9deb0a3d6e4ac"
           ],
           [
             "node_modules/browserslist",
@@ -83711,7 +83657,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/eslint-config-next",
-            "3c1ac4092c5da221d4bddb7d48138dfedff3f8a73d584d05d669679e8c8e77a9"
+            "17aecc9abb93ab14682ce8ac1dabd287d6eae856ca5f720c462b3591294ba263"
           ],
           [
             "node_modules/eslint-config-next/node_modules/globals",
@@ -83803,11 +83749,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/fast-glob",
-            "92659a5e1598d2ea915a4773ce67a5c9efa5a31d8b09f42b93a8c6751448961c"
-          ],
-          [
-            "node_modules/fast-glob/node_modules/glob-parent",
-            "0fe60fe188a1eef83a92ffa781ce28f55750fe85c18183c92b8f837faf5dbf1c"
+            "ce444fdea7d3189c338f4a9df6a737d1c9ed6ce162480ba4f059853e53b8daff"
           ],
           [
             "node_modules/fast-json-stable-stringify",
@@ -83818,16 +83760,8 @@ var init_validation_policy = __esm({
             "bfce071effe2311f6e6da903ee8c6145144820f80dd9a912723f455c4304abce"
           ],
           [
-            "node_modules/fastq",
-            "053679e940e93ac48ead74885e23236e2a897223f8a414bbb112936a810a44ae"
-          ],
-          [
             "node_modules/file-entry-cache",
             "6548e25b9cfa8655a8400a4f2c8f45121d94ade187aa58852b730039ea0793a8"
-          ],
-          [
-            "node_modules/fill-range",
-            "c51cb058570f3159722c47d919537d5744883a65b8f14447f67b85fee9dcbd89"
           ],
           [
             "node_modules/find-up",
@@ -83903,7 +83837,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/glob/node_modules/brace-expansion",
-            "56c47ee279b42d221613b2031590598582afb458521049c3786d0b741afb1831"
+            "43dd96c58de2925594bab609c3331e1b9ec823fb01aca181806bfb43825cc888"
           ],
           [
             "node_modules/glob/node_modules/minimatch",
@@ -84076,10 +84010,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/is-negative-zero",
             "4df0f27c382d829782f596ddb93ea0f8332e3f63264222c197cf3a693a477449"
-          ],
-          [
-            "node_modules/is-number",
-            "b1e580381181a9dfaa74d8ff3ff7af4958496aa369ebccfd015b61eab1da0a1c"
           ],
           [
             "node_modules/is-number-object",
@@ -84314,14 +84244,6 @@ var init_validation_policy = __esm({
             "cf60adddc6f187f71b8beab525aa1a038a5d09b97f5579ab85c162ba969b0867"
           ],
           [
-            "node_modules/merge2",
-            "f43d4096e9b4542e2a2b65ac91114e91231d70bedc7eb5c4dfaa99d74c35d1e5"
-          ],
-          [
-            "node_modules/micromatch",
-            "776221798a2a61824efa69d3669fcf6433a395419d992a02284c9c5e6ea6d2ed"
-          ],
-          [
             "node_modules/mime-db",
             "65d2f921b91adbb6345d5bfd4a80d2dd57f81fa275724ff07788c7eeff0ccfc9"
           ],
@@ -84363,7 +84285,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/next",
-            "ecd31875f57497b0ee69f3c9b82b7d4108896508b3517afcfc0acafa02f7cdaf"
+            "82452dec55947a1fc8c6afbad8cdd6510f8c9de4d7d9f9fb7ae792577a93c4fc"
           ],
           [
             "node_modules/next/node_modules/postcss",
@@ -84474,10 +84396,6 @@ var init_validation_policy = __esm({
             "d758e140b69949e56ba5237fb4e215a5843286f0c64e195449dc0a7535afe8a6"
           ],
           [
-            "node_modules/picomatch",
-            "56ef804009c8abf45729050318cea54c8a807a3d1b95ca36ad688a1f02cb54cd"
-          ],
-          [
             "node_modules/playwright",
             "05bc5aa0f9559550af2bc8daa88a78effe8f08b57b87f463393d1ca8b60cce08"
           ],
@@ -84518,10 +84436,6 @@ var init_validation_policy = __esm({
             "85e50e372134fea83b1c4626fb881af43e82ae0469177b7ed3d4b89c72f81fe7"
           ],
           [
-            "node_modules/queue-microtask",
-            "e65b73d7f94e408014f7aeb84e5141a60db7f7237973486f5f1361119eb8ad4c"
-          ],
-          [
             "node_modules/react",
             "6e0fabc2f80eb4f49288e3d6d44a953389eb9b96923708189c06b220313df909"
           ],
@@ -84558,10 +84472,6 @@ var init_validation_policy = __esm({
             "c7aa283f80078550b77f3b96d25347ae41f89f8990364c5e2abc4f3dd742feae"
           ],
           [
-            "node_modules/reusify",
-            "9604a4248c7a0461345a0c417ea65b6a3e0c96f690a14b58170598433a720a32"
-          ],
-          [
             "node_modules/rolldown",
             "28035a6cf81f019fdf30626655818fc7da003329356d202aee903487322fdf68"
           ],
@@ -84572,10 +84482,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/rrweb-cssom",
             "1fe5dc6f8fb25edaefef5a6c4d8488543c941025e8252dbed403691850cdea6d"
-          ],
-          [
-            "node_modules/run-parallel",
-            "ab53f00b63ba2e38eb707449ce28c7c6addd124587fa90f5e7653098c741a70f"
           ],
           [
             "node_modules/safe-array-concat",
@@ -84795,7 +84701,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/test-exclude/node_modules/brace-expansion",
-            "fdbea9c59b458b2bfb415345a0e68466bb50d5370465a5448c7042e1a4ae7b09"
+            "85116c5073ee21e20e4138fbde2d1654e8e8d5a8a134e822e4dcce9f79468766"
           ],
           [
             "node_modules/test-exclude/node_modules/minimatch",
@@ -84840,10 +84746,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/tldts-core",
             "cc5e0cd70f327b88333cd6514520f05afb23ee6eb7764482d1f149f2c21fc3f9"
-          ],
-          [
-            "node_modules/to-regex-range",
-            "e386219ecd51c93563619449fe492a712ae05faccd79b88359e7c5b66f22411c"
           ],
           [
             "node_modules/tough-cookie",
@@ -85120,6 +85022,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/zod-validation-error",
             "d8acdbd7d55b76dbd97d5e078ccb6f5fc6654dcb37ce99e35edbbd95ff8cfed9"
+          ],
+          [
+            "tools/next-eslint-glob",
+            "3ecae546b18979ffd72947a2dd04ccf6e651a56e3a9b4c3dbeea30f19aa44bd7"
           ],
           [
             "tools/supremo-cli",
@@ -85144,7 +85050,9 @@ var init_validation_policy = __esm({
           "playwright.config.ts": "00862f7365ef877397dbdbcd561a014d684cc38b",
           "e2e/smoke.spec.ts": "1cbc9274efb10b61602139ca8bda68c9224a5b9b",
           "eslint.config.mjs": "42fe347c89ba48a3ad45d6e18eb47f6caaf9665a",
-          "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4"
+          "tsconfig.json": "20e0391c06b2506dcdad6a51aca57d7b2b2e97c4",
+          "tools/next-eslint-glob/package.json": "f5436c67e25e481027acb4e180eff890c0ad8e55",
+          "tools/next-eslint-glob/index.cjs": "14cdb8f0f6b1fea5b3af4f7cf186d95a03e0ef07"
         },
         "scripts": {
           "typecheck": "tsc --noEmit",
@@ -85173,13 +85081,19 @@ var init_validation_policy = __esm({
           "@vitejs/plugin-react": "^6.1.1",
           "@vitest/coverage-v8": "^3.2.7",
           "eslint": "^9.39.5",
-          "eslint-config-next": "16.3.3",
+          "eslint-config-next": "16.3.8",
+          "fast-glob": "file:tools/next-eslint-glob",
           "jsdom": "^25.0.1",
           "supabase": "2.116.0",
           "supremo-cli": "file:tools/supremo-cli",
           "tailwindcss": "^4.3.3",
           "typescript": "^5.9.3",
           "vitest": "^3.2.7"
+        },
+        "overrides": {
+          "@next/eslint-plugin-next": {
+            "fast-glob": "$fast-glob"
+          }
         },
         "lock": [
           [
@@ -85620,11 +85534,11 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@next/env",
-            "adca1dd37a42c46318aed99eb94b4c3cc735bc0e5101b845448e52d783d130b5"
+            "07d7ff6a2ce8ea884d6cfc331f85aaadcc6e8d0c1b0dfe2ba1bb01feb5ad053b"
           ],
           [
             "node_modules/@next/eslint-plugin-next",
-            "0c88e0592f760e9aadf6dacbd50ce1a50a2354836919e6ad916982f6c59b3739"
+            "3840f14656d8cdaa8d8900f280f4abde89086e19fc040d929f13b90b48f2c793"
           ],
           [
             "node_modules/@next/eslint-plugin-next/node_modules/@eslint-community/eslint-utils",
@@ -85636,35 +85550,35 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@next/swc-darwin-arm64",
-            "417ff020071c0251b1aa1c9fb5c4f327d07a43a69d405262c6fd954f861ba434"
+            "7ad795c67f0aed46065cda9089adc67a26ffa237a84c29a02c339216fffe5701"
           ],
           [
             "node_modules/@next/swc-darwin-x64",
-            "e4122f6dead56783d8bcfc149aac8f65efddb7df56dcbcd7e3cde1a69babccf0"
+            "0110adcbfd5fc4fb188a3e7cbb0cf2f4e9863072a76b64c01336a5ae343d5d58"
           ],
           [
             "node_modules/@next/swc-linux-arm64-gnu",
-            "6ba0a65b03309f8ac76e02567463195ccb1f07627533ba4c002407a9d97e1bc5"
+            "df7ef7c9f62f9653b64c48aab284167f8564d85b30d4d62bbd6077da563c8ac7"
           ],
           [
             "node_modules/@next/swc-linux-arm64-musl",
-            "2aceb7471288aacfdeefd234aa67e23b744d2b940a117db76540a6785d4f13b7"
+            "dd5ab4ad15b534847a4aeb3bd9ccdd52b7f4eef0d4de4f113f92276b74d2f4e8"
           ],
           [
             "node_modules/@next/swc-linux-x64-gnu",
-            "e4b3c1f4f9754e2dc3f4d199d23ebf13b22ab5e0ccf23b8d1598cb04188de406"
+            "c8d3b78c8b5e6d8b2939ed4ac547356670805de4141ed02beaeb0ad1f6471452"
           ],
           [
             "node_modules/@next/swc-linux-x64-musl",
-            "3d239b574445c8696d8d26b2ae64003408c8515f6613af3d671679374e48acb9"
+            "6541fabde81bc4b7fc7816291c68144688a502d96765fc6131e3895228c26f37"
           ],
           [
             "node_modules/@next/swc-win32-arm64-msvc",
-            "5d2d04f7568c506220a25455b6dc64cd02b4b5fc720e190a5857b67014a86541"
+            "a284bb3ffd8f2a8755618074d3a405faa620c2b346ce01a3f613fd000aae4e65"
           ],
           [
             "node_modules/@next/swc-win32-x64-msvc",
-            "8918a6c12f827cd398229b0a205b89d3ff59bba6de8cdf1ada61369ce1a253eb"
+            "d63b45c4b04554fdd5bc20bebdc0924000f1e10c1ff65812c624b3ffbf865af4"
           ],
           [
             "node_modules/@noble/ciphers",
@@ -85677,18 +85591,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/@noble/hashes",
             "6860045ea9bc127bb13658c8f8619e8b5a6d18f594bd3c95cc2d5f1857f36ff6"
-          ],
-          [
-            "node_modules/@nodelib/fs.scandir",
-            "52a532a49fbec3948957f0c676487d6e6e0fa60df0e667ce4068a64b08f75fd2"
-          ],
-          [
-            "node_modules/@nodelib/fs.stat",
-            "9c003ff21d3f2abf4cd1eed005f4fbcc24b10b19f2584d5644ce40377fbf4c4e"
-          ],
-          [
-            "node_modules/@nodelib/fs.walk",
-            "22ef3a6b5929d14877de413f47f798d9e17e721c3235a45b1ecb6adeecadeffd"
           ],
           [
             "node_modules/@nolyfill/is-core-module",
@@ -86124,7 +86026,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/@typescript-eslint/typescript-estree/node_modules/brace-expansion",
-            "fdbea9c59b458b2bfb415345a0e68466bb50d5370465a5448c7042e1a4ae7b09"
+            "85116c5073ee21e20e4138fbde2d1654e8e8d5a8a134e822e4dcce9f79468766"
           ],
           [
             "node_modules/@typescript-eslint/typescript-estree/node_modules/minimatch",
@@ -86380,11 +86282,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/brace-expansion",
-            "00460adaa527c261e070cc199993d22640fb2808630a9357438b1351c00ad612"
-          ],
-          [
-            "node_modules/braces",
-            "573421cfdbed9e81f32cc01bdc95c6208c18b7d892bb88034285e26e65111c12"
+            "5bd0813e71a3a61bfe63ae4057927b9a4ec9b77d1c1f8bb164b9deb0a3d6e4ac"
           ],
           [
             "node_modules/browserslist",
@@ -86632,7 +86530,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/eslint-config-next",
-            "3c1ac4092c5da221d4bddb7d48138dfedff3f8a73d584d05d669679e8c8e77a9"
+            "17aecc9abb93ab14682ce8ac1dabd287d6eae856ca5f720c462b3591294ba263"
           ],
           [
             "node_modules/eslint-config-next/node_modules/globals",
@@ -86724,11 +86622,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/fast-glob",
-            "92659a5e1598d2ea915a4773ce67a5c9efa5a31d8b09f42b93a8c6751448961c"
-          ],
-          [
-            "node_modules/fast-glob/node_modules/glob-parent",
-            "0fe60fe188a1eef83a92ffa781ce28f55750fe85c18183c92b8f837faf5dbf1c"
+            "ce444fdea7d3189c338f4a9df6a737d1c9ed6ce162480ba4f059853e53b8daff"
           ],
           [
             "node_modules/fast-json-stable-stringify",
@@ -86739,16 +86633,8 @@ var init_validation_policy = __esm({
             "bfce071effe2311f6e6da903ee8c6145144820f80dd9a912723f455c4304abce"
           ],
           [
-            "node_modules/fastq",
-            "053679e940e93ac48ead74885e23236e2a897223f8a414bbb112936a810a44ae"
-          ],
-          [
             "node_modules/file-entry-cache",
             "6548e25b9cfa8655a8400a4f2c8f45121d94ade187aa58852b730039ea0793a8"
-          ],
-          [
-            "node_modules/fill-range",
-            "c51cb058570f3159722c47d919537d5744883a65b8f14447f67b85fee9dcbd89"
           ],
           [
             "node_modules/find-up",
@@ -86824,7 +86710,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/glob/node_modules/brace-expansion",
-            "56c47ee279b42d221613b2031590598582afb458521049c3786d0b741afb1831"
+            "43dd96c58de2925594bab609c3331e1b9ec823fb01aca181806bfb43825cc888"
           ],
           [
             "node_modules/glob/node_modules/minimatch",
@@ -86997,10 +86883,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/is-negative-zero",
             "4df0f27c382d829782f596ddb93ea0f8332e3f63264222c197cf3a693a477449"
-          ],
-          [
-            "node_modules/is-number",
-            "b1e580381181a9dfaa74d8ff3ff7af4958496aa369ebccfd015b61eab1da0a1c"
           ],
           [
             "node_modules/is-number-object",
@@ -87235,14 +87117,6 @@ var init_validation_policy = __esm({
             "cf60adddc6f187f71b8beab525aa1a038a5d09b97f5579ab85c162ba969b0867"
           ],
           [
-            "node_modules/merge2",
-            "f43d4096e9b4542e2a2b65ac91114e91231d70bedc7eb5c4dfaa99d74c35d1e5"
-          ],
-          [
-            "node_modules/micromatch",
-            "776221798a2a61824efa69d3669fcf6433a395419d992a02284c9c5e6ea6d2ed"
-          ],
-          [
             "node_modules/mime-db",
             "65d2f921b91adbb6345d5bfd4a80d2dd57f81fa275724ff07788c7eeff0ccfc9"
           ],
@@ -87284,7 +87158,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/next",
-            "ecd31875f57497b0ee69f3c9b82b7d4108896508b3517afcfc0acafa02f7cdaf"
+            "82452dec55947a1fc8c6afbad8cdd6510f8c9de4d7d9f9fb7ae792577a93c4fc"
           ],
           [
             "node_modules/next/node_modules/postcss",
@@ -87395,10 +87269,6 @@ var init_validation_policy = __esm({
             "d758e140b69949e56ba5237fb4e215a5843286f0c64e195449dc0a7535afe8a6"
           ],
           [
-            "node_modules/picomatch",
-            "56ef804009c8abf45729050318cea54c8a807a3d1b95ca36ad688a1f02cb54cd"
-          ],
-          [
             "node_modules/playwright",
             "05bc5aa0f9559550af2bc8daa88a78effe8f08b57b87f463393d1ca8b60cce08"
           ],
@@ -87439,10 +87309,6 @@ var init_validation_policy = __esm({
             "85e50e372134fea83b1c4626fb881af43e82ae0469177b7ed3d4b89c72f81fe7"
           ],
           [
-            "node_modules/queue-microtask",
-            "e65b73d7f94e408014f7aeb84e5141a60db7f7237973486f5f1361119eb8ad4c"
-          ],
-          [
             "node_modules/react",
             "6e0fabc2f80eb4f49288e3d6d44a953389eb9b96923708189c06b220313df909"
           ],
@@ -87479,10 +87345,6 @@ var init_validation_policy = __esm({
             "c7aa283f80078550b77f3b96d25347ae41f89f8990364c5e2abc4f3dd742feae"
           ],
           [
-            "node_modules/reusify",
-            "9604a4248c7a0461345a0c417ea65b6a3e0c96f690a14b58170598433a720a32"
-          ],
-          [
             "node_modules/rolldown",
             "28035a6cf81f019fdf30626655818fc7da003329356d202aee903487322fdf68"
           ],
@@ -87493,10 +87355,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/rrweb-cssom",
             "1fe5dc6f8fb25edaefef5a6c4d8488543c941025e8252dbed403691850cdea6d"
-          ],
-          [
-            "node_modules/run-parallel",
-            "ab53f00b63ba2e38eb707449ce28c7c6addd124587fa90f5e7653098c741a70f"
           ],
           [
             "node_modules/safe-array-concat",
@@ -87716,7 +87574,7 @@ var init_validation_policy = __esm({
           ],
           [
             "node_modules/test-exclude/node_modules/brace-expansion",
-            "fdbea9c59b458b2bfb415345a0e68466bb50d5370465a5448c7042e1a4ae7b09"
+            "85116c5073ee21e20e4138fbde2d1654e8e8d5a8a134e822e4dcce9f79468766"
           ],
           [
             "node_modules/test-exclude/node_modules/minimatch",
@@ -87761,10 +87619,6 @@ var init_validation_policy = __esm({
           [
             "node_modules/tldts-core",
             "cc5e0cd70f327b88333cd6514520f05afb23ee6eb7764482d1f149f2c21fc3f9"
-          ],
-          [
-            "node_modules/to-regex-range",
-            "e386219ecd51c93563619449fe492a712ae05faccd79b88359e7c5b66f22411c"
           ],
           [
             "node_modules/tough-cookie",
@@ -88041,6 +87895,10 @@ var init_validation_policy = __esm({
           [
             "node_modules/zod-validation-error",
             "d8acdbd7d55b76dbd97d5e078ccb6f5fc6654dcb37ce99e35edbbd95ff8cfed9"
+          ],
+          [
+            "tools/next-eslint-glob",
+            "3ecae546b18979ffd72947a2dd04ccf6e651a56e3a9b4c3dbeea30f19aa44bd7"
           ],
           [
             "tools/supremo-cli",
@@ -203064,7 +202922,10 @@ function inspectValidationIntegrity(manifest, tree, packageContent, lockContent)
       if (name in scripts)
         failures.push("Hook de instala\xE7\xE3o n\xE3o autorizado: ".concat(name));
     }
-    for (const name of ["overrides", "workspaces", "resolutions", "pnpm"])
+    if (manifest.overrides === void 0 ? "overrides" in pkg : stable(pkg.overrides) !== stable(manifest.overrides)) {
+      failures.push("Resolu\xE7\xE3o das ferramentas n\xE3o autorizada: overrides");
+    }
+    for (const name of ["workspaces", "resolutions", "pnpm"])
       if (name in pkg)
         failures.push("Resolu\xE7\xE3o das ferramentas n\xE3o autorizada: ".concat(name));
     const dev = record2(pkg.devDependencies);

@@ -59,6 +59,7 @@ const packageJson = JSON.parse(file('package.json')) as {
   scripts: Record<string, string>
   dependencies: Record<string, string>
   devDependencies: Record<string, string>
+  overrides: Record<string, Record<string, string>>
 }
 
 describe('manifesto — integridade', () => {
@@ -183,6 +184,31 @@ describe('dependências — tudo que é importado está instalado', () => {
   it('não declara dependência de Tailwind v3 junto do v4', () => {
     expect(Object.keys(allDeps)).not.toContain('autoprefixer')
     expect(allDeps.tailwindcss).toMatch(/^\^4/)
+  })
+})
+
+describe('Next ESLint — adaptação local preserva as regras do framework', () => {
+  it.each(['public', 'solo', 'team'] as const)('inclui o adaptador completo e restringe a substituição ao plugin Next em %s', (kind) => {
+    const nextFiles = new Map(buildProjectFiles({ projectName: 'eslint-proof', description: '', kind, stack: 'nextjs' }).map(entry => [entry.path, entry.content]))
+    const manifest = JSON.parse(nextFiles.get('package.json')!) as typeof packageJson
+    expect(manifest.dependencies.next).toBe('16.3.8')
+    expect(manifest.devDependencies['eslint-config-next']).toBe('16.3.8')
+    expect(manifest.devDependencies['fast-glob']).toBe('file:tools/next-eslint-glob')
+    expect(manifest.overrides).toEqual({ '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob' } })
+    for (const name of ['package.json', 'index.cjs']) {
+      const adapterPath = `tools/next-eslint-glob/${name}`
+      expect(nextFiles.get(adapterPath)).toBe(fs.readFileSync(path.join(process.cwd(), adapterPath), 'utf8'))
+    }
+    expect(nextFiles.get('eslint.config.mjs')).toContain("import nextVitals from 'eslint-config-next/core-web-vitals'")
+    expect(nextFiles.get('eslint.config.mjs')).toContain("import nextTs from 'eslint-config-next/typescript'")
+  })
+
+  it('não adiciona o adaptador ou overrides ao template TanStack', () => {
+    const startFiles = new Map(buildProjectFiles({ projectName: 'start-proof', description: '', stack: 'tanstack-start-vite' }).map(entry => [entry.path, entry.content]))
+    const manifest = JSON.parse(startFiles.get('package.json')!) as typeof packageJson
+    expect(manifest.devDependencies).not.toHaveProperty('fast-glob')
+    expect(manifest).not.toHaveProperty('overrides')
+    expect([...startFiles.keys()].some(name => name.startsWith('tools/next-eslint-glob/'))).toBe(false)
   })
 })
 

@@ -26,6 +26,8 @@ const nextConfig: NextConfig = {
       './src/lib/templates/tanstack-start/package-lock.json',
       './packages/cli/dist/bin.js',
       './packages/cli/package.json',
+      './tools/next-eslint-glob/package.json',
+      './tools/next-eslint-glob/index.cjs',
     ],
   },
   async headers() {

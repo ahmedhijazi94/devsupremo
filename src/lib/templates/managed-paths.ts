@@ -18,6 +18,8 @@
 export const PLATFORM_MANAGED_PATHS = [
   'tools/supremo-cli/package.json',
   'tools/supremo-cli/dist/bin.js',
+  'tools/next-eslint-glob/package.json',
+  'tools/next-eslint-glob/index.cjs',
   // Ferramentas e configuração
   'tsconfig.json',
   'next.config.ts',

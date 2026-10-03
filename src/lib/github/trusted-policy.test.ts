@@ -15,6 +15,8 @@ import { TRUSTED_VALIDATION_POLICIES_4_0_9 } from './validation-policy-releases/
 import { TRUSTED_VALIDATION_POLICIES_4_0_10_5_0_0 } from './validation-policy-releases/4.0.10-5.0.0'
 import { TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1 } from './validation-policy-releases/4.0.11-5.0.1'
 import { TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0 } from './validation-policy-releases/4.0.12-5.1.0'
+import { TRUSTED_VALIDATION_POLICIES } from '../../../packages/cli/src/generated/validation-policy'
+import { templateVersionFor } from '../templates/stacks'
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'
@@ -159,6 +161,24 @@ describe('independent engine policy over actual generated candidates', () => {
   it.each(['public', 'solo', 'team'] as const)('accepts intact released %s validators', kind => {
     expect(verifyCandidatePolicy(candidate(kind))).toMatchObject({ approved: true, reasons: [] })
   })
+  it.each(['public', 'solo', 'team'] as const)('pins the Next adapter and its scoped override only to the new Next %s policy', kind => {
+    const next = TRUSTED_VALIDATION_POLICIES.find(policy => policy.version === templateVersionFor('nextjs') && policy.kind === kind)!
+    const start = TRUSTED_VALIDATION_POLICIES.find(policy => policy.version === templateVersionFor('tanstack-start-vite') && policy.kind === kind)!
+    expect(next.overrides).toEqual({ '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob' } })
+    expect(start).not.toHaveProperty('overrides')
+    for (const path of ['tools/next-eslint-glob/package.json', 'tools/next-eslint-glob/index.cjs']) {
+      expect(next.files[path]).toMatch(/^[a-f0-9]{40}$/)
+      expect(start.files).not.toHaveProperty(path)
+      expect(verifyCandidatePolicy(candidate(kind, { [path]: 'module.exports = { sync: () => [] }' })).approved).toBe(false)
+      expect(verifyCandidatePolicy(candidate(kind, { [path]: null })).approved).toBe(false)
+    }
+  })
+  it.each([previousCandidate, previous404Candidate, previous405Candidate])('does not extend historical override authority when the new engine override is approved', build => {
+    const input = build()
+    const pkg = JSON.parse(input.packageContent) as Record<string, unknown>
+    pkg.overrides = { '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob' } }
+    expect(verifyCandidatePolicy(replaceMetadata(input, 'package.json', JSON.stringify(pkg))).approved).toBe(false)
+  })
   it.each(['public', 'solo', 'team'] as const)('keeps the actual archived 4.0.2 %s scaffold authorized after release 4.0.6', kind => {
     expect(releasedFixture).toMatchObject({ schemaVersion: 1, templateVersion: '4.0.2',
       sourceCommit: 'ae3285a13b91d7b3931d8a80a7f0647dc4cb1c92' })
@@ -229,6 +249,12 @@ describe('independent engine policy over actual generated candidates', () => {
       (pkg: Record<string, unknown>) => { pkg.overrides = { vitest: 'npm:fake-test@1.0.0' } },
       (pkg: Record<string, unknown>) => { (pkg.devDependencies as Record<string, string>).vitest = 'file:./fake-test' },
     ]) expect(verifyCandidatePolicy(packageEdit(edit)).approved).toBe(false)
+  })
+  it('rejects extra override entries even when the scoped engine override is intact', () => {
+    for (const overrides of [
+      { '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob' }, vitest: 'npm:fake-test@1.0.0' },
+      { '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob', vitest: 'npm:fake-test@1.0.0' } },
+    ]) expect(verifyCandidatePolicy(packageEdit(pkg => { pkg.overrides = overrides })).approved).toBe(false)
   })
   it('rejects redirected locked artifacts even if package scripts and versions are intact', () => {
     const lock = JSON.parse(candidate().lockContent) as { packages: Record<string, Record<string, unknown>> }

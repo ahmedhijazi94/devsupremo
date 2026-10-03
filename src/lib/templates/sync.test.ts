@@ -55,6 +55,14 @@ describe('computePlan', () => {
     expect(isManagedPath('src/router.tsx')).toBe(false)
     expect(isManagedPath('.supremo/runtime/browser-diagnostics.json')).toBe(false)
   })
+  it('updates both Next adapter files as managed rails without creating them in Start projects', () => {
+    const paths = ['tools/next-eslint-glob/package.json', 'tools/next-eslint-glob/index.cjs']
+    const next = buildProjectFiles({ projectName: 'app', description: '', stack: 'nextjs' })
+    const start = buildProjectFiles({ projectName: 'app', description: '', stack: 'tanstack-start-vite' })
+    const plan = computePlan(next, new Set(paths), new Set())
+    expect(plan.updates.map(item => item.path)).toEqual(paths)
+    expect(start.some(file => paths.includes(file.path))).toBe(false)
+  })
   const files: FileEntry[] = [
     { path: 'proxy.ts', content: 'NOVO' }, // rail
     { path: 'lib/supabase/server.ts', content: 'NOVO' }, // rail

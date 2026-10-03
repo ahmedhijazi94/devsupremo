@@ -6,6 +6,7 @@ export interface ValidationManifest {
   files: Record<string, string>
   scripts: Record<string, string>
   devDependencies: Record<string, string>
+  overrides?: Record<string, unknown>
   lock: Record<string, string>
 }
 export interface PolicyTreeEntry { path: string; sha: string; mode: string }
@@ -71,7 +72,12 @@ export function inspectValidationIntegrity(
     for (const name of ['preinstall', 'install', 'postinstall', 'prepare', 'prepublish', 'preprepare', 'postprepare']) {
       if (name in scripts) failures.push(`Hook de instalação não autorizado: ${name}`)
     }
-    for (const name of ['overrides', 'workspaces', 'resolutions', 'pnpm']) if (name in pkg) failures.push(`Resolução das ferramentas não autorizada: ${name}`)
+    // Only engine-owned overrides are allowed. Historical releases with no
+    // override authority still reject the field, including an empty object.
+    if (manifest.overrides === undefined ? 'overrides' in pkg : stable(pkg.overrides) !== stable(manifest.overrides)) {
+      failures.push('Resolução das ferramentas não autorizada: overrides')
+    }
+    for (const name of ['workspaces', 'resolutions', 'pnpm']) if (name in pkg) failures.push(`Resolução das ferramentas não autorizada: ${name}`)
     const dev = record(pkg.devDependencies)
     for (const [name, expected] of Object.entries(manifest.devDependencies)) {
       if (dev[name] !== expected || name in record(pkg.dependencies) || name in record(pkg.optionalDependencies)) failures.push(`Ferramenta de validação alterada: ${name}`)

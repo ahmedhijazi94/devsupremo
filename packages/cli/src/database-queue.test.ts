@@ -128,3 +128,27 @@ it('preserva a reconciliação transacional existente para timeout de migration'
   await vi.advanceTimersByTimeAsync(90_000)
   expect((await result as Error).message).toContain('Consulte db status e repita migrate')
 })
+
+it('transporta um plano assinado grande sem ampliar o orçamento das outras operações', async () => {
+  const cwd = workspace()
+  const execute = vi.fn(async () => ({ deleted: true }))
+  stops.push(startDatabaseWorker(cwd, execute))
+  const options = { environment: 'development' as const, planToken: 'x'.repeat(100_000), authorization: 'Excluir os registros solicitados.' }
+  await expect(requestDatabase(cwd, 'data-delete-apply', options)).resolves.toEqual({ deleted: true })
+  expect(execute).toHaveBeenCalledExactlyOnceWith('data-delete-apply', options)
+  const file = path.join(cwd, '.supremo/database-queue', `${randomUUID()}.request.json`)
+  fs.writeFileSync(file, JSON.stringify({ operation: 'query', options: { sql: 'select 1' }, expiresAt: Date.now() + 5000 }) + ' '.repeat(33 * 1024))
+  await drainDatabaseRequests(cwd, execute)
+  expect(execute).toHaveBeenCalledTimes(1)
+})
+
+it('timeout de exclusão exige consulta real e nunca recomenda repetir a mutação', async () => {
+  vi.useFakeTimers()
+  const cwd = workspace()
+  fs.writeFileSync(path.join(cwd, '.supremo/database-queue/heartbeat'), String(Date.now()))
+  const result = requestDatabase(cwd, 'data-delete-apply', { environment: 'development', planToken: 'x'.repeat(100), authorization: 'Pedido explícito para excluir.' }).catch((error: unknown) => error)
+  await vi.advanceTimersByTimeAsync(90_000)
+  expect((await result as Error).message).toContain('Não repita delete-apply')
+  expect((await result as Error).message).toContain('db query')
+  expect((await result as Error).message).not.toContain('migrate')
+})

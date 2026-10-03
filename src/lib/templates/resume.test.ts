@@ -292,20 +292,17 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
   let dir: string
 
   afterEach(() => {
-    // Nunca deixa processo órfão pra trás — mata o que a fixture subiu.
+    // O heartbeat é destacado separadamente do npm/dev. Encerrar só o
+    // preview.pid deixa esse escritor concorrendo com a remoção da fixture.
     const { pid } = daemonState(dir)
-    if (pid) {
-      try {
-        process.kill(pid)
-      } catch {
-        /* já morto */
-      }
-    }
-    try {
-      const previewPid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
-      if (previewPid) process.kill(previewPid)
-    } catch {
-      /* já morto/nunca subiu */
+    const processLog = join(dir, 'preview-processes.log')
+    const previewPids = existsSync(processLog)
+      ? readFileSync(processLog, 'utf8').trim().split('\n').map(Number)
+      : []
+    const snapshot = capturePreviewProcesses([...previewPids, ...(pid ? [pid] : [])])
+    signalCapturedPreviewProcesses(snapshot, 'SIGKILL')
+    if (!waitUntilPreviewProcessesTerminate(snapshot, true)) {
+      throw new Error('Cleanup da fixture deixou processo de preview, heartbeat ou daemon ativo.')
     }
     rmSync(dir, { recursive: true, force: true })
   })
@@ -314,7 +311,14 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
     dir = mkdtempSync(join(tmpdir(), 'supremo-resume-'))
     mkdirSync(join(dir, 'scripts'), { recursive: true })
 
-    writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
+    // Observa os dois filhos destacados na cópia do teste, antes de unref.
+    // Inclui instâncias anteriores que já não aparecem em preview.pid.
+    const supervisor = previewSupervisorScript()
+    const unref = '  child.unref()'
+    if (supervisor.split(unref).length !== 3) throw new Error('Lifecycle da fixture mudou: PIDs não podem ficar sem rastreamento.')
+    writeFileSync(join(dir, 'scripts/preview.mjs'), supervisor.replaceAll(unref,
+      "  if (child.pid) writeFileSync(process.env.RESUME_TEST_PROCESS_LOG, String(child.pid) + '\\n', { flag: 'a' })\n" + unref,
+    ), 'utf8')
     writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
     writeFileSync(
       join(dir, 'scripts/dev-server.mjs'),
@@ -333,6 +337,7 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
       ...process.env,
       PORT: String(port),
       RESUME_TEST_CALL_LOG: join(dir, 'npx-call-log.jsonl'),
+      RESUME_TEST_PROCESS_LOG: join(dir, 'preview-processes.log'),
       // ensure() do supervisor real já espera internamente (waitReady) até o
       // dev-server.mjs (HTTP puro, sobe quase instantâneo) responder — a
       // janela de polling do preflight abaixo não é o que estes testes

@@ -7,6 +7,18 @@ function object(value: unknown): JsonObject {
   return value as JsonObject
 }
 
+function mergeManagedOverrides(current: JsonObject, target: JsonObject): JsonObject {
+  const result = { ...current }
+  for (const [name, value] of Object.entries(target)) {
+    const existing = current[name]
+    result[name] = typeof value === 'string' ? value : mergeManagedOverrides(
+      existing && typeof existing === 'object' && !Array.isArray(existing) ? object(existing) : {},
+      object(value),
+    )
+  }
+  return result
+}
+
 /** Upgrade only platform-owned execution fields; preserve app dependencies. */
 export function upgradeValidationPackages(currentPackage: string, currentLock: string, targetPackage: string, targetLock: string): { packageContent: string; lockContent: string } {
   const current = object(JSON.parse(currentPackage))
@@ -24,9 +36,12 @@ export function upgradeValidationPackages(currentPackage: string, currentLock: s
     delete scripts[`pre${name}`]
     delete scripts[`post${name}`]
   }
-  // Silently deleting user installation hooks/overrides could break the app.
-  // Keep them visible in the PR; the independent gate requires explicit repair.
+  // Preserve installation hooks and extra overrides for explicit repair by
+  // the independent gate; copy only the exact engine-owned override branches.
   const next: JsonObject = { ...current, scripts, dependencies: { ...object(current.dependencies ?? {}), ...object(target.dependencies) }, devDependencies: { ...object(current.devDependencies ?? {}), ...object(target.devDependencies) } }
+  if (target.overrides !== undefined) {
+    next.overrides = mergeManagedOverrides(object(current.overrides ?? {}), object(target.overrides))
+  }
   const lock = object(JSON.parse(currentLock))
   const trustedLock = object(JSON.parse(targetLock))
   const packages = { ...object(lock.packages), ...object(trustedLock.packages) }

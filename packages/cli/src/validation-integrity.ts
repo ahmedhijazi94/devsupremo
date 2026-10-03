@@ -6,6 +6,7 @@ export interface ValidationManifest {
   files: Record<string, string>
   scripts: Record<string, string>
   devDependencies: Record<string, string>
+  overrides?: Record<string, unknown>
   lock: Record<string, string>
 }
 export interface PolicyTreeEntry { path: string; sha: string; mode: string }
@@ -71,7 +72,12 @@ export function inspectValidationIntegrity(
     for (const name of ['preinstall', 'install', 'postinstall', 'prepare', 'prepublish', 'preprepare', 'postprepare']) {
       if (name in scripts) failures.push(`Hook de instalação não autorizado: ${name}`)
     }
-    for (const name of ['overrides', 'workspaces', 'resolutions', 'pnpm']) if (name in pkg) failures.push(`Resolução das ferramentas não autorizada: ${name}`)
+    // Only engine-owned overrides are allowed. Historical releases with no
+    // override authority still reject the field, including an empty object.
+    if (manifest.overrides === undefined ? 'overrides' in pkg : stable(pkg.overrides) !== stable(manifest.overrides)) {
+      failures.push('Resolução das ferramentas não autorizada: overrides')
+    }
+    for (const name of ['workspaces', 'resolutions', 'pnpm']) if (name in pkg) failures.push(`Resolução das ferramentas não autorizada: ${name}`)
     const dev = record(pkg.devDependencies)
     for (const [name, expected] of Object.entries(manifest.devDependencies)) {
       if (dev[name] !== expected || name in record(pkg.dependencies) || name in record(pkg.optionalDependencies)) failures.push(`Ferramenta de validação alterada: ${name}`)
@@ -83,6 +89,19 @@ export function inspectValidationIntegrity(
       if (!packages[path] || lockEntryHash(packages[path]) !== expected) failures.push(`Dependência protegida alterada: ${path}`)
     }
     const protectedBins = new Set(Object.keys(manifest.lock).flatMap(path => binNames(path, packages[path])))
+    // Linked tools resolve from their source directory, not node_modules.
+    // Protect every ancestor search location as well as the tool's own one;
+    // an app package installed at tools/ must not shadow a validator's imports.
+    const localModuleRoots = new Set<string>()
+    for (const path of Object.keys(manifest.lock)) {
+      if (path.split('/').includes('node_modules')) continue
+      let directory = path
+      while (directory) {
+        localModuleRoots.add(`${directory}/node_modules/`)
+        const parent = directory.lastIndexOf('/')
+        directory = parent < 0 ? '' : directory.slice(0, parent)
+      }
+    }
     // A new nested install can shadow an unchanged, pinned transitive package.
     // Node resolves from the importing tool outward, so protecting only existing
     // paths is insufficient. Extra app dependencies may not enter a tool's tree.
@@ -90,6 +109,10 @@ export function inspectValidationIntegrity(
       if (path in manifest.lock) continue
       if (binNames(path, packages[path]).some(name => protectedBins.has(name))) {
         failures.push(`Executável colide com ferramenta protegida: ${path}`)
+      }
+      if ([...localModuleRoots].some(root => path.startsWith(root))) {
+        failures.push(`Dependência sombreia ferramenta protegida: ${path}`)
+        continue
       }
       let ancestor = path
       for (;;) {

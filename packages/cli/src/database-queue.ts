@@ -7,10 +7,16 @@ import { z } from 'zod'
 
 const directory = (cwd: string): string => path.join(cwd, '.supremo/database-queue')
 const maxRequestBytes = 32 * 1024
+const maxDeleteRequestBytes = 600 * 1024
 const timeoutMs = 90_000
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 function timeoutMessage(operation: DatabaseOperation, options: DatabaseOptions): string {
+  if (operation.startsWith('data-delete-')) {
+    return operation === 'data-delete-apply'
+      ? 'O daemon não confirmou a exclusão a tempo; ela pode ter concluído. Não repita delete-apply. Consulte os registros com db query e gere um novo delete-plan somente após conferir o resultado.'
+      : 'O daemon não confirmou o plano a tempo. Nenhum pedido de exclusão foi enviado; solicite novamente data delete-plan para inspecionar os registros.'
+  }
   if (operation.startsWith('functions-')) {
     const check = operation.startsWith('functions-hook-') ? 'functions hook-status'
       : options.slug ? `functions status ${options.slug}` : 'functions list'
@@ -28,7 +34,7 @@ function writeAtomic(file: string, value: unknown): void {
   fs.renameSync(temporary, file)
 }
 
-function readRequest(file: string, maximumBytes = maxRequestBytes): unknown {
+function readRequest(file: string, maximumBytes = maxDeleteRequestBytes): unknown {
   // Não seguir symlinks nem bloquear ao abrir um FIFO. fstat e read usam o
   // mesmo descritor: renomear/trocar o caminho não troca o arquivo inspecionado.
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
@@ -45,6 +51,10 @@ function readRequest(file: string, maximumBytes = maxRequestBytes): unknown {
     }
     if (length > maximumBytes) throw new Error('Pedido de banco inválido.')
     const parsed = JSON.parse(buffer.toString('utf8', 0, length)) as unknown
+    if (maximumBytes === maxDeleteRequestBytes && length > maxRequestBytes) {
+      const operation = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>).operation : undefined
+      if (operation !== 'data-delete-apply' && (operation !== 'data-delete-plan' || length > 256 * 1024)) throw new Error('Pedido de banco inválido.')
+    }
     if (length > 1024 && parsed && typeof parsed === 'object' && ['status', 'migrate', 'anonymous-auth'].includes(String((parsed as Record<string, unknown>).operation))) throw new Error('Pedido de banco inválido.')
     return parsed
   } finally {

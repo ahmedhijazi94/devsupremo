@@ -7,7 +7,7 @@ import path from 'node:path'
 import { generateRlsTest, inferTablesFromMigration } from './rls-tests'
 import { designSystemFiles } from './design-system'
 import { withDevelopmentPolicy } from './development-policy'
-import { MIGRATION_GUIDE } from './migration-guide'
+import { DESTRUCTIVE_OPERATIONS_GUIDE, DESTRUCTIVE_OPERATIONS_SUMMARY, MIGRATION_GUIDE } from './migration-guide'
 import { harnessFiles, harnessPackageScripts } from './harness'
 import {
   capabilitiesForKind,
@@ -142,7 +142,7 @@ const DEPENDENCIES = {
   'class-variance-authority': '^0.7.1',
   clsx: '^2.1.1',
   'lucide-react': '^1.35.0',
-  next: '16.3.3',
+  next: '16.3.8',
   react: '19.2.8',
   'react-dom': '19.2.8',
   'tailwind-merge': '^3.6.0',
@@ -174,7 +174,8 @@ const DEV_DEPENDENCIES = {
   '@vitejs/plugin-react': '^6.1.1',
   '@vitest/coverage-v8': '^3.2.7',
   eslint: '^9.39.5',
-  'eslint-config-next': '16.3.3',
+  'eslint-config-next': '16.3.8',
+  'fast-glob': 'file:tools/next-eslint-glob',
   jsdom: '^25.0.1',
   // CLI do Supabase PINADA no projeto: o bootstrap e o agente usam esta versão
   // local (node_modules/.bin/supabase), nunca uma instalação global arbitrária —
@@ -403,7 +404,14 @@ export function buildProjectFiles(options: TemplateOptions): FileEntry[] {
       content: generateRlsTest(inferTablesFromMigration(migration).filter((table) => table.tenant?.isSelf)),
     })
   }
-  return options.stack === 'tanstack-start-vite' ? adaptTanStackFiles(files, options) : files
+  if (options.stack === 'tanstack-start-vite') return adaptTanStackFiles(files, options)
+  // Next's ESLint plugin uses directory globbing through this engine-owned
+  // adapter. Keep the copied implementation identical to the one we validate.
+  files.push(
+    { path: 'tools/next-eslint-glob/package.json', content: fs.readFileSync(path.join(process.cwd(), 'tools/next-eslint-glob/package.json'), 'utf8') },
+    { path: 'tools/next-eslint-glob/index.cjs', content: fs.readFileSync(path.join(process.cwd(), 'tools/next-eslint-glob/index.cjs'), 'utf8') },
+  )
+  return files
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -423,6 +431,7 @@ function packageJson(projectName: string): string {
       scripts,
       dependencies: DEPENDENCIES,
       devDependencies: DEV_DEPENDENCIES,
+      overrides: { '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob' } },
     },
     null,
     2,
@@ -3253,13 +3262,7 @@ Use a CLI local pinada do projeto (\`npx supabase …\`, nunca a global).
 O agente continua criando enquanto CI e integração trabalham em background.
 Nenhum ciclo de CI deve bloquear o próximo pedido de desenvolvimento.
 
-### Operações destrutivas no remoto — PARE e confirme
-\`npx supabase db reset --linked\`, \`DROP\`/\`TRUNCATE\` de estrutura existente,
-\`DELETE\` em massa e exclusões massivas são irreversíveis no banco online. Antes
-de rodar qualquer uma:
-1. **Mostre o \`project-ref\` alvo:** \`cat supabase/.temp/project-ref\`.
-2. **Peça confirmação explícita** ao humano, nomeando esse ref.
-3. Só então execute. Nunca rode uma operação destrutiva de forma autônoma.
+${DESTRUCTIVE_OPERATIONS_GUIDE}
 
 Credenciais (o token do \`supabase login\` e a senha do banco) vivem no **keychain
 do sistema**, gravadas pela própria CLI. Nunca as imprima, escreva em arquivo nem
@@ -3343,9 +3346,7 @@ Não carregue dumps em todo prompt nem procure credenciais em arquivos ou keycha
 Migration versionada, validada em development. \`npx supabase\` usa a CLI local pinada;
 o core verifica ambiente e autoridade antes de \`supremo db migrate\`.
 Nunca aplique SQL experimental em produção, apague migration aplicada ou use service
-role para resolver erro de autorização. Operação destrutiva remota exige confirmação
-explícita do humano e mostrar o \`project-ref\`: \`DROP\`, \`TRUNCATE\`, \`DELETE\` em massa,
-\`npx supabase db reset --linked\` e exclusão de dados não são auto-repair.
+role para resolver erro de autorização. ${DESTRUCTIVE_OPERATIONS_SUMMARY}
 Nunca \`git push\`/\`git branch\`/\`git merge\`/\`git rebase\`/force push/PR manual de entrega;
 o daemon/backend integram pelos required checks do HEAD atual. Nunca mexa em
 AGENTS.md/CLAUDE.md/tsconfig/CI/package.json/migrations/config numa microfeature LOW

@@ -1,6 +1,6 @@
 # Novos projetos com TanStack Start
 
-O Supremo continua em Next.js 16.3.3. O template `tanstack-start-vite` 5.0.0 troca somente a estrutura dos aplicativos gerados. Não há migração de aplicações nem alteração de banco necessária para selecionar a stack.
+O Supremo continua em Next.js 16.3.8. O template `tanstack-start-vite` 5.0.0 troca somente a estrutura dos aplicativos gerados. Não há migração de aplicações nem alteração de banco necessária para selecionar a stack.
 
 ## Seleção e versões
 

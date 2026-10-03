@@ -29,6 +29,21 @@ afterAll(() => fs.rmSync(directory, { recursive: true, force: true }))
 const invoke = (args: string[]) => exec(process.execPath, [cli, ...args], { cwd, timeout: 10_000, maxBuffer: 64_000 })
 
 describe('public project service commands reach the private daemon queue', () => {
+  it('plans and applies an exact development deletion through the data family without waiting for CI', async () => {
+    const targets = [{ table: 'orgs', key: { id: 'requested-company' } }]
+    const planToken = 'signed-plan-fixture-'.repeat(5)
+    fs.writeFileSync(path.join(cwd, '.supremo/delete-targets.json'), JSON.stringify(targets))
+    reply = operation => operation === 'data-delete-plan' ? { data: { planToken, targets } } : { verified: true, deletedCount: 1 }
+    const result = await invoke(['data', 'delete-plan', '--file', '.supremo/delete-targets.json', '--output', '.supremo/delete-plan.json', '--environment', 'development'])
+    expect(JSON.parse(result.stdout).data.targets).toEqual(targets)
+    const applied = await invoke(['data', 'delete-apply', '--plan-file', '.supremo/delete-plan.json', '--authorization', 'Excluir exatamente a empresa solicitada.', '--environment', 'development'])
+    expect(JSON.parse(applied.stdout)).toEqual({ verified: true, deletedCount: 1 })
+    expect(requests).toEqual([
+      { operation: 'data-delete-plan', options: { environment: 'development', targets } },
+      { operation: 'data-delete-apply', options: { environment: 'development', planToken, authorization: 'Excluir exatamente a empresa solicitada.' } },
+    ])
+    expect(fs.readdirSync(cwd)).toEqual(['.supremo'])
+  })
   it('exposes vault metadata aliases and exact reference application without plaintext arguments', async () => {
     const credentialId = '33333333-3333-4333-8333-333333333333', requestId = '22222222-2222-4222-8222-222222222222'
     await invoke(['integrations', 'credentials'])

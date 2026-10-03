@@ -15,7 +15,9 @@ const protectedScripts = ['typecheck', 'lint', 'test', 'test:coverage', 'test:rl
 const manifests: ValidationManifest[] = []
 for (const stack of ['nextjs', 'tanstack-start-vite'] as const) for (const kind of ['public', 'solo', 'team'] as const) {
   const files = buildProjectFiles({ projectName: 'supremo-policy', description: '', kind, stack })
-  const paths = stack === 'nextjs' ? protectedPaths : [
+  const paths = stack === 'nextjs' ? [
+    ...protectedPaths, 'tools/next-eslint-glob/package.json', 'tools/next-eslint-glob/index.cjs',
+  ] : [
     ...protectedPaths.filter(path => path !== 'vitest.config.ts'),
     'vitest.config.mts', 'vite.config.mts', 'scripts/generate-routes.mjs', 'scripts/start-production.mjs',
     // Imported by Vite configuration even when the dev-only plugin is disabled.
@@ -23,7 +25,7 @@ for (const stack of ['nextjs', 'tanstack-start-vite'] as const) for (const kind 
   ]
   const scripts = stack === 'nextjs' ? protectedScripts : [...protectedScripts, 'routes:generate']
   const contents = new Map(files.map(file => [file.path, file.content]))
-  const pkg = JSON.parse(contents.get('package.json')!) as { scripts: Record<string, string>; devDependencies: Record<string, string> }
+  const pkg = JSON.parse(contents.get('package.json')!) as { scripts: Record<string, string>; devDependencies: Record<string, string>; overrides?: Record<string, unknown> }
   const lock = JSON.parse(contents.get('package-lock.json')!) as { packages: Record<string, unknown> }
   manifests.push({
     version: templateVersionFor(stack), kind,
@@ -38,6 +40,7 @@ for (const stack of ['nextjs', 'tanstack-start-vite'] as const) for (const kind 
       return [name, value]
     })),
     devDependencies: pkg.devDependencies,
+    ...(pkg.overrides === undefined ? {} : { overrides: pkg.overrides }),
     lock: Object.fromEntries(Object.entries(lock.packages).filter(([path]) => path !== '').map(([path, value]) => [path, lockEntryHash(value)])),
   })
 }

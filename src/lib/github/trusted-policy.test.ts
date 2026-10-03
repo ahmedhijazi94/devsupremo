@@ -256,6 +256,20 @@ describe('independent engine policy over actual generated candidates', () => {
       { '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob', vitest: 'npm:fake-test@1.0.0' } },
     ]) expect(verifyCandidatePolicy(packageEdit(pkg => { pkg.overrides = overrides })).approved).toBe(false)
   })
+  it('rejects a local app package that installs a dependency above the protected Next adapter', () => {
+    const input = candidate()
+    const pkg = JSON.parse(input.packageContent) as { dependencies: Record<string, string> }
+    pkg.dependencies['local-feature'] = 'file:tools'
+    const lock = JSON.parse(input.lockContent) as { packages: Record<string, unknown> }
+    lock.packages['node_modules/local-feature'] = { resolved: 'tools', link: true }
+    lock.packages.tools = { name: 'local-feature', version: '1.0.0', dependencies: { tinyglobby: 'file:replacement-glob' } }
+    lock.packages['tools/node_modules/tinyglobby'] = { resolved: 'tools/replacement-glob', link: true }
+    lock.packages['tools/replacement-glob'] = { name: 'tinyglobby', version: '0.2.17', main: 'index.cjs' }
+    const attack = replaceMetadata(replaceMetadata(input, 'package.json', JSON.stringify(pkg)), 'package-lock.json', JSON.stringify(lock))
+    const result = verifyCandidatePolicy(attack)
+    expect(result.approved).toBe(false)
+    expect(result.reasons).toContain('Dependência sombreia ferramenta protegida: tools/node_modules/tinyglobby')
+  })
   it('rejects redirected locked artifacts even if package scripts and versions are intact', () => {
     const lock = JSON.parse(candidate().lockContent) as { packages: Record<string, Record<string, unknown>> }
     lock.packages['node_modules/vitest']!.resolved = 'https://attacker.invalid/test.tgz'

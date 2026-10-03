@@ -202942,11 +202942,26 @@ function inspectValidationIntegrity(manifest, tree, packageContent, lockContent)
         failures.push("Depend\xEAncia protegida alterada: ".concat(path32));
     }
     const protectedBins = new Set(Object.keys(manifest.lock).flatMap((path32) => binNames(path32, packages[path32])));
+    const localModuleRoots = /* @__PURE__ */ new Set();
+    for (const path32 of Object.keys(manifest.lock)) {
+      if (path32.split("/").includes("node_modules"))
+        continue;
+      let directory3 = path32;
+      while (directory3) {
+        localModuleRoots.add("".concat(directory3, "/node_modules/"));
+        const parent = directory3.lastIndexOf("/");
+        directory3 = parent < 0 ? "" : directory3.slice(0, parent);
+      }
+    }
     for (const path32 of Object.keys(packages)) {
       if (path32 in manifest.lock)
         continue;
       if (binNames(path32, packages[path32]).some((name) => protectedBins.has(name))) {
         failures.push("Execut\xE1vel colide com ferramenta protegida: ".concat(path32));
+      }
+      if ([...localModuleRoots].some((root) => path32.startsWith(root))) {
+        failures.push("Depend\xEAncia sombreia ferramenta protegida: ".concat(path32));
+        continue;
       }
       let ancestor = path32;
       for (; ; ) {

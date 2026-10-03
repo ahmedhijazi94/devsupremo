@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blobHash, inspectValidationIntegrity, type PolicyTreeEntry, type ValidationManifest } from './validation-integrity'
+import { blobHash, inspectValidationIntegrity, lockEntryHash, type PolicyTreeEntry, type ValidationManifest } from './validation-integrity'
 
 const approvedOverrides = { '@next/eslint-plugin-next': { 'fast-glob': '$fast-glob' } }
 const adapterFiles = {
@@ -63,5 +63,47 @@ describe('engine-owned dependency overrides', () => {
     ]) {
       expect(inspect({ overrides: approvedOverrides }, manifest, editTree)).toContain(`Validador ausente ou alterado: ${path}`)
     }
+  })
+})
+
+describe('linked validator dependency resolution', () => {
+  const pinned = {
+    'node_modules/fast-glob': { resolved: 'tools/next-eslint-glob', link: true },
+    'tools/next-eslint-glob': { version: '1.0.0', dependencies: { tinyglobby: '0.2.17' } },
+    'tools/supremo-cli': { version: '1.13.0' },
+    'tools/nested/validator': { version: '1.0.0' },
+    'node_modules/tinyglobby': { version: '0.2.17', integrity: 'approved-content' },
+  }
+  const policy: ValidationManifest = {
+    ...manifest,
+    lock: Object.fromEntries(Object.entries(pinned).map(([path, entry]) => [path, lockEntryHash(entry)])),
+  }
+  function inspectExtra(extra: Record<string, unknown>): string[] {
+    const packageContent = JSON.stringify({ devDependencies: policy.devDependencies, overrides: approvedOverrides })
+    const lockContent = JSON.stringify({ lockfileVersion: 3, packages: { ...pinned, ...extra } })
+    const tree = Object.entries({ ...adapterFiles, 'package.json': packageContent, 'package-lock.json': lockContent })
+      .map(([path, content]) => ({ path, sha: blobHash(content), mode: '100644' }))
+    return inspectValidationIntegrity(policy, tree, packageContent, lockContent)
+  }
+
+  it.each([
+    'tools/next-eslint-glob/node_modules/tinyglobby',
+    'tools/supremo-cli/node_modules/helper',
+    'tools/node_modules/tinyglobby',
+    'tools/nested/validator/node_modules/helper',
+    'tools/nested/node_modules/helper',
+    'tools/node_modules/extra/node_modules/helper',
+  ])('rejects extra imports at every local tool search location: %s', path => {
+    expect(inspectExtra({ [path]: { version: '0.2.17', integrity: 'unapproved-content' } }))
+      .toContain(`Dependência sombreia ferramenta protegida: ${path}`)
+  })
+
+  it('preserves pinned dependencies and new app dependencies outside protected search paths', () => {
+    expect(inspectExtra({})).toEqual([])
+    expect(inspectExtra({
+      'node_modules/new-app-library': { version: '1.0.0' },
+      'node_modules/new-app-library/node_modules/tinyglobby': { version: '0.2.17' },
+      'features/app/node_modules/helper': { version: '1.0.0' },
+    })).toEqual([])
   })
 })

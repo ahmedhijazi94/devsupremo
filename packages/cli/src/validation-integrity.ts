@@ -89,6 +89,19 @@ export function inspectValidationIntegrity(
       if (!packages[path] || lockEntryHash(packages[path]) !== expected) failures.push(`Dependência protegida alterada: ${path}`)
     }
     const protectedBins = new Set(Object.keys(manifest.lock).flatMap(path => binNames(path, packages[path])))
+    // Linked tools resolve from their source directory, not node_modules.
+    // Protect every ancestor search location as well as the tool's own one;
+    // an app package installed at tools/ must not shadow a validator's imports.
+    const localModuleRoots = new Set<string>()
+    for (const path of Object.keys(manifest.lock)) {
+      if (path.split('/').includes('node_modules')) continue
+      let directory = path
+      while (directory) {
+        localModuleRoots.add(`${directory}/node_modules/`)
+        const parent = directory.lastIndexOf('/')
+        directory = parent < 0 ? '' : directory.slice(0, parent)
+      }
+    }
     // A new nested install can shadow an unchanged, pinned transitive package.
     // Node resolves from the importing tool outward, so protecting only existing
     // paths is insufficient. Extra app dependencies may not enter a tool's tree.
@@ -96,6 +109,10 @@ export function inspectValidationIntegrity(
       if (path in manifest.lock) continue
       if (binNames(path, packages[path]).some(name => protectedBins.has(name))) {
         failures.push(`Executável colide com ferramenta protegida: ${path}`)
+      }
+      if ([...localModuleRoots].some(root => path.startsWith(root))) {
+        failures.push(`Dependência sombreia ferramenta protegida: ${path}`)
+        continue
       }
       let ancestor = path
       for (;;) {

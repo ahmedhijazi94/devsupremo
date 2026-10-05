@@ -53,14 +53,16 @@ describe('release 5.1.1 remains authorized after engine upgrades', () => {
     const lock = JSON.parse(readFileSync(join(cwd, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string }> }
     expect(lock.packages['tools/supremo-cli']?.version).toBe('1.10.0')
   })
-  it.each(fixture.projects)('rejects modified validation authority in archived $version/$kind', project => {
+  it.each(fixture.projects)('rejects a modified verifier script in archived $version/$kind', project => {
     const cwd = materialize(project)
     const tampered = project.files.map(file => file.path === 'scripts/verify.mjs' ? { ...file, content: 'process.exit(0)' } : file)
     expect(verifyCandidatePolicy(candidate(project, tampered)).approved).toBe(false)
     writeFileSync(join(cwd, 'scripts/verify.mjs'), 'process.exit(0)')
     expect(() => verifyTrustedFiles(cwd)).toThrow(/base de validação/)
-    writeFileSync(join(cwd, 'scripts/verify.mjs'), project.files.find(file => file.path === 'scripts/verify.mjs')!.content)
+  })
 
+  it.each(fixture.projects)('rejects a modified pinned CLI version in archived $version/$kind', project => {
+    const cwd = materialize(project)
     const lockFile = project.files.find(file => file.path === 'package-lock.json')!
     const lock = JSON.parse(lockFile.content) as { packages: Record<string, { version?: string }> }
     lock.packages['tools/supremo-cli']!.version = '999.0.0'
@@ -68,8 +70,10 @@ describe('release 5.1.1 remains authorized after engine upgrades', () => {
     expect(verifyCandidatePolicy(candidate(project, project.files.map(file => file === lockFile ? { ...file, content: changedLock } : file))).approved).toBe(false)
     writeFileSync(join(cwd, 'package-lock.json'), changedLock)
     expect(() => verifyTrustedFiles(cwd)).toThrow(/base de validação/)
-    writeFileSync(join(cwd, 'package-lock.json'), lockFile.content)
+  })
 
+  it.each(fixture.projects)('rejects an unapproved workflow in archived $version/$kind', project => {
+    const cwd = materialize(project)
     const extraWorkflow = { path: '.github/workflows/unapproved.yml', content: 'name: Unapproved' }
     expect(verifyCandidatePolicy(candidate(project, [...project.files, extraWorkflow])).approved).toBe(false)
     writeFileSync(join(cwd, extraWorkflow.path), extraWorkflow.content)

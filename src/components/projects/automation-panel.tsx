@@ -52,7 +52,10 @@ export function BackendAutomation({ projectId }: { projectId: string }) {
     }}>
       <label className="flex items-center gap-2"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} disabled={!confirmed || busy} />Permitir automação neste ambiente</label>
       <p className="text-muted text-sm">Operações dentro destas permissões seguem sem nova pergunta. O motor continua verificando o dono, o ambiente, os limites e o resultado de cada ação.</p>
-      {status.environment === 'development' && <button type="button" className="rounded-xl border px-3 py-2 text-sm" disabled={busy} onClick={() => { setSelected([...developmentCapabilities]); setEnabled(true) }}>Selecionar perfil de desenvolvimento</button>}
+      {status.environment === 'development' && <div className="space-y-2">
+        <button type="button" className="rounded-xl border px-3 py-2 text-sm" disabled={busy} onClick={() => { setSelected([...developmentCapabilities]); setEnabled(true); setResources('') }}>Selecionar perfil completo de desenvolvimento</button>
+        <p className="text-muted text-sm">Autoriza todas as operações disponíveis em todos os recursos de desenvolvimento deste projeto. Mantém os computadores e limites escolhidos. Salve a autorização para aplicar.</p>
+      </div>}
       <fieldset disabled={!confirmed || busy} className="grid gap-2 sm:grid-cols-2"><legend className="mb-2 font-medium">O que o agente pode fazer</legend>
         {capabilities.map(capability => <label key={capability} className="flex gap-2 text-sm"><input type="checkbox" checked={selected.includes(capability)} onChange={event => setSelected(current => event.target.checked ? [...current, capability] : current.filter(item => item !== capability))} />{capabilityLabels[capability]}</label>)}
       </fieldset>

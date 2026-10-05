@@ -39,10 +39,4 @@ export class OperationError extends Error {
   constructor(message: string, public readonly status = 409) { super(message); this.name = 'OperationError' }
 }
 
-export const developmentCapabilities: OperationCapability[] = [
-  'data.read', 'data.insert', 'data.update', 'data.upsert', 'data.delete', 'schema.migrate',
-  'auth.read', 'auth.configure', 'auth.users', 'auth.invite', 'auth.roles', 'auth.sessions',
-  'functions.read', 'functions.deploy', 'functions.remove', 'functions.hooks',
-  'jobs.read', 'jobs.manage', 'jobs.run', 'storage.read', 'storage.manage', 'storage.write', 'storage.delete',
-  'integrations.read', 'integrations.configure', 'integrations.invoke', 'credentials.use', 'engine.update', 'engine.repair',
-]
+export const developmentCapabilities: OperationCapability[] = [...capabilities]

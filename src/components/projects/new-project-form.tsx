@@ -279,6 +279,11 @@ export function NewProjectForm() {
         </div>
       </div>
 
+      <div className="bg-sunken space-y-2 rounded-[var(--radius-control)] p-3 text-sm">
+        <p className="text-ink font-medium">Autonomia completa no desenvolvimento</p>
+        <p className="text-muted">Ao criar o projeto, você autoriza o agente a executar seus pedidos em todos os recursos do ambiente de desenvolvimento: dados, usuários, funções, tarefas agendadas, arquivos, integrações e ferramentas do motor, incluindo alterações e exclusões. Essa autorização poderá ser ajustada em Automação.</p>
+      </div>
+
       <button
         type="submit"
         disabled={!form.name || !!nameError || isPending}

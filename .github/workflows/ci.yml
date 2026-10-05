@@ -139,6 +139,7 @@ jobs:
         run: >-
           npx vitest run --maxWorkers=1
           src/lib/backend-operations/postgres.test.ts
+          src/lib/backend-operations/default-automation.postgres.test.ts
           src/lib/database-mutations/postgres.test.ts
           src/lib/database-jobs/execution.postgres.test.ts
           src/lib/provider-connections/oauth-postgres.test.ts

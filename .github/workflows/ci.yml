@@ -115,8 +115,8 @@ jobs:
           npx tsx scripts/test-secret-requests.mts
           node --conditions=react-server --import tsx scripts/test-project-credentials.mts
           npx tsx scripts/test-database-inspection.mts
-          npx tsx scripts/test-trigger-migrations.mts
-          npx tsx scripts/test-migration-repairs.mts
+          node --conditions=react-server --import tsx scripts/test-trigger-migrations.mts
+          node --conditions=react-server --import tsx scripts/test-migration-repairs.mts
           node --import tsx scripts/test-function-jobs.mts
           node --conditions=react-server --import tsx scripts/test-function-leases.mts
         env:

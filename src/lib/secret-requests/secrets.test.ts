@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { assertSameBinding, requireSecretBinding, safeSecretError, saveSecretSchema, secretEntrySchema, secretRequestView, secretsRequestSchema, SecretRequestError, type SecretBinding, type SecretEntry, type SecretRequestRecord } from './policy'
@@ -218,8 +219,18 @@ describe('secret request service', () => {
 })
 
 describe('secret provider transport', () => {
+  it('refuses a successful POST when the provider fingerprint does not match and rechecks authority before readback',async()=>{
+    const fetcher=vi.spyOn(globalThis,'fetch').mockResolvedValueOnce(Response.json({})).mockResolvedValueOnce(Response.json([{name:entry.name,value:'0'.repeat(64)}]))
+    await expect(deliverSecret(binding,entry.name,'private-value','oauth-token',null)).rejects.toThrow(/não confirmou/)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    fetcher.mockClear();fetcher.mockResolvedValueOnce(Response.json({}))
+    const authorize=vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('policy revoked'))
+    await expect(deliverSecret(binding,entry.name,'private-value','oauth-token',null,authorize)).rejects.toThrow(/não confirmou/)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(authorize).toHaveBeenCalledTimes(2)
+  })
   it('sends only to the pinned Supabase project with redirects disabled and returns no value', async () => {
-    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 201 }))
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{}', { status: 201 })).mockResolvedValueOnce(Response.json([{name:entry.name,value:createHash('sha256').update('private-value').digest('hex')}]))
     expect(await deliverSecret(binding, entry.name, 'private-value', 'oauth-token', null)).toBeUndefined()
     const [url, options] = fetcher.mock.calls[0]!
     expect(String(url)).toBe('https://api.supabase.com/v1/projects/projectref/secrets')

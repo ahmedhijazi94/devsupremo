@@ -11,6 +11,8 @@ import { defaultCheckpointDeps, type CheckpointRecord } from './checkpoint'
 import { isKnownNextTsconfigNoise } from './restore'
 import { linkIsolatedDependencies, readProjectStack, syntheticValidationEnvironment } from './framework-runtime'
 import { captureTurnCheckpoint, gitText, readJson, TURN_DIR, withTurnLock, writeJson } from './turn-workspace'
+import { reconcileAbandonedHost } from './host-recovery'
+import { measureRuntime } from './runtime-metrics'
 
 import { automaticValidation, readEnginePolicy } from './engine-policy'
 import { runWorkerProcess, WorkerAbortedError, WorkerInfrastructureError, WorkerOutputLimitError, WorkerTimeoutError } from './worker-process'
@@ -252,7 +254,7 @@ export async function validateCheckpoint(cwd: string, record: CheckpointRecord, 
     const parent = baseSha
     let executionError: unknown = null
     try {
-      const result = await runWorkerProcess(process.execPath, [script, '--base', parent, '--background', ...(record.draft ? ['--draft'] : [])], {
+        const result = await runWorkerProcess(process.execPath, [script, '--base', parent, '--background', ...(record.recoveryValidation ? ['full'] : []), ...(record.draft ? ['--draft'] : [])], {
         cwd: scratch, env, timeoutMs: remaining(), maxOutputBytes: limits.max_output_bytes, signal,
       })
       logs = `${result.stdout}\n${result.stderr}`
@@ -408,7 +410,8 @@ function invalidAttemptEvidence(cwd: string, transport: LocalEvidence): LocalEvi
 async function executeScheduledValidation(cwd: string, record: CheckpointRecord, transport: LocalEvidence, signal?: AbortSignal, requested = false): Promise<LocalEvidence> {
   const limits = readEnginePolicy(cwd).validation
   const key = crypto.createHash('sha256').update(JSON.stringify({ projectId: record.projectId, sha: record.commitSha, base: transport.baseSha,
-    environment: record.environment, draft: record.draft === true, trustedPolicy: TRUSTED_VALIDATION_POLICIES, validation: readEnginePolicy(cwd).validation })).digest('hex')
+    environment: record.environment, draft: record.draft === true, recoveryValidation: record.recoveryValidation === true,
+    trustedPolicy: TRUSTED_VALIDATION_POLICIES, validation: readEnginePolicy(cwd).validation })).digest('hex')
   const cacheFile = path.join(cwd, VALIDATION_DIR, 'cache', `${key}.json`)
   let cacheInput: unknown = null
   try { cacheInput = readJson(cacheFile) }
@@ -588,7 +591,9 @@ export function startLocalValidationWorker(cwd: string): () => void {
   const heartbeatTimer = setInterval(heartbeat, 5000)
   let timer: ReturnType<typeof setTimeout> | undefined
   const tick = async (): Promise<void> => {
-    try { await drainLocalValidation(cwd, controller.signal)
+    try {
+      await reconcileAbandonedHost(cwd)
+      await measureRuntime(cwd, 'validation', () => drainLocalValidation(cwd, controller.signal))
       if (!stopped) { const { drainAutoHeal } = await import('./engine-repair'); await drainAutoHeal(cwd, controller.signal) }
     }
     catch (error) { console.error('[validation]', sanitizeDiagnostic(error instanceof Error ? error.message : String(error))) }

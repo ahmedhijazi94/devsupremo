@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { databaseOperationSchema, parseDatabaseOptions, type DatabaseOperation, type DatabaseOptions } from './database-request'
 import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
 import { z } from 'zod'
+import { drainDurableOperations, enqueueDatabaseOperation, waitForDatabaseOperation } from './durable-operations'
 
 const directory = (cwd: string): string => path.join(cwd, '.supremo/database-queue')
 const maxRequestBytes = 32 * 1024
@@ -74,6 +75,14 @@ export async function requestDatabase(cwd: string, operation: DatabaseOperation,
   if (!Number.isFinite(heartbeat) || heartbeat <= 0 || Date.now() - heartbeat > 5000 || heartbeat > Date.now() + 5000) {
     throw new Error('Canal de banco do daemon indisponível. Atualize a CLI e reinicie somente o daemon no terminal autorizado; preserve o preview. Não é necessário refazer o bootstrap.')
   }
+  const capability = path.join(dir, 'capabilities.json')
+  if (fs.existsSync(capability)) {
+    const worker = z.object({ protocolVersion: z.literal(2), pid: z.number().int().positive() }).strict().parse(readRequest(capability, 1024))
+    try { process.kill(worker.pid, 0) }
+    catch { throw new Error('Executor durável indisponível; retome o daemon antes de enviar a operação.') }
+    return waitForDatabaseOperation(cwd, enqueueDatabaseOperation(cwd, selected, checkedOptions))
+  }
+  // Old workers retain the legacy wire contract until an explicit runtime update.
   const id = randomUUID()
   const request = path.join(dir, `${id}.request.json`)
   const response = path.join(dir, `${id}.response.json`)
@@ -129,16 +138,17 @@ export async function drainDatabaseRequests(
 export function startDatabaseWorker(cwd: string, execute: (operation: DatabaseOperation, options?: DatabaseOptions) => Promise<unknown>): () => void {
   const dir = directory(cwd)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  writeAtomic(path.join(dir, 'capabilities.json'), { protocolVersion: 2, pid: process.pid })
   let running = false
   const tick = (): void => {
     writeAtomic(path.join(dir, 'heartbeat'), Date.now())
     if (running) return
     running = true
-    void drainDatabaseRequests(cwd, execute).catch(() => {
+    void drainDatabaseRequests(cwd, execute).then(() => drainDurableOperations(cwd, execute)).catch(() => {
       process.stderr.write('[daemon] Falha ao processar a fila local de banco.\n')
     }).finally(() => { running = false })
   }
   tick()
   const timer = setInterval(tick, 250)
-  return () => { clearInterval(timer); fs.rmSync(path.join(dir, 'heartbeat'), { force: true }) }
+  return () => { clearInterval(timer); fs.rmSync(path.join(dir, 'heartbeat'), { force: true }); fs.rmSync(path.join(dir, 'capabilities.json'), { force: true }) }
 }

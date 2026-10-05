@@ -30,6 +30,7 @@ export function turnAgentResponse(output: TurnResult, cwd?: string) {
       context: {
         protocol: bounded(supplied.protocol, 2000),
         developmentPolicy: context?.developmentPolicy,
+        backgroundRecoveryReady: supplied.backgroundRecoveryReady === true,
         permissions: supplied.permissions ?? { diagnostics: context?.reconciliation.status === 'fresh', editing: !state.readOnly && state.turn.status === 'active' },
         project: context?.project, projectId: state.turn.projectId,
         environment: state.turn.environment, databaseEnvironment: context?.databaseEnvironment,
@@ -51,6 +52,7 @@ export function turnAgentResponse(output: TurnResult, cwd?: string) {
         ...(browserDiagnostics ? { browserDiagnostics } : {}),
       },
       turn: { id: state.turn.turnId, status: state.turn.status, checkpointId: state.turn.checkpointId,
+        delivery: state.delivery ?? null, approved: false,
         headSha: state.turn.workspace.headSha, fingerprint: state.turn.workspace.fingerprint },
       stateFile: '.supremo/turns/state.json',
     } : {}),

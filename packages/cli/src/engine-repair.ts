@@ -17,6 +17,7 @@ import { canAutoRepairPaths } from './turn-model'
 import { evidenceFor, scanCheckpointForUpload, validateCheckpoint, type LocalEvidence } from './turn-validation'
 import { captureTree, captureTurnCheckpoint, gitText, readJson, TURN_DIR, TurnLockBusyError, withTurnLock, writeJson } from './turn-workspace'
 import { verifyTrustedFiles } from './trusted-validation'
+import { measureRuntime } from './runtime-metrics'
 
 const DIR = '.supremo/validation/repair'
 const repairStateSchema = z.object({ checkpointId: z.string(), sha: z.string(), attempts: z.number().int().nonnegative(),
@@ -255,7 +256,7 @@ export async function drainAutoHeal(cwd: string, signal?: AbortSignal, deps: Rep
       const prompt = repairPrompt(cwd, record, evidence, policy)
       inference = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-repair-proposal-'))
       job.attempts++; job.starts++; attemptStarted = true; update('running', `Proposta isolada via ${runner}; orçamento limitado.`)
-      const proposal = await deps.propose(runner, inference, prompt, { ...policy, max_budget_usd: policy.max_budget_usd / (policy.max_attempts * 2) }, controller.signal)
+      const proposal = await measureRuntime(cwd, 'model', () => deps.propose(runner, inference!, prompt, { ...policy, max_budget_usd: policy.max_budget_usd / (policy.max_attempts * 2) }, controller.signal), record.checkpointId)
       if (controller.signal.aborted) throw new Error('Autocura cancelada por atividade, pausa ou encerramento.')
       if (proposal.files.length > policy.max_changed_files || new Set(proposal.files.map(file => file.path)).size !== proposal.files.length || Buffer.byteLength(JSON.stringify(proposal)) > policy.max_output_bytes) throw new Error('Proposta excede limites ou duplica caminhos.')
       candidate = path.join(cwd, DIR, `candidate-${crypto.randomUUID()}`)

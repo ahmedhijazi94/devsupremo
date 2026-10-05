@@ -12,9 +12,10 @@ const localDeploySchema = z.object({
   files: z.array(functionPathSchema).max(64).default([]),
   importMap: functionPathSchema.optional(),
   verifyJwt: z.boolean().default(true),
+  operationId: z.string().uuid().optional(),
 }).strict()
 export type LocalFunctionDeploy = z.infer<typeof localDeploySchema>
-export type FunctionFields = Partial<LocalFunctionDeploy> & { secretName?: string }
+export type FunctionFields = Partial<LocalFunctionDeploy> & { secretName?: string | undefined; expectedVersion?: number | undefined; version?: number | undefined; replaceSlug?: string | undefined }
 
 export function parseFunctionOptions(operation: string, raw: unknown): FunctionFields {
   functionOperationSchema.parse(operation)
@@ -39,5 +40,7 @@ export function readFunctionDeployment(cwd: string, raw: unknown): z.infer<typeo
     if (bytes > 512 * 1024) throw new Error('A função excede o limite total de 512 KiB.')
     return { path: name, content: file.content }
   })
-  return functionDeploySchema.parse({ ...options, files })
+  const { operationId: _operationId, ...bundle } = options
+  void _operationId
+  return functionDeploySchema.parse({ ...bundle, files })
 }

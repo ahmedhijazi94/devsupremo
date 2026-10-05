@@ -162,7 +162,7 @@ describe('bounded declarative job contract', () => {
   })
   it('binds apply/control request shapes with no loose options', () => {
     const base = {
-      deviceSecret: 'device-credential-fixture',
+      deviceSecret: 'device-credential-fixture', operationId: '00000000-0000-4000-8000-000000000099',
       projectId: project,
       expectedRef: 'abc',
       environment: 'development',

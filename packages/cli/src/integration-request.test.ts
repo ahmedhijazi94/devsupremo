@@ -101,7 +101,7 @@ describe('vault references never become credentials in the daemon or output', ()
     expect(() => credentialResponse({ projectId: USER, credentials: [metadata] }, PROJECT)).toThrow()
     expect(parseDatabaseOptions('secrets-apply', { requestId: REQUEST, credentialId: CREDENTIAL })).toEqual({ requestId: REQUEST, credentialId: CREDENTIAL })
     expect(parseDatabaseOptions('secrets-credentials', {})).toEqual({})
-    expect(parseDatabaseOptions('secrets-revoke-credential', { credentialId: CREDENTIAL })).toEqual({ credentialId: CREDENTIAL })
+    expect(parseDatabaseOptions('secrets-revoke-credential', { credentialId: CREDENTIAL })).toEqual({ credentialId: CREDENTIAL, operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) })
     for (const operation of ['secrets-credentials', 'secrets-apply', 'secrets-revoke-credential'] as const) {
       expect(() => parseDatabaseOptions(operation, { credentialId: CREDENTIAL, requestId: REQUEST, value: 'never-accepted' })).toThrow()
     }

@@ -74,6 +74,13 @@ beforeEach(() => {
   mocks.decrypt.mockReturnValue('vercel-token')
 })
 describe('owner scoped secret request store', () => {
+  it('rechecks the live device before owned project lookup',async()=>{
+    const fixture=clientFixture(), verify=vi.fn(async()=>{throw new SecretRequestError('device revoked')})
+    const port=secretRequestStore(fixture.client,'owner',projectId,undefined,verify)
+    await expect(port.authorize()).rejects.toThrow(/device revoked/)
+    await expect(port.resolve({target:'supabase',environment:'development'})).rejects.toThrow(/device revoked/)
+    expect(fixture.calls).toHaveLength(0)
+  })
   it.each(['generic', 'smtp'] as const)('stops %s dispatch if its vault credential is removed during provider credential lookup', async (kind) => {
     const configuration = kind === 'smtp' ? { kind: 'supabase-smtp' as const, provider: 'resend' as const, senderEmail: 'account@example.test', senderName: 'Example' } : null
     const fixture = configuredFixture(configuration)
@@ -125,7 +132,7 @@ describe('owner scoped secret request store', () => {
     expect(mocks.deliver).not.toHaveBeenCalled()
     finishCredentials?.({ projectRef: 'projectref', token: 'oauth-token' })
     await first
-    expect(mocks.deliver).toHaveBeenCalledExactlyOnceWith({ target: 'supabase', environment: 'development', targetRef: 'projectref', accountId }, row.name, 'first-private-value', 'oauth-token', null)
+    expect(mocks.deliver).toHaveBeenCalledExactlyOnceWith({ target: 'supabase', environment: 'development', targetRef: 'projectref', accountId }, row.name, 'first-private-value', 'oauth-token', null,expect.any(Function))
     expect(fixture.state.row).toMatchObject({ status: 'fulfilled', configuration: null, delivery_claim_id: null, delivery_claim_expires_at: null })
     await expect(fulfillSecret(port, requestId, 'third-private-value')).rejects.toThrow('já foi concluído')
     expect(mocks.deliver).toHaveBeenCalledTimes(1)
@@ -304,7 +311,7 @@ describe('owner scoped secret request store', () => {
     await fulfillSecret(secretRequestStore(client, 'owner', projectId), requestId, 'private-value')
     expect(mocks.project).toHaveBeenCalledWith('owner', projectId)
     expect(mocks.credentials).toHaveBeenCalledWith('owner', project)
-    expect(mocks.deliver).toHaveBeenCalledWith({ target: 'supabase', environment: 'development', targetRef: 'projectref', accountId }, row.name, 'private-value', 'oauth-token', null)
+    expect(mocks.deliver).toHaveBeenCalledWith({ target: 'supabase', environment: 'development', targetRef: 'projectref', accountId }, row.name, 'private-value', 'oauth-token', null,expect.any(Function))
     expect(calls.filter((call) => call.table === 'projects')).toHaveLength(3)
     const audit = calls.find((call) => call.table === 'audit_logs')
     expect(audit?.payload).toMatchObject({ user_id: 'owner', metadata: { requestId, name: row.name, target: 'supabase', environment: 'development', targetRef: 'projectref' } })
@@ -326,7 +333,7 @@ describe('owner scoped secret request store', () => {
     const port = secretRequestStore(client, 'owner', projectId)
     const binding = await port.resolve({ target: 'vercel', environment: 'preview' })
     await port.deliver(vercelRecord, binding, 'private-value', claim)
-    expect(mocks.deliver).toHaveBeenCalledWith(binding, row.name, 'private-value', 'vercel-token', 'team')
+    expect(mocks.deliver).toHaveBeenCalledWith(binding, row.name, 'private-value', 'vercel-token', 'team',expect.any(Function))
     for (const call of calls.filter((item) => item.table === 'vercel_accounts')) expect(call.filters).toContainEqual(['user_id', 'owner'])
     expect(mocks.environment).not.toHaveBeenCalled()
   })

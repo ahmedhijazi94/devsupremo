@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { scheduledFunctionAction } from './function-contract'
 import { isSensitiveIdentifier } from '../database-inspection/sensitive'
+import { dailySchedule, jobTimezoneSchema } from './schedule'
 
 export const jobIdentifier = z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/)
 const scalar = z.union([
@@ -73,7 +74,7 @@ export const jobManifestEntrySchema = z
         validSchedule,
         'Cron exige cinco campos UTC, com intervalo mínimo de um minuto.',
       ),
-    timezone: z.literal('UTC'),
+    timezone: jobTimezoneSchema,
     action: z
       .object({
         type: z.literal('update'),
@@ -119,6 +120,7 @@ export const jobsManifestSchema = z
     (value) => new TextEncoder().encode(JSON.stringify(value)).length <= 32768,
     'Manifesto limitado a 32KB.',
   )
+  .refine(value => value.jobs.every(job => job.timezone === 'UTC' || dailySchedule(job.schedule) !== null), 'Fusos locais aceitam horário diário fixo. Expressões complexas exigem UTC.')
 export type JobDefinition = z.infer<typeof jobManifestEntrySchema>
 export type JobsManifest = z.infer<typeof jobsManifestSchema>
 export const jobOperationSchema = z.enum([
@@ -128,6 +130,7 @@ export const jobOperationSchema = z.enum([
   'cron-pause',
   'cron-resume',
   'cron-remove',
+  'cron-run-now',
 ])
 export const jobsRequestSchema = z
   .object({
@@ -141,6 +144,7 @@ export const jobsRequestSchema = z
       .regex(/^[a-z0-9][a-z0-9_-]{0,39}$/)
       .optional(),
     manifest: jobsManifestSchema.optional(),
+    operationId: z.string().uuid().optional(),
     limit: z.number().int().min(1).max(100).default(50),
     offset: z.number().int().min(0).max(10000).default(0),
   })
@@ -152,7 +156,7 @@ export const jobsRequestSchema = z
         message: 'Manifesto obrigatório somente em apply.',
       })
     if (
-      ['cron-pause', 'cron-resume', 'cron-remove'].includes(value.operation) &&
+      ['cron-pause', 'cron-resume', 'cron-remove', 'cron-run-now'].includes(value.operation) &&
       !value.jobId
     )
       context.addIssue({ code: 'custom', message: 'ID do job obrigatório.' })
@@ -161,6 +165,7 @@ export const jobsRequestSchema = z
         code: 'custom',
         message: 'Apply recebe o manifesto completo.',
       })
+    if (!['cron-list', 'cron-history'].includes(value.operation) && !value.operationId) context.addIssue({ code: 'custom', message: 'ID durável obrigatório para alterar ou executar jobs. Atualize o agente.' })
   })
 export type JobsRequest = z.infer<typeof jobsRequestSchema>
 export const isReadJobOperation = (operation: JobsRequest['operation']) =>

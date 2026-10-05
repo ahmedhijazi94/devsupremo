@@ -55,7 +55,7 @@ describe('public project service commands reach the private daemon queue', () =>
       { operation: 'secrets-credentials' }, { operation: 'secrets-credentials' },
       { operation: 'secrets-status', options: { requestId } },
       { operation: 'secrets-apply', options: { requestId, credentialId } },
-      { operation: 'secrets-revoke-credential', options: { credentialId } },
+      { operation: 'secrets-revoke-credential', options: { credentialId, operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) } },
     ])
   })
   it.each(['email', 'request'])('creates and applies the exact %s request without opening a form', async kind => {
@@ -94,7 +94,7 @@ describe('public project service commands reach the private daemon queue', () =>
   it('preserves explicit production selectors', async () => {
     await invoke(['jobs', 'apply', '--environment', 'production'])
     await invoke(['jobs', 'pause', '--job-id', 'close-old-tickets', '--environment', 'production'])
-    expect(requests).toEqual([{ operation: 'cron-apply', options: { environment: 'production' } }, { operation: 'cron-pause', options: { jobId: 'close-old-tickets', environment: 'production' } }])
+    expect(requests).toEqual([{ operation: 'cron-apply', options: { environment: 'production', operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) } }, { operation: 'cron-pause', options: { jobId: 'close-old-tickets', environment: 'production', operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) } }])
   })
   it('emits an authenticated cron scaffold locally without queuing or overwriting files', async () => {
     fs.writeFileSync(path.join(cwd,'.supremo/project.json'), JSON.stringify({ projectId: '11111111-1111-4111-8111-111111111111', supremoUrl: 'https://supremo.example.invalid' }))
@@ -106,7 +106,7 @@ describe('public project service commands reach the private daemon queue', () =>
   })
   it('routes apply without letting the agent inject SQL, a manifest path or unknown environment selector', async () => {
     await invoke(['jobs', 'apply'])
-    expect(requests).toEqual([{ operation: 'cron-apply' }])
+    expect(requests).toEqual([{ operation: 'cron-apply', options: { operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) } }])
     for (const args of [
       ['jobs', 'apply', '--sql', 'select 1'], ['jobs', 'apply', '--manifest', '/tmp/foreign.json'],
       ['jobs', 'pause', '--job-id', 'close-old-tickets', '--environment', 'unknown'],

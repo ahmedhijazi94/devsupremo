@@ -9,6 +9,7 @@ import {
   within,
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { webcrypto } from 'node:crypto'
 import type {
   BackendInput,
   BackendData,
@@ -17,8 +18,12 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   run: vi.fn<(input: BackendInput) => Promise<BackendResult>>(),
+  automation: vi.fn(), storage: vi.fn(),
 }))
 vi.mock('@/actions/project-backend', () => ({ runProjectBackend: mocks.run }))
+vi.mock('@/actions/automation', () => ({ getProjectAutomation: mocks.automation, saveProjectAutomation: vi.fn() }))
+vi.mock('@/actions/project-storage', () => ({ manageProjectStorage: mocks.storage }))
+vi.mock('@/actions/operation-approvals', () => ({ getProjectOperationApprovals: vi.fn(async () => ({ ok: true, approvals: [] })), decideProjectOperationApproval: vi.fn() }))
 import { BackendConsole } from './backend-console'
 
 const projectId = '11111111-1111-4111-8111-111111111111'
@@ -36,12 +41,15 @@ function success(
   }
 }
 beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto)
   vi.resetAllMocks()
+  mocks.automation.mockResolvedValue({ ok: true, environment: 'development', projectRef: 'connected-ref', policy: null, operations: [] })
+  mocks.storage.mockResolvedValue({ ok: true, data: { items: [] } })
   mocks.run.mockImplementation(async (input: BackendInput) =>
     success(input.operation),
   )
 })
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('console de dados e serviços', () => {
   it('abre registros e pagina mantendo o projeto e a tabela escolhidos', async () => {
@@ -252,6 +260,7 @@ describe('console de dados e serviços', () => {
         projectId,
         operation: 'job-set-active',
         jobId: 'daily-report',
+        operationId: expect.any(String),
         enabled: false,
         expectedRef: 'connected-ref',
         environment: 'development',
@@ -373,16 +382,14 @@ describe('console de dados e serviços', () => {
       await screen.findByText('Nenhuma conta cadastrada neste projeto.'),
     ).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Armazenamento' }))
+    const list = screen.getByRole('button', { name: 'Listar espaços' }) as HTMLButtonElement
+    await waitFor(() => expect(list.disabled).toBe(false))
+    fireEvent.click(list)
     expect(
       await screen.findByText(
         'Nenhum espaço de arquivos criado neste projeto.',
       ),
     ).toBeTruthy()
-    expect(mocks.run).toHaveBeenCalledWith({
-      projectId,
-      operation: 'storage',
-      limit: 50,
-      offset: 0,
-    })
+    expect(mocks.storage).toHaveBeenCalledWith({ projectId, options: { operation: 'storage-buckets', environment: 'development', expectedRef: 'connected-ref' } })
   })
 })

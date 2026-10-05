@@ -25,8 +25,9 @@ function record(row: unknown): SecretRequestRecord {
     targetRef: parsed.target_ref, accountId: parsed.target_account_id, status: parsed.status,
     ...(parsed.configuration ? { configuration: parsed.configuration } : {}) }
 }
-export function secretRequestStore(client: SupabaseClient, userId: string, projectId: string, verifyCredential?: () => Promise<void>): SecretRequestPort {
+export function secretRequestStore(client: SupabaseClient, userId: string, projectId: string, verifyCredential?: () => Promise<void>, verifyAuthority?: () => Promise<void>): SecretRequestPort {
   const owned = async () => {
+    await verifyAuthority?.()
     const result = await client.from('projects').select('id,supabase_account_id,supabase_project_ref,vercel_account_id,vercel_project_id').eq('id', projectId).eq('user_id', userId).maybeSingle()
     if (result.error || !result.data) throw new SecretRequestError('Projeto não encontrado ou não autorizado.')
     return result.data as { id: string; supabase_account_id: string | null; supabase_project_ref: string | null; vercel_account_id: string | null; vercel_project_id: string | null }
@@ -34,6 +35,7 @@ export function secretRequestStore(client: SupabaseClient, userId: string, proje
   const scoped = () => client.from('secret_requests').select(columns).eq('project_id', projectId).eq('user_id', userId)
   const unclaimedOrExpired = () => `delivery_claim_id.is.null,delivery_claim_expires_at.lte.${new Date().toISOString()}`
   const assertClaim = async (row: SecretRequestRecord, claim: SecretDeliveryClaim) => {
+    await verifyAuthority?.()
     await verifyCredential?.()
     const current = await scoped().eq('id', row.id).eq('status', 'pending').eq('delivery_claim_id', claim.id)
       .gt('delivery_claim_expires_at', new Date(Date.now() + deliveryDispatchMarginMs).toISOString()).maybeSingle()
@@ -123,7 +125,9 @@ export function secretRequestStore(client: SupabaseClient, userId: string, proje
       // Refresh/credential I/O may take time. Recheck the actual owner, account, ref and environment immediately before dispatch.
       assertSameBinding(row, await port.resolve(binding))
       await assertClaim(row, claim)
-      await deliverSecret(binding, row.name, value, token, teamId)
+      await deliverSecret(binding, row.name, value, token, teamId, async()=>{
+        assertSameBinding(row,await port.resolve(binding)); await assertClaim(row,claim)
+      })
     },
     fulfill: async (row, claim) => {
       if (!claim) throw new SecretRequestError('Confirmação sem reserva válida.')

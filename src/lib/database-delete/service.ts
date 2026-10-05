@@ -6,7 +6,7 @@ import { buildDeleteCatalogQuery, buildDeleteInspection, buildDeleteApply, delet
 import type { DeleteProvider } from './provider'
 
 const planScopeSchema = z.object({ ownerId: z.string().uuid(), projectId: z.string().uuid(), accountId: z.string().uuid(),
-  projectRef: z.string().regex(/^[a-z0-9_-]{1,64}$/), environment: z.literal('development') }).strict()
+  projectRef: z.string().regex(/^[a-z0-9_-]{1,64}$/), environment: z.literal('development'), policyId: z.uuid().optional(), policyRevision: z.uuid().optional() }).strict()
 export type DeleteScope = z.infer<typeof planScopeSchema>
 const planSchema = z.object({ version: z.literal(1), id: z.string().uuid(), scope: planScopeSchema,
   createdAt: z.number().int().nonnegative(), expiresAt: z.number().int().nonnegative(),
@@ -24,7 +24,14 @@ export interface DeleteDependencies {
   id?(): string
 }
 const scopeMatches = (a: DeleteScope, b: DeleteScope): boolean =>
-  a.ownerId === b.ownerId && a.projectId === b.projectId && a.accountId === b.accountId && a.projectRef === b.projectRef && a.environment === b.environment
+  a.ownerId === b.ownerId && a.projectId === b.projectId && a.accountId === b.accountId && a.projectRef === b.projectRef && a.environment === b.environment && a.policyId === b.policyId && a.policyRevision === b.policyRevision
+
+export function describeDeletePlan(token: string) {
+  try {
+    const plan = planSchema.parse(JSON.parse(decryptToken(token)))
+    return { planId: plan.id, targets: plan.targets, scope: plan.scope, expiresAt: plan.expiresAt }
+  } catch { throw new DataDeleteError('Plano inválido ou adulterado. Prepare outro plano.', 400) }
+}
 
 export async function runDataDelete(deps: DeleteDependencies, raw: DeleteOptions): Promise<DeleteResponse> {
   const options = deleteOptionsSchema.parse(raw)

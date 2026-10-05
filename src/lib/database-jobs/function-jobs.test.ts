@@ -10,7 +10,7 @@ import { supabaseJobsProvider, type JobsProvider } from './provider'
 const projectId = '00000000-0000-4000-8000-000000000001'
 const definition = { id: 'daily-report', schedule: '0 12 * * *', timezone: 'UTC', action: { type: 'function', slug: 'daily-report', body: { digest: true } } }
 const job = () => functionJobManifestEntrySchema.parse(definition)
-const request = () => jobsRequestSchema.parse({ projectId, deviceSecret: 'device-fixture', expectedRef: 'project-fixture', environment: 'development', operation: 'cron-apply', manifest: { version: 1, jobs: [definition] } })
+const request = () => jobsRequestSchema.parse({ projectId, operationId: '00000000-0000-4000-8000-000000000099', deviceSecret: 'device-fixture', expectedRef: 'project-fixture', environment: 'development', operation: 'cron-apply', manifest: { version: 1, jobs: [definition] } })
 const capability = { installed: true, registry: true, timezone: 'UTC', functions: true }
 const info = { id: 'fn-id', slug: 'daily-report', version: 1, status: 'ACTIVE', verifyJwt: false }
 const secret = 'a'.repeat(64)
@@ -23,7 +23,8 @@ describe('typed scheduled functions', () => {
    expect(jobsManifestSchema.parse({ version: 1, jobs: [definition] }).jobs[0]!.action.type).toBe('function')
    for (const action of [{ ...definition.action, slug: 'https://evil.test' }, { ...definition.action, url: 'https://evil.test' }, { ...definition.action, headers: { Authorization: 'secret' } }, { ...definition.action, body: { apiKey: 'private' } }, { ...definition.action, body: { nested: {} } }])
      expect(() => functionJobManifestEntrySchema.parse({ ...definition, action })).toThrow()
-   expect(() => functionJobManifestEntrySchema.parse({ ...definition, timezone: 'America/New_York' })).toThrow()
+   expect(functionJobManifestEntrySchema.parse({ ...definition, timezone: 'America/New_York' }).timezone).toBe('America/New_York')
+   expect(() => functionJobManifestEntrySchema.parse({ ...definition, timezone: 'Moon/Local' })).toThrow()
    expect(scheduledFunctionNames(projectId,'daily-report').environment).toMatch(/^SUPREMO_CRON_[A-F0-9]{24}$/)
    expect(scheduledFunctionNames(projectId,'daily-report')).not.toEqual(scheduledFunctionNames(projectId,'other-function'))
  })

@@ -4,10 +4,15 @@ import { z } from 'zod'
 import { readEnvironment } from '@/lib/database-environment/store'
 import { getProject, getSupabaseCredentials } from '@/lib/projects/repository'
 import { functionOptionsSchema, functionResponseSchema, isFunctionRead, type FunctionOptions, type FunctionResponse } from './contract'
-import { FunctionError, requireFunctionTarget } from './policy'
+import { FunctionError, FunctionOperationError, requireFunctionTarget } from './policy'
 import { supabaseFunctionProvider } from './provider'
 import { runFunctions } from './service'
 import { claimFunctionLease, type FunctionLease } from './store'
+import { authorizeProjectOperation } from '@/lib/backend-operations/server'
+import { functionArtifactStore } from './artifacts'
+import { backendOperationStore } from '@/lib/backend-operations/store'
+import { runTrackedOperation } from '@/lib/backend-operations/service'
+import { assertSamePolicy } from '@/lib/backend-operations/policy'
 
 const scopeSchema = z.object({ ownerId: z.string().uuid(), projectId: z.string().uuid(), expectedRef: z.string().max(64).regex(/^[a-z0-9_-]+(?![\s\S])/) }).strict()
 export interface FunctionAuthorization {
@@ -15,6 +20,8 @@ export interface FunctionAuthorization {
   ownerId: string
   projectId: string
   expectedRef: string
+  deviceId?: string
+  ownerSession?: true
   /** Resolve a fresh session/device identity; never return a client-supplied owner. */
   verifyIdentity(): Promise<string>
 }
@@ -22,6 +29,33 @@ export interface FunctionAuthorization {
 /** Shared by the device API and authenticated panel actions. No caller can skip
  * ownership/environment checks or supply a provider token/ref/URL. */
 export async function runAuthorizedFunctions(authority: FunctionAuthorization, raw: FunctionOptions): Promise<FunctionResponse> {
+  const options = functionOptionsSchema.parse(raw)
+  if (isFunctionRead(options.operation)) {
+    let readBinding: { policyId: string; revision: string } | undefined
+    return executeAuthorizedFunctions(authority, options, authority.ownerSession === true ? undefined : async () => {
+      const current = await authorizeProjectOperation({ ...authority, environment: options.environment }, 'functions.read', 'slug' in options ? { resource: options.slug } : {})
+      if (readBinding) assertSamePolicy(readBinding, current)
+      readBinding ??= current
+    })
+  }
+  if (!('operationId' in options) || !options.operationId) throw new FunctionError('Mutações exigem ID de operação persistente. Atualize o agente antes de repetir.', 400)
+  const capability = options.operation === 'functions-remove' ? 'functions.remove' : options.operation.startsWith('functions-hook-') || options.operation === 'functions-test' ? 'functions.hooks' : 'functions.deploy'
+  let binding: { policyId: string; revision: string } | undefined
+  const authorize = async () => {
+    const current = await authorizeProjectOperation({ ...authority, environment: options.environment }, capability, 'slug' in options ? { resource: options.slug } : {})
+    if (binding) assertSamePolicy(binding, current)
+    binding ??= current
+    return current
+  }
+  const store = backendOperationStore(authority.client, { ownerId: authority.ownerId, projectId: authority.projectId, id: options.operationId, capability, input: { options, expectedRef: authority.expectedRef } })
+  const receipt = await runTrackedOperation({ authorize, ...store,
+    execute: async () => ({ response: await executeAuthorizedFunctions(authority, options, async () => { await authorize() }) }),
+    verify: async result => { await authorize(); return functionResponseSchema.safeParse(result.response).success },
+  })
+  if (receipt.state !== 'succeeded' || !receipt.result?.response) throw new FunctionOperationError(options.operationId, receipt.state === 'failed' ? 'failed' : ['queued', 'running', 'verifying'].includes(receipt.state) ? 'running' : 'uncertain')
+  return functionResponseSchema.parse(receipt.result.response)
+}
+async function executeAuthorizedFunctions(authority: FunctionAuthorization, raw: FunctionOptions, verifyPolicy?: () => Promise<void>): Promise<FunctionResponse> {
   const { ownerId, projectId, expectedRef } = scopeSchema.parse({ ownerId: authority.ownerId, projectId: authority.projectId, expectedRef: authority.expectedRef })
   const options = functionOptionsSchema.parse(raw)
   let lease: FunctionLease | undefined
@@ -29,6 +63,7 @@ export async function runAuthorizedFunctions(authority: FunctionAuthorization, r
     if (await authority.verifyIdentity() !== ownerId) throw new FunctionError('Identidade não autorizada.', 401)
     const project = await getProject(ownerId, projectId)
     requireFunctionTarget(await readEnvironment(authority.client, projectId), project.supabase_project_ref, { expectedRef, environment: options.environment })
+    await verifyPolicy?.()
     return project
   }
   const initial = await authorize()
@@ -42,6 +77,17 @@ export async function runAuthorizedFunctions(authority: FunctionAuthorization, r
     await lease?.assertCurrent()
     return credentials
   })
+  const artifacts = functionArtifactStore(authority.client, { ownerId, projectId, projectRef: expectedRef, environment: options.environment, authorize: async () => { await authorize(); await lease?.assertCurrent() } })
+  provider.artifact = artifacts.load
+  provider.artifactHistory = artifacts.history
+  const deploy = provider.deploy
+  provider.deploy = async bundle => {
+    const result = await deploy(bundle)
+    const metadata = z.object({ slug: z.literal(bundle.slug), version: z.number().int().positive() }).safeParse(result)
+    if (!metadata.success) throw new FunctionError('Publicação sem versão confirmada; artefato não foi registrado.', 502)
+    await artifacts.save(bundle, metadata.data.version)
+    return result
+  }
   if (!isFunctionRead(options.operation)) {
     const audit = await authority.client.from('audit_logs').insert({ user_id: ownerId, action: `${options.operation}.requested`, resource_type: 'project', resource_id: projectId,
       metadata: { slug: 'slug' in options ? options.slug : null, environment: options.environment, targetRef: expectedRef }, ip_address: null })

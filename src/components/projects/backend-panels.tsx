@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Loader2, Play, Pause, ChevronRight } from 'lucide-react'
 import { runProjectBackend } from '@/actions/project-backend'
 import type {
@@ -15,6 +15,13 @@ import {
   type BackendSuccess,
 } from './backend-resource'
 import { BackendTable, BackendPagination } from './backend-table'
+import { BackendDataEditor } from './backend-data-editor'
+import { administerProjectBackend } from '@/actions/backend-administration'
+import { getProjectAutomation } from '@/actions/automation'
+import { BackendSqlChanges } from './backend-sql-changes'
+import { BackendUsageHistory } from './backend-usage-history'
+import { BackendFunctionInspector } from './backend-function-inspector'
+import { browserOperation } from '@/lib/project-backend/browser-operation'
 
 const PAGE_SIZE = 50
 
@@ -22,6 +29,9 @@ export function BackendTables({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [tableOffset, setTableOffset] = useState(0)
   const [offset, setOffset] = useState(0)
+  const [filterColumn, setFilterColumn] = useState('')
+  const [filterValue, setFilterValue] = useState('')
+  const [filter, setFilter] = useState<{ column: string; value: string } | undefined>()
   return (
     <div className="space-y-6">
       <p className="text-muted text-xs">Credenciais e outros campos sensíveis aparecem ocultos nas consultas.</p>
@@ -49,6 +59,7 @@ export function BackendTables({ projectId }: { projectId: string }) {
                         onClick={() => {
                           setSelected(String(table.name))
                           setOffset(0)
+                          setFilter(undefined); setFilterColumn(''); setFilterValue('')
                         }}
                       >
                         {typeof table.schema === 'string'
@@ -76,6 +87,12 @@ export function BackendTables({ projectId }: { projectId: string }) {
           )
         }
       </BackendResource>
+      {selected && <form className="flex flex-wrap items-end gap-3" onSubmit={event => { event.preventDefault(); setOffset(0); setFilter(filterColumn ? { column: filterColumn, value: filterValue } : undefined) }}>
+        <label className="text-sm">Coluna do filtro<input className={backendField} value={filterColumn} onChange={event => setFilterColumn(event.target.value)} placeholder="Ex.: status" /></label>
+        <label className="text-sm">Valor exato<input className={backendField} value={filterValue} onChange={event => setFilterValue(event.target.value)} /></label>
+        <button type="submit" className={backendButton}>Filtrar registros</button>
+        {filter && <button type="button" className={backendButton} onClick={() => { setFilter(undefined); setFilterColumn(''); setFilterValue(''); setOffset(0) }}>Limpar filtro</button>}
+      </form>}
       {selected ? (
         <BackendResource
           input={{
@@ -84,16 +101,21 @@ export function BackendTables({ projectId }: { projectId: string }) {
             table: selected,
             limit: PAGE_SIZE,
             offset,
+            ...(filter ? { filter } : {}),
           }}
           label={`Registros de ${selected}`}
         >
-          {({ data }) => (
+          {({ data, projectRef, environment }) => (
             <>
               <BackendTable
                 rows={data.items}
                 columns={data.columns}
                 caption={`Registros de ${selected}`}
               />
+              <button type="button" className={`${backendButton} mt-3`} disabled={!data.items.length} onClick={() => {
+                const url = URL.createObjectURL(new Blob([JSON.stringify(data.items, null, 2)], { type: 'application/json' }))
+                const link = document.createElement('a'); link.href = url; link.download = `${selected}-pagina-${Math.floor(offset / PAGE_SIZE) + 1}.json`; link.click(); URL.revokeObjectURL(url)
+              }}>Exportar esta página ({data.items.length} registros)</button>
               <BackendPagination
                 offset={offset}
                 count={data.items.length}
@@ -101,6 +123,7 @@ export function BackendTables({ projectId }: { projectId: string }) {
                 hasMore={data.hasMore === true && data.nextOffset !== null}
                 onChange={setOffset}
               />
+              {environment === 'development' && <BackendDataEditor key={selected} projectId={projectId} expectedRef={projectRef} table={selected} />}
             </>
           )}
         </BackendResource>
@@ -114,6 +137,13 @@ export function BackendTables({ projectId }: { projectId: string }) {
 }
 
 export function BackendSql({ projectId }: { projectId: string }) {
+  const [developmentRef, setDevelopmentRef] = useState<string | null>(null)
+  const [targetError, setTargetError] = useState('')
+  useEffect(() => { let active = true; void getProjectAutomation(projectId).then(status => {
+    if (!active) return
+    if (status.ok && status.environment === 'development') setDevelopmentRef(status.projectRef)
+    else if (!status.ok) setTargetError(status.error)
+  }).catch(() => { if (active) setTargetError('Não foi possível consultar o ambiente para alterações de estrutura.') }); return () => { active = false } }, [projectId])
   const [sql, setSql] = useState('')
   const [executedSql, setExecutedSql] = useState('')
   const [offset, setOffset] = useState(0)
@@ -165,7 +195,7 @@ export function BackendSql({ projectId }: { projectId: string }) {
         />
         <p id="backend-sql-note" className="text-muted text-xs">
           Consultas de leitura. Alterações de estrutura e dados seguem pelo
-          agente, com migrations e validação.
+          agente ou pelo formulário abaixo, com histórico e validação.
         </p>
         <button
           type="submit"
@@ -180,6 +210,8 @@ export function BackendSql({ projectId }: { projectId: string }) {
           {pending ? 'Consultando…' : 'Executar consulta'}
         </button>
       </form>
+      {developmentRef && <BackendSqlChanges projectId={projectId} expectedRef={developmentRef} />}
+      {targetError && <p role="status" className="mt-3 text-sm">{targetError}</p>}
       {result && (
         <div className="mt-6" aria-live="polite">
           {result.ok ? (
@@ -273,12 +305,14 @@ export function BackendFunctions({ projectId }: { projectId: string }) {
           input={{ projectId, operation: 'function-status', slug }}
           label={`Detalhes de ${slug}`}
         >
-          {({ data }) => (
-            <BackendTable
+          {({ data, environment, projectRef }) => (
+            <><BackendTable
               rows={data.items}
               columns={data.columns}
               caption={`Estado de ${slug}`}
             />
+              {environment !== 'unknown' && <BackendFunctionInspector key={`${projectId}:${projectRef}:${environment}:${slug}`} projectId={projectId} expectedRef={projectRef} environment={environment} slug={slug} {...(typeof data.items[0]?.version === 'number' ? { currentVersion: data.items[0].version } : {})} />}
+            </>
           )}
         </BackendResource>
       )}
@@ -315,20 +349,41 @@ function JobsList({
   const [history, setHistory] = useState<string | null>(null)
   const [pending, setPending] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
+  async function operate(jobId: string, operation: 'cron-run-now' | 'cron-remove') {
+    if (result.environment === 'unknown') return
+    setPending(jobId); setError(null); setNotice('')
+    let operationId = ''
+    try {
+      const attempt = await browserOperation(projectId, { expectedRef: result.projectRef, operation, environment: result.environment, jobId })
+      operationId = attempt.id
+      const response = await administerProjectBackend({ projectId, expectedRef: result.projectRef, operationId, kind: 'job',
+        options: { operation, environment: result.environment, jobId, operationId } })
+      if (!response.ok) setError(response.error)
+      else {
+        const receipt = (response.data as { operationReceipt?: { state: string; message: string } }).operationReceipt
+        if (receipt?.state === 'succeeded') attempt.confirmed()
+        setNotice(receipt?.message ?? 'Pedido registrado. Consulte o histórico para conferir o resultado.'); setHistory(jobId); refresh()
+      }
+    } catch { setError(`Conexão interrompida. Confira a operação ${operationId} em Automação antes de repetir.`) }
+    finally { setPending(null) }
+  }
   async function toggle(jobId: string, enabled: boolean) {
     setPending(jobId)
     setError(null)
     try {
+      const attempt = await browserOperation(projectId, { operation: 'job-set-active', jobId, enabled, expectedRef: result.projectRef, environment: result.environment })
       const response = await runProjectBackend({
         projectId,
         operation: 'job-set-active',
+        operationId: attempt.id,
         jobId,
         enabled,
         expectedRef: result.projectRef,
         environment: result.environment,
       })
       if (!response.ok) setError(response.error)
-      else refresh()
+      else { attempt.confirmed(); refresh() }
     } catch {
       setError(
         'Não foi possível confirmar a alteração. Atualize os agendamentos antes de tentar novamente.',
@@ -339,6 +394,7 @@ function JobsList({
   }
   return (
     <div className="space-y-4">
+      {notice && <p role="status" className="text-sm">{notice}</p>}
       {error && (
         <p
           role="alert"
@@ -364,7 +420,7 @@ function JobsList({
                   <h4 className="text-sm font-semibold">{name}</h4>
                   <p className="text-muted mt-1 text-xs">
                     {typeof job.schedule === 'string'
-                      ? `${job.schedule} · UTC`
+                      ? `${job.schedule} · ${typeof job.timezone === 'string' ? job.timezone : 'UTC'}`
                       : 'Horário indisponível'}
                   </p>
                   <p className="mt-2 text-xs">
@@ -390,6 +446,8 @@ function JobsList({
                 <div className="flex flex-wrap gap-2">
                   {jobId && (
                     <>
+                      <button type="button" className={backendButton} disabled={pending !== null || job.active !== true || result.environment === 'unknown'} onClick={() => void operate(jobId, 'cron-run-now')}>Executar {name} agora</button>
+                      <button type="button" className={backendButton} disabled={pending !== null || result.environment === 'unknown'} onClick={() => void operate(jobId, 'cron-remove')}>Remover {name}</button>
                       <button
                         type="button"
                         className={backendButton}
@@ -444,7 +502,7 @@ function JobsList({
       )}
       <p className="text-muted text-xs">
         Para criar ou alterar uma tarefa, diga ao agente o que deve acontecer e
-        em qual horário. A programação exibida usa UTC.
+        em qual horário. Cada tarefa mostra seu fuso confirmado; horários ausentes usam UTC.
       </p>
     </div>
   )
@@ -493,6 +551,7 @@ function JobHistory({
 }
 
 export function BackendLogs({ projectId }: { projectId: string }) {
+  const [searchText, setSearchText] = useState(''), [search, setSearch] = useState('')
   const [source, setSource] =
     useState<NonNullable<BackendInput['source']>>('functions')
   const [level, setLevel] = useState<NonNullable<BackendInput['level']>>('all')
@@ -554,10 +613,16 @@ export function BackendLogs({ projectId }: { projectId: string }) {
           </select>
         </label>
       </div>
+      <form className="mb-4 flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); setSearch(searchText.trim()); setOffset(0) }}>
+        <label className="flex-1 text-xs font-medium">Buscar no texto dos logs<input className={`${backendField} mt-1`} maxLength={160} value={searchText} onChange={event => setSearchText(event.target.value)} placeholder="Nome da função, ID da operação ou mensagem" /></label>
+        <button type="submit" className={backendButton}>Buscar eventos</button>
+      </form>
+      <p className="text-muted mb-3 text-xs">Busca literal no texto, sem distinção de maiúsculas. Até 24 horas por consulta e 50 eventos por página. A retenção e a presença de IDs dependem da fonte; incompatibilidade ou ausência de acesso aparece como erro.</p>
       <BackendResource
         input={{
           projectId,
           operation: 'logs',
+          ...(search ? { search } : {}),
           source,
           minutes,
           level,
@@ -594,7 +659,7 @@ export function BackendUsage({ projectId }: { projectId: string }) {
       input={{ projectId, operation: 'usage' }}
       label="Indicadores atuais"
     >
-      {({ data }) => (
+      {({ data, environment, projectRef }) => (
         <>
           {data.metrics?.length ? (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -638,6 +703,7 @@ export function BackendUsage({ projectId }: { projectId: string }) {
               />
             </div>
           )}
+          {environment !== 'unknown' && <BackendUsageHistory key={`${projectId}:${projectRef}:${environment}`} projectId={projectId} expectedRef={projectRef} environment={environment} />}
         </>
       )}
     </BackendResource>

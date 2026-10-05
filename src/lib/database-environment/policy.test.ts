@@ -16,7 +16,7 @@ describe('autoridade do ambiente', () => {
     expect(() => requireDevelopment(dev, null, 'dev-ref')).toThrow()
   })
   it('valida payload sem aceitar autoridade ou caminho arbitrário do cliente', () => {
-    const valid = { deviceSecret: 'device-test-fixture', projectId: '00000000-0000-4000-8000-000000000001', operation: 'migrate' }
+    const valid = { deviceSecret: 'device-test-fixture', projectId: '00000000-0000-4000-8000-000000000001', operation: 'migrate', expectedRef:'dev-ref',operationId:'00000000-0000-4000-8000-000000000099' }
     expect(databaseRequestSchema.safeParse(valid).success).toBe(true)
     expect(databaseRequestSchema.safeParse({ ...valid, environment: 'development' }).success).toBe(false)
     expect(databaseRequestSchema.safeParse({ ...valid, migrations: [{ path: '../evil.sql', content: 'select 1' }] }).success).toBe(false)
@@ -41,6 +41,7 @@ describe('autoridade do ambiente', () => {
     'ON CONFLICT DO NOTHING',
     'on conflict (user_id) do nothing',
     'ON\nCONFLICT (user_id, org_id)\nDO\nNOTHING',
+    'ON CONFLICT (user_id) DO /* explanatory comment */ NOTHING',
   ])('permite a cláusula idempotente estática: %s', (clause) => {
     expect(() => validateAutomaticMigration(`INSERT INTO public.members (user_id, org_id) VALUES ('user', 'org') ${clause};`)).not.toThrow()
   })
@@ -53,13 +54,13 @@ describe('autoridade do ambiente', () => {
     'ON CONFLICT (user_id) DO NOTHING; COMMIT;',
     "ON CONFLICT (user_id) DO NOTHING; EXECUTE 'SELECT 1';",
     'ON CONFLICT (user_id) DO NOTHING; ALTER TABLE public.members DISABLE ROW LEVEL SECURITY;',
-    'ON CONFLICT (user_id) DO /* not a supported clause */ NOTHING;',
     'ON CONFLICT (lower(user_id)) DO NOTHING;',
   ])('a exceção idempotente não libera outros comandos ou sintaxe ambígua: %s', (suffix) => {
     expect(() => validateAutomaticMigration(`INSERT INTO public.members (user_id) VALUES ('user') ${suffix}`)).toThrow()
   })
-  it('não esconde comandos proibidos dentro da origem do INSERT ou de literais', () => {
-    expect(() => validateAutomaticMigration(`INSERT INTO public.notes (body) VALUES ('DROP TABLE notes') ON CONFLICT DO NOTHING;`)).toThrow()
+  it('distingue texto de comandos executáveis, mantendo o guard na origem do INSERT', () => {
+    expect(() => validateAutomaticMigration(`INSERT INTO public.notes (body) VALUES ('DROP TABLE notes') ON CONFLICT DO NOTHING;`)).not.toThrow()
+    expect(() => validateAutomaticMigration(`INSERT INTO public.notes (body) VALUES ($text$BEGIN; SECURITY DEFINER; DROP TABLE notes$text$); /* DROP TABLE notes */`)).not.toThrow()
     expect(() => validateAutomaticMigration(`INSERT INTO public.notes (body) SELECT pg_read_file('/etc/passwd') ON CONFLICT DO NOTHING;`)).toThrow()
     expect(() => validateAutomaticMigration(`INSERT INTO public.notes (body) VALUES ('ON CONFLICT DO NOTHING'); DO $$ SELECT 1; $$;`)).toThrow()
   })

@@ -13,6 +13,13 @@ export type RequestedSecret = z.infer<typeof requestedSecretSchema>
 export const secretRequestOptionsSchema = z.object({ requests: z.array(requestedSecretSchema).min(1).max(20) }).strict()
 export const credentialIdSchema = z.string().uuid()
 export const credentialApplyOptionsSchema = z.object({ requestId: z.string().uuid(), credentialId: credentialIdSchema }).strict()
+export function secretOperationReceipt(raw: unknown, expectedId: string) {
+  const parsed = z.object({ receipt: z.object({ id: z.literal(expectedId), capability: z.literal('credentials.use'),
+    environment: z.enum(['development', 'production']), state: z.enum(['queued', 'running', 'verifying', 'succeeded', 'failed', 'uncertain', 'cancelled']),
+    updatedAt: z.string().datetime({ offset: true }) }) }).safeParse(raw)
+  if (!parsed.success) throw new Error(`O motor não confirmou o recibo desta configuração. Consulte backend operation-status ${expectedId} antes de repetir.`)
+  return parsed.data.receipt
+}
 const secretViewSchema = z.object({
   id: z.string().uuid(), name: z.string().max(128), description: z.string().max(1000).nullable(),
   target: z.enum(['supabase', 'vercel']), environment: z.enum(['development', 'preview', 'production']),

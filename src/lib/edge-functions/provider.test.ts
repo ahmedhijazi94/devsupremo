@@ -9,6 +9,29 @@ const token = 'private-management-token'
 beforeEach(() => vi.stubGlobal('fetch', vi.fn(async () => Response.json({}))))
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 describe('Supabase function Management API transport', () => {
+  it('accepts the documented empty DELETE 200 response and disables only the enabled flag', async () => {
+    const p = supabaseFunctionProvider(async () => ({ projectRef: ref, token }))
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 200 })).mockResolvedValueOnce(Response.json({}))
+    await p.remove!('send-email'); await p.disableHook!()
+    expect(vi.mocked(fetch).mock.calls[0]).toEqual([`https://api.supabase.com/v1/projects/${ref}/functions/send-email`, expect.objectContaining({ method: 'DELETE' })])
+    expect(vi.mocked(fetch).mock.calls[1]![1]?.body).toBe(JSON.stringify({ hook_send_email_enabled: false }))
+  })
+  it('checks hooks and cron dependencies with the management role under a read-only transaction', async () => {
+    const p = supabaseFunctionProvider(async () => ({ projectRef: ref, token }))
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ hook_send_email_uri: `https://${ref}.supabase.co/functions/v1/send-email`, hook_send_email_enabled: true }))
+      .mockResolvedValueOnce(Response.json([{ installed: true }])).mockResolvedValueOnce(Response.json([{ count: 2 }]))
+    expect(await p.dependencies!('send-email')).toBe(3)
+    const queryCalls = vi.mocked(fetch).mock.calls.slice(1)
+    for (const [url, init] of queryCalls) { expect(url).toBe(`https://api.supabase.com/v1/projects/${ref}/database/query`); expect(String(init?.body)).toContain('READ ONLY') }
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({})).mockResolvedValueOnce(Response.json([{ installed: false }]))
+    expect(await p.dependencies!('send-email')).toBe(0)
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json(null))
+    await expect(p.dependencies!('send-email')).rejects.toThrow('inspecionar')
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({})).mockResolvedValueOnce(Response.json([]))
+    await expect(p.dependencies!('send-email')).rejects.toThrow('indisponíveis')
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({})).mockResolvedValueOnce(Response.json([{ installed: true }])).mockResolvedValueOnce(Response.json([]))
+    await expect(p.dependencies!('send-email')).rejects.toThrow('não confirmadas')
+  })
   it('configures the hook through real-format GET secrets responses and confirms them after the write', async () => {
     const uri = `https://${ref}.supabase.co/functions/v1/send-email`
     let config = { hook_send_email_enabled: false, hook_send_email_uri: uri, hook_send_email_secrets: secret, external_email_enabled: true }

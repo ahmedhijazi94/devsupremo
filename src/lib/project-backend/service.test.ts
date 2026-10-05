@@ -21,14 +21,25 @@ describe('project backend console', () => {
   it.each([
     { ...base, ownerId: 'attacker' }, { ...base, operation: 'rows', table: 'auth.users' },
     { ...base, operation: 'rows', table: 'x";DELETE' }, { ...base, sql: 'SELECT 1' },
-    { ...base, limit: 101 }, { ...base, operation: 'job-set-active', jobId: 'daily', enabled: false },
-    { ...base, operation: 'job-set-active', jobId: 'daily', enabled: false, expectedRef: 'ref', environment: 'unknown' },
+    { ...base, limit: 101 }, { ...base, operation: 'job-set-active', operationId: '00000000-0000-4000-8000-000000000099', jobId: 'daily', enabled: false },
+    { ...base, operation: 'job-set-active', operationId: '00000000-0000-4000-8000-000000000099', jobId: 'daily', enabled: false, expectedRef: 'ref', environment: 'unknown' },
   ])('rejects forged or ambiguous input %#', value => expect(backendInputSchema.safeParse(value).success).toBe(false))
   it('reads only public rows with read-only SQL and pagination', async () => {
     const p = ports(); vi.mocked(p.inspection.query).mockResolvedValue([{ id: 1 }, { id: 2 }])
     const result = await runBackend(p, target, { ...base, operation: 'rows', table: 'expenses', limit: 1, offset: 3 })
     expect(p.inspection.query).toHaveBeenCalledWith(expect.stringContaining('public."expenses"'))
     expect(result).toMatchObject({ items: [{ id: 1 }], hasMore: true, nextOffset: 4 })
+  })
+  it('escapes equality filters as data while retaining the independent read-only SQL guard', async () => {
+    const p = ports()
+    await runBackend(p, target, { ...base, operation: 'rows', table: 'expenses', filter: { column: 'description', value: "x'; DELETE FROM public.expenses; --" } })
+    expect(p.inspection.query).toHaveBeenCalledWith(expect.stringContaining(`"description" = 'x''; DELETE FROM public.expenses; --'`))
+    await expect(runBackend(p, target, { ...base, operation: 'rows', table: 'expenses', filter: { column: 'password', value: 'guess' } })).rejects.toThrow('recusada')
+    expect(p.inspection.query).toHaveBeenCalledTimes(1)
+    for (const filter of [{ column: 'id" OR TRUE', value: 'x' }, { column: 'id', value: '\\escape' }]) {
+      expect(backendInputSchema.safeParse({ ...base, operation: 'rows', table: 'expenses', filter }).success).toBe(false)
+    }
+    expect(backendInputSchema.safeParse({ ...base, filter: { column: 'id', value: 'x' } }).success).toBe(false)
   })
   it.each(['DELETE FROM public.expenses', 'SELECT * FROM auth.users', "SELECT pg_read_file('/etc/passwd')"])('rejects unsafe editor SQL before provider access', async sql => {
     const p = ports()
@@ -82,7 +93,7 @@ describe('project backend console', () => {
     expect(await runBackend(p, target, { ...base, operation: 'job-history', jobId: 'daily' })).toMatchObject({ items: [{ jobId: 'daily', http_status: 'http_failed' }] })
   })
   it.each([true, false])('changes job state only after target match and confirmed provider receipt (%s)', async enabled => {
-    const p = ports(), input: BackendInput = { ...base, operation: 'job-set-active', enabled, jobId: 'daily', expectedRef: target.projectRef, environment: target.environment }
+    const p = ports(), input: BackendInput = { ...base, operation: 'job-set-active', operationId: '00000000-0000-4000-8000-000000000099', enabled, jobId: 'daily', expectedRef: target.projectRef, environment: target.environment }
     await expect(runBackend(p, { ...target, projectRef: 'other' }, input)).rejects.toThrow('mudou')
     expect(p.jobs).not.toHaveBeenCalled()
     vi.mocked(p.jobs).mockResolvedValue({ available: true, applied: true, jobId: 'daily' })

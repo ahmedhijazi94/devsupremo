@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runDatabaseDirect } from './database'
+import { drainDurableOperations, enqueueDatabaseOperation, readDurableOperation, resumeDatabaseOperation } from './durable-operations'
 
 const projectId = '11111111-1111-4111-8111-111111111111'
 const planId = '22222222-2222-4222-8222-222222222222'
@@ -77,6 +78,25 @@ describe('deletion transport remains bound to the authorized development project
     failure = 'http'
     await expect(apply()).rejects.toThrow('Plano expirado ou já utilizado.')
     expect(calls.map(call => call.operation)).toEqual(['status', 'data-delete-apply'])
+  })
+  it('keeps an HTTP409 operation_uncertain receipt uncertain in the durable queue and never repeats the deletion', async () => {
+    const original = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      const input = JSON.parse(String(init?.body)) as Record<string, unknown>
+      if (input.operation === 'data-delete-apply') {
+        calls.push(input)
+        return Promise.resolve(Response.json({ error: 'Exclusão ainda não confirmada.', code: 'operation_uncertain', operationId: planId, operationState: 'uncertain' }, { status: 409 }))
+      }
+      return original(url, init)
+    })
+    const id = enqueueDatabaseOperation(cwd, 'data-delete-apply', { environment: 'development', planToken, authorization: 'Excluir o registro solicitado.' })
+    const execute = vi.fn((operation: Parameters<typeof runDatabaseDirect>[0], options?: Parameters<typeof runDatabaseDirect>[2]) => runDatabaseDirect(operation, cwd, options))
+    await drainDurableOperations(cwd, execute)
+    await drainDurableOperations(cwd, execute)
+    expect(readDurableOperation(cwd, id)).toMatchObject({ status: 'uncertain', error: expect.stringContaining('Não repita delete-apply') })
+    expect(() => resumeDatabaseOperation(cwd, id)).toThrow('Somente recusa')
+    expect(calls.map(call => call.operation)).toEqual(['status', 'data-delete-apply'])
+    expect(execute).toHaveBeenCalledTimes(1)
   })
   it.each(['network', 'body', 'json'])('requires reconciliation after an uncertain %s failure without exposing raw errors or retrying', async stage => {
     const original = vi.mocked(fetch).getMockImplementation()!

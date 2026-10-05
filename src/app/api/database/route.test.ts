@@ -1,5 +1,13 @@
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { authorizeProjectOperation } from '@/lib/backend-operations/server'
+import { OperationError } from '@/lib/backend-operations/contract'
+vi.mock('@/lib/backend-operations/server', () => ({ authorizeProjectOperation: vi.fn() }))
+vi.mock('@/lib/backend-operations/store', () => ({ backendOperationStore: (_client: unknown, scope: {id:string;capability:string}) => ({
+  claim: async () => ({ acquired:true, token:'claim', receipt:{id:scope.id,capability:scope.capability,environment:'development',state:'queued',updatedAt:new Date().toISOString(),message:'',result:null} }),
+  update: async (id:string,_token:string,state:string,message:string,result?:Record<string,unknown>) => ({id,capability:scope.capability,environment:'development',state,updatedAt:new Date().toISOString(),message,result:result??null}),
+}) }))
 import { POST } from './route'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import { getProject, getSupabaseCredentials } from '@/lib/projects/repository'
@@ -10,16 +18,23 @@ vi.mock('@/lib/checkpoint/devices', () => ({ authenticateDeviceSecret: vi.fn() }
 vi.mock('@/lib/projects/repository', () => ({ getProject: vi.fn(), getSupabaseCredentials: vi.fn() }))
 vi.mock('@/lib/database-environment/store', () => ({ readEnvironment: vi.fn(), registerDevelopment: vi.fn() }))
 const body = { deviceSecret: 'sup_dev_ckpt_fixture', projectId: '00000000-0000-4000-8000-000000000001', operation: 'status' }
-function request(extra: Record<string, unknown> = {}) { return new NextRequest('https://supremo.test/api/database', { method: 'POST', body: JSON.stringify({ ...body, ...extra }) }) }
+function request(extra: Record<string, unknown> = {}) { return new NextRequest('https://supremo.test/api/database', { method: 'POST', body: JSON.stringify({ ...body, ...(String(extra.operation??'').startsWith('auth-') && !['auth-count','auth-users','auth-config'].includes(String(extra.operation)) || ['cron-apply','cron-pause','cron-resume','cron-remove','migrate','anonymous-auth'].includes(String(extra.operation)) ? {operationId:'00000000-0000-4000-8000-000000000099'}:{}), ...extra }) }) }
 beforeEach(() => {
+  vi.mocked(authorizeProjectOperation).mockResolvedValue({policyId:'00000000-0000-4000-8000-000000000070',revision:'00000000-0000-4000-8000-000000000071'})
   vi.mocked(authenticateDeviceSecret).mockResolvedValue({ ok: true, device: { id: 'device', ownerUserId: 'owner', revokedAt: null, label: null } })
-  vi.mocked(getProject).mockResolvedValue({ id: body.projectId, user_id: 'owner', supabase_project_ref: 'dev-ref' } as Awaited<ReturnType<typeof getProject>>)
+  vi.mocked(getProject).mockResolvedValue({ id: body.projectId, user_id: 'owner', supabase_project_ref: 'dev-ref', supabase_account_id:'owned-account' } as Awaited<ReturnType<typeof getProject>>)
   vi.mocked(readEnvironment).mockResolvedValue({ project_ref: 'dev-ref', environment: 'development', source: 'supremo_provisioned' })
   vi.mocked(getSupabaseCredentials).mockResolvedValue({ projectRef: 'dev-ref', token: 'fixture' } as Awaited<ReturnType<typeof getSupabaseCredentials>>)
   vi.stubGlobal('fetch', vi.fn(async () => Response.json([])))
 })
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals() })
 describe('API do banco: dispositivo, dono e ambiente', () => {
+  it('requires auth.read for device reads and blocks revoked policy before provider access',async()=>{
+    vi.mocked(authorizeProjectOperation).mockRejectedValue(new OperationError('Política revogada.',403))
+    expect((await POST(request({operation:'auth-count',expectedRef:'dev-ref',environment:'development'}))).status).toBe(403)
+    expect(authorizeProjectOperation).toHaveBeenCalledWith(expect.objectContaining({deviceId:'device'}),'auth.read',{rows:1,resource:'auth.users'})
+    expect(fetch).not.toHaveBeenCalled()
+  })
   it('counts auth users through the fixed server query, without granting general auth SQL', async () => {
     vi.mocked(fetch).mockResolvedValue(Response.json([{ count: 7 }]))
     const response = await POST(request({ operation: 'auth-count', expectedRef: 'dev-ref', environment: 'development' }))
@@ -45,7 +60,7 @@ describe('API do banco: dispositivo, dono e ambiente', () => {
     vi.mocked(authenticateDeviceSecret).mockImplementation(async () => authorized ? { ok: true, device: { id: 'device', ownerUserId: 'owner', revokedAt: null, label: null } } : { ok: false, reason: 'revoked' })
     vi.mocked(fetch).mockImplementation(async () => { authorized = false; return Response.json({ mailer_autoconfirm: false, disable_signup: false }) })
     const response = await POST(request({ operation: 'auth-configure', expectedRef: 'dev-ref', environment: 'development', config: { emailConfirmation: false } }))
-    expect(response.status).toBe(401)
+    expect(await response.json()).toMatchObject({ receipt: { state: 'uncertain' } })
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetch).mock.calls[0]?.[1]?.method).toBe('GET')
   })
@@ -54,20 +69,23 @@ describe('API do banco: dispositivo, dono e ambiente', () => {
       vi.mocked(getProject).mockResolvedValue({ id: body.projectId, user_id: 'owner', supabase_project_ref: 'dev-ref', supabase_account_id: 'other-account' } as Awaited<ReturnType<typeof getProject>>)
       return Response.json([{ name: 'service_role', api_key: 'server-admin-fixture' }])
     })
-    expect((await POST(request({ operation: 'auth-delete', expectedRef: 'dev-ref', environment: 'development', userId: body.projectId }))).status).toBe(409)
+    expect(await (await POST(request({ operation: 'auth-delete', expectedRef: 'dev-ref', environment: 'development', userId: body.projectId }))).json()).toMatchObject({ receipt: { state: 'uncertain' } })
     expect(fetch).toHaveBeenCalledTimes(1)
   })
   it('keeps admin keys on the server and passes only the selected user update', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(Response.json([{ name: 'service_role', api_key: 'server-admin-fixture' }]))
       .mockResolvedValueOnce(Response.json({ id: body.projectId, email: 'a@example.test', app_metadata: { key: 'server-admin-fixture' }, recovery_token: 'hidden' }))
+      .mockResolvedValueOnce(Response.json([{ name: 'service_role', api_key: 'server-admin-fixture' }]))
+      .mockResolvedValueOnce(Response.json({ id: body.projectId, email: 'a@example.test', banned_until: new Date(Date.now()+24*3600000).toISOString() }))
     const response = await POST(request({ operation: 'auth-update', expectedRef: 'dev-ref', environment: 'development', userId: body.projectId, user: { banHours: 24 } }))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ data: { user: { id: body.projectId, email: 'a@example.test' } } })
-    expect(fetch).toHaveBeenLastCalledWith(`https://dev-ref.supabase.co/auth/v1/admin/users/${body.projectId}`, expect.objectContaining({ method: 'PUT', body: '{"ban_duration":"24h"}' }))
+    expect(fetch).toHaveBeenCalledWith(`https://dev-ref.supabase.co/auth/v1/admin/users/${body.projectId}`, expect.objectContaining({ method: 'PUT', body: '{"ban_duration":"24h"}' }))
+    expect(fetch).toHaveBeenLastCalledWith(`https://dev-ref.supabase.co/auth/v1/admin/users/${body.projectId}`, expect.objectContaining({ method: 'GET' }))
   })
   it.each(['foreign-ref', null])('refuses auth operations for target %s', async ref => {
     if (ref === null) vi.mocked(readEnvironment).mockResolvedValue(null)
-    expect((await POST(request({ operation: 'auth-configure', expectedRef: ref ?? 'dev-ref', environment: 'development', config: { emailConfirmation: false } }))).status).toBe(409)
+    expect(await (await POST(request({ operation: 'auth-configure', expectedRef: ref ?? 'dev-ref', environment: 'development', config: { emailConfirmation: false } }))).json()).toMatchObject({ receipt: { state: 'uncertain' } })
     expect(fetch).not.toHaveBeenCalled()
   })
   it('status machine-readable consulta o projeto pelo dono autenticado', async () => {
@@ -76,6 +94,51 @@ describe('API do banco: dispositivo, dono e ambiente', () => {
     expect(getProject).toHaveBeenCalledWith('owner', body.projectId)
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(fetch).not.toHaveBeenCalled()
+  })
+  it('denies legacy writes without a durable ID and refuses a revoked policy before provider access', async () => {
+    const raw = { operation: 'auth-delete', expectedRef: 'dev-ref', environment: 'development', userId: body.projectId }
+    expect((await POST(request({ ...raw, operationId: undefined }))).status).toBe(400)
+    vi.mocked(authorizeProjectOperation).mockRejectedValue(new OperationError('Política revogada.',403))
+    expect((await POST(request(raw))).status).toBe(403)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it.each(['migrate','anonymous-auth'])('requires explicit policy and a durable ID for legacy %s writes', async operation => {
+    expect((await POST(request({operation,expectedRef:'dev-ref',operationId:undefined}))).status).toBe(400)
+    vi.mocked(authorizeProjectOperation).mockRejectedValue(new OperationError('Política revogada.',403))
+    expect((await POST(request({operation,expectedRef:'dev-ref'}))).status).toBe(403)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it('rechecks device revocation between two migration writes and does not dispatch the second', async () => {
+    const migrations = ['20261005110000','20261005110001'].map((version,index)=>({path:`supabase/migrations/${version}_notes.sql`,content:`CREATE TABLE public.notes_${index}(id uuid primary key); ALTER TABLE public.notes_${index} ENABLE ROW LEVEL SECURITY;`}))
+    let writes = 0
+    vi.mocked(fetch).mockImplementation(async (_url,init) => {
+      const query = String(JSON.parse(String(init?.body)).query)
+      if (/^select version, statements/.test(query)) return Response.json([])
+      writes++
+      vi.mocked(authenticateDeviceSecret).mockResolvedValue({ok:false,reason:'revoked'})
+      return Response.json([])
+    })
+    const response = await POST(request({operation:'migrate',expectedRef:'dev-ref',migrations}))
+    expect(await response.json()).toMatchObject({receipt:{state:'uncertain'}})
+    expect(writes).toBe(1)
+  })
+  it('confirms migration contents by final provider history before reporting success', async () => {
+    const migration = {path:'supabase/migrations/20261005110000_notes.sql',content:'CREATE TABLE public.notes(id uuid primary key); ALTER TABLE public.notes ENABLE ROW LEVEL SECURITY;'}
+    let writes = 0
+    vi.mocked(fetch).mockImplementation(async (_url,init) => {
+      const query = String(JSON.parse(String(init?.body)).query)
+      if (/^select version, statements/.test(query)) return Response.json([])
+      if (query.startsWith('BEGIN READ ONLY;')) return Response.json([{version:'20261005110000',statements:[migration.content]}])
+      writes++; return Response.json([])
+    })
+    const response = await POST(request({operation:'migrate',expectedRef:'dev-ref',migrations:[migration]}))
+    expect(await response.json()).toMatchObject({applied:[migration.path],verified:true,receipt:{state:'succeeded'}})
+    expect(writes).toBe(1)
+  })
+  it('does not mark a write successful when final provider readback disagrees', async () => {
+    vi.mocked(fetch).mockImplementation(async url => String(url).endsWith('/api-keys') ? Response.json([{name:'service_role',api_key:'private-key'}]) : Response.json({id:body.projectId,email:'different@example.test'}))
+    const response = await POST(request({operation:'auth-update',expectedRef:'dev-ref',environment:'development',userId:body.projectId,user:{email:'wanted@example.test'}}))
+    expect(await response.json()).toMatchObject({receipt:{state:'uncertain',result:null}})
   })
   it('refuta dispositivo revogado e projeto de outro dono sem acessar o provedor', async () => {
     vi.mocked(authenticateDeviceSecret).mockResolvedValueOnce({ ok: false, reason: 'revoked' })
@@ -102,15 +165,14 @@ describe('API do banco: dispositivo, dono e ambiente', () => {
     expect(fetch).toHaveBeenCalledWith('https://api.supabase.com/v1/projects/dev-ref/config/auth', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ external_anonymous_users_enabled: true }) }))
   })
   it('falha explícita se configuração não foi confirmada ou provedor recusou', async () => {
-    expect((await POST(request({ operation: 'anonymous-auth', expectedRef: 'dev-ref' }))).status).toBe(409)
+    expect(await (await POST(request({ operation: 'anonymous-auth', expectedRef: 'dev-ref' }))).json()).toMatchObject({receipt:{state:'uncertain'}})
     vi.mocked(fetch).mockResolvedValue(new Response('unavailable', { status: 503 }))
     const response = await POST(request({ operation: 'migrate', expectedRef: 'dev-ref' }))
-    expect(response.status).toBe(409)
-    expect(await response.json()).toMatchObject({ error: expect.stringContaining('Nenhum fallback') })
+    expect(await response.json()).toMatchObject({receipt:{state:'uncertain'}})
   })
   it('recusa vínculo que mudou antes de usar credenciais', async () => {
     vi.mocked(getSupabaseCredentials).mockResolvedValue({ projectRef: 'production-ref', token: 'fixture' } as Awaited<ReturnType<typeof getSupabaseCredentials>>)
-    expect((await POST(request({ operation: 'migrate', expectedRef: 'dev-ref' }))).status).toBe(409)
+    expect(await (await POST(request({ operation: 'migrate', expectedRef: 'dev-ref' }))).json()).toMatchObject({receipt:{state:'uncertain'}})
     expect(fetch).not.toHaveBeenCalled()
   })
   it('rejeita payload inválido, autoridade forjada, ref ausente e corpo excessivo', async () => {

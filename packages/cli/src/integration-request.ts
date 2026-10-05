@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { credentialIdSchema, secretRequestOptionsSchema, secretResponseSchema, selectRequestedSecrets } from './project-service-request'
 import type { DatabaseOperation, DatabaseOptions } from './database-request'
+import { isOperationReceipt } from './operation-receipt'
 
 /** Only public setup metadata is accepted here. The value is supplied directly
  * to the authenticated Supremo form, never through argv or the daemon queue. */
@@ -53,11 +54,13 @@ export async function requestIntegration(input: z.infer<typeof secretRequestOpti
   const requested = secretRequestOptionsSchema.parse(input)
   const id = validateCredentialReuse(requested, credentialId)
   const result = await execute('secrets-request', requested)
+  if (isOperationReceipt(result)) return { ...result, ...(id ? { continuation: { credentialId: id, action: 'apply_to_confirmed_request', requiresCompletedOperation: result.operationId } } : {}) }
   if (id === undefined) return result
   const parsed = secretResponseSchema.parse(result)
   const selected = selectRequestedSecrets(parsed.requests, requested.requests)[0]!
   if (selected.status !== 'pending') throw new Error('O pedido já foi atendido. Para alterar a configuração, use secrets dismiss e crie um novo pedido; nenhum valor foi substituído.')
   const applied = await execute('secrets-apply', { requestId: selected.id, credentialId: id })
+  if (isOperationReceipt(applied)) return applied
   const confirmed = secretResponseSchema.extend({ projectId: z.literal(parsed.projectId) }).parse(applied)
   const receipt = selectRequestedSecrets(confirmed.requests, requested.requests)[0]!
   if (receipt.id !== selected.id || receipt.status !== 'fulfilled') throw new Error('O servidor não confirmou a aplicação da credencial ao pedido solicitado.')

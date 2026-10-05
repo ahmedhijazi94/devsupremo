@@ -37,9 +37,6 @@ describe('gramática da substituição equivalente de foreign keys', () => {
     sql.replace('auth.users', 'storage.objects'),
     sql.replace('REFERENCES auth.users(id)', 'REFERENCES users(id)'),
     sql.replace('(id)', '(id, org_id)'),
-    sql.replace('NO ACTION', 'CASCADE'),
-    sql.replace('NO ACTION', 'RESTRICT'),
-    sql.replace('NO ACTION', 'SET NULL'),
     sql.replace('ON DELETE NO ACTION', 'ON UPDATE NO ACTION'),
     sql.replace('NO ACTION;', 'NO ACTION NOT VALID;'),
     sql.replace('NO ACTION;', 'NO ACTION DEFERRABLE;'),
@@ -62,6 +59,11 @@ describe('gramática da substituição equivalente de foreign keys', () => {
     sql.replace('ON DELETE', 'ON /* unclosed comment DELETE'),
   ])('recusa mudança além da gramática de substituição: %s', (input) => {
     expect(() => parseForeignKeyReplacements(input)).toThrow(/revisão|recusada/)
+  })
+  it.each([['CASCADE','c'],['RESTRICT','r'],['SET NULL','n'],['SET DEFAULT','d']])('confere no catálogo a preservação de %s', (action,code)=>{
+    const replacements=parseForeignKeyReplacements(sql.replace('NO ACTION',action!))
+    expect(replacements[0]?.onDelete).toBe(action!.toLowerCase())
+    expect(foreignKeyReplacementPreconditions(replacements)).toContain(`c.confdeltype = '${code}'`)
   })
   it('limita o lote mesmo quando todas as constraints são distintas', () => {
     const tooMany = Array.from({ length: 101 }, (_, i) => sql.replaceAll('orgs_owner_id_fkey', `fk_${i}`)).join('\n')

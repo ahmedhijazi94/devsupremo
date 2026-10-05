@@ -82,6 +82,15 @@ describe('bounded daemon termination', () => {
 })
 
 describe('daemon lifecycle with real managed processes', () => {
+  it('identifies the same executable through a directory alias without loosening daemon argv', async () => {
+    const cwd = workspace(), alias = path.join(cwd, 'directory-alias')
+    fs.symlinkSync(cwd, alias, 'dir')
+    await ensureDaemon(alias)
+    const target = pid(cwd); pids.push(target); await ready(cwd, target)
+    const canonical = fs.realpathSync(cwd)
+    expect(await inspectManagedDaemon(canonical, target, [path.join(canonical, 'node_modules/.bin/supremo')])).not.toBeNull()
+    expect(await stopDaemon(canonical)).toBe(true)
+  })
   it('serializes simultaneous starts and preserves preview/env while recovering stale upload', async () => {
     const cwd = workspace()
     fs.writeFileSync(path.join(cwd, '.env.local'), 'KEEP_THIS_PRIVATE=unchanged')

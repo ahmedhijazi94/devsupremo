@@ -123,7 +123,14 @@ export function validateDeleteCatalog(input: readonly DeleteTarget[], raw: unkno
       reject('Exclusão exige uma chave primária completa, imediata e válida.')
     const referencedColumns = new Set(catalog.foreignKeys.filter(fk => fk.schema === table.schema && fk.table === table.name).flatMap(fk => fk.columns))
     for (const column of table.columns.filter(column => isTarget || referencedColumns.has(column.name))) {
-      if (!deleteIdentifierSchema.safeParse(column.name).success || column.typeSchema !== 'pg_catalog' || column.kind !== 'b' || !safeTypes.has(column.type) || column.generated || (column.collationSchema !== null && column.collationSchema !== 'pg_catalog'))
+      const compared = table.primaryKey.includes(column.name) || referencedColumns.has(column.name)
+      // DELETE does not evaluate a generated expression or modify enum/array
+      // values. Their native output is safe for the snapshot; only comparison
+      // columns need the supported scalar operator/cast contract.
+      const nativeOutput = column.kind === 'e' || column.typeSchema === 'pg_catalog' && column.kind === 'b'
+        && (safeTypes.has(column.type) || column.type.startsWith('_') && safeTypes.has(column.type.slice(1)))
+      if (!deleteIdentifierSchema.safeParse(column.name).success || !nativeOutput || compared &&
+        (column.typeSchema !== 'pg_catalog' || column.kind !== 'b' || !safeTypes.has(column.type) || column.generated || (column.collationSchema !== null && column.collationSchema !== 'pg_catalog')))
         reject('Tipo, coluna calculada ou collation não suportado pela exclusão delimitada.')
     }
     if (isTarget && table.primaryKey.some(key => !table.columns.some(column => column.name === key && !nonKeyTypes.has(column.type)))) reject('Tipo de chave primária não suportado pela exclusão delimitada.')

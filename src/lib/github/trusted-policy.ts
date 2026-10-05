@@ -1,3 +1,4 @@
+import { TRUSTED_VALIDATION_POLICIES_4_0_18_5_1_6_CLI_1_13 } from './validation-policy-releases/4.0.18-5.1.6-cli1.13'
 import { TRUSTED_VALIDATION_POLICIES_4_0_17_5_1_5 } from './validation-policy-releases/4.0.17-5.1.5'
 import { TRUSTED_VALIDATION_POLICIES_4_0_16_5_1_4 } from './validation-policy-releases/4.0.16-5.1.4'
 import { TRUSTED_VALIDATION_POLICIES_4_0_15_5_1_3 } from './validation-policy-releases/4.0.15-5.1.3'
@@ -24,6 +25,7 @@ export interface ValidationAuthority { approved: boolean; headSha: string; reaso
 // policy by declaring a version, and future generator output is not implicitly
 // approved here. The archived release has no dependency on the current manifest.
 const releasedPolicies: readonly ValidationManifest[] = [
+  ...TRUSTED_VALIDATION_POLICIES_4_0_18_5_1_6_CLI_1_13,
   ...TRUSTED_VALIDATION_POLICIES.filter(policy => policy.version === '4.0.18' || policy.version === '5.1.6'),
   ...TRUSTED_VALIDATION_POLICIES_4_0_17_5_1_5,
   ...TRUSTED_VALIDATION_POLICIES_4_0_16_5_1_4,

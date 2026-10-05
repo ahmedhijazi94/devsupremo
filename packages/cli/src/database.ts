@@ -7,7 +7,7 @@ import { requestDatabase } from './database-queue'
 import { parseDatabaseOptions, type DatabaseOperation, type DatabaseOptions } from './database-request'
 import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
 import { z } from 'zod'
-import { credentialResponse, readJobManifest, secretResponse, secretResponseSchema, selectRequestedSecrets } from './project-service-request'
+import { credentialResponse, readJobManifest, secretResponse, secretResponseSchema, selectRequestedSecrets, secretOperationReceipt } from './project-service-request'
 import { readProjectStack } from './framework-runtime'
 import { readFunctionDeployment } from './functions-request'
 import { functionResponseSchema } from '../../../src/lib/edge-functions/contract'
@@ -22,7 +22,7 @@ export interface DatabaseStatus {
 
 // Only a parsed HTTP error returned by Supremo carries a server diagnostic.
 // Network/body/JSON failures leave a sent mutation's outcome unknown.
-class DatabaseServerError extends Error {}
+class DatabaseServerError extends Error { readonly definitive = true }
 
 export function validateLocalTarget(cwd: string, status: DatabaseStatus): string {
   if (status.environment !== 'development' || !status.automaticMigrations || !status.projectRef) {
@@ -53,7 +53,7 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   const secret = readDeviceSecret(resolveKeychain(), config.projectId, config.apiBaseUrl)
   if (!secret) throw new Error('O daemon não conseguiu acessar a autorização deste dispositivo. Verifique o keychain na máquina que executou o bootstrap.')
   const issuer = deviceIssuer(config.apiBaseUrl)
-  const url = new URL(`${issuer}/api/${operation.startsWith('secrets-') ? 'secrets' : operation.startsWith('functions-') ? 'functions' : 'database'}`)
+  const url = new URL(`${issuer}/api/${operation === 'backend-approval-status' ? 'operation-approvals' : operation.startsWith('backend-') ? 'backend-operations' : operation.startsWith('secrets-') ? 'secrets' : operation.startsWith('functions-') ? 'functions' : 'database'}`)
   if (url.username || url.password || url.search || url.hash) throw new Error('Endpoint contém componentes não permitidos.')
   if (url.protocol !== 'https:' && !(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:')) {
     throw new Error('O endpoint do Supremo deve usar HTTPS.')
@@ -62,12 +62,16 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     const endpoint = op === 'status' && operation.startsWith('functions-') ? new URL(`${issuer}/api/database`) : url
     const res = await fetch(endpoint, {
       method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, operation: op, ...extra }),
+      body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, ...(operation === 'backend-approval-status' ? {} : { operation: op }), ...extra }),
       signal: AbortSignal.timeout(op === 'status' ? 15_000 : 60_000),
     })
     const text = await res.text()
     if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error('Resposta de banco excede o limite; reduza paginação ou intervalo.')
-    const data = JSON.parse(text) as { error?: string }
+    const data = JSON.parse(text) as { error?: string; code?: string; operationId?: string }
+    if (!res.ok && data.code === 'operation_approval_required' && z.string().uuid().safeParse(data.operationId).success) {
+      throw Object.assign(new Error(sanitizeDiagnostic(data.error ?? 'Autorize a operação preparada no Supremo.')), { code: 'operation_approval_required', operationId: data.operationId })
+    }
+    if (!res.ok && data.code === 'operation_uncertain') throw new Error(sanitizeDiagnostic(`${data.error ?? 'Resultado não confirmado.'} Consulte backend operation-status ${data.operationId ?? ''} antes de repetir.`))
     if (!res.ok) throw new DatabaseServerError(sanitizeDiagnostic(data.error ?? `Banco indisponível (HTTP ${res.status}).`))
     return data
   }
@@ -83,15 +87,33 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     })
     try { return await Promise.race([transport(op, extra), deadline]) }
     catch (error) {
-      if (op === 'data-delete-apply' && !(error instanceof DatabaseServerError)) {
+      if (op === 'data-delete-apply' && !(error instanceof DatabaseServerError) && !(error instanceof Error && 'code' in error && error.code === 'operation_approval_required')) {
         throw new Error('Resultado da exclusão não confirmado; o pedido pode ter sido executado. Não repita delete-apply. Consulte os registros com db query antes de gerar outro plano.')
       }
       throw error
     }
     finally { if (timer !== undefined) clearTimeout(timer) }
   }
+  if (operation.startsWith('backend-')) {
+    const selected = operation.slice('backend-'.length)
+    const result = await request(selected, { ...checkedOptions })
+    const schema = operation === 'backend-approval-status'
+      ? z.object({ projectId: z.literal(config.projectId), operationId: z.literal(checkedOptions.operationId!), data: z.unknown(), observedAt: z.string() })
+      : z.object({ projectId: z.literal(config.projectId), operation: z.literal(selected), data: z.unknown(), observedAt: z.string() })
+    const envelope = schema.passthrough().safeParse(result)
+    if (!envelope.success) throw new Error('Resposta do motor não corresponde ao projeto solicitado. Consulte o ID da operação antes de repetir.')
+    return envelope.data
+  }
   if (operation.startsWith('secrets-')) {
     const result = await request(operation.slice('secrets-'.length), operation === 'secrets-status' ? {} : { ...checkedOptions })
+    if (operation === 'secrets-apply' || operation === 'secrets-revoke-credential') {
+      const receipt = secretOperationReceipt(result, operation === 'secrets-apply' ? checkedOptions.requestId! : checkedOptions.operationId!)
+      if (receipt.state !== 'succeeded') {
+        const message = `Configuração ainda não confirmada (${receipt.state}). Consulte backend operation-status ${receipt.id} antes de repetir.`
+        if (receipt.state === 'failed' || receipt.state === 'cancelled') throw new DatabaseServerError(message)
+        throw new Error(message)
+      }
+    }
     if (operation === 'secrets-credentials' || operation === 'secrets-revoke-credential') return credentialResponse(result, config.projectId)
     const parsed = secretResponseSchema.extend({ projectId: z.literal(config.projectId) }).parse(result)
     const selected = operation === 'secrets-request' ? selectRequestedSecrets(parsed.requests, checkedOptions.requests ?? []).map(entry => entry.id)
@@ -105,6 +127,13 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   // Snapshot informativo, jamais usado como autorização para uma escrita futura.
   fs.writeFileSync(path.join(cwd, '.supremo/database.json'), JSON.stringify(status, null, 2) + '\n')
   if (operation === 'status') return status
+  if (operation === 'data-plan' || operation === 'data-apply') {
+    const expectedRef = validateLocalTarget(cwd, status)
+    const result = await request(operation, { ...checkedOptions, expectedRef })
+    const envelope = z.object({ projectId: z.literal(config.projectId), projectRef: z.literal(expectedRef), environment: z.literal('development'), operation: z.literal(operation) }).passthrough().safeParse(result)
+    if (!envelope.success) throw new Error('Resposta de dados não corresponde ao plano. Consulte os registros antes de repetir a aplicação.')
+    return envelope.data
+  }
   if (operation.startsWith('data-delete-')) {
     const expectedRef = validateLocalTarget(cwd, status)
     const result = deleteResponseSchema.safeParse(await request(operation, { ...checkedOptions, expectedRef }))
@@ -119,7 +148,7 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
       projectRef: z.string().regex(/^[a-z0-9_-]+$/).max(64) }).safeParse(status)
     if (!target.success || checkedOptions.environment !== target.data.environment) throw new Error('Funções exigem o ambiente explicitamente selecionado e confirmado pelo Supremo.')
     const deployment = operation === 'functions-deploy' ? readFunctionDeployment(cwd, checkedOptions) : checkedOptions
-    const result = functionResponseSchema.safeParse(await request(operation, { ...deployment, expectedRef: target.data.projectRef, environment: target.data.environment }))
+    const result = functionResponseSchema.safeParse(await request(operation, { ...deployment, ...(checkedOptions.operationId ? { operationId: checkedOptions.operationId } : {}), expectedRef: target.data.projectRef, environment: target.data.environment }))
     if (!result.success || result.data.projectId !== config.projectId || result.data.projectRef !== target.data.projectRef || result.data.environment !== target.data.environment || result.data.operation !== operation) {
       throw new Error('Resposta da operação de funções não corresponde ao projeto e à solicitação autorizados.')
     }
@@ -146,10 +175,10 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
       ...(operation === 'cron-apply' ? { manifest: readJobManifest(cwd) } : {}) })
   }
   const expectedRef = validateLocalTarget(cwd, status)
-  if (operation === 'anonymous-auth') return request(operation, { expectedRef })
+  if (operation === 'anonymous-auth') return request(operation, { expectedRef, operationId: checkedOptions.operationId })
   const directory = path.join(cwd, 'supabase/migrations')
   const migrations = fs.readdirSync(directory).filter((name) => name.endsWith('.sql')).sort().map((name) => ({
     path: `supabase/migrations/${name}`, content: fs.readFileSync(path.join(directory, name), 'utf8'),
   }))
-  return request(operation, { expectedRef, migrations })
+  return request(operation, { expectedRef, migrations, operationId: checkedOptions.operationId })
 }

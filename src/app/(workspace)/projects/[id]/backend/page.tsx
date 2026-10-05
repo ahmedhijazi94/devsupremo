@@ -8,10 +8,13 @@ export const metadata = { title: 'Dados e serviços · Supremo' }
 
 export default async function ProjectBackendPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>
+  searchParams: Promise<{ section?: string }>
 }) {
   const { id } = await params
+  const { section } = await searchParams
   const supabase = await createClient()
   const {
     data: { user },
@@ -46,7 +49,7 @@ export default async function ProjectBackendPage({
           </p>
         </header>
         {project.supabase_project_ref ? (
-          <BackendConsole projectId={project.id} />
+          <BackendConsole projectId={project.id} initialSection={section ?? 'tables'} />
         ) : (
           <section className="bg-surface rounded-[var(--radius-inner)] p-6">
             <h2 className="font-semibold">Banco ainda não conectado</h2>

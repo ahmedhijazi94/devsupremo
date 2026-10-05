@@ -36,3 +36,10 @@ export type DeleteResponse = z.infer<typeof deleteResponseSchema>
 export class DataDeleteError extends Error {
   constructor(message: string, readonly status = 409) { super(message); this.name = 'DataDeleteError' }
 }
+
+export class DataDeleteOperationError extends DataDeleteError {
+  constructor(readonly operationId: string, readonly operationState: 'uncertain' | 'failed' | 'running') {
+    super(`Exclusão ${operationState === 'failed' ? 'interrompida antes do envio' : 'ainda não confirmada'}. Consulte o recibo ${operationId} antes de preparar outro plano.`, 409)
+    this.name = 'DataDeleteOperationError'
+  }
+}

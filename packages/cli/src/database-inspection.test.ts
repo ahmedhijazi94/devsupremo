@@ -99,7 +99,9 @@ describe('authorized database reads through the daemon', () => {
     const result = await requestDatabase(cwd, 'query', { sql: 'select title from public.tickets' })
     expect(result).toMatchObject({ data: { rows: [{ title: 'Chamado A' }] } })
     expect(JSON.stringify(result)).not.toContain(CREDENTIAL)
-    expect(fs.readdirSync(path.join(cwd, '.supremo/database-queue'))).toEqual(['heartbeat'])
+    expect(fs.readdirSync(path.join(cwd, '.supremo/database-queue'))).toEqual(['capabilities.json', 'heartbeat', 'operations'])
+    const receipts = path.join(cwd, '.supremo/database-queue/operations')
+    for (const file of fs.readdirSync(receipts)) expect(fs.readFileSync(path.join(receipts, file), 'utf8')).not.toContain(CREDENTIAL)
   })
   it('never captures inspection cache/queue data even if accidentally tracked or missing ignore rules', () => {
     gitText(cwd, ['init', '-b', 'main']); gitText(cwd, ['config', 'user.name', 'Fixture']); gitText(cwd, ['config', 'user.email', 'fixture@example.invalid'])

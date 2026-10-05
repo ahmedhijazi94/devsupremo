@@ -5,6 +5,7 @@ import { jobNames } from './compile'
 import { scheduledFunctionNames } from './function-contract'
 import { functionJobManifestEntrySchema, type FunctionJobDefinition } from './policy'
 import { assertSql, begin, capabilitiesSafe, registrySafe, revokePreviousSql } from './sql'
+import { localDailyCommand } from './execution-sql'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export function bootstrapFunctionJobsSql(): string {
@@ -64,12 +65,14 @@ export function applyFunctionJobsSql(projectId: string, projectRef: string, jobs
  if (!jobs.length || jobs.length>8 || new Set(jobs.map(job => job.id)).size!==jobs.length) throw new Error('Manifesto inválido.')
  const fragments = jobs.map(raw => {
  const job = functionJobManifestEntrySchema.parse(raw), names = jobNames(projectId, job.id)
- const command = runtimeFunctionJobSql(projectId, projectRef, job)
+ const innerCommand = runtimeFunctionJobSql(projectId, projectRef, job)
+ const command = localDailyCommand(projectId, job.id, job.timezone, job.schedule, innerCommand)
  return `${assertSql(`NOT EXISTS(SELECT 1 FROM cron.job j WHERE j.jobname=${ql(names.key)} AND NOT EXISTS(SELECT 1 FROM supremo_jobs.managed_jobs m WHERE m.project_id=${ql(projectId)}::uuid AND m.job_id=${ql(job.id)} AND m.cron_id=j.jobid AND j.username=CURRENT_USER AND j.database=pg_catalog.current_database()))`, 'Nome cron já utilizado fora do motor.')}
  ${revokePreviousSql(projectId, job.id)}
  INSERT INTO supremo_jobs.managed_jobs(project_id,job_id,job_key,cron_id,role_name,wrapper_name,table_name,manifest_hash,source_fingerprint,command_hash)
- VALUES(${ql(projectId)}::uuid,${ql(job.id)},${ql(names.key)},cron.schedule(${ql(names.key)},${ql(job.schedule)},${ql(command)}),'','',${ql(job.action.slug)},${ql(hash(JSON.stringify(job)))},${ql(hash(projectRef+':'+job.action.slug))},${ql(hash(command))})
+ VALUES(${ql(projectId)}::uuid,${ql(job.id)},${ql(names.key)},cron.schedule(${ql(names.key)},${ql(job.timezone === 'UTC' ? job.schedule : '* * * * *')},${ql(command)}),'','',${ql(job.action.slug)},${ql(hash(JSON.stringify(job)))},${ql(hash(projectRef+':'+job.action.slug))},${ql(hash(command))})
  ON CONFLICT(project_id,job_id) DO UPDATE SET cron_id=excluded.cron_id,role_name='',wrapper_name='',table_name=excluded.table_name,manifest_hash=excluded.manifest_hash,source_fingerprint=excluded.source_fingerprint,command_hash=excluded.command_hash,updated_at=now();
+ DO $supremo_timezone$ BEGIN IF EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='supremo_jobs.managed_jobs'::regclass AND attname='execution_command') THEN UPDATE supremo_jobs.managed_jobs SET timezone=${ql(job.timezone)},requested_schedule=${ql(job.schedule)},execution_command=${ql(innerCommand)},execution_command_hash=${ql(hash(innerCommand))} WHERE project_id=${ql(projectId)}::uuid AND job_id=${ql(job.id)}; END IF; END $supremo_timezone$;
  SELECT cron.alter_job(cron_id,active:=active) FROM supremo_jobs.managed_jobs WHERE project_id=${ql(projectId)}::uuid AND job_id=${ql(job.id)};`
  }).join('\n')
  return `${transaction ? begin : ''} ${registrySafe()} ${functionRegistrySafe()} ${capabilitiesSafe()}

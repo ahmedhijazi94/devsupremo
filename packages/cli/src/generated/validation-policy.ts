@@ -2870,7 +2870,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "ddedd5073244810b8659cd2ae246631b82c0c94632e1ccf214c20cbcdf23f896"
+        "7edadf277722862e409d4a12b8fff0cc18d0cb8a25101940268c52220e319a12"
       ]
     ]
   },
@@ -5743,7 +5743,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "ddedd5073244810b8659cd2ae246631b82c0c94632e1ccf214c20cbcdf23f896"
+        "7edadf277722862e409d4a12b8fff0cc18d0cb8a25101940268c52220e319a12"
       ]
     ]
   },
@@ -8616,7 +8616,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "ddedd5073244810b8659cd2ae246631b82c0c94632e1ccf214c20cbcdf23f896"
+        "7edadf277722862e409d4a12b8fff0cc18d0cb8a25101940268c52220e319a12"
       ]
     ]
   },
@@ -11594,7 +11594,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "ddedd5073244810b8659cd2ae246631b82c0c94632e1ccf214c20cbcdf23f896"
+        "7edadf277722862e409d4a12b8fff0cc18d0cb8a25101940268c52220e319a12"
       ]
     ]
   },
@@ -14572,7 +14572,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "ddedd5073244810b8659cd2ae246631b82c0c94632e1ccf214c20cbcdf23f896"
+        "7edadf277722862e409d4a12b8fff0cc18d0cb8a25101940268c52220e319a12"
       ]
     ]
   },
@@ -17550,7 +17550,7 @@ export const TRUSTED_VALIDATION_POLICIES: readonly ValidationManifest[] = [
       ],
       [
         "tools/supremo-cli",
-        "ddedd5073244810b8659cd2ae246631b82c0c94632e1ccf214c20cbcdf23f896"
+        "7edadf277722862e409d4a12b8fff0cc18d0cb8a25101940268c52220e319a12"
       ]
     ]
   }

@@ -6,7 +6,7 @@ import type { JobsProvider } from './provider'
 
 const projectId = '00000000-0000-4000-8000-000000000001'
 const job = { id: 'expire-tickets', schedule: '*/5 * * * *', timezone: 'UTC', action: { type: 'update', table: 'tickets', set: { status: 'overdue' }, where: [{ column: 'status', op: 'eq', value: 'open' }], limit: 100 } }
-const options = (extra: Record<string, unknown> = {}) => jobsRequestSchema.parse({ projectId, deviceSecret: 'device-fixture', operation: 'cron-list', expectedRef: 'dev-ref', environment: 'development', ...extra })
+const options = (extra: Record<string, unknown> = {}) => jobsRequestSchema.parse({ projectId, operationId: '00000000-0000-4000-8000-000000000099', deviceSecret: 'device-fixture', operation: 'cron-list', expectedRef: 'dev-ref', environment: 'development', ...extra })
 const capability = { installed: true, registry: true, timezone: 'UTC' }
 const table = {
   oid: 1234, name: 'tickets', kind: 'r', rls: true, partition: false, inherits: false,

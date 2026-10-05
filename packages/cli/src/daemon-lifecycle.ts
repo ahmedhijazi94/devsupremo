@@ -114,7 +114,17 @@ export async function inspectManagedDaemon(cwd: string, pid: number, bins: strin
       try { return [bin, fs.realpathSync(bin)] } catch { return [bin] }
     })
     const executables = [executable, process.execPath, fs.realpathSync(process.execPath)]
-    if (!candidates.some(bin => executables.some(node => command === `${node} ${bin} daemon`))) return null
+    const knownInvocation = candidates.some(bin => executables.some(node => command === `${node} ${bin} daemon` || command === `${node} ${bin} runtime supervise`))
+    // macOS may expose cwd through /private/var while argv retained /var. Match
+    // only one absolute executable path and exact daemon argv, then resolve the
+    // path against the same allowlist; extra arguments still cannot authorize a PID.
+    const aliasInvocation = executables.some(node => [' daemon', ' runtime supervise'].some(suffix => {
+      if (!command.startsWith(`${node} `) || !command.endsWith(suffix)) return false
+      const invoked = command.slice(node.length + 1, -suffix.length)
+      if (!path.isAbsolute(invoked)) return false
+      try { return candidates.includes(fs.realpathSync(invoked)) } catch { return false }
+    }))
+    if (!knownInvocation && !aliasInvocation) return null
     return { command, started, startedAt, cwd: realCwd }
   } catch {
     // Missing inspection permissions/tools are uncertainty, never permission to kill.

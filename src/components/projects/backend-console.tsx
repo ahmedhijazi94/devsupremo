@@ -1,6 +1,10 @@
 'use client'
 
 import { useState } from 'react'
+import { BackendAutomation } from './automation-panel'
+import { BackendStorageManager } from './backend-storage-manager'
+import { BackendIntegrationsManager } from './backend-integrations-manager'
+import { BackendUsersManager, BackendFunctionsManager } from './backend-operation-controls'
 import {
   Table2,
   Code2,
@@ -15,15 +19,20 @@ import {
 import {
   BackendTables,
   BackendSql,
-  BackendFunctions,
   BackendJobs,
   BackendLogs,
   BackendUsage,
-  BackendUsers,
-  BackendStorage,
 } from './backend-panels'
 
 const sections = [
+  {
+    id: 'integrations', label: 'Integrações', icon: Zap,
+    description: 'Conecte os serviços preparados pelo agente e acompanhe os resultados.', component: BackendIntegrationsManager,
+  },
+  {
+    id: 'automation', label: 'Automação', icon: Zap,
+    description: 'Autorize o agente uma vez e acompanhe o resultado das operações.', component: BackendAutomation,
+  },
   {
     id: 'tables',
     label: 'Tabelas',
@@ -43,7 +52,7 @@ const sections = [
     label: 'Edge Functions',
     icon: Zap,
     description: 'Acompanhe as funções publicadas na nuvem.',
-    component: BackendFunctions,
+    component: BackendFunctionsManager,
   },
   {
     id: 'jobs',
@@ -71,14 +80,14 @@ const sections = [
     label: 'Usuários',
     icon: Users,
     description: 'Contas cadastradas no aplicativo.',
-    component: BackendUsers,
+    component: BackendUsersManager,
   },
   {
     id: 'storage',
     label: 'Armazenamento',
     icon: FolderOpen,
     description: 'Espaços de arquivos do projeto.',
-    component: BackendStorage,
+    component: BackendStorageManager,
   },
 ] satisfies Array<{
   id: string
@@ -88,12 +97,12 @@ const sections = [
   component: React.ComponentType<{ projectId: string }>
 }>
 
-export function BackendConsole({ projectId }: { projectId: string }) {
-  return <ProjectBackendConsole key={projectId} projectId={projectId} />
+export function BackendConsole({ projectId, initialSection = 'tables' }: { projectId: string; initialSection?: string }) {
+  return <ProjectBackendConsole key={`${projectId}:${initialSection}`} projectId={projectId} initialSection={initialSection} />
 }
 
-function ProjectBackendConsole({ projectId }: { projectId: string }) {
-  const [selected, setSelected] = useState('tables')
+function ProjectBackendConsole({ projectId, initialSection }: { projectId: string; initialSection: string }) {
+  const [selected, setSelected] = useState(sections.some(section => section.id === initialSection) ? initialSection : 'tables')
   const section = sections.find((item) => item.id === selected) ?? sections[0]!
   const Panel = section.component
   return (

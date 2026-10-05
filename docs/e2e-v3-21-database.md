@@ -64,13 +64,13 @@ Reprodução do teste remoto (variáveis são IDs da conta autorizada, não toke
 SUPREMO_TEST_CREATE_DEV_DATABASE=1 \
 SUPREMO_TEST_ACCOUNT_ID=<account-id> \
 SUPREMO_TEST_OWNER_ID=<owner-id> \
-node --env-file=.env.local --import tsx scripts/test-development-database.mts
+node --conditions=react-server --env-file=.env.local --import tsx scripts/test-development-database.mts
 ```
 
 O teste remoto recusa refs existentes e remove somente o banco retornado pela
 criação da própria execução. Requer capacidade para criar um Supabase temporário.
 O teste local exige um PostgreSQL descartável e `SUPREMO_TEST_DATABASE_URL` local;
-execute `node --import tsx scripts/test-development-database-local.mts`.
+execute `node --conditions=react-server --import tsx scripts/test-development-database-local.mts`.
 
 ## Publicação para o v3.21
 

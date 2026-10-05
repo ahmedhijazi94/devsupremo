@@ -4,7 +4,7 @@ import { newProjectTemplateVersion } from '@/lib/templates/stacks'
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { decryptToken } from '@/lib/crypto'
+import { getAccountToken } from '@/lib/account-tokens/server'
 import { deleteSharedPreview, sharedPreviewConfig } from '@/lib/preview'
 import {
   getSelectableOwners,
@@ -210,19 +210,20 @@ export async function deleteProject(
   if (project.supabase_project_ref && project.supabase_account_id) {
     const { data: account } = await supabase
       .from('supabase_accounts')
-      .select('access_token_encrypted')
+      .select('id')
       .eq('id', project.supabase_account_id)
       .eq('user_id', user.id)
       .maybeSingle()
 
     if (account) {
       try {
+        const token = await getAccountToken({ provider: 'supabase', accountId: project.supabase_account_id as string, userId: user.id })
         const response = await fetch(
           `https://api.supabase.com/v1/projects/${project.supabase_project_ref}`,
           {
             method: 'DELETE',
             headers: {
-              Authorization: `Bearer ${decryptToken(account.access_token_encrypted as string)}`,
+              Authorization: `Bearer ${token}`,
             },
           },
         )
@@ -250,19 +251,20 @@ export async function deleteProject(
   if (project.github_repo_full_name && project.github_account_id) {
     const { data: account } = await supabase
       .from('github_accounts')
-      .select('access_token_encrypted, login')
+      .select('id, login')
       .eq('id', project.github_account_id)
       .eq('user_id', user.id)
       .maybeSingle()
 
     if (account) {
       try {
+        const token = await getAccountToken({ provider: 'github', accountId: project.github_account_id as string, userId: user.id })
         const response = await fetch(
           `https://api.github.com/repos/${project.github_repo_full_name}`,
           {
             method: 'DELETE',
             headers: {
-              Authorization: `Bearer ${decryptToken(account.access_token_encrypted as string)}`,
+              Authorization: `Bearer ${token}`,
               Accept: 'application/vnd.github+json',
               'X-GitHub-Api-Version': '2022-11-28',
             },
@@ -343,7 +345,7 @@ export async function getOwnerChoices(): Promise<{
 
   const { data: gh } = await supabase
     .from('github_accounts')
-    .select('login, access_token_encrypted, scopes')
+    .select('id, login, scopes')
     .eq('user_id', user.id)
     .maybeSingle()
   if (!gh) return { owners: [], needsReconnect: false, notConnected: true }
@@ -355,7 +357,7 @@ export async function getOwnerChoices(): Promise<{
   )
 
   const owners = await getSelectableOwners(
-    decryptToken((gh as { access_token_encrypted: string }).access_token_encrypted),
+    await getAccountToken({ provider: 'github', accountId: gh.id as string, userId: user.id }),
     (gh as { login: string }).login,
   )
   return { owners, needsReconnect, notConnected: false }
@@ -401,14 +403,14 @@ export async function createEmptyProject(
   if (owner) {
     const { data: gh } = await supabase
       .from('github_accounts')
-      .select('login, access_token_encrypted')
+      .select('id, login')
       .eq('user_id', user.id)
       .maybeSingle()
     if (!gh) {
       return { error: 'Conecte uma conta GitHub antes de escolher onde criar o repo.' }
     }
     const owners = await getSelectableOwners(
-      decryptToken((gh as { access_token_encrypted: string }).access_token_encrypted),
+      await getAccountToken({ provider: 'github', accountId: gh.id as string, userId: user.id }),
       (gh as { login: string }).login,
     )
     if (!isOwnerAllowed(owners, owner)) {

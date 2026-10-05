@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
-import { freshGithubToken } from '@/lib/github-token'
+import { getAccountToken } from '@/lib/account-tokens/server'
 import {
   closePullRequest,
   deleteBranch,
@@ -50,27 +50,10 @@ async function resolveGithub(
     return { ok: false, error: 'Projeto ainda não provisionado no GitHub.' }
   }
 
-  const { data: account } = await supabase
-    .from('github_accounts')
-    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
-    .eq('id', accountId)
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  if (!account) return { ok: false, error: 'Conta GitHub não encontrada.' }
-
   const [owner, repo] = repoFullName.split('/')
   if (!owner || !repo) return { ok: false, error: 'Repositório inválido.' }
 
-  // Renova o token de 8h se expirou — senão o painel de Testes (que consulta a
-  // cada poucos segundos) e as ações de PR quebrariam com "Bad credentials".
-  const token = await freshGithubToken(account, (update) =>
-    supabase
-      .from('github_accounts')
-      .update(update)
-      .eq('id', accountId)
-      .eq('user_id', user.id),
-  )
+  const token = await getAccountToken({ provider: 'github', accountId, userId: user.id })
 
   const defaultBranch = (project.default_branch as string | null) ?? 'main'
   return {

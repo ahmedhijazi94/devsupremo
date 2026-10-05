@@ -3,7 +3,7 @@ import { CI_JOB_NAMES } from '@/lib/templates/project-files'
 
 const mocks = vi.hoisted(() => ({ owner: vi.fn(), token: vi.fn(), pr: vi.fn(), checks: vi.fn(), merge: vi.fn(), history: vi.fn(), head: vi.fn(), open: vi.fn(), policy: vi.fn(), checkpoint: vi.fn() }))
 vi.mock('@/lib/auth', () => ({ requireProjectOwner: mocks.owner, toActionError: (error: unknown) => String(error) }))
-vi.mock('@/lib/github-token', () => ({ freshGithubToken: mocks.token }))
+vi.mock('@/lib/account-tokens/server', () => ({ getAccountToken: mocks.token }))
 vi.mock('@/actions/checkpoints', () => ({ listProjectCheckpoints: mocks.history }))
 vi.mock('@/lib/github/client', () => ({
   getPullRequest: mocks.pr, getChecks: mocks.checks, mergePullRequest: mocks.merge,
@@ -59,6 +59,7 @@ describe('manual merge uses complete CI proof for the exact current HEAD', () =>
   })
   it('passes the independently reread HEAD as GitHub expectedSha', async () => {
     expect(await mergeProjectPr(projectId, 1)).toEqual({ ok: true })
+    expect(mocks.token).toHaveBeenCalledWith({ provider: 'github', accountId: 'account', userId: 'owner' })
     expect(mocks.pr).toHaveBeenCalledTimes(2)
     expect(mocks.merge).toHaveBeenCalledWith(expect.anything(), 1, undefined, head)
   })
@@ -161,6 +162,7 @@ describe('manual merge uses complete CI proof for the exact current HEAD', () =>
   it('does not reach GitHub without project ownership', async () => {
     mocks.owner.mockRejectedValue(new Error('not authorized'))
     expect((await mergeProjectPr(projectId, 1)).error).toBeTruthy()
+    expect(mocks.token).not.toHaveBeenCalled()
     expect(mocks.pr).not.toHaveBeenCalled()
     expect(mocks.merge).not.toHaveBeenCalled()
   })

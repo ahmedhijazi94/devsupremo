@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { createClient } from '@supabase/supabase-js'
 import { buildProjectFiles } from '../src/lib/templates/project-files'
 import { provisionSupabase } from '../src/lib/provisioning/provision'
-import { decryptToken } from '../src/lib/crypto'
+import { getAccountToken } from '../src/lib/account-tokens/server'
 import { describeEnvironment, requireDevelopment } from '../src/lib/database-environment/policy'
 import { runDatabaseOperation } from '../src/lib/database-environment/service'
 
@@ -14,13 +14,14 @@ const control = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.
 const accountId = process.env.SUPREMO_TEST_ACCOUNT_ID
 const ownerId = process.env.SUPREMO_TEST_OWNER_ID
 if (!accountId || !ownerId) throw new Error('Informe SUPREMO_TEST_ACCOUNT_ID e SUPREMO_TEST_OWNER_ID da conta autorizada.')
-const { data: account, error: accountError } = await control.from('supabase_accounts').select('access_token_encrypted').eq('id', accountId).eq('user_id', ownerId).single()
-assert.ifError(accountError)
-const token = decryptToken(account!.access_token_encrypted as string)
+const accountScope = { provider: 'supabase' as const, accountId, userId: ownerId }
 let createdRef: string | null = null
 let record: unknown = null
 const management = async (ref: string, suffix: string, method: string, body?: unknown) => {
   assert.equal(ref, createdRef, 'Teste só opera no ref retornado pela criação desta execução')
+  // Provisioning ou outra execução pode ter renovado o token. A limpeza também
+  // resolve a versão persistida atual antes de remover o banco descartável.
+  const token = await getAccountToken(accountScope)
   const response = await fetch(`https://api.supabase.com/v1/projects/${ref}${suffix}`, {
     method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000),

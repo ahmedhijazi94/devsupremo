@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
-import { decryptToken } from '@/lib/crypto'
+import { getAccountToken } from '@/lib/account-tokens/server'
 import { listTree } from '@/lib/github/client'
 import type { GithubCredentials } from '@/lib/projects/repository'
 
@@ -24,7 +24,7 @@ async function resolveGithub(
 ): Promise<
   { ok: true; creds: GithubCredentials } | { ok: false; error: string }
 > {
-  const { user, supabase, project } = await requireProjectOwner(
+  const { user, project } = await requireProjectOwner(
     projectId,
     PROJECT_COLUMNS,
   )
@@ -35,22 +35,16 @@ async function resolveGithub(
     return { ok: false, error: 'Projeto ainda não provisionado no GitHub.' }
   }
 
-  const { data: account } = await supabase
-    .from('github_accounts')
-    .select('access_token_encrypted')
-    .eq('id', accountId)
-    .eq('user_id', user.id)
-    .maybeSingle()
-  if (!account) return { ok: false, error: 'Conta GitHub não encontrada.' }
-
   const [owner, repo] = repoFullName.split('/')
   if (!owner || !repo) return { ok: false, error: 'Repositório inválido.' }
+
+  const token = await getAccountToken({ provider: 'github', accountId, userId: user.id })
 
   const defaultBranch = (project.default_branch as string | null) ?? 'main'
   return {
     ok: true,
     creds: {
-      token: decryptToken(account.access_token_encrypted as string),
+      token,
       repoFullName,
       owner,
       repo,

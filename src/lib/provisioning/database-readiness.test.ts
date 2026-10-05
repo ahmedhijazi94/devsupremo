@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { provisionSupabase } from './provision'
 vi.mock('@/lib/crypto', () => ({ decryptToken: () => 'test-token', encryptToken: () => 'encrypted' }))
+vi.mock('@/lib/account-tokens/server', () => ({ getAccountToken: async () => 'test-token' }))
 const chain = { from: () => chain, select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { access_token_encrypted: 'x', org_slug: 'test' } }) }
 const client = chain as unknown as SupabaseClient
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })

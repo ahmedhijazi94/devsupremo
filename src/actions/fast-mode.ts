@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
-import { freshGithubToken } from '@/lib/github-token'
+import { getAccountToken } from '@/lib/account-tokens/server'
 import { ensureRequiredBranchChecks } from '@/lib/github/client'
 import type { GithubCredentials } from '@/lib/projects/repository'
 import { requiredGates } from '@/lib/templates/project-files'
@@ -24,7 +24,7 @@ async function resolveGithub(
   | { ok: true; creds: GithubCredentials; defaultBranch: string }
   | { ok: false; error: string }
 > {
-  const { user, supabase, project } = await requireProjectOwner(
+  const { user, project } = await requireProjectOwner(
     projectId,
     PROJECT_COLUMNS,
   )
@@ -34,24 +34,10 @@ async function resolveGithub(
     return { ok: false, error: 'Projeto ainda não provisionado no GitHub.' }
   }
 
-  const { data: account } = await supabase
-    .from('github_accounts')
-    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
-    .eq('id', accountId)
-    .eq('user_id', user.id)
-    .maybeSingle()
-  if (!account) return { ok: false, error: 'Conta GitHub não encontrada.' }
-
   const [owner, repo] = repoFullName.split('/')
   if (!owner || !repo) return { ok: false, error: 'Repositório inválido.' }
 
-  const token = await freshGithubToken(account, (update) =>
-    supabase
-      .from('github_accounts')
-      .update(update)
-      .eq('id', accountId)
-      .eq('user_id', user.id),
-  )
+  const token = await getAccountToken({ provider: 'github', accountId, userId: user.id })
   const defaultBranch = (project.default_branch as string | null) ?? 'main'
 
   return {

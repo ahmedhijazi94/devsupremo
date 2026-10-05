@@ -105,6 +105,8 @@ export async function GET(request: NextRequest) {
         access_token_encrypted: encryptedToken,
         refresh_token_encrypted: encryptedRefresh,
         token_expires_at: expiryFromNow(tokenData.expires_in),
+        token_refresh_claim: null,
+        token_refresh_started_at: null,
         scopes: tokenData.scope?.split(',') ?? [],
       },
       {

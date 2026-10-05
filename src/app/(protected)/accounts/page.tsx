@@ -9,11 +9,8 @@ import { isSupabaseOAuthAvailable } from '@/actions/accounts'
 import { DisconnectAccountButton } from '@/components/accounts/disconnect-account-button'
 import { ReconnectButton } from '@/components/accounts/reconnect-button'
 import { HealthBadge } from '@/components/accounts/health-badge'
-import {
-  checkGithubToken,
-  checkSupabaseToken,
-  type AccountHealth,
-} from '@/lib/account-health'
+import type { AccountHealth } from '@/lib/account-health'
+import { checkConnectedAccount } from '@/lib/account-health/server'
 import { AccountsToastHandler } from '@/components/accounts/accounts-toast-handler'
 
 export default async function AccountsPage({
@@ -32,12 +29,12 @@ export default async function AccountsPage({
   const [githubResponse, supabaseResponse] = await Promise.all([
     supabase
       .from('github_accounts')
-      .select('*')
+      .select('id,login,name,avatar_url,scopes,created_at')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false }),
     supabase
       .from('supabase_accounts')
-      .select('*')
+      .select('id,org_name,created_at')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false }),
   ])
@@ -46,22 +43,20 @@ export default async function AccountsPage({
   const supabaseAccounts = supabaseResponse.data ?? []
   const supabaseOAuth = await isSupabaseOAuthAvailable()
 
-  // Perguntamos a cada provedor se o token ainda vale. Dizer"Conectado"
-  // com token morto faz o usuário caçar a causa em outro lugar quando algo
-  // falha. As checagens correm em paralelo e têm timeout curto.
+  // A verificação renova a credencial no servidor antes de consultar o provedor.
   const health = new Map<string, AccountHealth>()
 
   await Promise.all([
     ...githubAccounts.map(async (account) => {
       health.set(
         `github:${account.id}`,
-        await checkGithubToken(account.access_token_encrypted),
+        await checkConnectedAccount('github', account.id, user.id),
       )
     }),
     ...supabaseAccounts.map(async (account) => {
       health.set(
         `supabase:${account.id}`,
-        await checkSupabaseToken(account.access_token_encrypted),
+        await checkConnectedAccount('supabase', account.id, user.id),
       )
     }),
   ])

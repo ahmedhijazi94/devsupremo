@@ -47,12 +47,18 @@ function fixture() {
 beforeEach(() => { vi.stubEnv('ENCRYPTION_KEY', 'ab'.repeat(32)) })
 describe('owner-configured OAuth protocol', () => {
   it('persists only a state digest and encrypted PKCE verifier bound to project/provider/account', async () => {
-    const f = fixture(), { result, state } = await f.start()
+    const f = fixture(), sealing = vi.spyOn(f.port, 'seal')
+    const { result, state } = await f.start()
+    // Hash the original one-time PKCE nonce, independently checking that its
+    // encrypted storage round-trips. S256 is the OAuth protocol, not a password KDF.
+    const pkceVerifier = sealing.mock.calls[0]![0]
+    expect(pkceVerifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(f.port.open(f.state().verifierCipher, f.state())).toBe(pkceVerifier)
     const query = new URL(result.authorizationUrl).searchParams
     expect(oauthCallbackProjectId(state)).toBe(project)
     expect(f.state().stateHash).toBe(createHash('sha256').update(state).digest('hex'))
     expect(query.get('code_challenge_method')).toBe('S256')
-    expect(query.get('code_challenge')).toBe(createHash('sha256').update(f.port.open(f.state().verifierCipher, f.state())).digest('base64url'))
+    expect(query.get('code_challenge')).toBe(createHash('sha256').update(pkceVerifier).digest('base64url'))
     expect(query.has('code_verifier')).toBe(false)
     expect(f.state().config.connector.identity.account).toBe('account-41')
     expect(JSON.stringify(result)).not.toContain('client-secret')

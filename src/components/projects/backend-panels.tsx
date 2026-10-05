@@ -55,18 +55,20 @@ export function BackendTables({ projectId }: { projectId: string }) {
                         key={`${table.name}-${index}`}
                         type="button"
                         aria-pressed={selected === table.name}
-                        className={`${backendButton} ${selected === table.name ? 'ring-ink ring-2' : ''}`}
+                        className={`${backendButton} min-w-0 max-w-full ${selected === table.name ? 'ring-ink ring-2' : ''}`}
                         onClick={() => {
                           setSelected(String(table.name))
                           setOffset(0)
                           setFilter(undefined); setFilterColumn(''); setFilterValue('')
                         }}
                       >
-                        {typeof table.schema === 'string'
-                          ? `${table.schema}.`
-                          : ''}
-                        {table.name}
-                        <ChevronRight aria-hidden="true" className="h-3 w-3" />
+                        <span className="min-w-0 break-words text-left">
+                          {typeof table.schema === 'string'
+                            ? `${table.schema}.`
+                            : ''}
+                          {table.name}
+                        </span>
+                        <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0" />
                       </button>
                     ),
                 )}

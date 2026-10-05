@@ -75,10 +75,10 @@ function ResourceRequest({
   return (
     <div aria-busy={pending}>
       <div className="mb-4 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold">{label}</h3>
+        <h3 className="min-w-0 break-words text-sm font-semibold">{label}</h3>
         <button
           type="button"
-          className={backendButton}
+          className={`${backendButton} shrink-0`}
           onClick={refresh}
           disabled={pending}
           aria-label={`Atualizar ${label.toLowerCase()}`}

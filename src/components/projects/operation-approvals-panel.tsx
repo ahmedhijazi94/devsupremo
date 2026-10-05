@@ -24,7 +24,7 @@ export function OperationApprovalsPanel({projectId}:{projectId:string}){
       const expired=Date.parse(approval.expiresAt)<=observedAt
       return <li key={approval.id} className="rounded-xl border p-3 text-sm">
         <p className="font-medium">{capabilityLabels[approval.capability]} · {expired?'Prazo encerrado':labels[approval.status]}</p>
-        <p>{approval.environment==='development'?'Desenvolvimento':'Produção'} · Destino: {approval.projectRef||'Projeto conectado'}{approval.resource?` · Recurso: ${approval.resource}`:''}</p>
+        <p className="break-words">{approval.environment==='development'?'Desenvolvimento':'Produção'} · Destino: {approval.projectRef||'Projeto conectado'}{approval.resource?` · Recurso: ${approval.resource}`:''}</p>
         {approval.rows!==null&&<p>Limite deste pedido: {approval.rows} registro(s).</p>}
         <p>Prazo: {new Date(approval.expiresAt).toLocaleString('pt-BR')}</p>
         <details className="my-2"><summary>Conferir o pedido exato</summary><dl className="mt-2 space-y-1">{approval.review.map((entry,index)=><div key={index} className="break-words"><dt className="font-medium">{entry.label}</dt><dd>{entry.value}</dd></div>)}</dl><p className="mt-2 break-all text-xs">Pedido: {approval.operationId}</p><p className="break-all text-xs">Identificador do conteúdo: {approval.inputDigest}</p></details>

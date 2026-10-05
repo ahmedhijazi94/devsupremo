@@ -182,8 +182,9 @@ try {
   proof.timings = Object.fromEntries(Object.entries(samples).map(([name, values]) => [name, values.length === 1
     ? { n: 1, duration: +values[0]!.toFixed(2), unit: 'ms' }
     : { n: values.length, p50: +[...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!.toFixed(2), p95: +[...values].sort((a, b) => a - b)[Math.ceil(values.length * .95) - 1]!.toFixed(2), unit: 'ms' }]))
-  const output = path.join(os.tmpdir(), `supremo-runtime-acceptance-${Date.now()}.json`)
-  fs.writeFileSync(output, JSON.stringify(proof, null, 2) + '\n'); console.log(JSON.stringify({ proof: output, ...proof }, null, 2))
+  const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'supremo-runtime-proof-'))
+  const output = path.join(outputDirectory, 'acceptance.json')
+  fs.writeFileSync(output, JSON.stringify(proof, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); console.log(JSON.stringify({ proof: output, ...proof }, null, 2))
 } finally {
   for (const child of children) if (child.exitCode === null) { try { child.kill('SIGKILL') } catch { /* fixture already exited */ } }
   for (const pid of daemonPids) { try { process.kill(pid, 'SIGKILL') } catch { /* fixture already exited */ } }

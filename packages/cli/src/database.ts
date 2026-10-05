@@ -12,6 +12,7 @@ import { readProjectStack } from './framework-runtime'
 import { readFunctionDeployment } from './functions-request'
 import { functionResponseSchema } from '../../../src/lib/edge-functions/contract'
 import { deleteResponseSchema } from '../../../src/lib/database-delete/contract'
+import { readStableFile } from './stable-file'
 export type { DatabaseOperation, DatabaseOptions } from './database-request'
 
 export interface DatabaseStatus {
@@ -24,10 +25,28 @@ export interface DatabaseStatus {
 // Network/body/JSON failures leave a sent mutation's outcome unknown.
 class DatabaseServerError extends Error { readonly definitive = true }
 
+const migrationSchema = z.object({
+  path: z.string().regex(/^supabase\/migrations\/\d{14}_[a-zA-Z0-9_-]+\.sql$/),
+  content: z.string().min(1).max(250_000),
+}).strict()
+
+/** Only versioned SQL files are upload sources. Reject links (including parents)
+ * before reading, and retain the server's per-file and collection limits. */
+function readMigrations(cwd: string): z.infer<typeof migrationSchema>[] {
+  const directory = path.join(cwd, 'supabase/migrations')
+  const names = fs.readdirSync(directory).filter(name => name.endsWith('.sql')).sort()
+  if (names.length > 100) throw new Error('O envio excede o limite de 100 migrations.')
+  return names.map(name => {
+    const relative = migrationSchema.shape.path.parse(`supabase/migrations/${name}`)
+    return migrationSchema.parse({ path: relative, content: readStableFile(path.join(cwd, relative), 1_000_000, cwd).content })
+  })
+}
+
 export function validateLocalTarget(cwd: string, status: DatabaseStatus): string {
   if (status.environment !== 'development' || !status.automaticMigrations || !status.projectRef) {
     throw new Error('Banco não reconhecido como development pelo Supremo. Produção e ambiente desconhecido estão protegidos.')
   }
+  z.string().regex(/^[a-z0-9_-]{1,64}$/).parse(status.projectRef)
   const linked = fs.readFileSync(path.join(cwd, 'supabase/.temp/project-ref'), 'utf8').trim()
   const env = fs.readFileSync(path.join(cwd, '.env.local'), 'utf8')
   const start = readProjectStack(cwd) === 'tanstack-start-vite'
@@ -50,9 +69,10 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   const checkedOptions = parseDatabaseOptions(operation, options)
   const config = readProjectConfig(cwd)
   if (!config) throw new Error('Execute o bootstrap para identificar o projeto.')
-  const secret = readDeviceSecret(resolveKeychain(), config.projectId, config.apiBaseUrl)
-  if (!secret) throw new Error('O daemon não conseguiu acessar a autorização deste dispositivo. Verifique o keychain na máquina que executou o bootstrap.')
+  const projectId = z.string().uuid().parse(config.projectId)
   const issuer = deviceIssuer(config.apiBaseUrl)
+  const secret = readDeviceSecret(resolveKeychain(), projectId, issuer)
+  if (!secret) throw new Error('O daemon não conseguiu acessar a autorização deste dispositivo. Verifique o keychain na máquina que executou o bootstrap.')
   const url = new URL(`${issuer}/api/${operation === 'backend-approval-status' ? 'operation-approvals' : operation.startsWith('backend-') ? 'backend-operations' : operation.startsWith('secrets-') ? 'secrets' : operation.startsWith('functions-') ? 'functions' : 'database'}`)
   if (url.username || url.password || url.search || url.hash) throw new Error('Endpoint contém componentes não permitidos.')
   if (url.protocol !== 'https:' && !(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:')) {
@@ -60,9 +80,27 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   }
   const transport = async (op: string, extra: Record<string, unknown> = {}) => {
     const endpoint = op === 'status' && operation.startsWith('functions-') ? new URL(`${issuer}/api/database`) : url
+    // Intentional uploads to the issuer bound in the keychain. Project only
+    // declared command fields; file-derived objects never supply identity,
+    // destination, headers or additional top-level request properties.
+    const body = JSON.stringify({ deviceSecret: secret, projectId,
+      operation: operation === 'backend-approval-status' ? undefined : op,
+      expectedRef: extra.expectedRef, environment: extra.environment, operationId: extra.operationId,
+      id: extra.id, options: extra.options, requests: extra.requests, requestId: extra.requestId,
+      credentialId: extra.credentialId, jobId: extra.jobId, manifest: extra.manifest,
+      sql: extra.sql, limit: extra.limit, offset: extra.offset, table: extra.table,
+      minutes: extra.minutes, source: extra.source, level: extra.level, search: extra.search,
+      config: extra.config, user: extra.user, userId: extra.userId, email: extra.email,
+      emailConfirmed: extra.emailConfirmed, roles: extra.roles, manifestVersion: extra.manifestVersion,
+      targets: extra.targets, planToken: extra.planToken, authorization: extra.authorization, action: extra.action,
+      slug: extra.slug, entrypoint: extra.entrypoint, files: extra.files, importMap: extra.importMap,
+      verifyJwt: extra.verifyJwt, secretName: extra.secretName, expectedVersion: extra.expectedVersion,
+      version: extra.version, replaceSlug: extra.replaceSlug, migrations: extra.migrations,
+    })
+    if (endpoint.pathname.endsWith('/api/database') && Buffer.byteLength(body) > 1_000_000) throw new Error('Pedido de banco excede o limite; reduza os arquivos ou dados selecionados.')
     const res = await fetch(endpoint, {
       method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, ...(operation === 'backend-approval-status' ? {} : { operation: op }), ...extra }),
+      body,
       signal: AbortSignal.timeout(op === 'status' ? 15_000 : 60_000),
     })
     const text = await res.text()
@@ -176,9 +214,6 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   }
   const expectedRef = validateLocalTarget(cwd, status)
   if (operation === 'anonymous-auth') return request(operation, { expectedRef, operationId: checkedOptions.operationId })
-  const directory = path.join(cwd, 'supabase/migrations')
-  const migrations = fs.readdirSync(directory).filter((name) => name.endsWith('.sql')).sort().map((name) => ({
-    path: `supabase/migrations/${name}`, content: fs.readFileSync(path.join(directory, name), 'utf8'),
-  }))
+  const migrations = readMigrations(cwd)
   return request(operation, { expectedRef, migrations, operationId: checkedOptions.operationId })
 }

@@ -25353,19 +25353,24 @@ async function measureRuntime(cwd, stage, run3, correlationId) {
     try {
       const directory3 = ensureRuntimeDirectory(cwd, ".supremo/runtime-metrics");
       const file2 = import_node_path12.default.join(directory3, "events.jsonl");
-      const stat = import_node_fs11.default.lstatSync(file2, { throwIfNoEntry: false });
-      if (stat?.isSymbolicLink() || stat && !stat.isFile())
-        throw new Error("Invalid metrics file");
-      if (stat && stat.size > 1024 * 1024)
-        import_node_fs11.default.renameSync(file2, import_node_path12.default.join(directory3, "previous.jsonl"));
-      import_node_fs11.default.appendFileSync(file2, JSON.stringify({
-        version: 1,
-        stage,
-        durationMs: Math.round(import_node_perf_hooks.performance.now() - started),
-        outcome,
-        at: (/* @__PURE__ */ new Date()).toISOString(),
-        ...correlationId && /^[a-f0-9-]{36}$/.test(correlationId) ? { correlationId } : {}
-      }) + "\n", { mode: 384 });
+      const descriptor = import_node_fs11.default.openSync(file2, import_node_fs11.default.constants.O_WRONLY | import_node_fs11.default.constants.O_APPEND | import_node_fs11.default.constants.O_CREAT | import_node_fs11.default.constants.O_NOFOLLOW | import_node_fs11.default.constants.O_NONBLOCK, 384);
+      try {
+        const stat = import_node_fs11.default.fstatSync(descriptor);
+        if (!stat.isFile() || stat.nlink !== 1)
+          throw new Error("Invalid metrics file");
+        if (stat.size > 1024 * 1024)
+          import_node_fs11.default.ftruncateSync(descriptor, 0);
+        import_node_fs11.default.appendFileSync(descriptor, JSON.stringify({
+          version: 1,
+          stage,
+          durationMs: Math.round(import_node_perf_hooks.performance.now() - started),
+          outcome,
+          at: (/* @__PURE__ */ new Date()).toISOString(),
+          ...correlationId && /^[a-f0-9-]{36}$/.test(correlationId) ? { correlationId } : {}
+        }) + "\n");
+      } finally {
+        import_node_fs11.default.closeSync(descriptor);
+      }
     } catch {
       process.stderr.write("[runtime] M\xE9trica indispon\xEDvel; resultado da opera\xE7\xE3o preservado.\n");
     }
@@ -25983,22 +25988,31 @@ async function sqlArtifactTick(cwd, sessionId, client) {
   });
 }
 function startSqlArtifactWorker(config2) {
+  const projectId = external_exports.string().uuid().parse(config2.projectId), issuer = deviceIssuer(config2.apiBaseUrl);
+  const endpoint2 = "".concat(issuer, "/api/sql-artifacts");
   const sessionId = import_node_crypto12.default.randomUUID(), controller = new AbortController();
   let running = false, unavailable = false;
   const client = { request: async (operation, fields) => {
     const secret = config2.getSecret();
     if (!secret)
       throw new Error("Identidade do executor indispon\xEDvel.");
-    const expectedRef = readStableFile(import_node_path15.default.join(config2.cwd, "supabase/.temp/project-ref"), 128, config2.cwd).content.trim();
+    const expectedRef = external_exports.string().regex(/^[a-z0-9_-]{1,64}$/).parse(readStableFile(import_node_path15.default.join(config2.cwd, "supabase/.temp/project-ref"), 128, config2.cwd).content.trim());
     validateLocalTarget(config2.cwd, { environment: "development", automaticMigrations: true, projectRef: expectedRef });
+    const selected = operation === "poll" ? { sessionId: fields.sessionId, ready: fields.ready } : {
+      id: fields.id,
+      claimToken: fields.claimToken,
+      ...operation === "materialized" ? { digest: fields.digest } : {},
+      ...operation === "completed" ? { typesDigest: fields.typesDigest } : {}
+    };
+    const body = sqlArtifactRequestSchema.parse({ projectId, expectedRef, deviceSecret: secret, operation, ...selected });
     const abort = new AbortController(), stop = () => abort.abort(), deadline = setTimeout(stop, 7e4);
     controller.signal.addEventListener("abort", stop, { once: true });
     try {
-      const response = await fetch("".concat(deviceIssuer(config2.apiBaseUrl), "/api/sql-artifacts"), {
+      const response = await fetch(endpoint2, {
         method: "POST",
         redirect: "error",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: config2.projectId, expectedRef, deviceSecret: secret, operation, ...fields }),
+        body: JSON.stringify(body),
         signal: abort.signal
       });
       if (!response.ok)
@@ -26024,7 +26038,10 @@ function startSqlArtifactWorker(config2) {
         await reader.cancel();
       }
       const text = Buffer.concat(chunks).toString("utf8");
-      return external_exports.object({ projectId: external_exports.literal(config2.projectId), artifact: sqlArtifactSchema.nullable() }).strict().parse(JSON.parse(text)).artifact;
+      return external_exports.object({ projectId: external_exports.literal(projectId), artifact: sqlArtifactSchema.extend({
+        projectId: external_exports.literal(projectId),
+        projectRef: external_exports.literal(expectedRef)
+      }).nullable() }).strict().parse(JSON.parse(text)).artifact;
     } finally {
       clearTimeout(deadline);
       controller.signal.removeEventListener("abort", stop);
@@ -224596,10 +224613,21 @@ __export(database_exports, {
   runDatabaseDirect: () => runDatabaseDirect,
   validateLocalTarget: () => validateLocalTarget
 });
+function readMigrations(cwd) {
+  const directory3 = import_node_path28.default.join(cwd, "supabase/migrations");
+  const names = import_node_fs25.default.readdirSync(directory3).filter((name) => name.endsWith(".sql")).sort();
+  if (names.length > 100)
+    throw new Error("O envio excede o limite de 100 migrations.");
+  return names.map((name) => {
+    const relative = migrationSchema.shape.path.parse("supabase/migrations/".concat(name));
+    return migrationSchema.parse({ path: relative, content: readStableFile(import_node_path28.default.join(cwd, relative), 1e6, cwd).content });
+  });
+}
 function validateLocalTarget(cwd, status) {
   if (status.environment !== "development" || !status.automaticMigrations || !status.projectRef) {
     throw new Error("Banco n\xE3o reconhecido como development pelo Supremo. Produ\xE7\xE3o e ambiente desconhecido est\xE3o protegidos.");
   }
+  external_exports.string().regex(/^[a-z0-9_-]{1,64}$/).parse(status.projectRef);
   const linked = import_node_fs25.default.readFileSync(import_node_path28.default.join(cwd, "supabase/.temp/project-ref"), "utf8").trim();
   const env = import_node_fs25.default.readFileSync(import_node_path28.default.join(cwd, ".env.local"), "utf8");
   const start = readProjectStack(cwd) === "tanstack-start-vite";
@@ -224621,10 +224649,11 @@ async function runDatabaseDirect(operation, cwd, options = {}) {
   const config2 = readProjectConfig(cwd);
   if (!config2)
     throw new Error("Execute o bootstrap para identificar o projeto.");
-  const secret = readDeviceSecret(resolveKeychain(), config2.projectId, config2.apiBaseUrl);
+  const projectId = external_exports.string().uuid().parse(config2.projectId);
+  const issuer = deviceIssuer(config2.apiBaseUrl);
+  const secret = readDeviceSecret(resolveKeychain(), projectId, issuer);
   if (!secret)
     throw new Error("O daemon n\xE3o conseguiu acessar a autoriza\xE7\xE3o deste dispositivo. Verifique o keychain na m\xE1quina que executou o bootstrap.");
-  const issuer = deviceIssuer(config2.apiBaseUrl);
   const url2 = new URL("".concat(issuer, "/api/").concat(operation === "backend-approval-status" ? "operation-approvals" : operation.startsWith("backend-") ? "backend-operations" : operation.startsWith("secrets-") ? "secrets" : operation.startsWith("functions-") ? "functions" : "database"));
   if (url2.username || url2.password || url2.search || url2.hash)
     throw new Error("Endpoint cont\xE9m componentes n\xE3o permitidos.");
@@ -224633,11 +224662,57 @@ async function runDatabaseDirect(operation, cwd, options = {}) {
   }
   const transport = async (op, extra = {}) => {
     const endpoint2 = op === "status" && operation.startsWith("functions-") ? new URL("".concat(issuer, "/api/database")) : url2;
+    const body = JSON.stringify({
+      deviceSecret: secret,
+      projectId,
+      operation: operation === "backend-approval-status" ? void 0 : op,
+      expectedRef: extra.expectedRef,
+      environment: extra.environment,
+      operationId: extra.operationId,
+      id: extra.id,
+      options: extra.options,
+      requests: extra.requests,
+      requestId: extra.requestId,
+      credentialId: extra.credentialId,
+      jobId: extra.jobId,
+      manifest: extra.manifest,
+      sql: extra.sql,
+      limit: extra.limit,
+      offset: extra.offset,
+      table: extra.table,
+      minutes: extra.minutes,
+      source: extra.source,
+      level: extra.level,
+      search: extra.search,
+      config: extra.config,
+      user: extra.user,
+      userId: extra.userId,
+      email: extra.email,
+      emailConfirmed: extra.emailConfirmed,
+      roles: extra.roles,
+      manifestVersion: extra.manifestVersion,
+      targets: extra.targets,
+      planToken: extra.planToken,
+      authorization: extra.authorization,
+      action: extra.action,
+      slug: extra.slug,
+      entrypoint: extra.entrypoint,
+      files: extra.files,
+      importMap: extra.importMap,
+      verifyJwt: extra.verifyJwt,
+      secretName: extra.secretName,
+      expectedVersion: extra.expectedVersion,
+      version: extra.version,
+      replaceSlug: extra.replaceSlug,
+      migrations: extra.migrations
+    });
+    if (endpoint2.pathname.endsWith("/api/database") && Buffer.byteLength(body) > 1e6)
+      throw new Error("Pedido de banco excede o limite; reduza os arquivos ou dados selecionados.");
     const res = await fetch(endpoint2, {
       method: "POST",
       redirect: "error",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deviceSecret: secret, projectId: config2.projectId, ...operation === "backend-approval-status" ? {} : { operation: op }, ...extra }),
+      body,
       signal: AbortSignal.timeout(op === "status" ? 15e3 : 6e4)
     });
     const text = await res.text();
@@ -224767,14 +224842,10 @@ async function runDatabaseDirect(operation, cwd, options = {}) {
   const expectedRef = validateLocalTarget(cwd, status);
   if (operation === "anonymous-auth")
     return request2(operation, { expectedRef, operationId: checkedOptions.operationId });
-  const directory3 = import_node_path28.default.join(cwd, "supabase/migrations");
-  const migrations = import_node_fs25.default.readdirSync(directory3).filter((name) => name.endsWith(".sql")).sort().map((name) => ({
-    path: "supabase/migrations/".concat(name),
-    content: import_node_fs25.default.readFileSync(import_node_path28.default.join(directory3, name), "utf8")
-  }));
+  const migrations = readMigrations(cwd);
   return request2(operation, { expectedRef, migrations, operationId: checkedOptions.operationId });
 }
-var import_node_fs25, import_node_path28, DatabaseServerError;
+var import_node_fs25, import_node_path28, DatabaseServerError, migrationSchema;
 var init_database = __esm({
   "src/database.ts"() {
     "use strict";
@@ -224792,12 +224863,17 @@ var init_database = __esm({
     init_functions_request();
     init_contract2();
     init_contract3();
+    init_stable_file();
     DatabaseServerError = class extends Error {
       constructor() {
         super(...arguments);
         this.definitive = true;
       }
     };
+    migrationSchema = external_exports.object({
+      path: external_exports.string().regex(/^supabase\/migrations\/\d{14}_[a-zA-Z0-9_-]+\.sql$/),
+      content: external_exports.string().min(1).max(25e4)
+    }).strict();
   }
 });
 
@@ -228078,6 +228154,25 @@ function launchAgentPlist(cwd, node2, label) {
   const log = import_node_path30.default.join(cwd, ".supremo/checkpoints/service.log");
   return '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>Label</key><string>'.concat(escapeXml(label), "</string>\n<key>ProgramArguments</key><array>").concat([node2, bundle, "runtime", "supervise"].map((value) => "<string>".concat(escapeXml(value), "</string>")).join(""), "</array>\n<key>WorkingDirectory</key><string>").concat(escapeXml(cwd), "</string>\n<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>ThrottleInterval</key><integer>10</integer>\n<key>StandardOutPath</key><string>").concat(escapeXml(log), "</string><key>StandardErrorPath</key><string>").concat(escapeXml(log), "</string>\n</dict></plist>\n");
 }
+function writeLaunchAgentPlist(plist, content, replaceRegistered) {
+  const temporary = import_node_fs27.default.mkdtempSync(import_node_path30.default.join(import_node_path30.default.dirname(plist), ".supremo-agent-"));
+  const candidate = import_node_path30.default.join(temporary, "agent.plist");
+  try {
+    const descriptor = import_node_fs27.default.openSync(candidate, "wx", 384);
+    try {
+      import_node_fs27.default.writeFileSync(descriptor, content);
+      import_node_fs27.default.fsyncSync(descriptor);
+    } finally {
+      import_node_fs27.default.closeSync(descriptor);
+    }
+    if (replaceRegistered)
+      import_node_fs27.default.renameSync(candidate, plist);
+    else
+      import_node_fs27.default.linkSync(candidate, plist);
+  } finally {
+    import_node_fs27.default.rmSync(temporary, { recursive: true, force: true });
+  }
+}
 async function controlRuntimeService(cwd, action) {
   const selected = external_exports.enum(["status", "install", "pause", "resume", "remove"]).parse(action);
   if (selected === "status")
@@ -228111,7 +228206,7 @@ async function controlRuntimeService(cwd, action) {
     }
     if (!await stopDaemon(cwd))
       throw new Error("Daemon atual n\xE3o p\xF4de ser encerrado com seguran\xE7a.");
-    import_node_fs27.default.writeFileSync(plist, launchAgentPlist(directory3, process.execPath, label), { mode: 384 });
+    writeLaunchAgentPlist(plist, launchAgentPlist(directory3, process.execPath, label), installed.success);
     writeJson(stateFile(cwd), { version: 1, label, plist, mode: "launchd", state: "paused" });
     launch(["enable", target4]);
     launch(["bootstrap", domain2, plist]);
@@ -228221,14 +228316,16 @@ init_daemon();
 init_device_identity();
 init_keychain();
 async function request(projectId, issuer, operation) {
-  const secret = readDeviceSecret(resolveKeychain(), projectId, issuer);
+  const selectedProject = external_exports.string().uuid().parse(projectId);
+  const selectedIssuer = deviceIssuer(issuer);
+  const secret = readDeviceSecret(resolveKeychain(), selectedProject, selectedIssuer);
   if (!secret)
     throw new Error("Identidade indispon\xEDvel para a atualiza\xE7\xE3o autorizada.");
-  const response = await fetch("".concat(deviceIssuer(issuer), "/api/cli/candidate"), {
+  const response = await fetch("".concat(selectedIssuer, "/api/cli/candidate"), {
     method: "POST",
     redirect: "error",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectId, deviceSecret: secret, operation }),
+    body: JSON.stringify({ projectId: selectedProject, deviceSecret: secret, operation }),
     signal: AbortSignal.timeout(operation === "prepare" ? 6e4 : 1e4)
   });
   if (!response.ok || !response.body || Number(response.headers.get("content-length")) > 8e6)
@@ -228257,11 +228354,12 @@ async function officialRuntimeCandidate(projectId, issuer) {
   return candidate;
 }
 async function authorizeRuntimeUpdate(cwd, authority3) {
+  const selected = runtimeUpdateAuthoritySchema.parse(authority3);
   const project = readProjectConfig(cwd);
-  if (!project || project.projectId !== authority3.projectId || deviceIssuer(project.apiBaseUrl) !== authority3.issuer)
+  if (!project || project.projectId !== selected.projectId || deviceIssuer(project.apiBaseUrl) !== selected.issuer)
     throw new Error("Identidade local mudou desde o preparo da atualiza\xE7\xE3o.");
-  const current2 = external_exports.object({ projectId: external_exports.literal(authority3.projectId), revision: external_exports.string().uuid() }).strict().parse(await request(authority3.projectId, authority3.issuer, "authorize"));
-  if (current2.revision !== authority3.revision)
+  const current2 = external_exports.object({ projectId: external_exports.literal(selected.projectId), revision: external_exports.string().uuid() }).strict().parse(await request(selected.projectId, selected.issuer, "authorize"));
+  if (current2.revision !== selected.revision)
     throw new Error("A autoriza\xE7\xE3o mudou. Prepare um novo candidato antes de substituir ferramentas.");
 }
 

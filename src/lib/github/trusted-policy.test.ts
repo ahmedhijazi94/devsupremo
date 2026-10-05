@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
+import { setImmediate } from 'node:timers/promises'
 import { buildProjectFiles } from '../templates/project-files'
 import { blobHash, lockEntryHash } from '../../../packages/cli/src/validation-integrity'
 import { selectTrustedWorkflow, verifyCandidatePolicy, verifyPolicyChanges, workflowChecks, type WorkflowEvidence } from './trusted-policy'
@@ -17,6 +18,11 @@ import { TRUSTED_VALIDATION_POLICIES_4_0_11_5_0_1 } from './validation-policy-re
 import { TRUSTED_VALIDATION_POLICIES_4_0_12_5_1_0 } from './validation-policy-releases/4.0.12-5.1.0'
 import { TRUSTED_VALIDATION_POLICIES } from '../../../packages/cli/src/generated/validation-policy'
 import { templateVersionFor } from '../templates/stacks'
+
+// These synchronous policy checks can occupy one worker for over a minute.
+// Yield between cases so Vitest can receive its pending task-update replies;
+// otherwise its 60s RPC deadline expires even when every assertion passes.
+beforeEach(() => setImmediate())
 
 const SHA = 'a'.repeat(40)
 type Kind = 'public' | 'solo' | 'team'

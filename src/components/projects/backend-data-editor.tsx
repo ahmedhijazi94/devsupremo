@@ -34,7 +34,7 @@ export function BackendDataEditor({ projectId, expectedRef, table }: { projectId
     catch { setResult({ ok: false, error: 'A confirmação não chegou. Confira o recibo em Automação antes de preparar outra alteração.' }) }
     finally { setPlan(null); setBusy(false) }
   }
-  return <details className="mt-5 rounded-xl border p-4"><summary className="cursor-pointer text-sm font-medium">Editar ou importar registros de {table}</summary>
+  return <details className="mt-5 rounded-xl border p-4"><summary className="cursor-pointer break-words text-sm font-medium">Editar ou importar registros de {table}</summary>
     <form className="mt-4 space-y-3" onSubmit={event => { event.preventDefault(); void prepare() }}>
       <label className="block text-sm">Operação<select value={type} onChange={event => { setType(event.target.value); setPlan(null); if (event.target.value === 'delete') setBatch(false) }} className={backendField}><option value="update">Editar</option><option value="insert">Criar</option><option value="upsert">Criar ou editar</option><option value="delete">Excluir</option></select></label>
       {type !== 'delete' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={batch} onChange={event => { setBatch(event.target.checked); setPlan(null) }} />Importar até 25 registros</label>}

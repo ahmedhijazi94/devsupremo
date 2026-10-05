@@ -29,6 +29,19 @@ export function launchAgentPlist(cwd: string, node: string, label: string): stri
 <key>StandardOutPath</key><string>${escapeXml(log)}</string><key>StandardErrorPath</key><string>${escapeXml(log)}</string>
 </dict></plist>\n`
 }
+/** Publish our completed file without opening or following the destination.
+ * An unregistered destination must remain absent until the atomic link succeeds. */
+export function writeLaunchAgentPlist(plist: string, content: string, replaceRegistered: boolean): void {
+  const temporary = fs.mkdtempSync(path.join(path.dirname(plist), '.supremo-agent-'))
+  const candidate = path.join(temporary, 'agent.plist')
+  try {
+    const descriptor = fs.openSync(candidate, 'wx', 0o600)
+    try { fs.writeFileSync(descriptor, content); fs.fsyncSync(descriptor) }
+    finally { fs.closeSync(descriptor) }
+    if (replaceRegistered) fs.renameSync(candidate, plist)
+    else fs.linkSync(candidate, plist)
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }) }
+}
 /** Explicit user-level installation only; no sudo, credentials or host permission changes. */
 export async function controlRuntimeService(cwd: string, action: string): Promise<Record<string, unknown>> {
   const selected = z.enum(['status', 'install', 'pause', 'resume', 'remove']).parse(action)
@@ -51,7 +64,7 @@ export async function controlRuntimeService(cwd: string, action: string): Promis
       catch { /* A registered but unloaded service can be installed again below. */ }
     }
     if (!await stopDaemon(cwd)) throw new Error('Daemon atual não pôde ser encerrado com segurança.')
-    fs.writeFileSync(plist, launchAgentPlist(directory, process.execPath, label), { mode: 0o600 })
+    writeLaunchAgentPlist(plist, launchAgentPlist(directory, process.execPath, label), installed.success)
     // A failed launch retains a resumable installation receipt, never an active claim.
     writeJson(stateFile(cwd), { version: 1, label, plist, mode: 'launchd', state: 'paused' })
     launch(['enable', target])

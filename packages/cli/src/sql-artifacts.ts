@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
-import { sqlArtifactSchema, artifactPathSchema, type SqlArtifact } from '../../../src/lib/sql-artifacts/contract'
+import { sqlArtifactSchema, sqlArtifactRequestSchema, artifactPathSchema, type SqlArtifact } from '../../../src/lib/sql-artifacts/contract'
 import { artifactDigest } from '../../../src/lib/sql-artifacts/service'
 import { readStableFile } from './stable-file'
 import { ensureRuntimeDirectory } from './runtime-files'
@@ -78,18 +78,27 @@ export async function sqlArtifactTick(cwd: string, sessionId: string, client: Sq
   })
 }
 export function startSqlArtifactWorker(config: DaemonConfig): () => void {
+  const projectId = z.string().uuid().parse(config.projectId), issuer = deviceIssuer(config.apiBaseUrl)
+  const endpoint = `${issuer}/api/sql-artifacts`
   const sessionId = crypto.randomUUID(), controller = new AbortController()
   let running = false, unavailable = false
   const client: SqlArtifactClient = { request: async (operation, fields) => {
     const secret = config.getSecret()
     if (!secret) throw new Error('Identidade do executor indisponível.')
-    const expectedRef = readStableFile(path.join(config.cwd, 'supabase/.temp/project-ref'), 128, config.cwd).content.trim()
+    const expectedRef = z.string().regex(/^[a-z0-9_-]{1,64}$/).parse(readStableFile(path.join(config.cwd, 'supabase/.temp/project-ref'), 128, config.cwd).content.trim())
     validateLocalTarget(config.cwd, { environment: 'development', automaticMigrations: true, projectRef: expectedRef })
+    // Receipts carry identifiers/digests only, never local file content. Select
+    // each operation's fields explicitly and keep daemon authority immutable.
+    const selected = operation === 'poll' ? { sessionId: fields.sessionId, ready: fields.ready }
+      : { id: fields.id, claimToken: fields.claimToken,
+        ...(operation === 'materialized' ? { digest: fields.digest } : {}),
+        ...(operation === 'completed' ? { typesDigest: fields.typesDigest } : {}) }
+    const body = sqlArtifactRequestSchema.parse({ projectId, expectedRef, deviceSecret: secret, operation, ...selected })
     const abort = new AbortController(), stop = (): void => abort.abort(), deadline = setTimeout(stop, 70_000)
     controller.signal.addEventListener('abort', stop, { once: true })
     try {
-      const response = await fetch(`${deviceIssuer(config.apiBaseUrl)}/api/sql-artifacts`, { method: 'POST', redirect: 'error',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: config.projectId, expectedRef, deviceSecret: secret, operation, ...fields }), signal: abort.signal })
+      const response = await fetch(endpoint, { method: 'POST', redirect: 'error',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: abort.signal })
       if (!response.ok) throw new Error('Operação versionada indisponível; recibo preservado.')
       if (Number(response.headers.get('content-length')) > 2_500_000) throw new Error('Resposta de artefatos excede limite.')
       const reader = response.body?.getReader()
@@ -106,7 +115,9 @@ export function startSqlArtifactWorker(config: DaemonConfig): () => void {
         }
       } finally { await reader.cancel() }
       const text = Buffer.concat(chunks).toString('utf8')
-      return z.object({ projectId: z.literal(config.projectId), artifact: sqlArtifactSchema.nullable() }).strict().parse(JSON.parse(text)).artifact
+      return z.object({ projectId: z.literal(projectId), artifact: sqlArtifactSchema.extend({
+        projectId: z.literal(projectId), projectRef: z.literal(expectedRef),
+      }).nullable() }).strict().parse(JSON.parse(text)).artifact
     } finally { clearTimeout(deadline); controller.signal.removeEventListener('abort', stop) }
   } }
   const tick = async (): Promise<void> => {

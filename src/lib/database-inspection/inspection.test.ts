@@ -23,6 +23,15 @@ const options = (extra: Record<string, unknown> = {}) =>
   })
 afterEach(() => vi.unstubAllGlobals())
 
+it('keeps log search as a bounded literal substring with ClickHouse quote and backslash escaping', () => {
+  const value = "a\\' OR 1=1 --"
+  const sql = logsParameters(options({ operation: 'logs', search: value, source: 'functions', level: 'error' }), new Date('2026-10-05T00:00:00Z')).get('sql')!
+  expect(sql).toContain("positionCaseInsensitiveUTF8(event_message, 'a\\\\\\' OR 1=1 --') > 0")
+  expect(sql).toContain("source = 'function_logs'")
+  for (const search of ['x'.repeat(161), 'two\nlines', '\0']) expect(() => options({ operation: 'logs', search })).toThrow()
+  expect(() => options({ search: 'only-logs' })).toThrow()
+})
+
 describe('project-scoped readonly authority', () => {
   it.each(['development', 'production'] as const)(
     'allows verified %s reads and preserves authority',

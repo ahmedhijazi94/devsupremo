@@ -9,8 +9,11 @@ import { isKnownOrGlobal, unknownCommandMessage } from './command-guard'
 import { readDeviceSecret, saveDeviceIdentity, deviceIssuer } from './device-identity'
 import { registerFunctionCommands } from './functions-command'
 import { registerDataDeleteCommands } from './data-delete-command'
+import { registerRuntimeCommands } from './runtime-commands'
+import { registerBackendCommands } from './backend-command'
 
 const program = new Command()
+registerRuntimeCommands(program)
 
 program
   .name('supremo')
@@ -357,6 +360,19 @@ credentialCommands(program
   .command('integrations')
   .description('Configura integrações por API usando o cofre ou o formulário seguro do Supremo'))
   .addCommand(secretRequestCommand())
+  .addCommand(new Command('auth-provider')
+    .description('Configura login Google ou GitHub no Supabase usando o formulário seguro ou o cofre')
+    .requiredOption('--provider <provider>', 'Provedor de login: google ou github')
+    .requiredOption('--client-id <id>', 'Client ID público do app OAuth')
+    .requiredOption('--environment <environment>', 'Ambiente confirmado: development ou production')
+    .option('--credential-id <uuid>', 'Referência do client secret no cofre deste ambiente')
+    .action(async (options: Record<string, unknown>) => {
+      const { authProviderIntegrationRequest, requestIntegration } = await import('./integration-request')
+      const { runDatabase } = await import('./database')
+      const { credentialId, ...fields } = options
+      console.log(JSON.stringify(await requestIntegration(authProviderIntegrationRequest(fields), credentialId,
+        (operation, input) => runDatabase(operation, process.cwd(), input))))
+    }))
   .addCommand(new Command('email')
     .description('Solicita a chave para configurar o SMTP do Supabase; dispensa Vercel')
     .requiredOption('--provider <provider>', 'Provedor de email: resend')
@@ -392,8 +408,9 @@ credentialCommands(program
 
 program
   .command('jobs <operation>')
-  .description('Tarefas Supabase: list, history, apply, pause, resume, remove ou scaffold; apply lê supabase/jobs.json')
+  .description('Tarefas Supabase: list, history, apply, pause, resume, remove, run-now ou scaffold; apply lê supabase/jobs.json')
   .option('--job-id <id>', 'Identificador da tarefa gerenciada')
+  .option('--operation-id <uuid>', 'Identificador estável da execução imediata; reutilize para consultar a mesma execução')
   .option('--limit <number>', 'Máximo de linhas (1–100)')
   .option('--offset <number>', 'Deslocamento da página (0–10000)')
   .option('--environment <environment>', 'Ambiente esperado; escritas em produção exigem production explícito')
@@ -404,7 +421,7 @@ program
       console.log(JSON.stringify(cronScaffold(process.cwd(), options)))
       return
     }
-    if (!['list', 'history', 'apply', 'pause', 'resume', 'remove'].includes(operation)) throw new Error('Operação de tarefas inválida.')
+    if (!['list', 'history', 'apply', 'pause', 'resume', 'remove', 'run-now'].includes(operation)) throw new Error('Operação de tarefas inválida.')
     const { databaseOperationSchema, parseDatabaseOptions } = await import('./database-request')
     const { runDatabase } = await import('./database')
     const selected = databaseOperationSchema.parse(`cron-${operation}`)
@@ -423,6 +440,7 @@ program
   .option('--minutes <minutes>', 'Intervalo de logs em minutos (1–1440)')
   .option('--source <service>', 'Logs: postgres, auth, api, functions, storage ou realtime')
   .option('--level <level>', 'Logs: all ou error')
+  .option('--search <text>', 'Busca literal nos logs (1–160 caracteres)')
   .action(async (operation: string, sql: string | undefined, options: Record<string, unknown>) => {
     try {
       const { databaseOperationSchema, parseDatabaseOptions } = await import('./database-request')
@@ -442,15 +460,18 @@ program
 
 program
   .command('auth <operation>')
-  .description('Administração do Supabase: count, users, config, configure, create, update, delete, password')
+  .description('Administração do Supabase: count, users, config, configure, create, invite, update, delete, password')
   .option('--environment <environment>', 'Ambiente esperado; obrigatório para alterações: development ou production')
   .option('--limit <number>', 'Quantidade de usuários por página (1–200)')
   .option('--offset <number>', 'Deslocamento da página (0–10000)')
   .option('--user-id <uuid>', 'Usuário específico a alterar ou excluir')
-  .option('--email <email>', 'Email do usuário a criar')
+  .option('--email <email>', 'Email do usuário a criar ou convidar')
+  .option('--redirect-to <url>', 'URL exata de retorno do convite, já cadastrada na configuração Auth')
   .option('--email-confirmed', 'Criar usuário com email confirmado, somente quando solicitado')
   .option('--config <json>', 'Ajuste de login: emailConfirmation, signupsEnabled, anonymousSignIns, siteUrl, recoveryEmailMode (code ou link)')
   .option('--user <json>', 'Ajuste do usuário: email, emailConfirmed:true, banHours (0 desbloqueia)')
+  .option('--roles <json>', 'Papéis da aplicação como array JSON, atribuição controlada pelo servidor')
+  .option('--manifest-version <number>', 'Versão do contrato de papéis, atualmente 1')
   .action(async (operation: string, options: Record<string, unknown>) => {
     if (operation === 'password') {
       const { authPasswordRequest } = await import('./integration-request')
@@ -462,13 +483,14 @@ program
     const { parseDatabaseOptions } = await import('./database-request')
     const { runDatabase } = await import('./database')
     const selected = authOperationSchema.parse(`auth-${operation}`)
-    for (const key of ['limit', 'offset']) if (options[key] !== undefined) options[key] = Number(options[key])
-    for (const key of ['config', 'user']) if (typeof options[key] === 'string') options[key] = JSON.parse(options[key]) as unknown
+    for (const key of ['limit', 'offset', 'manifestVersion']) if (options[key] !== undefined) options[key] = Number(options[key])
+    for (const key of ['config', 'user', 'roles']) if (typeof options[key] === 'string') options[key] = JSON.parse(options[key]) as unknown
     console.log(JSON.stringify(await runDatabase(selected, process.cwd(), parseDatabaseOptions(selected, options))))
   })
 
 registerFunctionCommands(program)
 registerDataDeleteCommands(program)
+registerBackendCommands(program)
 guardUnknownCommand(process.argv.slice(2))
 if (process.argv.length === 2) program.outputHelp()
 else void (async () => {

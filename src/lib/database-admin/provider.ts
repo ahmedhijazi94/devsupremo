@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { boundedJson, InspectionError } from '../database-inspection/provider'
 import type { AuthAdminProvider } from './service'
 import { readOnlyTransaction } from '../database-inspection/sql'
+import { authAdministrationSql } from './administration-sql'
 
 async function authProviderError(response: Response, recoveryTemplate: boolean): Promise<InspectionError> {
   const fallback = new InspectionError(`Supabase recusou a operação de autenticação (HTTP ${response.status}). ${response.status === 401 || response.status === 403 ? 'Confira as permissões da conexão; ' : ''}resultado não confirmado.`, response.status === 403 ? 403 : 502)
@@ -26,9 +27,10 @@ async function authProviderError(response: Response, recoveryTemplate: boolean):
 
 /** All credentials stay in the control plane; re-authorize before every provider request. */
 export function supabaseAuthAdminProvider(resolve: () => Promise<{ projectRef: string; token: string }>, secrets: string[]): AuthAdminProvider {
-  const send = async (url: string, method: string, headers: Record<string, string>, body?: object) => {
+  const send = async (url: string, method: string, headers: Record<string, string>, body?: object, allowMissing = false) => {
     const response = await fetch(url, { method, headers: { ...headers, 'Content-Type': 'application/json' },
       ...(body ? { body: JSON.stringify(body) } : {}), cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12000) })
+    if (allowMissing && response.status === 404) { await response.body?.cancel(); return null }
     if (!response.ok) {
       const recoveryTemplate = method === 'PATCH' && body !== undefined && Object.hasOwn(body, 'mailer_templates_recovery_content')
       throw await authProviderError(response, recoveryTemplate)
@@ -41,18 +43,28 @@ export function supabaseAuthAdminProvider(resolve: () => Promise<{ projectRef: s
     return send(`https://api.supabase.com/v1/projects/${credentials.projectRef}/${suffix}`, method, { Authorization: `Bearer ${credentials.token}` },
       suffix === 'database/query/read-only' ? { query: readOnlyTransaction(z.object({ query: z.string() }).parse(body).query) } : body)
   }
+  const admin = async (suffix: string, method: string, body?: object, allowMissing = false) => {
+    const initial = await resolve()
+    const keys = z.array(z.object({ name: z.string(), api_key: z.string() })).parse(await management('api-keys', 'GET'))
+    const key = keys.find(entry => entry.name === 'service_role')?.api_key
+    if (!key) throw new InspectionError('Credencial de administração de usuários indisponível no servidor.')
+    secrets.push(key)
+    const current = await resolve()
+    if (current.projectRef !== initial.projectRef) throw new InspectionError('Vínculo do banco mudou.', 409)
+    return send(`https://${current.projectRef}.supabase.co/auth/v1/${suffix}`, method,
+      { Authorization: `Bearer ${key}`, apikey: key }, body, allowMissing)
+  }
   return {
     management,
-    async user(method, userId, body) {
-      const initial = await resolve()
-      const keys = z.array(z.object({ name: z.string(), api_key: z.string() })).parse(await management('api-keys', 'GET'))
-      const key = keys.find(entry => entry.name === 'service_role')?.api_key
-      if (!key) throw new InspectionError('Credencial de administração de usuários indisponível no servidor.')
-      secrets.push(key)
-      const current = await resolve()
-      if (current.projectRef !== initial.projectRef) throw new InspectionError('Vínculo do banco mudou.', 409)
-      return send(`https://${current.projectRef}.supabase.co/auth/v1/admin/users${userId ? `/${userId}` : ''}`, method,
-        { Authorization: `Bearer ${key}`, apikey: key }, body)
+    async roles(userId, roles) {
+      const result = z.array(z.unknown()).length(1).parse(await management('database/query', 'POST', { query: authAdministrationSql(userId, roles) }))
+      return result[0]
     },
+    async revokeSessions(userId) {
+      const result = z.array(z.unknown()).length(1).parse(await management('database/query', 'POST', { query: authAdministrationSql(userId) }))
+      return result[0]
+    },
+    user: (method, userId, body) => admin(`admin/users${userId ? `/${userId}` : ''}`, method, body, method === 'GET'),
+    invite: (email, redirectTo) => admin(`invite${redirectTo ? `?${new URLSearchParams({ redirect_to: redirectTo })}` : ''}`, 'POST', { email }),
   }
 }

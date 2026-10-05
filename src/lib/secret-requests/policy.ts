@@ -11,7 +11,7 @@ export const secretsRequestSchema = z.discriminatedUnion('operation', [
   z.object({ ...identity, operation: z.literal('dismiss'), requestId: z.string().uuid() }).strict(),
   z.object({ ...identity, operation: z.literal('credentials') }).strict(),
   z.object({ ...identity, operation: z.literal('apply'), requestId: z.string().uuid(), credentialId: z.string().uuid() }).strict(),
-  z.object({ ...identity, operation: z.literal('revoke-credential'), credentialId: z.string().uuid() }).strict(),
+  z.object({ ...identity, operation: z.literal('revoke-credential'), credentialId: z.string().uuid(),operationId:z.uuid() }).strict(),
 ])
 export const saveSecretSchema = z.object({ projectId: z.string().uuid(), requestId: z.string().uuid(), value: z.string().min(1).max(16384).refine((value) => value.trim().length > 0 && !value.includes('\0')), remember: z.boolean().optional() }).strict()
 export const dismissSecretSchema = saveSecretSchema.pick({ projectId: true, requestId: true })

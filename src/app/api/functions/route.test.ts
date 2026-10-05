@@ -1,23 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
-const mocks = vi.hoisted(() => ({ auth: vi.fn(), project: vi.fn(), environment: vi.fn(), credentials: vi.fn(), insert: vi.fn(), claim: vi.fn(), assert: vi.fn(), release: vi.fn() }))
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), project: vi.fn(), environment: vi.fn(), credentials: vi.fn(), insert: vi.fn(), claim: vi.fn(), assert: vi.fn(), release: vi.fn(), policy: vi.fn(), admit: vi.fn(), track: vi.fn(), saveArtifact: vi.fn(), loadArtifact: vi.fn(), historyArtifact: vi.fn() }))
 vi.mock('@/lib/supabase/admin', () => ({ createServiceClient: () => ({ from: () => ({ insert: mocks.insert }) }) }))
 vi.mock('@/lib/checkpoint/devices', () => ({ authenticateDeviceSecret: mocks.auth }))
 vi.mock('@/lib/checkpoint/store', () => ({ supabaseCheckpointDeviceStore: () => ({}) }))
 vi.mock('@/lib/projects/repository', () => ({ getProject: mocks.project, getSupabaseCredentials: mocks.credentials }))
 vi.mock('@/lib/database-environment/store', () => ({ readEnvironment: mocks.environment }))
 vi.mock('@/lib/edge-functions/store', () => ({ claimFunctionLease: mocks.claim }))
+vi.mock('@/lib/backend-operations/server', () => ({ authorizeProjectOperation: mocks.policy }))
+vi.mock('@/lib/backend-operations/store', () => ({ backendOperationStore: () => ({ claim: mocks.admit, update: mocks.track }) }))
+vi.mock('@/lib/edge-functions/artifacts', () => ({ functionArtifactStore: () => ({ save: mocks.saveArtifact, load: mocks.loadArtifact, history: mocks.historyArtifact }) }))
 import { POST } from './route'
 import { runAuthorizedFunctions } from '@/lib/edge-functions/server'
 import { FunctionError } from '@/lib/edge-functions/policy'
+import { OperationApprovalRequired } from '@/lib/backend-operations/approval-contract'
 const projectId = '00000000-0000-4000-8000-000000000001'
 const ownerId = '00000000-0000-4000-8000-000000000002'
 const foreignOwner = '00000000-0000-4000-8000-000000000003'
+const operationId = '00000000-0000-4000-8000-000000000004'
 const project = { id: projectId, user_id: ownerId, supabase_project_ref: 'own-ref', supabase_account_id: 'own-account' }
 const body = { projectId, deviceSecret: 'sup_dev_ckpt_fixture', expectedRef: 'own-ref', environment: 'development', operation: 'functions-list' }
 const functionRecord = { id: 'private-id', slug: 'send-email', status: 'ACTIVE', version: 1, verify_jwt: true, private_token: 'private-provider-value' }
-const deploy = { ...body, operation: 'functions-deploy', slug: 'send-email', entrypoint: 'supabase/functions/send-email/index.ts',
+const deploy = { ...body, operation: 'functions-deploy', operationId, slug: 'send-email', entrypoint: 'supabase/functions/send-email/index.ts',
   files: [{ path: 'supabase/functions/send-email/index.ts', content: 'Deno.serve(() => new Response("private-source"))' }], verifyJwt: true }
 const request = (payload: unknown = body) => new NextRequest('https://supremo.example/api/functions', { method: 'POST', body: JSON.stringify(payload) })
 const fetchMock = vi.fn<typeof fetch>()
@@ -30,10 +35,32 @@ beforeEach(() => {
   mocks.credentials.mockResolvedValue({ projectRef: 'own-ref', token: 'private-provider-token' })
   mocks.insert.mockResolvedValue({ error: null })
   mocks.claim.mockResolvedValue({ assertCurrent: mocks.assert, release: mocks.release })
+  mocks.policy.mockResolvedValue({ policyId: 'policy', revision: 'revision' })
+  mocks.admit.mockResolvedValue({ acquired: true, token: 'claim', receipt: { id: operationId } })
+  mocks.track.mockImplementation(async (_id: string, _token: string, state: string, message: string, result: unknown) => ({ id: operationId, state, message, result }))
   fetchMock.mockImplementation(async () => Response.json([functionRecord]))
 })
 afterEach(() => vi.unstubAllGlobals())
 describe('functions device API and shared authorization', () => {
+  it('returns a resumable owner approval request before reserving or sending a mutation', async () => {
+    mocks.policy.mockRejectedValueOnce(new OperationApprovalRequired(operationId))
+    const response = await POST(request(deploy))
+    expect(response.status).toBe(403)
+    expect(await response.json()).toMatchObject({ code: 'operation_approval_required', operationId })
+    expect(mocks.admit).not.toHaveBeenCalled(); expect(fetchMock).not.toHaveBeenCalled()
+  })
+  it('authorizes archived history/code as reads, projects source, and refuses policy revocation after artifact lookup', async () => {
+    mocks.historyArtifact.mockResolvedValue({ versions: [{ version: 1, createdAt: '2026-10-05T00:00:00Z', hash: 'a'.repeat(64) }], complete: true })
+    const history = await POST(request({ ...body, operation: 'functions-history', slug: 'send-email' }))
+    expect(history.status).toBe(200); expect(await history.json()).toMatchObject({ readOnly: true, data: { versions: [{ version: 1 }] } })
+    mocks.loadArtifact.mockResolvedValue({ slug: deploy.slug, environment: deploy.environment, entrypoint: deploy.entrypoint, files: deploy.files, verifyJwt: true })
+    const code = await POST(request({ ...body, operation: 'functions-code', slug: 'send-email', version: 1 }))
+    expect(code.status).toBe(200); expect(await code.text()).not.toContain('private-source')
+    expect(mocks.policy).toHaveBeenCalledWith(expect.objectContaining({ projectId, ownerId }), 'functions.read', { resource: 'send-email' })
+    expect(mocks.admit).not.toHaveBeenCalled(); expect(fetchMock).not.toHaveBeenCalled()
+    mocks.historyArtifact.mockImplementationOnce(async () => { mocks.policy.mockResolvedValue({ policyId: 'policy', revision: 'revoked' }); return { versions: [], complete: true } })
+    expect((await POST(request({ ...body, operation: 'functions-history', slug: 'send-email' }))).status).toBe(409)
+  })
   it('validates payload, explicit environment and bounded body before device access', async () => {
     for (const payload of [{ ...body, rawToken: 'secret' }, { ...body, targetUrl: 'https://foreign.test' }, { ...body, expectedRef: 'own-ref\n' },
       { ...body, ownerId: foreignOwner }, { ...body, environment: undefined }, { ...deploy, files: [{ path: '.env', content: 'secret' }] }])
@@ -112,7 +139,7 @@ describe('functions device API and shared authorization', () => {
     })
     const response = await POST(request(operation === 'read' ? body : deploy))
     expect(response.status).toBe(409)
-    expect(await response.json()).toEqual({ error: 'Conta do Supabase mudou durante a operação.' })
+    expect(await response.json()).toMatchObject(operation === 'read' ? { error: 'Conta do Supabase mudou durante a operação.' } : { code: 'operation_uncertain', operationId, operationState: 'uncertain' })
     expect(fetchMock).toHaveBeenCalledTimes(operation === 'read' ? 1 : 2)
     expect(mocks.release).not.toHaveBeenCalled()
   })
@@ -127,7 +154,7 @@ describe('functions device API and shared authorization', () => {
   })
   it('fails closed on audit error before claiming or publishing', async () => {
     mocks.insert.mockResolvedValue({ error: { message: 'private database details' } })
-    const response = await POST(request(deploy)); expect(response.status).toBe(503)
+    const response = await POST(request(deploy)); expect(response.status).toBe(409)
     expect(await response.text()).not.toContain('private database')
     expect(mocks.claim).not.toHaveBeenCalled(); expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -138,17 +165,38 @@ describe('functions device API and shared authorization', () => {
     expect((await POST(request(deploy))).status).toBe(409)
     expect(fetchMock).not.toHaveBeenCalled()
     fetchMock.mockRejectedValueOnce(new Error('private network token'))
-    expect((await POST(request(deploy))).status).toBe(502)
+    expect((await POST(request(deploy))).status).toBe(409)
     expect(mocks.release).not.toHaveBeenCalled()
   })
   it('does not perform deployment readback after revoked identity', async () => {
     fetchMock.mockImplementation(async () => { mocks.auth.mockResolvedValue({ ok: false }); return Response.json(functionRecord) })
-    expect((await POST(request(deploy))).status).toBe(401)
+    expect((await POST(request(deploy))).status).toBe(409)
     expect(fetchMock).toHaveBeenCalledOnce(); expect(mocks.release).not.toHaveBeenCalled()
   })
   it('rejects unexpected provider data without reflecting it', async () => {
     fetchMock.mockResolvedValueOnce(Response.json({ error: 'private-provider-value' }))
     const response = await POST(request()); expect(response.status).toBe(502)
     expect(await response.text()).not.toContain('private-provider-value')
+  })
+  it('requires a queued operation identity and stops absent or changed authorization before an effect', async () => {
+    expect((await POST(request({ ...deploy, operationId: undefined }))).status).toBe(400)
+    expect(fetchMock).not.toHaveBeenCalled()
+    mocks.policy.mockRejectedValueOnce(new Error('private policy'))
+    expect((await POST(request(deploy))).status).toBe(409); expect(mocks.admit).not.toHaveBeenCalled()
+    mocks.policy.mockResolvedValueOnce({ policyId: 'policy', revision: 'before' }).mockResolvedValue({ policyId: 'policy', revision: 'after' })
+    const response = await POST(request(deploy))
+    expect(await response.json()).toMatchObject({ code: 'operation_failed', operationId })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+  it('reuses a completed ledger receipt and never automatically repeats an uncertain deployment', async () => {
+    fetchMock.mockImplementation(async () => Response.json(functionRecord))
+    const first = await (await POST(request(deploy))).json()
+    fetchMock.mockClear()
+    mocks.admit.mockResolvedValue({ acquired: false, token: 'another', receipt: { id: operationId, state: 'succeeded', result: { response: first } } })
+    expect(await (await POST(request(deploy))).json()).toEqual(first)
+    expect(fetchMock).not.toHaveBeenCalled()
+    mocks.admit.mockResolvedValue({ acquired: false, token: 'another', receipt: { id: operationId, state: 'uncertain', result: null } })
+    expect(await (await POST(request(deploy))).json()).toMatchObject({ code: 'operation_uncertain', operationId })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

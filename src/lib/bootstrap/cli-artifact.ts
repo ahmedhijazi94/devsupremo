@@ -24,12 +24,12 @@ export function packCli(version: string, bundle: string): Buffer {
   blocks.push(Buffer.alloc(1024))
   return gzipSync(Buffer.concat(blocks))
 }
-let cached: { bytes: Buffer; digest: string } | undefined
-export function cliArtifact(): { bytes: Buffer; digest: string } {
+let cached: { bytes: Buffer; digest: string; version: string } | undefined
+export function cliArtifact(): { bytes: Buffer; digest: string; version: string } {
   if (cached) return cached
   const root = path.join(process.cwd(), 'packages/cli')
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string }
   const bytes = packCli(pkg.version, fs.readFileSync(path.join(root, 'dist/bin.js'), 'utf8'))
-  cached = { bytes, digest: createHash('sha256').update(bytes).digest('hex') }
+  cached = { bytes, digest: createHash('sha256').update(bytes).digest('hex'), version: pkg.version }
   return cached
 }

@@ -3,6 +3,7 @@ import { assertSafeSql } from '@/lib/database/sql-guard'
 import { maskVerifiedTriggerSyntax } from './trigger-migration'
 import { assertExplicitForeignKeyDelete } from './foreign-key-contract'
 import { parseForeignKeyReplacements } from './foreign-key-replacement'
+import { executableMigrationSql } from './executable-sql'
 
 export const environmentSchema = z.object({
   project_ref: z.string().min(1),
@@ -35,11 +36,12 @@ export const databaseRequestSchema = z.object({
   projectId: z.string().uuid(),
   operation: z.enum(['status', 'migrate', 'anonymous-auth']),
   expectedRef: z.string().regex(/^[a-z0-9_-]+$/).max(64).optional(),
+  operationId: z.uuid().optional(),
   migrations: z.array(z.object({
     path: z.string().regex(/^supabase\/migrations\/\d{14}_[a-zA-Z0-9_-]+\.sql$/),
     content: z.string().min(1).max(250_000),
   }).strict()).max(100).optional(),
-}).strict()
+}).strict().refine(value => value.operation === 'status' || Boolean(value.operationId && value.expectedRef), 'Alterações exigem destino e ID durável. Atualize o agente.')
 
 /** Only the DO keyword in an idempotent INSERT clause is exempted. Keep
  * the conflict target, source query and every other token under inspection;
@@ -55,19 +57,18 @@ function maskConflictDoNothing(sql: string): string {
 }
 
 export function validateAutomaticMigration(sql: string): void {
-  assertSafeSql(sql, { allowDdl: true })
+  assertSafeSql(executableMigrationSql(sql), { allowDdl: true })
   assertExplicitForeignKeyDelete(sql)
   // This grammar only authorizes a candidate. The service verifies equivalence
   // against the locked catalog inside the migration transaction before applying.
   if (parseForeignKeyReplacements(sql).length > 0) return
   // Conservador: operações destrutivas/dinâmicas seguem fora do caminho automático.
-  // Examina também strings e comentários: falsos positivos falham explicitamente.
   // BEGIN de um corpo PL/pgSQL e EXECUTE FUNCTION de um gatilho verificado
   // não são transação nem SQL dinâmico. O restante do corpo continua inspecionado.
-  const checked = maskConflictDoNothing(maskVerifiedTriggerSyntax(sql))
+  const checked = maskConflictDoNothing(executableMigrationSql(maskVerifiedTriggerSyntax(sql)))
     .replace(/\bon\s+delete\s+(cascade|restrict|set\s+null|no\s+action)\b/gi, '')
     .replace(/\bfor\s+delete\b/gi, '')
-  if (/\b(drop|truncate|execute|do|commit|rollback|begin|call|copy|dblink|pg_read_file|pg_write_file)\b|\bdelete\s+from\b|\bupdate\s+[\w."]+\s+set\b/i.test(checked) || /\bsupabase_migrations\b/i.test(sql)) {
+  if (/\b(drop|truncate|execute|do|commit|rollback|begin|call|copy|dblink|pg_read_file|pg_write_file)\b|\bdelete\s+from\b|\bupdate\s+[\w."]+\s+set\b/i.test(checked) || /\bsupabase_migrations\b/i.test(checked)) {
     throw new Error('Migration recusada: operação destrutiva, dinâmica ou controle de transação não permitido no fluxo automático. Para excluir linhas específicas autorizadas em development, use data delete-plan e data delete-apply. SQL destrutivo arbitrário não é suportado por esse canal; salvar um arquivo para revisão não enfileira sua aplicação.')
   }
 }

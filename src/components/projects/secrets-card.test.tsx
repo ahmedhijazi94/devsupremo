@@ -125,6 +125,42 @@ describe('project secret form', () => {
     await waitFor(() => expect(field.value).toBe(''))
     expect(JSON.stringify(mocks.success.mock.calls)).not.toContain('synthetic-password')
   })
+  it.each(['google', 'github'])('labels the %s OAuth client and saves its secret only through the owner form', async provider => {
+    const name = provider === 'google' ? 'Google' : 'GitHub'
+    mocks.get.mockResolvedValue({ requests: [{ ...request, name: `AUTH_${provider.toUpperCase()}_CLIENT_SECRET`, configuration: {
+      kind: 'supabase-auth-provider', provider, clientId: 'public-client.apps.example',
+    } }] })
+    render(<SecretsCard projectId={projectId} />)
+    const field = await screen.findByLabelText(`Client secret do ${name}`) as HTMLInputElement
+    expect(field.type).toBe('password')
+    expect(screen.getByText(`Login com ${name} · Desenvolvimento · projectref`)).toBeTruthy()
+    expect(screen.getByText(/Client ID: public-client.apps.example/)).toBeTruthy()
+    fireEvent.change(field, { target: { value: 'synthetic-private-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Configurar login' }))
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith({ projectId, requestId: request.id, value: 'synthetic-private-secret', remember: true }))
+    await waitFor(() => expect(field.value).toBe(''))
+    expect(mocks.success).toHaveBeenCalledWith('Configuração do provedor salva no Supabase. O login ainda precisa ser testado.')
+    expect(document.body.textContent).not.toContain('synthetic-private-secret')
+  })
+  it('allows dismissing a completed OAuth field for explicit rotation without submitting or revoking a value', async () => {
+    mocks.get.mockResolvedValue({ requests: [{ ...request, status: 'fulfilled', configuration: { kind: 'supabase-auth-provider', provider: 'google', clientId: 'public-client' } }] })
+    render(<SecretsCard projectId={projectId} />)
+    const dismiss = await screen.findByRole('button', { name: 'Dispensar pedido para trocar o segredo' })
+    mocks.get.mockResolvedValue({ requests: [] })
+    fireEvent.click(dismiss)
+    await waitFor(() => expect(mocks.dismiss).toHaveBeenCalledWith({ projectId, requestId: request.id }))
+    await waitFor(() => expect(screen.queryByText('Client secret do Google')).toBeNull())
+    expect(mocks.save).not.toHaveBeenCalled()
+    expect(mocks.revoke).not.toHaveBeenCalled()
+  })
+  it('refreshes metadata when an OAuth field is prepared in the backend panel', async () => {
+    mocks.get.mockResolvedValue({ requests: [] })
+    render(<SecretsCard projectId={projectId} />)
+    await waitFor(() => expect(mocks.credentials).toHaveBeenCalledOnce())
+    mocks.get.mockResolvedValue({ requests: [request] })
+    fireEvent(window, new Event('supremo:secret-requests-changed'))
+    expect(await screen.findByLabelText('PAYMENT_API_KEY')).toBeTruthy()
+  })
   it('lets the owner opt out of storing a credential while still configuring the destination', async () => {
     render(<SecretsCard projectId={projectId} />)
     const field = await screen.findByLabelText('PAYMENT_API_KEY')

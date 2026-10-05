@@ -28,9 +28,27 @@ export function registerFunctionCommands(program: Command): void {
       console.log(JSON.stringify(await runDatabase('functions-deploy', process.cwd(), parseFunctionOptions('functions-deploy', { ...fields, slug, files: file }))))
     })
   functions.command('hook-configure <slug>').description('Gera a assinatura privada e conecta a função publicada ao Send Email Hook')
+    .option('--replace-slug <slug>', 'Substitui explicitamente o vínculo atual desta função')
     .option('--secret-name <name>', 'Variável privada lida pela função (não use o prefixo reservado SUPABASE_)', 'AUTH_SEND_EMAIL_HOOK_SECRET')
     .option('--environment <environment>', 'Ambiente confirmado', 'development')
     .action(async (slug: string, options: Record<string, unknown>) => {
       console.log(JSON.stringify(await runDatabase('functions-hook-configure', process.cwd(), parseFunctionOptions('functions-hook-configure', { ...options, slug }))))
     })
+  for (const operation of ['history', 'code'] as const) {
+    const command = functions.command(`${operation} <slug>`).description(operation === 'history' ? 'Versões guardadas pelo motor neste ambiente' : 'Prévia estrutural do código, ocultando linhas com valores ou comentários').option('--environment <environment>', 'Ambiente confirmado', 'development')
+    if (operation === 'code') command.requiredOption('--version <number>', 'Versão guardada pelo motor')
+    command.action(async (slug: string, options: Record<string, unknown>) => {
+      if (options.version !== undefined) options.version = Number(options.version)
+      console.log(JSON.stringify(await runDatabase(`functions-${operation}`, process.cwd(), parseFunctionOptions(`functions-${operation}`, { ...options, slug }))))
+    })
+  }
+  for (const operation of ['remove', 'rollback', 'hook-disable', 'test'] as const) {
+    const command = functions.command(`${operation} <slug>`).option('--environment <environment>', 'Ambiente confirmado', 'development')
+    if (operation !== 'hook-disable') command.requiredOption('--expected-version <number>', 'Versão atual confirmada no provedor')
+    if (operation === 'rollback') command.requiredOption('--version <number>', 'Artefato anterior guardado pelo motor')
+    command.action(async (slug: string, options: Record<string, unknown>) => {
+      for (const name of ['expectedVersion', 'version']) if (options[name] !== undefined) options[name] = Number(options[name])
+      console.log(JSON.stringify(await runDatabase(`functions-${operation}`, process.cwd(), parseFunctionOptions(`functions-${operation}`, { ...options, slug }))))
+    })
+  }
 }

@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { authorizeProjectOperation } from '@/lib/backend-operations/server'
+vi.mock('@/lib/backend-operations/server', () => ({ authorizeProjectOperation: vi.fn() }))
+vi.mock('@/lib/backend-operations/store', () => ({ backendOperationStore: (_client: unknown, scope: {id:string;capability:string}) => ({
+  claim: async () => ({ acquired:true, token:'claim', receipt:{id:scope.id,capability:scope.capability,environment:'development',state:'queued',updatedAt:new Date().toISOString(),message:'',result:null} }),
+  update: async (id:string,_token:string,state:string,message:string,result?:Record<string,unknown>) => ({id,capability:scope.capability,environment:'development',state,updatedAt:new Date().toISOString(),message,result:result??null}),
+}) }))
 import type { JobsProvider } from '@/lib/database-jobs/provider'
 import type { JobsRequest } from '@/lib/database-jobs/policy'
 
@@ -20,7 +27,7 @@ vi.mock('@/lib/database-jobs/provider', async (original) => {
     query: async (_sql: string, options: { readOnly: boolean }) => { await resolve(options.readOnly); return [] },
   }) }
 })
-vi.mock('@/lib/database-jobs/service', () => ({ runJobs: async (provider: JobsProvider, input: JobsRequest) => {
+vi.mock('@/lib/database-jobs/service', async original => ({ ...await original<typeof import('@/lib/database-jobs/service')>(), runJobs: async (provider: JobsProvider, input: JobsRequest) => {
   await provider.query('generated-in-service', { readOnly: !['cron-pause', 'cron-resume'].includes(input.operation) })
   return mocks.jobs(input)
 } }))
@@ -34,10 +41,11 @@ const ownerId = 'owner-session'
 const token = 'fixture-private-management-token'
 const target = { projectRef: 'boundproject', environment: 'development' as const }
 const input = { projectId, operation: 'rows' as const, table: 'expenses' }
-const job = { projectId, operation: 'job-set-active' as const, jobId: 'daily-summary', enabled: false, expectedRef: target.projectRef, environment: target.environment }
+const job = { projectId, operation: 'job-set-active' as const, operationId: '00000000-0000-4000-8000-000000000099', jobId: 'daily-summary', enabled: false, expectedRef: target.projectRef, environment: target.environment }
 
 beforeEach(() => {
-  vi.resetAllMocks()
+  vi.mocked(authorizeProjectOperation).mockResolvedValue({policyId:'00000000-0000-4000-8000-000000000070',revision:'00000000-0000-4000-8000-000000000071'})
+  vi.clearAllMocks()
   mocks.user.mockResolvedValue({ user: { id: ownerId } })
   mocks.project.mockResolvedValue({ supabase_project_ref: target.projectRef, supabase_account_id: 'owned-account' })
   mocks.environment.mockResolvedValue({ project_ref: target.projectRef, environment: 'development', source: 'supremo_provisioned' })

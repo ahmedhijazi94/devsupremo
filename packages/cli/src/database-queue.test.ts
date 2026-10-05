@@ -65,12 +65,12 @@ it('agente sem keychain recebe resultado do daemon e não grava credenciais', as
   const execute = vi.fn(async () => ({ applied: ['migration.sql'] }))
   stops.push(startDatabaseWorker(cwd, execute))
   await expect(requestDatabase(cwd, 'migrate')).resolves.toEqual({ applied: ['migration.sql'] })
-  expect(execute).toHaveBeenCalledExactlyOnceWith('migrate')
-  expect(fs.readdirSync(path.join(cwd, '.supremo/database-queue'))).toEqual(['heartbeat'])
+  expect(execute).toHaveBeenCalledExactlyOnceWith('migrate', { operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) })
+  expect(fs.readdirSync(path.join(cwd, '.supremo/database-queue'))).toEqual(['capabilities.json', 'heartbeat', 'operations'])
 })
 it('propaga recusa do servidor sem fallback ou sucesso falso', async () => {
   const cwd = workspace()
-  stops.push(startDatabaseWorker(cwd, async () => { throw new Error('Dispositivo revogado') }))
+  stops.push(startDatabaseWorker(cwd, async () => { throw Object.assign(new Error('Dispositivo revogado'), { definitive: true }) }))
   await expect(requestDatabase(cwd, 'anonymous-auth')).rejects.toThrow('Dispositivo revogado')
 })
 it('daemon antigo ou ausente falha imediatamente sem pedir bootstrap', async () => {

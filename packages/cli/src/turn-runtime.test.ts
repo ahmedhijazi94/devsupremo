@@ -66,6 +66,38 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); fs.rmSync(cwd, { force: true, recursive: true }) })
 
 describe('validation evidence is bound to the executed isolated snapshot', () => {
+  it.each([
+    'supremo runtime update --with-dependencies',
+    'supremo runtime update --prepare-only --with-dependencies',
+    'supremo runtime update --with-dependencies --prepare-only',
+    `supremo runtime apply-update ${TURN} --with-dependencies`,
+    `node tools/supremo-cli/dist/bin.js runtime apply-update ${TURN} --with-dependencies`,
+  ])('lets the dependency updater own its reservation for the exact command %s', async command => {
+    await runTurnEvent('preflight', cwd, {}, 'assisted', deps)
+    const input = { tool_name: 'Bash', tool_use_id: 'dependency-update', tool_input: { command } }
+    expect((await runTurnEvent('before-mutation', cwd, input, 'assisted', deps)).allowed).toBe(true)
+    expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toBeNull()
+    input.tool_input.command += '; touch app.txt'
+    expect((await runTurnEvent('before-mutation', cwd, input, 'assisted', deps)).allowed).toBe(true)
+    expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toMatchObject({ toolUseId: 'dependency-update' })
+  })
+
+  it('lets the exact runtime updater own its lock without exempting compound shell commands', async () => {
+    await runTurnEvent('preflight', cwd, {}, 'assisted', deps)
+    const input = { tool_name: 'Bash', tool_use_id: 'update-command', tool_input: { command: 'node node_modules/supremo-cli/dist/bin.js runtime update' } }
+    expect((await runTurnEvent('before-mutation', cwd, input, 'assisted', deps)).allowed).toBe(true)
+    expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toBeNull()
+    input.tool_input.command += '; touch app.txt'
+    expect((await runTurnEvent('before-mutation', cwd, input, 'assisted', deps)).allowed).toBe(true)
+    expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toMatchObject({ toolUseId: 'update-command' })
+  })
+  it('keeps runtime activation blocked in a production diagnostic turn', async () => {
+    remote.environment = 'production'
+    await runTurnEvent('preflight', cwd, {}, 'assisted', deps)
+    expect((await runTurnEvent('before-mutation', cwd, { tool_name: 'Bash', tool_use_id: 'update-command',
+      tool_input: { command: 'supremo runtime update' } }, 'assisted', deps)).allowed).toBe(false)
+    expect(readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json'))).toBeNull()
+  })
   it('records the actual change title in assisted mode and lets hook-wrapped complete finish without a mutation lease', async () => {
     await runTurnEvent('preflight', cwd, {}, 'assisted', deps)
     change()
@@ -192,6 +224,42 @@ describe('validation evidence is bound to the executed isolated snapshot', () =>
 })
 
 describe('host mutations and recovery share an executable workspace lease', () => {
+  it.each(['legacy', 'untracked-process'])('preserves an ambiguous %s lease when a different session starts after host death', async kind => {
+    const deadPid = 987654
+    await runTurnEvent('preflight', cwd, { ...hook, supremo_host_pid: deadPid }, 'codex', deps)
+    const state = (await runTurnEvent('status', cwd)).state!
+    const lease = kind === 'legacy' ? { toolUseId: 'original-edit', sessionId: state.sessionId } : {
+      version: 2, toolUseId: 'original-command', sessionId: state.sessionId, turnId: state.turn.turnId,
+      hostPid: deadPid, hostGroupId: deadPid, executionScope: 'untracked-process',
+    }
+    const file = path.join(cwd, TURN_DIR, 'mutation-lease.json')
+    writeJson(file, lease)
+    const before = readJson(path.join(cwd, TURN_DIR, 'state.json'))
+    const probe = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
+    try {
+      await expect(runTurnEvent('preflight', cwd, { ...hook, session_id: 'new-session' }, 'codex', deps)).rejects.toThrow('sem prova de término')
+      expect(readJson(file)).toEqual(lease)
+      expect(readJson(path.join(cwd, TURN_DIR, 'state.json'))).toEqual(before)
+    } finally { probe.mockRestore() }
+  })
+
+  it('lets a new preflight recover a bound file operation only after proof that its host and group ended', async () => {
+    const deadPid = 987654
+    await runTurnEvent('preflight', cwd, { ...hook, supremo_host_pid: deadPid }, 'codex', deps)
+    const state = (await runTurnEvent('status', cwd)).state!
+    const file = path.join(cwd, TURN_DIR, 'mutation-lease.json')
+    writeJson(file, { version: 2, toolUseId: 'write', sessionId: state.sessionId, turnId: state.turn.turnId,
+      hostPid: deadPid, hostGroupId: deadPid, executionScope: 'host-file-operation' })
+    const probe = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
+    try {
+      const next = await runTurnEvent('preflight', cwd, { ...hook, session_id: 'new-session' }, 'codex', deps)
+      expect(next.allowed).toBe(true)
+      expect(next.state?.sessionId).toBe('new-session')
+      expect(readJson(file)).toBeNull()
+      expect(probe).toHaveBeenCalledWith(-deadPid, 0)
+    } finally { probe.mockRestore() }
+  })
+
   it('allows repairing code while preview and validation worker are unavailable', async () => {
     await runTurnEvent('preflight', cwd, hook, 'codex', deps); change(); await runTurnEvent('complete', cwd); failRemote()
     remote.feedback.current!.failures = [{ name: 'security', category: 'security' }]
@@ -475,6 +543,24 @@ describe('foreground recovery before the next ordinary request', () => {
     environment: 'development', status: 'passed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
     summary: 'Conferência parcial', logs: '', checks: types.map(type => ({ name: type, type, status: 'passed' })),
     criterionIds: [], acceptanceCriteria: [],
+  })
+  it('hands off a final snapshot only to a proved available recovery worker, keeping failure and publication gates open', async () => {
+    await pending()
+    fs.writeFileSync(path.join(cwd, 'src/colors.css'), 'button { background: blue }')
+    const verifyRecovery = vi.fn(proof)
+    const completed = await runTurnEvent('complete', cwd, {}, 'codex', { ...deps, verifyRecovery, backgroundRecoveryAvailable: () => true })
+    expect(completed.allowed).toBe(true)
+    expect(completed.state?.delivery).toBe('preview_pending_recovery')
+    expect(completed.state?.turn.recovery?.required).toBe(true)
+    expect(verifyRecovery).not.toHaveBeenCalled()
+    const record = defaultCheckpointDeps(cwd).readQueue().at(-1)!
+    expect(record).toMatchObject({ validationStatus: 'pending', recoveryValidation: true })
+    expect(readJson(path.join(cwd, '.supremo/validation/recovery', `${record.checkpointId}.json`))).toMatchObject({
+      checkpointId: record.checkpointId, fingerprint: record.treeSha, requiredTypes: ['typecheck'], responsible: 'validation-and-repair-worker', status: 'pending',
+    })
+    const publish = vi.fn()
+    await drainOnce({ cwd, projectId: PROJECT, apiBaseUrl: 'https://supremo.example.invalid', getSecret: () => null }, { http: { publish } as never })
+    expect(publish).not.toHaveBeenCalled()
   })
   it('rejects cosmetic-only completion, accepts verified test corrections, and neither publishes partial proof nor replays the old failure', async () => {
     const opened = await pending()

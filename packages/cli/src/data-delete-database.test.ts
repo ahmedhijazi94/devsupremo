@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runDatabaseDirect } from './database'
+import { drainDurableOperations, enqueueDatabaseOperation, readDurableOperation, resumeDatabaseOperation } from './durable-operations'
 
 const projectId = '11111111-1111-4111-8111-111111111111'
 const planId = '22222222-2222-4222-8222-222222222222'
@@ -78,15 +79,43 @@ describe('deletion transport remains bound to the authorized development project
     await expect(apply()).rejects.toThrow('Plano expirado ou já utilizado.')
     expect(calls.map(call => call.operation)).toEqual(['status', 'data-delete-apply'])
   })
-  it.each(['network', 'body', 'json'])('requires reconciliation after an uncertain %s failure without exposing raw errors or retrying', async stage => {
+  it('keeps an HTTP409 operation_uncertain receipt uncertain in the durable queue and never repeats the deletion', async () => {
+    const original = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      const input = JSON.parse(String(init?.body)) as Record<string, unknown>
+      if (input.operation === 'data-delete-apply') {
+        calls.push(input)
+        return Promise.resolve(Response.json({ error: 'Exclusão ainda não confirmada.', code: 'operation_uncertain', operationId: planId, operationState: 'uncertain' }, { status: 409 }))
+      }
+      return original(url, init)
+    })
+    const id = enqueueDatabaseOperation(cwd, 'data-delete-apply', { environment: 'development', planToken, authorization: 'Excluir o registro solicitado.' })
+    const execute = vi.fn((operation: Parameters<typeof runDatabaseDirect>[0], options?: Parameters<typeof runDatabaseDirect>[2]) => runDatabaseDirect(operation, cwd, options))
+    await drainDurableOperations(cwd, execute)
+    await drainDurableOperations(cwd, execute)
+    expect(readDurableOperation(cwd, id)).toMatchObject({ status: 'uncertain', error: expect.stringContaining('Não repita delete-apply') })
+    expect(() => resumeDatabaseOperation(cwd, id)).toThrow('Somente recusa')
+    expect(calls.map(call => call.operation)).toEqual(['status', 'data-delete-apply'])
+    expect(execute).toHaveBeenCalledTimes(1)
+  })
+  it.each(['network', 'body', 'json', 'oversize'])('requires reconciliation after an uncertain %s failure without exposing raw errors or retrying', async stage => {
     const original = vi.mocked(fetch).getMockImplementation()!
     vi.mocked(fetch).mockImplementation((url, init) => {
       if (JSON.parse(String(init?.body)).operation === 'data-delete-apply') {
         calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
         if (stage === 'network') return Promise.reject(new Error('raw private network detail'))
-        const response = new Response('raw private malformed response')
-        if (stage === 'body') vi.spyOn(response, 'text').mockRejectedValue(new Error('raw private body detail'))
-        return Promise.resolve(response)
+        let chunks = 0
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (stage === 'oversize') controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1))
+            else if (stage === 'body' && chunks++ > 0) controller.error(new Error('raw private body detail'))
+            else {
+              controller.enqueue(new TextEncoder().encode('raw private malformed response'))
+              if (stage === 'json') controller.close()
+            }
+          },
+        }, { highWaterMark: 0 })
+        return Promise.resolve(new Response(body))
       }
       return original(url, init)
     })
@@ -99,30 +128,40 @@ describe('deletion transport remains bound to the authorized development project
   })
   it.each(['request', 'body'])('releases the worker when the provider ignores cancellation in the %s', async stage => {
     vi.useFakeTimers()
+    const cancel = vi.fn(() => new Promise<void>(() => undefined))
+    let signal: AbortSignal | null | undefined
     const original = vi.mocked(fetch).getMockImplementation()!
     vi.mocked(fetch).mockImplementation((url, init) => {
       if (JSON.parse(String(init?.body)).operation === 'data-delete-apply') {
         calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        signal = init?.signal
         if (stage === 'body') {
-          const response = Response.json({})
-          vi.spyOn(response, 'text').mockImplementation(() => new Promise<string>(() => undefined))
-          return Promise.resolve(response)
+          return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ cancel })))
         }
         return new Promise<Response>(() => undefined)
       }
       return original(url, init)
     })
-    const pending = apply().catch((error: unknown) => error)
-    await vi.advanceTimersByTimeAsync(60_000)
+    let settled = false
+    const pending = apply().catch((error: unknown) => { settled = true; return error })
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
     expect((await pending as Error).message).toContain('Não repita delete-apply')
+    expect(signal?.aborted).toBe(true)
+    expect(cancel).toHaveBeenCalledTimes(stage === 'body' ? 1 : 0)
     expect(calls.map(call => call.operation)).toEqual(['status', 'data-delete-apply'])
   })
-  it('never starts a deletion when the fresh status request hangs', async () => {
+  it.each(['request', 'body'])('never starts a deletion when the fresh status %s hangs', async stage => {
     vi.useFakeTimers()
-    vi.mocked(fetch).mockImplementation(() => new Promise<Response>(() => undefined))
+    const cancel = vi.fn()
+    vi.mocked(fetch).mockImplementation(() => stage === 'body'
+      ? Promise.resolve(new Response(new ReadableStream<Uint8Array>({ cancel })))
+      : new Promise<Response>(() => undefined))
     const pending = apply().catch((error: unknown) => error)
     await vi.advanceTimersByTimeAsync(15_000)
     expect((await pending as Error).message).toContain('nenhum pedido de exclusão foi enviado')
     expect(fetch).toHaveBeenCalledTimes(1)
+    expect(cancel).toHaveBeenCalledTimes(stage === 'body' ? 1 : 0)
   })
 })

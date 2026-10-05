@@ -5,7 +5,7 @@ import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import { getProject } from '@/lib/projects/repository'
 import { readEnvironment } from '@/lib/database-environment/store'
 import { runAuthorizedDelete } from '@/lib/database-delete/server'
-import { DataDeleteError } from '@/lib/database-delete/contract'
+import { DataDeleteError, DataDeleteOperationError } from '@/lib/database-delete/contract'
 vi.mock('@/lib/supabase/admin', () => ({ createServiceClient: () => ({}) }))
 vi.mock('@/lib/checkpoint/store', () => ({ supabaseCheckpointDeviceStore: () => ({}) }))
 vi.mock('@/lib/checkpoint/devices', () => ({ authenticateDeviceSecret: vi.fn() }))
@@ -45,5 +45,13 @@ describe('typed deletion device API', () => {
     expect(await (await POST(request())).json()).toEqual({ error: 'Plano expirado.' })
     vi.mocked(runAuthorizedDelete).mockRejectedValueOnce(new Error('private secret'))
     expect(JSON.stringify(await (await POST(request())).json())).not.toContain('private secret')
+  })
+  it.each(['uncertain', 'running', 'failed'] as const)('returns the remote operation ID and %s outcome without losing its classification', async operationState => {
+    const operationId = '00000000-0000-4000-8000-000000000090'
+    vi.mocked(runAuthorizedDelete).mockRejectedValueOnce(new DataDeleteOperationError(operationId, operationState))
+    const response = await POST(request({ operation: 'data-delete-apply', targets: undefined, planToken: 'signed-fixture'.repeat(8), authorization: 'Excluir o registro solicitado.' }))
+    expect(response.status).toBe(409)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toMatchObject({ code: operationState === 'failed' ? 'operation_failed' : 'operation_uncertain', operationId, operationState })
   })
 })

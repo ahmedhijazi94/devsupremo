@@ -11,6 +11,7 @@ import { authPasswordRequest, emailIntegrationRequest } from './integration-requ
 const PROJECT = '11111111-1111-4111-8111-111111111111'
 const ISSUER = 'https://supremo.example.invalid'
 const SECRET = 'fixture-device-secret-only'
+const receipt = (id: string) => ({ id, capability: 'credentials.use', environment: 'development', state: 'succeeded', updatedAt: '2026-10-05T10:00:00Z' })
 vi.mock('./daemon', () => ({ readProjectConfig: () => ({ projectId: PROJECT, apiBaseUrl: ISSUER }) }))
 vi.mock('./keychain', () => ({ resolveKeychain: () => ({ get: () => JSON.stringify({ version: 1, projectId: PROJECT, issuer: ISSUER, secret: SECRET }) }) }))
 const entry = { name: 'STRIPE_SECRET_KEY', description: 'Assinar pagamentos no servidor', target: 'supabase' as const, environment: 'development' as const }
@@ -49,13 +50,14 @@ describe('named secret requests never carry secret values', () => {
     const result = await runDatabaseDirect('secrets-credentials', cwd)
     expect(JSON.stringify(result)).not.toContain('never-return')
     expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'credentials' })
-    fetcher.mockResolvedValue(Response.json({ projectId: PROJECT, credentials: [] }))
-    await runDatabaseDirect('secrets-revoke-credential', cwd, { credentialId })
-    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'revoke-credential', credentialId })
+    const operationId = '44444444-4444-4444-8444-444444444444'
+    fetcher.mockResolvedValue(Response.json({ projectId: PROJECT, credentials: [], receipt: receipt(operationId) }))
+    await runDatabaseDirect('secrets-revoke-credential', cwd, { credentialId, operationId })
+    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'revoke-credential', credentialId, operationId })
   })
   it('applies a vault reference through the server and reports only the targeted fulfilled receipt', async () => {
     const requestId = '22222222-2222-4222-8222-222222222222', credentialId = '33333333-3333-4333-8333-333333333333'
-    const fetcher = vi.fn().mockResolvedValue(Response.json({ projectId: PROJECT, requests: [
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ projectId: PROJECT, receipt: receipt(requestId), requests: [
       { id: requestId, ...entry, targetRef: 'owned-ref', status: 'fulfilled' },
       { id: credentialId, ...entry, name: 'OTHER_KEY', targetRef: 'owned-ref', status: 'pending' },
     ] }))
@@ -72,7 +74,7 @@ describe('named secret requests never carry secret values', () => {
       selectedRequestIds: [requestId], nextAction: { kind: 'continue_integration' },
     })
     expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'status' })
-    fetcher.mockResolvedValue(Response.json({ projectId: PROJECT, requests: [{ id: requestId, ...entry, targetRef: 'owned-ref', status: 'pending' }] }))
+    fetcher.mockResolvedValue(Response.json({ projectId: PROJECT, receipt: receipt(requestId), requests: [{ id: requestId, ...entry, targetRef: 'owned-ref', status: 'pending' }] }))
     await expect(runDatabaseDirect('secrets-apply', cwd, { requestId, credentialId })).rejects.toThrow('não confirmou')
   })
   it('sends metadata through the daemon and returns a form URL pinned to the issuer', async () => {
@@ -133,7 +135,7 @@ describe('declarative Supabase jobs retain environment and source restrictions',
   })
   it('applies only the fixed declarative source after verifying the development link', async () => {
     await runDatabaseDirect('cron-apply', cwd)
-    expect(calls[1]?.body).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'cron-apply', expectedRef: 'owned-ref', environment: 'development', manifest })
+    expect(calls[1]?.body).toEqual({ projectId: PROJECT, deviceSecret: SECRET, operation: 'cron-apply', expectedRef: 'owned-ref', environment: 'development', manifest, operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) })
     expect(() => parseDatabaseOptions('cron-apply', { manifest })).toThrow()
     expect(() => parseDatabaseOptions('cron-apply', { sql: 'delete from tickets' })).toThrow()
   })

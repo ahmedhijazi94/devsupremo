@@ -22,6 +22,8 @@ export type PushStatus =
   | 'push_failed'
 
 export interface CheckpointRecord {
+  /** A previous failure requires full checks even when this diff is cosmetic. */
+  recoveryValidation?: boolean
   /** Explicitly unapproved until evidence for this exact commit is attached. */
   validationStatus?: 'pending' | 'running' | 'passed' | 'failed' | 'deferred'
   validationId?: string

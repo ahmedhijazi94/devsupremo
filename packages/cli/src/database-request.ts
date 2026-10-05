@@ -1,62 +1,95 @@
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import { credentialApplyOptionsSchema, credentialIdSchema, jobIdSchema, secretRequestOptionsSchema, type RequestedSecret } from './project-service-request'
-import { authOptionsSchema, authOperationSchema, type AuthOptions } from '../../../src/lib/database-admin/options'
-import { authPasswordRequest, emailIntegrationRequest, validateCredentialReuse } from './integration-request'
-import { functionOperationSchema } from '../../../src/lib/edge-functions/contract'
+import { authOptionsSchema, authOperationSchema, isAuthRead, type AuthOptions } from '../../../src/lib/database-admin/options'
+import { authPasswordRequest, authProviderIntegrationRequest, emailIntegrationRequest, validateCredentialReuse } from './integration-request'
+import { functionOperationSchema, isFunctionRead } from '../../../src/lib/edge-functions/contract'
 import { parseFunctionOptions, type FunctionFields } from './functions-request'
 import { deleteOperationSchema, deleteOptionsSchema, type DeleteOptions } from '../../../src/lib/database-delete/contract'
+import { mutationOperationSchema, mutationOptionsSchema, type MutationAction } from '../../../src/lib/database-mutations/contract'
+import { storageOptionsSchema, type StorageOptions } from '../../../src/lib/project-storage/contract'
+import { integrationOptionsSchema, type IntegrationOptions } from '../../../src/lib/integrations/contract'
+import { connectionProposalInputSchema, type ConnectionProposalInput } from '../../../src/lib/provider-connections/proposals-contract'
+import { usageReadSchema } from '../../../src/lib/backend-observability/contract'
+
+export const backendCommandOperationSchema = z.enum(['backend-catalog', 'backend-policy', 'backend-operation-status', 'backend-approval-status', 'backend-storage', 'backend-integration', 'backend-integration-status', 'backend-integration-propose', 'backend-usage'])
 
 export const databaseOperationSchema = z.enum(['status', 'migrate', 'anonymous-auth', 'inspect', 'query', 'logs', 'report',
-  'secrets-request', 'secrets-status', 'secrets-dismiss', 'secrets-credentials', 'secrets-apply', 'secrets-revoke-credential', 'cron-list', 'cron-history', 'cron-apply', 'cron-pause', 'cron-resume', 'cron-remove', ...authOperationSchema.options, ...functionOperationSchema.options, ...deleteOperationSchema.options])
+  'secrets-request', 'secrets-status', 'secrets-dismiss', 'secrets-credentials', 'secrets-apply', 'secrets-revoke-credential', 'cron-list', 'cron-history', 'cron-apply', 'cron-pause', 'cron-resume', 'cron-remove', 'cron-run-now', ...authOperationSchema.options, ...functionOperationSchema.options, ...deleteOperationSchema.options, ...mutationOperationSchema.options, ...backendCommandOperationSchema.options])
 export type DatabaseOperation = z.infer<typeof databaseOperationSchema>
 const target = { environment: z.enum(['development', 'production', 'unknown']).optional() }
 const bounded = { limit: z.number().int().min(1).max(200).default(50) }
 const page = { offset: z.number().int().min(0).max(10_000).default(0) }
 const logging = { minutes: z.number().int().min(1).max(1440).default(60),
   source: z.enum(['postgres', 'auth', 'api', 'functions', 'storage', 'realtime']).default('postgres'),
-  level: z.enum(['all', 'error']).default('all') }
+  level: z.enum(['all', 'error']).default('all'), search: z.string().trim().min(1).max(160).refine(value => !/[\u0000-\u001f\u007f]/.test(value)).optional() }
 export const databaseReadOptionsSchema = z.object({ ...target, ...bounded,
   sql: z.string().min(1).max(12_000).optional(), offset: page.offset.optional(),
   table: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/).optional(),
-  minutes: logging.minutes.optional(), source: logging.source.optional(), level: logging.level.optional(),
+  minutes: logging.minutes.optional(), source: logging.source.optional(), level: logging.level.optional(), search: logging.search,
 }).strict()
-type AuthFields = { config?: Extract<AuthOptions, { operation: 'auth-configure' }>['config']; user?: Extract<AuthOptions, { operation: 'auth-update' }>['user']; userId?: string; email?: string; emailConfirmed?: boolean }
+type AuthFields = { config?: Extract<AuthOptions, { operation: 'auth-configure' }>['config']; user?: Extract<AuthOptions, { operation: 'auth-update' }>['user']; userId?: string; email?: string; emailConfirmed?: boolean; redirectTo?: string | undefined; roles?: string[]; manifestVersion?: 1 }
 type DeleteFields = { targets?: Extract<DeleteOptions, { operation: 'data-delete-plan' }>['targets']; planToken?: string; authorization?: string }
-export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & DeleteFields & Omit<FunctionFields, 'environment'> & { requests?: RequestedSecret[]; requestId?: string; credentialId?: string; jobId?: string | undefined }
+export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & DeleteFields & Omit<FunctionFields, 'environment'> & { requests?: RequestedSecret[]; requestId?: string; credentialId?: string; jobId?: string | undefined; operationId?: string | undefined; action?: MutationAction; id?: string; options?: StorageOptions | IntegrationOptions | ConnectionProposalInput | z.infer<typeof usageReadSchema> }
 
 /** Scope selectors never include URLs, refs or credentials. Server authority is
  * checked again for every operation, including production reads. */
 export function parseDatabaseOptions(operation: DatabaseOperation, options: unknown = {}): DatabaseOptions {
   databaseOperationSchema.parse(operation)
+  if (backendCommandOperationSchema.safeParse(operation).success) {
+    if (operation === 'backend-usage') return z.object({ options: usageReadSchema }).strict().parse(options)
+    if (operation === 'backend-approval-status') return z.object({ operationId: z.string().uuid() }).strict().parse(options)
+    if (operation === 'backend-operation-status') return z.object({ id: z.string().uuid() }).strict().parse(options)
+    if (operation === 'backend-storage') return z.object({ options: storageOptionsSchema }).strict().parse(options)
+    if (operation === 'backend-integration') return z.object({ options: integrationOptionsSchema }).strict().parse(options)
+    if (operation === 'backend-integration-propose') return z.object({ options: connectionProposalInputSchema }).strict().parse(options)
+    return z.object({}).strict().parse(options)
+  }
+  if (mutationOperationSchema.safeParse(operation).success) {
+    const fields = z.record(z.string(), z.unknown()).parse(options)
+    const { operation: selected, ...parsed } = mutationOptionsSchema.parse({ ...fields, operation }); void selected
+    return parsed
+  }
   if (deleteOperationSchema.safeParse(operation).success) {
     const fields = z.record(z.string(), z.unknown()).parse(options)
     const { operation: selected, ...parsed } = deleteOptionsSchema.parse({ ...fields, operation })
     void selected
     return parsed
   }
-  if (functionOperationSchema.safeParse(operation).success) return parseFunctionOptions(operation, options)
+  if (functionOperationSchema.safeParse(operation).success) {
+    const fields = z.record(z.string(), z.unknown()).parse(options)
+    return parseFunctionOptions(operation, isFunctionRead(operation)
+      ? fields : { ...fields, operationId: fields.operationId ?? randomUUID() })
+  }
   if (authOperationSchema.safeParse(operation).success) {
     const fields = z.record(z.string(), z.unknown()).parse(options)
-    const { operation: selected, ...parsed } = authOptionsSchema.parse({ ...fields, operation })
+    const { operationId: suppliedId, ...domain } = fields
+    const { operation: selected, ...parsed } = authOptionsSchema.parse({ ...domain, operation })
     void selected
-    return parsed
+    if (isAuthRead(selected)) {
+      if (suppliedId !== undefined) throw new Error('Consultas de autenticação não recebem ID de alteração.')
+      return parsed
+    }
+    return { ...parsed, operationId: z.string().uuid().parse(suppliedId ?? randomUUID()) }
   }
   if (operation === 'secrets-request') return secretRequestOptionsSchema.parse(options)
   if (operation === 'secrets-dismiss') return z.object({ requestId: z.string().uuid() }).strict().parse(options)
   if (operation === 'secrets-apply') return credentialApplyOptionsSchema.parse(options)
-  if (operation === 'secrets-revoke-credential') return z.object({ credentialId: credentialIdSchema }).strict().parse(options)
+  if (operation === 'secrets-revoke-credential') return z.object({ credentialId: credentialIdSchema, operationId: z.string().uuid().default(() => randomUUID()) }).strict().parse(options)
   if (operation === 'secrets-status') {
     const input = z.object({ requestId: z.string().uuid().optional() }).strict().parse(options)
     return input.requestId ? { requestId: input.requestId } : {}
   }
   if (operation === 'secrets-credentials') return z.object({}).strict().parse(options)
   const jobTarget = { environment: z.enum(['development', 'production']).optional() }
-  if (operation === 'cron-apply') return z.object(jobTarget).strict().parse(options)
-  if (['cron-pause', 'cron-resume', 'cron-remove'].includes(operation)) return z.object({ jobId: jobIdSchema, ...jobTarget }).strict().parse(options)
+  if (operation === 'cron-apply') return z.object({ ...jobTarget, operationId: z.string().uuid().default(randomUUID) }).strict().parse(options)
+  if (operation === 'cron-run-now') return z.object({ jobId: jobIdSchema, operationId: z.string().uuid(), ...jobTarget }).strict().parse(options)
+  if (['cron-pause', 'cron-resume', 'cron-remove'].includes(operation)) return z.object({ jobId: jobIdSchema, operationId: z.string().uuid().default(randomUUID), ...jobTarget }).strict().parse(options)
   const cronPage = z.object({ ...target, ...page, limit: z.number().int().min(1).max(100).default(50) }).strict()
   if (operation === 'cron-list') return cronPage.parse(options)
   if (operation === 'cron-history') return cronPage.extend({ jobId: jobIdSchema.optional() }).parse(options)
-  if (operation === 'status' || operation === 'migrate' || operation === 'anonymous-auth') return z.object({}).strict().parse(options)
+  if (operation === 'migrate' || operation === 'anonymous-auth') return z.object({ operationId: z.string().uuid().default(randomUUID) }).strict().parse(options)
+  if (operation === 'status') return z.object({}).strict().parse(options)
   if (operation === 'query') return z.object({ ...target, ...bounded, ...page, sql: z.string().min(1).max(12_000) }).strict().parse(options)
   if (operation === 'logs' || operation === 'report') return z.object({ ...target, ...bounded, ...page, ...logging }).strict().parse(options)
   return z.object({ ...target, ...bounded, ...page, table: databaseReadOptionsSchema.shape.table }).strict().parse(options)
@@ -81,8 +114,12 @@ export function isDatabaseReadCommand(command: string): boolean {
   if (tokens.shift() !== 'supremo') return false
   const family = tokens.shift()
   const requestedOperation = tokens.shift()
+  if (family === 'backend') {
+    if (['catalog', 'policy', 'integration-status'].includes(requestedOperation ?? '')) return tokens.length === 0
+    return requestedOperation === 'operation-status' && tokens.length === 1 && z.string().uuid().safeParse(tokens[0]).success
+  }
   if (family === 'data') {
-    if (requestedOperation !== 'delete-plan') return false
+    if (requestedOperation !== 'delete-plan' && requestedOperation !== 'plan') return false
     const fields: Record<string, string> = {}
     while (tokens.length) {
       const flag = tokens.shift()!
@@ -93,16 +130,22 @@ export function isDatabaseReadCommand(command: string): boolean {
       && (fields['--output'] === undefined || fields['--output'].length > 0 && fields['--output'].length <= 4096)
   }
   if (family === 'functions') {
-    if (!['list', 'status', 'hook-status'].includes(requestedOperation ?? '')) return false
+    if (!['list', 'status', 'hook-status', 'history', 'code'].includes(requestedOperation ?? '')) return false
     const fields: Record<string, unknown> = { environment: 'development' }
-    if (requestedOperation === 'status') fields.slug = tokens.shift()
-    if (tokens.length === 2 && tokens[0] === '--environment') fields.environment = tokens.splice(0, 2)[1]
-    if (tokens.length) return false
+    if (['status', 'history', 'code'].includes(requestedOperation ?? '')) fields.slug = tokens.shift()
+    const flags = new Set<string>()
+    while (tokens.length) {
+      const flag = tokens.shift()!
+      if (!['--environment', '--version'].includes(flag) || !tokens.length || flags.has(flag)) return false
+      flags.add(flag)
+      if (flag === '--environment') fields.environment = tokens.shift()
+      else fields.version = Number(tokens.shift())
+    }
     try { parseFunctionOptions(`functions-${requestedOperation}`, fields); return true } catch { return false }
   }
-  if ((family === 'integrations' && requestedOperation === 'email') || (family === 'auth' && requestedOperation === 'password')) {
+  if ((family === 'integrations' && ['email', 'auth-provider'].includes(requestedOperation ?? '')) || (family === 'auth' && requestedOperation === 'password')) {
     const fields: Record<string, string> = {}
-    const names: Record<string, string> = { '--provider': 'provider', '--sender-email': 'senderEmail', '--sender-name': 'senderName', '--environment': 'environment', '--user-id': 'userId', '--credential-id': 'credentialId' }
+    const names: Record<string, string> = { '--provider': 'provider', '--client-id': 'clientId', '--sender-email': 'senderEmail', '--sender-name': 'senderName', '--environment': 'environment', '--user-id': 'userId', '--credential-id': 'credentialId' }
     while (tokens.length) {
       const flag = tokens.shift()!, key = Object.hasOwn(names, flag) ? names[flag] : undefined
       if (!key || !tokens.length || Object.hasOwn(fields, key)) return false
@@ -111,7 +154,7 @@ export function isDatabaseReadCommand(command: string): boolean {
     try {
       if (family === 'integrations') {
         const { credentialId, ...input } = fields
-        validateCredentialReuse(emailIntegrationRequest(input), credentialId)
+        validateCredentialReuse(requestedOperation === 'auth-provider' ? authProviderIntegrationRequest(input) : emailIntegrationRequest(input), credentialId)
       }
       else authPasswordRequest(fields)
       return true

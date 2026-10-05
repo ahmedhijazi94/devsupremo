@@ -38,7 +38,7 @@ describe('secret requests device endpoint', () => {
   it('scopes every operation to the authenticated owner, refusing a foreign project before metadata reads', async () => {
     mocks.authorize.mockRejectedValue(new SecretRequestError('Projeto não autorizado.'))
     expect((await POST(request())).status).toBe(409)
-    expect(mocks.store).toHaveBeenCalledWith({}, 'owner', projectId)
+    expect(mocks.store).toHaveBeenCalledWith({}, 'owner', projectId,undefined,expect.any(Function))
     expect(mocks.list).not.toHaveBeenCalled()
     expect(mocks.insert).not.toHaveBeenCalled()
   })

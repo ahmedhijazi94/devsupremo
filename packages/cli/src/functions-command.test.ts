@@ -42,6 +42,9 @@ describe('functions CLI commands', () => {
     { args: ['list'], operation: 'functions-list', options: { environment: 'development' } },
     { args: ['status', 'send-email'], operation: 'functions-status', options: { environment: 'development', slug: 'send-email' } },
     { args: ['hook-status'], operation: 'functions-hook-status', options: { environment: 'development' } },
+    { args: ['history', 'send-email'], operation: 'functions-history', options: { environment: 'development', slug: 'send-email' } },
+    { args: ['code', 'send-email', '--version', '3'], operation: 'functions-code', options: { environment: 'development', slug: 'send-email', version: 3 } },
+    { args: ['test', 'send-email', '--expected-version', '3'], operation: 'functions-test', options: { environment: 'development', slug: 'send-email', expectedVersion: 3 } },
     { args: ['hook-configure', 'send-email'], operation: 'functions-hook-configure',
       options: { environment: 'development', slug: 'send-email', secretName: 'AUTH_SEND_EMAIL_HOOK_SECRET' } },
   ])('routes $operation through the daemon', async ({ args, operation, options }) => {
@@ -69,6 +72,7 @@ describe('function diagnostics during local recovery', () => {
     'supremo functions status send-email --environment development', 'supremo functions list --environment production',
     'node tools/supremo-cli/dist/bin.js functions hook-status',
     'node node_modules/supremo-cli/dist/bin.js functions list',
+    'supremo functions history send-email', 'supremo functions code send-email --version 3 --environment production',
   ])('allows the literal read command %s', command => {
     expect(isDatabaseReadCommand(command)).toBe(true)
   })
@@ -80,6 +84,7 @@ describe('function diagnostics during local recovery', () => {
     'supremo functions list --expected-ref foreign', 'supremo functions hook-status --secret fixture',
     'supremo functions status send-email && echo unsafe', 'supremo functions list; echo unsafe',
     'supremo functions status $(cat .env.local)',
+    'supremo functions test send-email --expected-version 3', 'supremo functions code send-email', 'supremo functions list --version 3',
   ])('refuses writes and composed or injected read commands: %s', command => {
     expect(isDatabaseReadCommand(command)).toBe(false)
   })

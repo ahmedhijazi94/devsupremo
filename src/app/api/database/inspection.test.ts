@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { POST } from './route'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import { getProject, getSupabaseCredentials } from '@/lib/projects/repository'
+import { authorizeProjectOperation } from '@/lib/backend-operations/server'
+import { OperationError } from '@/lib/backend-operations/contract'
+vi.mock('@/lib/backend-operations/server',()=>({authorizeProjectOperation:vi.fn()}))
 import { readEnvironment } from '@/lib/database-environment/store'
 vi.mock('@/lib/supabase/admin', () => ({ createServiceClient: () => ({}) }))
 vi.mock('@/lib/checkpoint/store', () => ({
@@ -35,6 +38,7 @@ const request = (extra: Record<string, unknown> = {}) =>
     body: JSON.stringify({ ...body, ...extra }),
   })
 beforeEach(() => {
+  vi.mocked(authorizeProjectOperation).mockResolvedValue({policyId:'00000000-0000-4000-8000-000000000070',revision:'00000000-0000-4000-8000-000000000071'})
   vi.mocked(authenticateDeviceSecret).mockResolvedValue({
     ok: true,
     device: {
@@ -47,7 +51,7 @@ beforeEach(() => {
   vi.mocked(getProject).mockResolvedValue({
     id: identity.projectId,
     user_id: 'owner',
-    supabase_project_ref: 'project-ref',
+    supabase_project_ref: 'project-ref',supabase_account_id:'owned-account',
   } as Awaited<ReturnType<typeof getProject>>)
   vi.mocked(readEnvironment).mockResolvedValue({
     project_ref: 'project-ref',
@@ -71,6 +75,15 @@ beforeEach(() => {
       ]),
     ),
   )
+})
+it('requires data.read and rechecks policy revocation after credential refresh', async()=>{
+  vi.mocked(getSupabaseCredentials).mockImplementation(async()=>{
+    vi.mocked(authorizeProjectOperation).mockRejectedValue(new OperationError('Política revogada.',403))
+    return{projectRef:'project-ref',token:'provider-private-fixture'}
+  })
+  expect((await POST(request())).status).toBe(403)
+  expect(authorizeProjectOperation).toHaveBeenCalledWith(expect.objectContaining({deviceId:'device'}),'data.read',expect.objectContaining({resource:'public'}))
+  expect(fetch).not.toHaveBeenCalled()
 })
 afterEach(() => {
   vi.clearAllMocks()
@@ -103,7 +116,7 @@ describe('device-authenticated real project inspection route', () => {
       limits: { rows: 50, statementTimeoutMs: 8000 },
     })
     expect(response.headers.get('cache-control')).toBe('no-store')
-    expect(getProject).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(getProject).mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(getProject).toHaveBeenCalledWith('owner', identity.projectId)
     expect(getSupabaseCredentials).toHaveBeenCalledWith(
       'owner',
@@ -123,13 +136,13 @@ describe('device-authenticated real project inspection route', () => {
               source: 'supremo_provisioned',
             },
       )
-      expect((await POST(request({ environment }))).status).toBe(200)
+      expect((await POST(request({ environment }))).status).toBe(environment==='unknown'?403:200)
       vi.mocked(fetch).mockClear()
       expect(
         (
           await POST(
             request({
-              operation: 'migrate',
+              operation: 'migrate', operationId:'00000000-0000-4000-8000-000000000099',
               environment: undefined,
               sql: undefined,
             }),

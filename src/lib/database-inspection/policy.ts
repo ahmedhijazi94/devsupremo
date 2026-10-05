@@ -28,9 +28,11 @@ export const inspectionOptionsSchema = z
       .enum(['postgres', 'auth', 'api', 'functions', 'storage', 'realtime'])
       .default('postgres'),
     level: z.enum(['all', 'error']).default('all'),
+    search: z.string().trim().min(1).max(160).refine(value => !/[\u0000-\u001f\u007f]/.test(value)).optional(),
   })
   .strict()
   .superRefine((value, context) => {
+    if (value.search && !['logs', 'report'].includes(value.operation)) context.addIssue({ code: 'custom', message: 'Busca textual é aceita apenas nos logs.' })
     if ((value.operation === 'query') !== (value.sql !== undefined)) {
       context.addIssue({
         code: 'custom',

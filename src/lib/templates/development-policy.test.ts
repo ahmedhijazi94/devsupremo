@@ -8,7 +8,7 @@ describe('upgrade of mixed user/platform instructions', () => {
     const custom = '# Minhas regras\nNão mude minhas cores.\n'
     const updated = withDevelopmentPolicy(custom + legacy + '\n## Meu rodapé\n')
     expect(updated).not.toContain(legacy)
-    expect(updated).toContain('Falhas anteriores confirmadas são corrigidas pelo próprio agente')
+    expect(updated).toContain('Falhas anteriores confirmadas são corrigidas junto do próximo pedido no snapshot final')
     expect(updated).toContain(custom)
     expect(updated).toContain('## Meu rodapé\n')
     expect(withDevelopmentPolicy(updated)).toBe(updated)
@@ -80,7 +80,7 @@ explícita do humano e mostrar o \`project-ref\`: \`DROP\`, \`TRUNCATE\`, \`DELE
     expect(updated).toContain('não iniciam QA nem exigem checkpoint')
     expect(updated).toContain('inclusive segurança/RLS/migrations')
     expect(updated).toContain('developmentPolicy.previousFailures=repair_before_request')
-    expect(updated).toContain('corrija as causas\n  confirmadas antes do pedido novo')
+    expect(updated).toContain('corrija as causas\n  confirmadas junto do pedido novo, no mesmo snapshot final')
     expect(updated).toContain('turn recovery-check')
     expect(updated).toContain('preservando assertions, comportamento e requisitos')
     expect(updated).toContain('Pedidos explicitamente só de leitura ou para não alterar o app não iniciam correções')

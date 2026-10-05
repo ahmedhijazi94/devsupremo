@@ -22,9 +22,12 @@ export function logsParameters(
 ): URLSearchParams {
   const end = now.toISOString()
   const start = new Date(now.getTime() - options.minutes * 60_000).toISOString()
+  // ClickHouse string literals escape both the backslash and the quote.
+  // Search is a literal substring, never an expression or a regex supplied by a caller.
+  const search = options.search?.replaceAll('\\', '\\\\').replaceAll("'", "\\'")
   // Fixed ClickHouse projection: no headers, cookies, arbitrary log_attributes
   // or client SQL. Older BigQuery projects fail explicitly, never return [].
-  const sql = `SELECT timestamp, source, event_message FROM logs WHERE source = '${SOURCES[options.source]}'${options.level === 'error' ? " AND (positionCaseInsensitive(event_message, 'error') > 0 OR positionCaseInsensitive(event_message, 'fatal') > 0)" : ''} ORDER BY timestamp DESC LIMIT ${options.limit + 1} OFFSET ${options.offset}`
+  const sql = `SELECT timestamp, source, event_message FROM logs WHERE source = '${SOURCES[options.source]}'${options.level === 'error' ? " AND (positionCaseInsensitive(event_message, 'error') > 0 OR positionCaseInsensitive(event_message, 'fatal') > 0)" : ''}${search ? ` AND positionCaseInsensitiveUTF8(event_message, '${search}') > 0` : ''} ORDER BY timestamp DESC LIMIT ${options.limit + 1} OFFSET ${options.offset}`
   return new URLSearchParams({
     sql,
     iso_timestamp_start: start,

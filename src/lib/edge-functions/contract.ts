@@ -5,7 +5,7 @@ export const FUNCTION_FILE_BYTES = 128 * 1024
 export const FUNCTION_BUNDLE_BYTES = 512 * 1024
 export const FUNCTION_REQUEST_BYTES = 3_300_000
 export const FUNCTION_HOOK_SECRET_NAME = 'AUTH_SEND_EMAIL_HOOK_SECRET'
-export const functionOperationSchema = z.enum(['functions-list', 'functions-status', 'functions-deploy', 'functions-hook-status', 'functions-hook-configure'])
+export const functionOperationSchema = z.enum(['functions-list', 'functions-status', 'functions-deploy', 'functions-hook-status', 'functions-hook-configure', 'functions-remove', 'functions-rollback', 'functions-hook-disable', 'functions-history', 'functions-code', 'functions-test'])
 export const functionSlugSchema = z.string().min(1).max(64).regex(/^[a-z][a-z0-9_-]*(?![\s\S])/)
 export const functionPathSchema = z.string().max(240).refine(path => {
   if (!/^(src\/|supabase\/functions\/)/.test(path) || !/\.(ts|js|json)$/.test(path) || /[\s\\]/.test(path)) return false
@@ -18,6 +18,7 @@ const sourceSchema = z.string().max(FUNCTION_FILE_BYTES).refine(content => {
 }, 'Arquivo deve ser UTF-8 e ter no máximo 128 KiB.')
 export const functionEnvironmentSchema = z.enum(['development', 'production'])
 const environment = functionEnvironmentSchema
+const operationIdentity = { operationId: z.string().uuid().optional() }
 const deployFields = {
   slug: functionSlugSchema, environment,
   entrypoint: functionPathSchema,
@@ -36,23 +37,35 @@ export const functionDeploySchema = z.object(deployFields).strict().refine(valid
 const variants = [
   z.object({ operation: z.literal('functions-list'), environment }).strict(),
   z.object({ operation: z.literal('functions-status'), environment, slug: functionSlugSchema }).strict(),
-  z.object({ operation: z.literal('functions-deploy'), ...deployFields }).strict(),
+  z.object({ operation: z.literal('functions-deploy'), ...deployFields, ...operationIdentity }).strict(),
   z.object({ operation: z.literal('functions-hook-status'), environment }).strict(),
   z.object({ operation: z.literal('functions-hook-configure'), environment, slug: functionSlugSchema,
-    secretName: z.literal(FUNCTION_HOOK_SECRET_NAME).default(FUNCTION_HOOK_SECRET_NAME) }).strict(),
+    secretName: z.literal(FUNCTION_HOOK_SECRET_NAME).default(FUNCTION_HOOK_SECRET_NAME), replaceSlug: functionSlugSchema.optional(), ...operationIdentity }).strict(),
+  z.object({ operation: z.literal('functions-remove'), environment, slug: functionSlugSchema, expectedVersion: z.number().int().positive(), ...operationIdentity }).strict(),
+  z.object({ operation: z.literal('functions-rollback'), environment, slug: functionSlugSchema, expectedVersion: z.number().int().positive(), version: z.number().int().positive(), ...operationIdentity }).strict(),
+  z.object({ operation: z.literal('functions-hook-disable'), environment, slug: functionSlugSchema, ...operationIdentity }).strict(),
+  z.object({ operation: z.literal('functions-history'), environment, slug: functionSlugSchema }).strict(),
+  z.object({ operation: z.literal('functions-code'), environment, slug: functionSlugSchema, version: z.number().int().positive() }).strict(),
+  z.object({ operation: z.literal('functions-test'), environment, slug: functionSlugSchema, expectedVersion: z.number().int().positive(), ...operationIdentity }).strict(),
 ] as const
 export const functionOptionsSchema = z.discriminatedUnion('operation', variants).refine(value => value.operation !== 'functions-deploy' || validBundle(value), 'Bundle inválido.')
 const authority = { deviceSecret: z.string().min(10).max(256), projectId: z.string().uuid(), expectedRef: z.string().regex(/^[a-z0-9_-]+(?![\s\S])/).max(64) }
 export const functionRequestSchema = z.discriminatedUnion('operation', [
-  variants[0].extend(authority), variants[1].extend(authority), variants[2].extend(authority), variants[3].extend(authority), variants[4].extend(authority),
+  variants[0].extend(authority), variants[1].extend(authority), variants[2].extend(authority), variants[3].extend(authority), variants[4].extend(authority), variants[5].extend(authority), variants[6].extend(authority), variants[7].extend(authority),
+  variants[8].extend(authority), variants[9].extend(authority), variants[10].extend(authority),
 ]).refine(value => value.operation !== 'functions-deploy' || validBundle(value), 'Bundle inválido.')
+  .refine(value => ['functions-list', 'functions-status', 'functions-hook-status', 'functions-history', 'functions-code'].includes(value.operation) || 'operationId' in value && Boolean(value.operationId), 'Mutações exigem ID de operação persistente.')
 export type FunctionDeploy = z.infer<typeof functionDeploySchema>
 export type FunctionOptions = z.infer<typeof functionOptionsSchema>
 export type FunctionRequest = z.infer<typeof functionRequestSchema>
-export const isFunctionRead = (operation: string): boolean => ['functions-list', 'functions-status', 'functions-hook-status'].includes(operation)
+export const isFunctionRead = (operation: string): boolean => ['functions-list', 'functions-status', 'functions-hook-status', 'functions-history', 'functions-code'].includes(operation)
 
 export const functionViewSchema = z.object({ slug: functionSlugSchema, status: z.enum(['ACTIVE', 'REMOVED', 'THROTTLED']), version: z.number().int().nonnegative(), verifyJwt: z.boolean().nullable() })
 export const functionHookViewSchema = z.object({ enabled: z.boolean(), targetSlug: functionSlugSchema.nullable(), targetMatchesProject: z.boolean(), signingSecretConfigured: z.boolean() })
+export const functionArtifactVersionSchema = z.object({ version: z.number().int().positive(), createdAt: z.string(), hash: z.string().regex(/^[a-f0-9]{64}$/) }).strict()
+export const functionCodeViewSchema = z.object({ slug: functionSlugSchema, version: z.number().int().positive(), entrypoint: functionPathSchema,
+  files: z.array(z.object({ path: functionPathSchema, content: z.string().max(16000), truncated: z.boolean(), redacted: z.boolean() })).max(FUNCTION_MAX_FILES),
+  sanitized: z.literal(true), exactSource: z.literal(false) }).strict()
 const responseFields = { projectId: z.string().uuid(), projectRef: authority.expectedRef, environment,
   observedAt: z.iso.datetime(), execution: z.literal('server_api'), providerDashboardRequired: z.literal(false), valuesReceived: z.literal(false) }
 export const functionResponseSchema = z.discriminatedUnion('operation', [
@@ -61,5 +74,11 @@ export const functionResponseSchema = z.discriminatedUnion('operation', [
   z.object({ ...responseFields, operation: z.literal('functions-deploy'), readOnly: z.literal(false), data: z.object({ function: functionViewSchema, deployed: z.literal(true), verified: z.literal(true), deliveryVerified: z.literal(false) }) }),
   z.object({ ...responseFields, operation: z.literal('functions-hook-status'), readOnly: z.literal(true), data: z.object({ hook: functionHookViewSchema, deliveryVerified: z.literal(false) }) }),
   z.object({ ...responseFields, operation: z.literal('functions-hook-configure'), readOnly: z.literal(false), data: z.object({ hook: functionHookViewSchema, configured: z.literal(true), verified: z.literal(true), signatureVerified: z.literal(true), deliveryVerified: z.literal(false) }) }),
+  z.object({ ...responseFields, operation: z.literal('functions-remove'), readOnly: z.literal(false), data: z.object({ slug: functionSlugSchema, removed: z.literal(true), verified: z.literal(true) }) }),
+  z.object({ ...responseFields, operation: z.literal('functions-rollback'), readOnly: z.literal(false), data: z.object({ function: functionViewSchema, restoredFromVersion: z.number().int().positive(), verified: z.literal(true), deliveryVerified: z.literal(false) }) }),
+  z.object({ ...responseFields, operation: z.literal('functions-hook-disable'), readOnly: z.literal(false), data: z.object({ hook: functionHookViewSchema, disabled: z.literal(true), verified: z.literal(true), deliveryVerified: z.literal(false) }) }),
+  z.object({ ...responseFields, operation: z.literal('functions-history'), readOnly: z.literal(true), data: z.object({ versions: z.array(functionArtifactVersionSchema).max(100), complete: z.boolean() }) }),
+  z.object({ ...responseFields, operation: z.literal('functions-code'), readOnly: z.literal(true), data: functionCodeViewSchema }),
+  z.object({ ...responseFields, operation: z.literal('functions-test'), readOnly: z.literal(false), data: z.object({ function: functionViewSchema, signatureVerified: z.literal(true), payload: z.literal('empty_object'), requests: z.literal(4), deliveryVerified: z.literal(false) }) }),
 ])
 export type FunctionResponse = z.infer<typeof functionResponseSchema>

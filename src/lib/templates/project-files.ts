@@ -2739,7 +2739,7 @@ O ID pode alimentar outro nome de destino quando se tratar comprovadamente da me
 credencial, por exemplo uma chave Resend usada como AUTH_SMTP_PASSWORD.
 
 Para instalar uma referência já conhecida, acrescente \`--credential-id UUID\` a
-\`integrations request\` com um único nome ou a \`integrations email\`. O motor cria o pedido
+\`integrations request\` com um único nome, \`integrations email\` ou \`integrations auth-provider\`. O motor cria o pedido
 e aplica a credencial por API. Para um pedido pendente existente, use
 \`integrations apply PEDIDO --credential-id UUID\`. O ID é apenas uma referência; o servidor
 revalida projeto, ambiente e autoridade. Nenhum navegador é necessário nesses caminhos.
@@ -2796,6 +2796,20 @@ não revoga a chave no provedor nem altera a configuração já aplicada. Nenhum
 Um pedido fulfilled não aceita substituição silenciosa por outra credencial.
 Quando solicitado pelo usuário, \`integrations revoke-credential UUID\` remove somente
 a credencial do cofre; não revoga a chave nem desfaz sua instalação no provedor.
+
+### Login com Google ou GitHub
+
+\`node node_modules/supremo-cli/dist/bin.js integrations auth-provider --provider google --client-id CLIENT_ID --environment development\`
+prepara o campo seguro do client secret; use \`--provider github\` para GitHub.
+O Client ID é público. O client secret entra somente pelo formulário do dono ou por
+\`--credential-id UUID\` com uma referência comprovadamente adequada no cofre do mesmo
+ambiente. O motor configura o provedor no Supabase e confere estado habilitado e Client ID.
+O recibo \`auth_provider_configured\` confirma configuração, com \`loginVerified:false\`:
+o app OAuth precisa existir no provedor e ter o callback do Supabase registrado; esses
+pré-requisitos não são criados por este comando. Não invente Client ID nem declare login
+testado sem executar o fluxo autorizado. Não abra o painel Supabase para repetir a
+configuração. Para trocar o segredo ou Client ID, dispense o pedido anterior com
+\`secrets dismiss ID\` e prepare um novo campo; o segredo anterior nunca é retornado.
 
 ### Email de autenticação com Resend
 

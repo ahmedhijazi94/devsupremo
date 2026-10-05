@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
 import { terminateManagedDaemon, withDaemonControl } from './daemon-lifecycle'
+import { inspectRuntimeVersions, recordActiveRuntime } from './runtime-version'
 import {
   defaultCheckpointDeps,
   classifyCheckpointRisk,
@@ -27,6 +28,7 @@ import { readRestoreReceipts, recoverRestoreReceipt, writeRestoreReceipt, type R
 import { resolveKeychain } from './keychain'
 import { readDeviceSecret, deviceIssuer } from './device-identity'
 import { startDatabaseWorker } from './database-queue'
+import { startSqlArtifactWorker } from './sql-artifacts'
 import { runDatabaseDirect } from './database'
 import { startFeedbackWorker } from './feedback'
 import { evidenceFor, startLocalValidationWorker } from './turn-validation'
@@ -533,6 +535,7 @@ export interface DaemonStatus {
   healthy: boolean
   pid: number | null
   pendingCheckpoints: number
+  runtime?: ReturnType<typeof inspectRuntimeVersions>
   upload?: UploadProgress
 }
 
@@ -557,7 +560,7 @@ export function daemonStatus(cwd: string): DaemonStatus {
       progressHealthy = upload.pid === pid && upload.phase !== 'stopped' && Date.parse(upload.deadlineAt) >= Date.now()
     } else if (fs.existsSync(path.join(cwd, DAEMON_PROGRESS_FILE))) progressHealthy = false
   } catch { progressHealthy = false }
-  return { running, healthy: running && progressHealthy, pid, pendingCheckpoints, ...(upload ? { upload } : {}) }
+  return { running, healthy: running && progressHealthy, pid, pendingCheckpoints, runtime: inspectRuntimeVersions(cwd), ...(upload ? { upload } : {}) }
 }
 
 export async function stopDaemon(cwd: string): Promise<boolean> {
@@ -888,15 +891,18 @@ export async function runDaemonLoop(
     }
   }
   progress({ phase: 'checking' })
+  recordActiveRuntime(cwd)
   // Independente do upload/CI/backoff: o banco responde mesmo com checkpoint pendente.
   const stopLocalValidationWorker = startLocalValidationWorker(cwd)
   const stopLocalReportWorker = startLocalReportWorker(daemonConfig)
   const stopDatabaseWorker = startDatabaseWorker(cwd, (operation, options) => runDatabaseDirect(operation, cwd, options))
+  const stopSqlArtifactWorker = startSqlArtifactWorker(daemonConfig)
   const stopFeedbackWorker = startFeedbackWorker(daemonConfig)
   const stop = (): void => {
     stopped = true
     controller.abort()
     stopDatabaseWorker()
+    stopSqlArtifactWorker()
     stopFeedbackWorker()
     stopLocalValidationWorker()
     stopLocalReportWorker()

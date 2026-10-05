@@ -1,11 +1,16 @@
+import { authorizeProjectOperation } from '../backend-operations/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runAuthorizedDelete } from './server'
-import { runDataDelete, type DeleteDependencies } from './service'
+import { describeDeletePlan, runDataDelete, type DeleteDependencies } from './service'
+import { runTrackedOperation } from '../backend-operations/service'
+import { DataDeleteOperationError } from './contract'
 import { getProject, getSupabaseCredentials } from '../projects/repository'
 import { readEnvironment } from '../database-environment/store'
 
-vi.mock('./service', () => ({ runDataDelete: vi.fn() }))
+vi.mock('./service', () => ({ runDataDelete: vi.fn(), describeDeletePlan: vi.fn() }))
+vi.mock('../backend-operations/service', () => ({ runTrackedOperation: vi.fn() }))
+vi.mock('../backend-operations/server', () => ({ authorizeProjectOperation: vi.fn() }))
 vi.mock('../projects/repository', () => ({ getProject: vi.fn(), getSupabaseCredentials: vi.fn() }))
 vi.mock('../database-environment/store', () => ({ readEnvironment: vi.fn() }))
 const ownerId = '00000000-0000-4000-8000-000000000001'
@@ -19,6 +24,7 @@ const options = { operation: 'data-delete-plan' as const, environment: 'developm
 const project = { id: projectId, user_id: ownerId, supabase_project_ref: 'dev-ref', supabase_account_id: accountId } as Awaited<ReturnType<typeof getProject>>
 let deps: DeleteDependencies
 beforeEach(() => {
+  vi.mocked(authorizeProjectOperation).mockResolvedValue({policyId:'00000000-0000-4000-8000-000000000070',revision:'00000000-0000-4000-8000-000000000071'})
   vi.clearAllMocks()
   verifyIdentity.mockResolvedValue(ownerId)
   vi.mocked(getProject).mockResolvedValue(project)
@@ -31,6 +37,19 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('owner-authorized deletion service boundary', () => {
+  it.each([
+    ['uncertain', 'uncertain'], ['queued', 'running'], ['running', 'running'],
+    ['verifying', 'running'], ['failed', 'failed'], ['cancelled', 'failed'],
+  ] as const)('preserves an existing %s deletion receipt as %s rather than a generic rejection', async (state, operationState) => {
+    const operationId = '00000000-0000-4000-8000-000000000090'
+    vi.mocked(describeDeletePlan).mockReturnValue({ planId: operationId, targets: options.targets,
+      scope: { ownerId, projectId, accountId, projectRef: 'dev-ref', environment: 'development' }, expiresAt: Date.now() + 60_000 })
+    vi.mocked(runTrackedOperation).mockResolvedValue({ id: operationId, state, capability: 'data.delete', environment: 'development', updatedAt: new Date().toISOString(), message: 'Fixture receipt', result: null })
+    const outcome = await runAuthorizedDelete(authority, { operation: 'data-delete-apply', environment: 'development', planToken: 'signed-fixture'.repeat(8), authorization: 'Excluir o registro solicitado.' }).catch((error: unknown) => error)
+    expect(outcome).toBeInstanceOf(DataDeleteOperationError)
+    expect(outcome).toMatchObject({ operationId, operationState, status: 409 })
+    expect(runDataDelete).not.toHaveBeenCalled()
+  })
   it.each(['production', 'unknown'] as const)('rejects %s before plan or credentials', async environment => {
     vi.mocked(readEnvironment).mockResolvedValue(environment === 'unknown' ? null : { environment, source: 'supremo_provisioned', project_ref: 'dev-ref' })
     await expect(runAuthorizedDelete(authority, options)).rejects.toThrow('development')
@@ -45,6 +64,14 @@ describe('owner-authorized deletion service boundary', () => {
     vi.mocked(getProject).mockResolvedValue({ ...project, supabase_account_id: '00000000-0000-4000-8000-000000000004' })
     await expect(deps.provider.query('write', false)).rejects.toThrow('Conta')
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('requires policy for every table and refuses changed authorization before provider dispatch', async () => {
+    await runAuthorizedDelete(authority, { ...options, targets: [...options.targets, {table:'members',key:{id:'member-id'}}] })
+    expect(authorizeProjectOperation).toHaveBeenCalledWith(expect.objectContaining({projectId,environment:'development'}),'data.read',{rows:2,resource:'public.orgs'})
+    expect(authorizeProjectOperation).toHaveBeenCalledWith(expect.anything(),'data.read',{rows:2,resource:'public.members'})
+    vi.mocked(authorizeProjectOperation).mockResolvedValue({policyId:projectId,revision:ownerId})
+    await expect(deps.provider.query('write',false)).rejects.toThrow(/autorização mudou/)
+    expect(fetch).not.toHaveBeenCalled()
   })
   it('blocks cross-owner, revoked device, wrong credential ref and removed account', async () => {
     verifyIdentity.mockResolvedValue('other')

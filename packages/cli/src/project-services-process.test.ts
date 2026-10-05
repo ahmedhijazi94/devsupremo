@@ -55,10 +55,10 @@ describe('public project service commands reach the private daemon queue', () =>
       { operation: 'secrets-credentials' }, { operation: 'secrets-credentials' },
       { operation: 'secrets-status', options: { requestId } },
       { operation: 'secrets-apply', options: { requestId, credentialId } },
-      { operation: 'secrets-revoke-credential', options: { credentialId } },
+      { operation: 'secrets-revoke-credential', options: { credentialId, operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) } },
     ])
   })
-  it.each(['email', 'request'])('creates and applies the exact %s request without opening a form', async kind => {
+  it.each(['email', 'request', 'auth-provider'])('creates and applies the exact %s request without opening a form', async kind => {
     const credentialId = '33333333-3333-4333-8333-333333333333', requestId = '22222222-2222-4222-8222-222222222222'
     let entry: NonNullable<DatabaseOptions['requests']>[number]
     reply = (operation, options) => {
@@ -69,11 +69,22 @@ describe('public project service commands reach the private daemon queue', () =>
     }
     const args = kind === 'email'
       ? ['integrations', 'email', '--provider', 'resend', '--sender-email', 'hello@example.invalid', '--environment', 'development']
+      : kind === 'auth-provider' ? ['integrations', 'auth-provider', '--provider', 'google', '--client-id', 'public-client.apps.googleusercontent.com', '--environment', 'development']
       : ['integrations', 'request', 'RESEND_API_KEY', '--reason', 'Enviar emails', '--target', 'supabase']
     const result = await invoke([...args, '--credential-id', credentialId])
     expect(requests).toHaveLength(2)
     expect(requests[1]).toEqual({ operation: 'secrets-apply', options: { requestId, credentialId } })
     expect(JSON.parse(result.stdout).requests[0].status).toBe('fulfilled')
+  })
+  it('queues only public OAuth metadata and rejects a client secret argument before dispatch', async () => {
+    const args = ['integrations', 'auth-provider', '--provider', 'github', '--client-id', 'public-client', '--environment', 'production']
+    await invoke(args)
+    expect(requests).toEqual([{ operation: 'secrets-request', options: { requests: [{
+      name: 'AUTH_GITHUB_CLIENT_SECRET', description: 'Configurar login com GitHub no Supabase pelo formulário seguro.', target: 'supabase', environment: 'production',
+      configuration: { kind: 'supabase-auth-provider', provider: 'github', clientId: 'public-client' },
+    }] } }])
+    await expect(invoke([...args, '--client-secret', 'never-accepted'])).rejects.toThrow()
+    expect(requests).toHaveLength(1)
   })
   it('requests exact names with explicit destination and defaults the environment safely', async () => {
     const result = await invoke(['secrets', 'request', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', '--reason', 'Pagamentos no servidor', '--target', 'supabase'])
@@ -94,7 +105,7 @@ describe('public project service commands reach the private daemon queue', () =>
   it('preserves explicit production selectors', async () => {
     await invoke(['jobs', 'apply', '--environment', 'production'])
     await invoke(['jobs', 'pause', '--job-id', 'close-old-tickets', '--environment', 'production'])
-    expect(requests).toEqual([{ operation: 'cron-apply', options: { environment: 'production' } }, { operation: 'cron-pause', options: { jobId: 'close-old-tickets', environment: 'production' } }])
+    expect(requests).toEqual([{ operation: 'cron-apply', options: { environment: 'production', operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) } }, { operation: 'cron-pause', options: { jobId: 'close-old-tickets', environment: 'production', operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) } }])
   })
   it('emits an authenticated cron scaffold locally without queuing or overwriting files', async () => {
     fs.writeFileSync(path.join(cwd,'.supremo/project.json'), JSON.stringify({ projectId: '11111111-1111-4111-8111-111111111111', supremoUrl: 'https://supremo.example.invalid' }))
@@ -106,7 +117,7 @@ describe('public project service commands reach the private daemon queue', () =>
   })
   it('routes apply without letting the agent inject SQL, a manifest path or unknown environment selector', async () => {
     await invoke(['jobs', 'apply'])
-    expect(requests).toEqual([{ operation: 'cron-apply' }])
+    expect(requests).toEqual([{ operation: 'cron-apply', options: { operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) } }])
     for (const args of [
       ['jobs', 'apply', '--sql', 'select 1'], ['jobs', 'apply', '--manifest', '/tmp/foreign.json'],
       ['jobs', 'pause', '--job-id', 'close-old-tickets', '--environment', 'unknown'],

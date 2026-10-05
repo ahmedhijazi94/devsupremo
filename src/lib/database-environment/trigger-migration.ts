@@ -7,7 +7,7 @@ type Token = {
 }
 
 function reject(): never {
-  throw new Error('Migration exige revisão: função/gatilho fora do formato automático. Use função nova, sem argumentos, RETURNS TRIGGER, LANGUAGE plpgsql, SECURITY INVOKER e SET search_path = vazio; declare-a antes do gatilho na mesma migration.')
+  throw new Error('Migration não suportada: função/gatilho fora do formato automático. Use função nova, sem argumentos, RETURNS TRIGGER, LANGUAGE plpgsql, SECURITY INVOKER e SET search_path = vazio; declare-a antes do gatilho na mesma migration. Nenhuma revisão foi enfileirada.')
 }
 
 /** Lexer restrito: preserva posições, não confunde ;/BEGIN em strings com SQL.
@@ -104,7 +104,7 @@ export function maskVerifiedTriggerSyntax(sql: string): string {
       // A static invoker trigger may append audit rows or assign NEW fields.
       // It may not perform DDL, invoke arbitrary procedures or change session
       // settings. Destructive writes/dynamic EXECUTE remain denied by policy.
-      if (/\b(create|alter|grant|revoke|perform|set|reset|discard|set_config|savepoint|release|start|abort|merge|end\s+transaction)\b/i.test(signature(bodyTokens))) reject()
+      if (/\b(create|alter|grant|revoke|perform|set|reset|discard|set_config|savepoint|release|start|abort|merge|end\s+transaction)\b/i.test(signature(bodyTokens.filter(token => token.kind !== 'literal')))) reject()
       for (const token of bodyTokens) {
         if (token.kind === 'word' && token.value === 'begin') ranges.push(token)
       }

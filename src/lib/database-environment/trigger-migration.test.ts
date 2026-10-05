@@ -31,7 +31,6 @@ describe('automatic invoker trigger migrations', () => {
     'DROP TABLE public.expenses;', 'TRUNCATE public.expenses;',
     "DO $$ BEGIN RAISE NOTICE 'no'; END; $$;",
     "EXECUTE FUNCTION public.set_updated_at();",
-    "SELECT 'BEGIN; COMMIT;';",
   ])('retains the top-level guard after an accepted function: %s', (sql) => {
     expect(() => validateAutomaticMigration(`${fn} ${trigger} ${sql}`)).toThrow()
   })

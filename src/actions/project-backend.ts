@@ -8,8 +8,9 @@ import { InspectionError, redactInspection, supabaseInspectionProvider } from '@
 import { UnsafeSqlError } from '@/lib/database/sql-guard'
 import { supabaseAuthAdminProvider } from '@/lib/database-admin/provider'
 import { runAuthAdmin } from '@/lib/database-admin/service'
-import { JobsError, supabaseJobsProvider } from '@/lib/database-jobs/provider'
-import { runJobs } from '@/lib/database-jobs/service'
+import { JobsError } from '@/lib/database-jobs/provider'
+import { runAuthorizedJobs } from '@/lib/database-jobs/server'
+import { OperationError } from '@/lib/backend-operations/contract'
 import { jobsRequestSchema } from '@/lib/database-jobs/policy'
 import { runAuthorizedFunctions } from '@/lib/edge-functions/server'
 import { FunctionError } from '@/lib/edge-functions/policy'
@@ -42,16 +43,17 @@ export async function runProjectBackend(raw: BackendInput): Promise<BackendResul
       users: (limit, offset) => runAuthAdmin(supabaseAuthAdminProvider(() => authority.resolve(), secrets), { operation: 'auth-users', limit, offset }),
       functions: async (operation, slug) => {
         if (target.environment === 'unknown') throw new InspectionError('Confirme o ambiente conectado antes de consultar funções pelo motor.', 409)
-        return runAuthorizedFunctions({ client, ownerId: user.id, projectId: input.projectId, expectedRef: target.projectRef, verifyIdentity: identity },
+        return runAuthorizedFunctions({ client, ownerId: user.id, ownerSession: true as const, projectId: input.projectId, expectedRef: target.projectRef, verifyIdentity: identity },
           operation === 'functions-list' ? { operation, environment: target.environment } : { operation, environment: target.environment, slug: slug! })
       },
       jobs: async (operation, fields) => {
         if (operation === 'cron-pause' || operation === 'cron-resume') await audit()
-        return runJobs(supabaseJobsProvider(readOnly => authority.resolve(readOnly)), jobsRequestSchema.parse({
+        return runAuthorizedJobs({ client, ownerId: user.id, ownerSession: true as const, projectId: input.projectId, expectedRef: target.projectRef, verifyIdentity: identity }, jobsRequestSchema.parse({
           // Internal typed-service envelope, not device authorization. Session
           // ownership is revalidated by authority.resolve on every provider call.
           deviceSecret: 'owner-session-internal', projectId: input.projectId, operation, expectedRef: target.projectRef, environment: target.environment,
           limit: fields.limit, offset: fields.offset, ...(fields.jobId ? { jobId: fields.jobId } : {}),
+          ...(input.operationId ? { operationId: input.operationId } : {}),
         }))
       },
     }, target, input)
@@ -59,7 +61,7 @@ export async function runProjectBackend(raw: BackendInput): Promise<BackendResul
     const safe = redactInspection(data, secrets).value as typeof data
     return { ok: true, data: safe, ...target, observedAt: new Date().toISOString() }
   } catch (error) {
-    const known = error instanceof InspectionError || error instanceof UnsafeSqlError || error instanceof JobsError || error instanceof FunctionError
+    const known = error instanceof InspectionError || error instanceof UnsafeSqlError || error instanceof JobsError || error instanceof FunctionError || error instanceof OperationError
     return { ok: false, error: known ? String(redactInspection(error.message, secrets).value) : 'Não foi possível confirmar os dados. Verifique sua sessão, a conexão e as permissões do projeto.' }
   }
 }

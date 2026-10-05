@@ -7,11 +7,12 @@ import { requestDatabase } from './database-queue'
 import { parseDatabaseOptions, type DatabaseOperation, type DatabaseOptions } from './database-request'
 import { sanitizeDiagnostic } from '../../../src/lib/checkpoint/feedback'
 import { z } from 'zod'
-import { credentialResponse, readJobManifest, secretResponse, secretResponseSchema, selectRequestedSecrets } from './project-service-request'
+import { credentialResponse, readJobManifest, secretResponse, secretResponseSchema, selectRequestedSecrets, secretOperationReceipt } from './project-service-request'
 import { readProjectStack } from './framework-runtime'
 import { readFunctionDeployment } from './functions-request'
 import { functionResponseSchema } from '../../../src/lib/edge-functions/contract'
 import { deleteResponseSchema } from '../../../src/lib/database-delete/contract'
+import { readStableFile } from './stable-file'
 export type { DatabaseOperation, DatabaseOptions } from './database-request'
 
 export interface DatabaseStatus {
@@ -22,12 +23,78 @@ export interface DatabaseStatus {
 
 // Only a parsed HTTP error returned by Supremo carries a server diagnostic.
 // Network/body/JSON failures leave a sent mutation's outcome unknown.
-class DatabaseServerError extends Error {}
+class DatabaseServerError extends Error { readonly definitive = true }
+
+function readDatabaseResponse(response: Response, signal: AbortSignal): Promise<string> {
+  if (!response.body) return Promise.reject(new Error('Resposta de banco sem corpo.'))
+  const reader = response.body.getReader()
+  return new Promise<string>((resolve, reject) => {
+    let settled = false
+    const cleanup = () => {
+      signal.removeEventListener('abort', abort)
+      reader.releaseLock()
+    }
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      reject(error)
+      // Do not wait for a provider's cancellation to finish. Its failure goes
+      // to the already rejected result, preserving the original body error.
+      void reader.cancel(error).catch(reject)
+      cleanup()
+    }
+    const abort = () => fail(signal.reason)
+    const read = async () => {
+      const chunks: Buffer[] = []
+      let bytes = 0
+      try {
+        while (!settled) {
+          const { done, value } = await reader.read()
+          if (settled) return
+          if (done) {
+            const text = Buffer.concat(chunks, bytes).toString('utf8')
+            settled = true
+            cleanup()
+            resolve(text)
+            return
+          }
+          bytes += value.byteLength
+          if (bytes > 2 * 1024 * 1024) {
+            fail(new Error('Resposta de banco excede o limite; reduza paginação ou intervalo.'))
+            return
+          }
+          chunks.push(Buffer.from(value))
+        }
+      } catch (error) { fail(error) }
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+    else void read()
+  })
+}
+
+const migrationSchema = z.object({
+  path: z.string().regex(/^supabase\/migrations\/\d{14}_[a-zA-Z0-9_-]+\.sql$/),
+  content: z.string().min(1).max(250_000),
+}).strict()
+
+/** Only versioned SQL files are upload sources. Reject links (including parents)
+ * before reading, and retain the server's per-file and collection limits. */
+function readMigrations(cwd: string): z.infer<typeof migrationSchema>[] {
+  const directory = path.join(cwd, 'supabase/migrations')
+  const names = fs.readdirSync(directory).filter(name => name.endsWith('.sql')).sort()
+  if (names.length > 100) throw new Error('O envio excede o limite de 100 migrations.')
+  return names.map(name => {
+    const relative = migrationSchema.shape.path.parse(`supabase/migrations/${name}`)
+    return migrationSchema.parse({ path: relative, content: readStableFile(path.join(cwd, relative), 1_000_000, cwd).content })
+  })
+}
 
 export function validateLocalTarget(cwd: string, status: DatabaseStatus): string {
   if (status.environment !== 'development' || !status.automaticMigrations || !status.projectRef) {
     throw new Error('Banco não reconhecido como development pelo Supremo. Produção e ambiente desconhecido estão protegidos.')
   }
+  z.string().regex(/^[a-z0-9_-]{1,64}$/).parse(status.projectRef)
   const linked = fs.readFileSync(path.join(cwd, 'supabase/.temp/project-ref'), 'utf8').trim()
   const env = fs.readFileSync(path.join(cwd, '.env.local'), 'utf8')
   const start = readProjectStack(cwd) === 'tanstack-start-vite'
@@ -50,24 +117,46 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   const checkedOptions = parseDatabaseOptions(operation, options)
   const config = readProjectConfig(cwd)
   if (!config) throw new Error('Execute o bootstrap para identificar o projeto.')
-  const secret = readDeviceSecret(resolveKeychain(), config.projectId, config.apiBaseUrl)
-  if (!secret) throw new Error('O daemon não conseguiu acessar a autorização deste dispositivo. Verifique o keychain na máquina que executou o bootstrap.')
+  const projectId = z.string().uuid().parse(config.projectId)
   const issuer = deviceIssuer(config.apiBaseUrl)
-  const url = new URL(`${issuer}/api/${operation.startsWith('secrets-') ? 'secrets' : operation.startsWith('functions-') ? 'functions' : 'database'}`)
+  const secret = readDeviceSecret(resolveKeychain(), projectId, issuer)
+  if (!secret) throw new Error('O daemon não conseguiu acessar a autorização deste dispositivo. Verifique o keychain na máquina que executou o bootstrap.')
+  const url = new URL(`${issuer}/api/${operation === 'backend-approval-status' ? 'operation-approvals' : operation.startsWith('backend-') ? 'backend-operations' : operation.startsWith('secrets-') ? 'secrets' : operation.startsWith('functions-') ? 'functions' : 'database'}`)
   if (url.username || url.password || url.search || url.hash) throw new Error('Endpoint contém componentes não permitidos.')
   if (url.protocol !== 'https:' && !(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:')) {
     throw new Error('O endpoint do Supremo deve usar HTTPS.')
   }
-  const transport = async (op: string, extra: Record<string, unknown> = {}) => {
+  const transport = async (op: string, extra: Record<string, unknown> = {}, signal = AbortSignal.timeout(op === 'status' ? 15_000 : 60_000)) => {
     const endpoint = op === 'status' && operation.startsWith('functions-') ? new URL(`${issuer}/api/database`) : url
+    // Intentional uploads to the issuer bound in the keychain. Project only
+    // declared command fields; file-derived objects never supply identity,
+    // destination, headers or additional top-level request properties.
+    const body = JSON.stringify({ deviceSecret: secret, projectId,
+      operation: operation === 'backend-approval-status' ? undefined : op,
+      expectedRef: extra.expectedRef, environment: extra.environment, operationId: extra.operationId,
+      id: extra.id, options: extra.options, requests: extra.requests, requestId: extra.requestId,
+      credentialId: extra.credentialId, jobId: extra.jobId, manifest: extra.manifest,
+      sql: extra.sql, limit: extra.limit, offset: extra.offset, table: extra.table,
+      minutes: extra.minutes, source: extra.source, level: extra.level, search: extra.search,
+      config: extra.config, user: extra.user, userId: extra.userId, email: extra.email,
+      emailConfirmed: extra.emailConfirmed, redirectTo: extra.redirectTo, roles: extra.roles, manifestVersion: extra.manifestVersion,
+      targets: extra.targets, planToken: extra.planToken, authorization: extra.authorization, action: extra.action,
+      slug: extra.slug, entrypoint: extra.entrypoint, files: extra.files, importMap: extra.importMap,
+      verifyJwt: extra.verifyJwt, secretName: extra.secretName, expectedVersion: extra.expectedVersion,
+      version: extra.version, replaceSlug: extra.replaceSlug, migrations: extra.migrations,
+    })
+    if (endpoint.pathname.endsWith('/api/database') && Buffer.byteLength(body) > 1_000_000) throw new Error('Pedido de banco excede o limite; reduza os arquivos ou dados selecionados.')
     const res = await fetch(endpoint, {
       method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceSecret: secret, projectId: config.projectId, operation: op, ...extra }),
-      signal: AbortSignal.timeout(op === 'status' ? 15_000 : 60_000),
+      body,
+      signal,
     })
-    const text = await res.text()
-    if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error('Resposta de banco excede o limite; reduza paginação ou intervalo.')
-    const data = JSON.parse(text) as { error?: string }
+    const text = await readDatabaseResponse(res, signal)
+    const data = JSON.parse(text) as { error?: string; code?: string; operationId?: string }
+    if (!res.ok && data.code === 'operation_approval_required' && z.string().uuid().safeParse(data.operationId).success) {
+      throw Object.assign(new Error(sanitizeDiagnostic(data.error ?? 'Autorize a operação preparada no Supremo.')), { code: 'operation_approval_required', operationId: data.operationId })
+    }
+    if (!res.ok && data.code === 'operation_uncertain') throw new Error(sanitizeDiagnostic(`${data.error ?? 'Resultado não confirmado.'} Consulte backend operation-status ${data.operationId ?? ''} antes de repetir.`))
     if (!res.ok) throw new DatabaseServerError(sanitizeDiagnostic(data.error ?? `Banco indisponível (HTTP ${res.status}).`))
     return data
   }
@@ -75,23 +164,46 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     if (!operation.startsWith('data-delete-')) return transport(op, extra)
     // Even an HTTP adapter that ignores AbortSignal must release the worker.
     // This deadline covers response-body reads as well and never retries writes.
+    const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(op === 'data-delete-apply'
-        ? 'A confirmação da exclusão excedeu o prazo. Não repita delete-apply; consulte os registros com db query antes de gerar outro plano.'
-        : 'A inspeção de exclusão excedeu o prazo; nenhum pedido de exclusão foi enviado.')), op === 'status' ? 15_000 : 60_000)
+      timer = setTimeout(() => {
+        const error = new Error(op === 'data-delete-apply'
+          ? 'A confirmação da exclusão excedeu o prazo. Não repita delete-apply; consulte os registros com db query antes de gerar outro plano.'
+          : 'A inspeção de exclusão excedeu o prazo; nenhum pedido de exclusão foi enviado.')
+        controller.abort(error)
+        reject(error)
+      }, op === 'status' ? 15_000 : 60_000)
     })
-    try { return await Promise.race([transport(op, extra), deadline]) }
+    try { return await Promise.race([transport(op, extra, controller.signal), deadline]) }
     catch (error) {
-      if (op === 'data-delete-apply' && !(error instanceof DatabaseServerError)) {
+      if (op === 'data-delete-apply' && !(error instanceof DatabaseServerError) && !(error instanceof Error && 'code' in error && error.code === 'operation_approval_required')) {
         throw new Error('Resultado da exclusão não confirmado; o pedido pode ter sido executado. Não repita delete-apply. Consulte os registros com db query antes de gerar outro plano.')
       }
       throw error
     }
     finally { if (timer !== undefined) clearTimeout(timer) }
   }
+  if (operation.startsWith('backend-')) {
+    const selected = operation.slice('backend-'.length)
+    const result = await request(selected, { ...checkedOptions })
+    const schema = operation === 'backend-approval-status'
+      ? z.object({ projectId: z.literal(config.projectId), operationId: z.literal(checkedOptions.operationId!), data: z.unknown(), observedAt: z.string() })
+      : z.object({ projectId: z.literal(config.projectId), operation: z.literal(selected), data: z.unknown(), observedAt: z.string() })
+    const envelope = schema.passthrough().safeParse(result)
+    if (!envelope.success) throw new Error('Resposta do motor não corresponde ao projeto solicitado. Consulte o ID da operação antes de repetir.')
+    return envelope.data
+  }
   if (operation.startsWith('secrets-')) {
     const result = await request(operation.slice('secrets-'.length), operation === 'secrets-status' ? {} : { ...checkedOptions })
+    if (operation === 'secrets-apply' || operation === 'secrets-revoke-credential') {
+      const receipt = secretOperationReceipt(result, operation === 'secrets-apply' ? checkedOptions.requestId! : checkedOptions.operationId!)
+      if (receipt.state !== 'succeeded') {
+        const message = `Configuração ainda não confirmada (${receipt.state}). Consulte backend operation-status ${receipt.id} antes de repetir.`
+        if (receipt.state === 'failed' || receipt.state === 'cancelled') throw new DatabaseServerError(message)
+        throw new Error(message)
+      }
+    }
     if (operation === 'secrets-credentials' || operation === 'secrets-revoke-credential') return credentialResponse(result, config.projectId)
     const parsed = secretResponseSchema.extend({ projectId: z.literal(config.projectId) }).parse(result)
     const selected = operation === 'secrets-request' ? selectRequestedSecrets(parsed.requests, checkedOptions.requests ?? []).map(entry => entry.id)
@@ -105,6 +217,13 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   // Snapshot informativo, jamais usado como autorização para uma escrita futura.
   fs.writeFileSync(path.join(cwd, '.supremo/database.json'), JSON.stringify(status, null, 2) + '\n')
   if (operation === 'status') return status
+  if (operation === 'data-plan' || operation === 'data-apply') {
+    const expectedRef = validateLocalTarget(cwd, status)
+    const result = await request(operation, { ...checkedOptions, expectedRef })
+    const envelope = z.object({ projectId: z.literal(config.projectId), projectRef: z.literal(expectedRef), environment: z.literal('development'), operation: z.literal(operation) }).passthrough().safeParse(result)
+    if (!envelope.success) throw new Error('Resposta de dados não corresponde ao plano. Consulte os registros antes de repetir a aplicação.')
+    return envelope.data
+  }
   if (operation.startsWith('data-delete-')) {
     const expectedRef = validateLocalTarget(cwd, status)
     const result = deleteResponseSchema.safeParse(await request(operation, { ...checkedOptions, expectedRef }))
@@ -119,7 +238,7 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
       projectRef: z.string().regex(/^[a-z0-9_-]+$/).max(64) }).safeParse(status)
     if (!target.success || checkedOptions.environment !== target.data.environment) throw new Error('Funções exigem o ambiente explicitamente selecionado e confirmado pelo Supremo.')
     const deployment = operation === 'functions-deploy' ? readFunctionDeployment(cwd, checkedOptions) : checkedOptions
-    const result = functionResponseSchema.safeParse(await request(operation, { ...deployment, expectedRef: target.data.projectRef, environment: target.data.environment }))
+    const result = functionResponseSchema.safeParse(await request(operation, { ...deployment, ...(checkedOptions.operationId ? { operationId: checkedOptions.operationId } : {}), expectedRef: target.data.projectRef, environment: target.data.environment }))
     if (!result.success || result.data.projectId !== config.projectId || result.data.projectRef !== target.data.projectRef || result.data.environment !== target.data.environment || result.data.operation !== operation) {
       throw new Error('Resposta da operação de funções não corresponde ao projeto e à solicitação autorizados.')
     }
@@ -146,10 +265,7 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
       ...(operation === 'cron-apply' ? { manifest: readJobManifest(cwd) } : {}) })
   }
   const expectedRef = validateLocalTarget(cwd, status)
-  if (operation === 'anonymous-auth') return request(operation, { expectedRef })
-  const directory = path.join(cwd, 'supabase/migrations')
-  const migrations = fs.readdirSync(directory).filter((name) => name.endsWith('.sql')).sort().map((name) => ({
-    path: `supabase/migrations/${name}`, content: fs.readFileSync(path.join(directory, name), 'utf8'),
-  }))
-  return request(operation, { expectedRef, migrations })
+  if (operation === 'anonymous-auth') return request(operation, { expectedRef, operationId: checkedOptions.operationId })
+  const migrations = readMigrations(cwd)
+  return request(operation, { expectedRef, migrations, operationId: checkedOptions.operationId })
 }

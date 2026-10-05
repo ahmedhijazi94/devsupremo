@@ -7,12 +7,15 @@ import { tableCatalogSql, validateJobTable } from './catalog'
 import { jobsRequestSchema, isReadJobOperation, isFunctionJob, jobIdentifier, jobManifestEntrySchema, type JobsRequest } from './policy'
 import { JobsError, type JobsProvider } from './provider'
 import { cronCapabilitySql, bootstrapJobsSql, applyJobsSql, listJobsSql, historyJobsSql, mutateJobSql, begin } from './sql'
+import { bootstrapExecutionsSql, runNowSql } from './execution-sql'
+import { dailySchedule, jobTimezoneSchema, nextDailyRuns } from './schedule'
 
 const capabilitySchema = z.object({ installed: z.boolean(), registry: z.boolean(), timezone: z.string(), functions: z.boolean().optional() })
 const time = z.string().min(1).max(64)
 const listRowSchema = z.object({
   job_id: jobManifestEntrySchema.shape.id, table_name: z.union([jobIdentifier, scheduledFunctionSlug]), type: z.enum(['function', 'update']).optional(), target: z.union([jobIdentifier, scheduledFunctionSlug]).optional(), active: z.boolean(), schedule: z.string().max(100).nullable(),
-  timezone: z.literal('UTC'), created_at: time, updated_at: time, synchronized: z.boolean(),
+  timezone: jobTimezoneSchema, created_at: time, updated_at: time, synchronized: z.boolean(),
+  max_affected_rows: z.number().int().min(1).max(1000).nullable().optional(),
 })
 const historyRowSchema = z.object({
   job_id: jobManifestEntrySchema.shape.id, runid: z.union([z.number().int().nonnegative(), z.string().regex(/^\d+$/)]),
@@ -50,7 +53,7 @@ export async function runJobs(provider: JobsProvider, input: JobsRequest) {
       ? confirmed(z.array(listRowSchema).max(request.limit + 1), raw)
       : confirmed(z.array(historyRowSchema).max(request.limit + 1), raw)
     const hasMore = rows.length > request.limit
-    return { available: true, rows: rows.slice(0, request.limit), rowCount: Math.min(rows.length, request.limit), hasMore,
+    return { available: true, rows: rows.slice(0, request.limit).map(row => 'schedule' in row && row.schedule && dailySchedule(row.schedule) ? { ...row, nextRuns: nextDailyRuns(row.schedule, row.timezone, new Date()), daylightSaving: 'skip_missing_minute_once_per_local_date' } : row), rowCount: Math.min(rows.length, request.limit), hasMore,
       nextOffset: hasMore && request.offset + request.limit <= 10000 ? request.offset + request.limit : null,
       truncated: hasMore, timezone: capability.timezone, scheduleAvailable: UTC.has(capability.timezone) }
   }
@@ -83,12 +86,25 @@ export async function runJobs(provider: JobsProvider, input: JobsRequest) {
         if (before.id !== after.id || before.version !== after.version) throw new JobsError('A função mudou durante a configuração. Revalide o manifesto antes de ativar o job.')
       }
     }
+    if (request.manifest!.jobs.some(job => job.timezone !== 'UTC')) confirmed(z.tuple([z.object({ ready: z.literal(true) })]), await provider.query(bootstrapExecutionsSql(), { readOnly: false }))
     const count = request.manifest!.jobs.length
     const sql = !functionJobs.length ? applyJobsSql(request.projectId, compiled) : `${begin} ${compiled.length ? applyJobsSql(request.projectId, compiled, false) : ''} ${applyFunctionJobsSql(request.projectId, request.expectedRef, functionJobs, false)} COMMIT; SELECT true AS applied,${count} AS job_count;`
     const [result] = confirmed(z.tuple([z.object({ applied: z.literal(true), job_count: z.literal(count) })]), await provider.query(sql, { readOnly: false }))
     return { available: true, ...result, jobIds: request.manifest!.jobs.map((job) => job.id), ...(functionJobs.length ? { deliveryVerified: false, functionAuthentication: 'hmac-sha256', httpResponsesRetainedHours: 6 } : {}) }
   }
   if (!capability.installed || !capability.registry) throw new JobsError('Nenhum registro de jobs está disponível neste projeto.')
+  if (request.operation === 'cron-run-now') {
+    const [job] = confirmed(z.tuple([listRowSchema]), await provider.query(listJobsSql(request.projectId, 1, 0, request.jobId), { readOnly: true }))
+    if (!job.active || !job.synchronized) throw new JobsError('O teste imediato exige job ativo e íntegro.')
+    await provider.authorizeImpact?.(job.job_id, job.type === 'function' ? 1 : job.max_affected_rows ?? null)
+    if (job.type === 'function') {
+      if (!provider.functionInfo || !provider.prepareFunctionSigner) throw new JobsError('Este canal não suporta teste de função.')
+      await provider.functionInfo(job.table_name); await provider.prepareFunctionSigner(request.projectId, job.table_name)
+    }
+    confirmed(z.tuple([z.object({ ready: z.literal(true) })]), await provider.query(bootstrapExecutionsSql(), { readOnly: false }))
+    const [receipt] = confirmed(z.tuple([z.object({ execution_key: z.literal(`manual:${request.operationId!}`), status: z.enum(['completed', 'dispatched']), affected_rows: z.number().int().nonnegative().nullable(), invocation_id: z.string().uuid().nullable(), request_id: z.union([z.string().regex(/^\d+$/), z.number().int()]).nullable(), created_at: time, updated_at: time, effect_verified: z.boolean() })]), await provider.query(runNowSql(request.projectId, request.jobId!, request.operationId!), { readOnly: false }))
+    return { available: true, jobId: request.jobId, operationId: request.operationId, receipt, deliveryVerified: false }
+  }
   // The strict request schema requires jobId for these exact operations.
   if (request.operation !== 'cron-pause' && request.operation !== 'cron-resume' && request.operation !== 'cron-remove') throw new JobsError('Operação de jobs inválida.')
   if (request.operation === 'cron-resume' && capability.functions) {

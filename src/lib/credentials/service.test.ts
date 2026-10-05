@@ -53,6 +53,18 @@ describe('project credential vault', () => {
     expect(vault.audit).toHaveBeenCalledWith('used', id, requestId)
     expect(secrets.fulfill).toHaveBeenCalledOnce()
   })
+  it.each(['google', 'github'] as const)('retains and reuses a %s client secret only through the project vault and private delivery', async provider => {
+    const { vault, secrets } = fixture()
+    const configured: SecretRequestRecord = { ...request, name: `AUTH_${provider.toUpperCase()}_CLIENT_SECRET`, configuration: {
+      kind: 'supabase-auth-provider', provider, clientId: 'public-client',
+    } }
+    secrets.find.mockResolvedValue(configured)
+    await applyCredential(vault, secrets, requestId, id)
+    expect(secrets.deliver).toHaveBeenCalledWith(configured, binding, 'private-value', expect.any(Object))
+    await rememberCredential(vault, { ...configured, status: 'fulfilled' }, 'private-value')
+    expect(vault.insert.mock.calls[0]?.[0]).toMatchObject({ name: configured.name, environment: 'development' })
+    expect(JSON.stringify([...vault.insert.mock.calls, ...vault.audit.mock.calls])).not.toContain('private-value')
+  })
   it.each(['owner', 'project', 'environment', 'missing', 'password', 'missing-request', 'corrupt', 'audit', 'revoked'])('fails closed for %s without provider dispatch', async (scenario) => {
     const { credential, vault, secrets } = fixture()
     if (scenario === 'owner') vault.find.mockResolvedValue({ ...credential, userId: requestId })

@@ -10,18 +10,21 @@ function destination(request: SecretRequestView): string {
   if (!request.target || !request.environment || !request.targetRef) return 'Pedido antigo sem destino confirmado. Dispense e peça ao agente para solicitar novamente.'
   if (request.configuration?.kind === 'supabase-smtp') return `Email de autenticação · Resend · ${environments[request.environment]} · ${request.targetRef}`
   if (request.configuration?.kind === 'supabase-user-password') return `Senha de desenvolvimento · Usuário ${request.configuration.userId} · ${request.targetRef}`
+  if (request.configuration?.kind === 'supabase-auth-provider') return `Login com ${request.configuration.provider === 'google' ? 'Google' : 'GitHub'} · ${environments[request.environment]} · ${request.targetRef}`
   return `${request.target === 'supabase' ? 'Supabase · Edge Functions' : 'Vercel'} · ${environments[request.environment]} · ${request.targetRef}`
 }
 
 function fieldLabel(request: SecretRequestView): string {
   if (request.configuration?.kind === 'supabase-smtp') return 'Chave da API do Resend'
   if (request.configuration?.kind === 'supabase-user-password') return 'Nova senha de desenvolvimento'
+  if (request.configuration?.kind === 'supabase-auth-provider') return `Client secret do ${request.configuration.provider === 'google' ? 'Google' : 'GitHub'}`
   return request.name
 }
 
 function successMessage(request: SecretRequestView): string {
   if (request.configuration?.kind === 'supabase-smtp') return 'Configuração de email salva no Supabase. O envio ainda precisa ser testado.'
   if (request.configuration?.kind === 'supabase-user-password') return 'Senha de desenvolvimento atualizada.'
+  if (request.configuration?.kind === 'supabase-auth-provider') return 'Configuração do provedor salva no Supabase. O login ainda precisa ser testado.'
   return request.target === 'vercel' ? `${request.name} enviado. Disponível no próximo deploy desse ambiente.` : `${request.name} enviado às Edge Functions do projeto.`
 }
 
@@ -59,7 +62,8 @@ function ProjectSecretsCard({ projectId }: { projectId: string }) {
     void refresh()
     const interval = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh() }, 5000)
     window.addEventListener('focus', refresh)
-    return () => { active = false; window.clearInterval(interval); window.removeEventListener('focus', refresh) }
+    window.addEventListener('supremo:secret-requests-changed', refresh)
+    return () => { active = false; window.clearInterval(interval); window.removeEventListener('focus', refresh); window.removeEventListener('supremo:secret-requests-changed', refresh) }
   }, [projectId, nonce])
   if (!requests.length && !credentials.length && !error && !credentialsError) return null
   return (
@@ -68,7 +72,7 @@ function ProjectSecretsCard({ projectId }: { projectId: string }) {
       <p className="text-muted mb-3 text-xs">Preencha o campo solicitado. O Supremo aplica a configuração no destino indicado. O valor fica fora do chat e do histórico; você pode guardá-lo criptografado no cofre para reutilizar.</p>
       {(error || credentialsError) && <div role="alert" className="mb-3 text-xs">{error && <p>{error}</p>}{credentialsError && <p>{credentialsError}</p>}<button type="button" onClick={() => setNonce((n) => n + 1)} className="underline">Tentar novamente</button></div>}
       <ul className="space-y-3">{requests.map((request) => <li key={request.id}>
-        {request.status === 'fulfilled' ? <div className="text-muted text-xs"><div className="flex items-center gap-2"><Check className="text-up-ink h-3.5 w-3.5" /><span>{fieldLabel(request)}</span><span>configurado</span></div><p className="mt-1 break-all">{destination(request)}</p><p className="mt-1">{successMessage(request)} Não é necessário preencher novamente no painel do provedor.</p></div>
+        {request.status === 'fulfilled' ? <div className="text-muted text-xs"><div className="flex items-center gap-2"><Check className="text-up-ink h-3.5 w-3.5" /><span>{fieldLabel(request)}</span><span>configurado</span></div><p className="mt-1 break-all">{destination(request)}</p><p className="mt-1">{successMessage(request)} Não é necessário preencher novamente no painel do provedor.</p>{request.configuration?.kind === 'supabase-auth-provider' && <DismissConfiguredProvider projectId={projectId} request={request} onDone={() => setNonce((n) => n + 1)} />}</div>
           : <SecretForm projectId={projectId} request={request} onDone={() => setNonce((n) => n + 1)} />}
       </li>)}</ul>
       {credentials.length > 0 && <div className="mt-4 border-t border-current/10 pt-3">
@@ -78,6 +82,21 @@ function ProjectSecretsCard({ projectId }: { projectId: string }) {
       </div>}
     </section>
   )
+}
+
+function DismissConfiguredProvider({ projectId, request, onDone }: { projectId: string; request: SecretRequestView; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  return <button type="button" disabled={busy} className="mt-2 underline disabled:opacity-50" onClick={async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const result = await dismissSecretRequest({ projectId, requestId: request.id })
+      if (!result.ok) { toast.error(result.error ?? 'Pedido não dispensado.'); return }
+      toast.success('Pedido dispensado. A configuração atual foi mantida; prepare um novo campo para trocar o segredo.')
+      onDone()
+    } catch { toast.error('Não foi possível dispensar o pedido.') }
+    finally { setBusy(false) }
+  }}>{busy ? 'Dispensando…' : 'Dispensar pedido para trocar o segredo'}</button>
 }
 
 function StoredCredential({ projectId, credential, onDone }: { projectId: string; credential: ProjectCredentialView; onDone: () => void }) {
@@ -107,6 +126,7 @@ function SecretForm({ projectId, request, onDone }: { projectId: string; request
   const inputId = `secret-${request.id}`
   const password = request.configuration?.kind === 'supabase-user-password'
   const smtp = request.configuration?.kind === 'supabase-smtp' ? request.configuration : null
+  const authProvider = request.configuration?.kind === 'supabase-auth-provider' ? request.configuration : null
   const configured = Boolean(request.target && request.environment && request.targetRef)
   async function save() {
     if (!value.trim() || busy) return
@@ -142,6 +162,7 @@ function SecretForm({ projectId, request, onDone }: { projectId: string; request
       {request.description && <p className="text-muted mb-2 text-xs">{request.description}</p>}
       <p id={`${inputId}-destination`} className="text-muted mb-2 break-all text-xs">{destination(request)}</p>
       {smtp && <p className="text-muted mb-2 text-xs">Remetente: {smtp.senderName} &lt;{smtp.senderEmail}&gt;. Ao salvar, o Supremo configura o envio de emails de autenticação. O domínio e as permissões de envio precisam estar liberados no Resend.</p>}
+      {authProvider && <p className="text-muted mb-2 break-words text-xs">Client ID: {authProvider.clientId}. Ao salvar, o Supremo configura este provedor de login no Supabase. O app OAuth e o callback precisam estar configurados no provedor; o login ainda precisa ser testado.</p>}
       {multiline && <p className="text-muted mb-2 text-xs">Credencial com várias linhas recebida. Cole novamente para substituir.</p>}
       {configured && <div className="flex items-center gap-1.5">
         <input id={inputId} name={request.name} type="password" value={multiline ? 'Credencial recebida' : value} readOnly={multiline} disabled={busy} placeholder={password ? 'Digite a nova senha' : 'Cole a chave'} required maxLength={password ? 72 : 16384} minLength={password ? 8 : undefined}
@@ -155,7 +176,7 @@ function SecretForm({ projectId, request, onDone }: { projectId: string; request
             }
           }} className="bg-surface min-w-0 flex-1 rounded px-2 py-1.5 font-mono text-xs outline-none" />
         <button type="submit" disabled={busy || !value.trim()} className="bg-accent text-accent-ink inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium disabled:opacity-50">
-          {busy ? <Loader2 aria-label="Enviando" className="h-3.5 w-3.5 animate-spin" /> : password ? 'Definir senha' : smtp ? 'Configurar email' : `Salvar no ${request.target === 'supabase' ? 'Supabase' : 'Vercel'}`}
+          {busy ? <Loader2 aria-label="Enviando" className="h-3.5 w-3.5 animate-spin" /> : password ? 'Definir senha' : smtp ? 'Configurar email' : authProvider ? 'Configurar login' : `Salvar no ${request.target === 'supabase' ? 'Supabase' : 'Vercel'}`}
         </button>
       </div>}
       {configured && !password && <label className="mt-2 flex items-start gap-2 text-xs">

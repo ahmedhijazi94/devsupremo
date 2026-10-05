@@ -37,7 +37,7 @@ function metric(name: string, row: Record<string, unknown> | undefined, key: str
   const value = number !== null && Number.isFinite(number) && number >= 0 ? number : null
   return { name, value, available: value !== null, ...(unit ? { unit } : {}), ...(note ? { note } : {}) }
 }
-async function usage(provider: InspectionProvider): Promise<BackendData> {
+export async function readBackendUsage(provider: InspectionProvider): Promise<BackendData> {
   const reads = await Promise.allSettled([provider.query(diagnosticsSql), provider.query(usageCountsSql), provider.query(storageUsageSql)])
   const rows = reads.map(result => result.status === 'fulfilled' ? records.safeParse(result.value) : null)
   const [database, counts, storage] = rows.map(result => result?.success ? result.data[0] : undefined)
@@ -56,9 +56,9 @@ export async function runBackend(ports: BackendPorts, target: BackendTarget, raw
   if (input.expectedRef && input.expectedRef !== target.projectRef || input.environment && input.environment !== target.environment) throw new InspectionError('O banco ou ambiente mudou. Atualize o painel.', 409)
   if (['tables', 'rows', 'query', 'logs'].includes(kind)) {
     const operation = kind === 'tables' ? 'inspect' : kind === 'logs' ? 'logs' : 'query'
-    const sql = kind === 'rows' ? `SELECT * FROM public."${input.table}"` : input.sql
+    const sql = kind === 'rows' ? `SELECT * FROM public."${input.table}"${input.filter ? ` WHERE "${input.filter.column}" = '${input.filter.value.replaceAll("'", "''")}'` : ''}` : input.sql
     return page(kind, await runInspection(ports.inspection, { operation, expectedRef: target.projectRef, environment: target.environment,
-      limit: input.limit, offset: input.offset, minutes: input.minutes, source: input.source, level: input.level, ...(sql ? { sql } : {}) }))
+      limit: input.limit, offset: input.offset, minutes: input.minutes, source: input.source, level: input.level, ...(input.search ? { search: input.search } : {}), ...(sql ? { sql } : {}) }))
   }
   if (kind === 'functions' || kind === 'function-status') {
     const result = await ports.functions(kind === 'functions' ? 'functions-list' : 'functions-status', input.slug)
@@ -73,7 +73,7 @@ export async function runBackend(ports: BackendPorts, target: BackendTarget, raw
     const rows = records.parse(await ports.inspection.query(`SELECT id,name,public,created_at,updated_at,file_size_limit,allowed_mime_types FROM storage.buckets ORDER BY id LIMIT ${input.limit + 1} OFFSET ${input.offset}`))
     return slice(kind, rows, input)
   }
-  if (kind === 'usage') return usage(ports.inspection)
+  if (kind === 'usage') return readBackendUsage(ports.inspection)
   const operation = kind === 'jobs' ? 'cron-list' : kind === 'job-history' ? 'cron-history' : input.enabled ? 'cron-resume' : 'cron-pause'
   if (kind === 'job-set-active' && target.environment === 'unknown') throw new InspectionError('Agendamentos exigem um ambiente confirmado pelo Supremo.', 409)
   const rawJobs = await ports.jobs(operation, input)

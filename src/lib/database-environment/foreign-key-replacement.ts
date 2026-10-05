@@ -7,13 +7,14 @@ export interface ForeignKeyReplacement {
   referencedSchema: 'public' | 'auth'
   referencedTable: string
   referencedColumn: string
+  onDelete?: 'cascade' | 'restrict' | 'set null' | 'set default'
 }
 
 const identifier = /^[A-Za-z_][A-Za-z_0-9]{0,62}$/
 const maximumReplacements = 100
 
 function reject(): never {
-  throw new Error('Migration exige revisão: DROP só é automático ao substituir a mesma foreign key por uma definição equivalente com ON DELETE NO ACTION, sem outras operações. Nenhuma alteração foi aplicada.')
+  throw new Error('Migration não suportada: DROP só é automático ao substituir a mesma foreign key por uma definição equivalente, preservando ON DELETE, sem outras operações. Nenhuma alteração foi aplicada ou revisão enfileirada.')
 }
 
 /** This is an intentionally closed grammar, not a generic DROP permission.
@@ -55,12 +56,21 @@ export function parseForeignKeyReplacements(sql: string): ForeignKeyReplacement[
     const referencedTable = name()
     symbol('(')
     const referencedColumn = name()
-    symbol(')'); word('on'); word('delete'); word('no'); word('action')
+    symbol(')'); word('on'); word('delete')
+    let onDelete: ForeignKeyReplacement['onDelete']
+    if (tokens[cursor]?.value === 'no') { word('no'); word('action') }
+    else if (tokens[cursor]?.value === 'cascade') { word('cascade'); onDelete = 'cascade' }
+    else if (tokens[cursor]?.value === 'restrict') { word('restrict'); onDelete = 'restrict' }
+    else if (tokens[cursor]?.value === 'set') {
+      word('set')
+      if (tokens[cursor]?.value === 'null') { word('null'); onDelete = 'set null' }
+      else { word('default'); onDelete = 'set default' }
+    } else reject()
     if (cursor < tokens.length) symbol(';')
     const key = `${table}.${constraint}`
     if (seen.has(key) || replacements.length >= maximumReplacements) reject()
     seen.add(key)
-    replacements.push({ table, constraint, column, referencedSchema, referencedTable, referencedColumn })
+    replacements.push({ table, constraint, column, referencedSchema, referencedTable, referencedColumn, ...(onDelete ? { onDelete } : {}) })
   }
   return replacements
 }
@@ -70,7 +80,8 @@ const quoteLiteral = (value: string): string => `'${value}'`
 
 function assertReplacementNames(value: ForeignKeyReplacement): void {
   if (![value.table, value.constraint, value.column, value.referencedTable, value.referencedColumn]
-    .every(name => typeof name === 'string' && identifier.test(name)) || !['public', 'auth'].includes(value.referencedSchema)) reject()
+    .every(name => typeof name === 'string' && identifier.test(name)) || !['public', 'auth'].includes(value.referencedSchema)
+    || value.onDelete !== undefined && !['cascade','restrict','set null','set default'].includes(value.onDelete)) reject()
 }
 
 function existingEquivalentConstraint(value: ForeignKeyReplacement): string {
@@ -90,7 +101,7 @@ function existingEquivalentConstraint(value: ForeignKeyReplacement): string {
     AND c.conname = ${literal(value.constraint)} AND c.contype = 'f'
     AND c.conkey = ARRAY[source_column.attnum]::pg_catalog.int2[]
     AND c.confkey = ARRAY[target_column.attnum]::pg_catalog.int2[]
-    AND c.confdeltype = 'a' AND c.confupdtype = 'a' AND c.confmatchtype = 's'
+    AND c.confdeltype = '${value.onDelete === 'cascade' ? 'c' : value.onDelete === 'restrict' ? 'r' : value.onDelete === 'set null' ? 'n' : value.onDelete === 'set default' ? 'd' : 'a'}' AND c.confupdtype = 'a' AND c.confmatchtype = 's'
     AND NOT c.condeferrable AND NOT c.condeferred AND c.convalidated
     AND c.conparentid = 0 AND c.coninhcount = 0 AND c.conislocal
     AND COALESCE((pg_catalog.to_jsonb(c)->>'conenforced')::pg_catalog.bool, true)

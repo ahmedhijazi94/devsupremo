@@ -7,6 +7,7 @@ import {
 } from './catalog'
 import { jobNames, type CompiledJob } from './compile'
 import { jobManifestEntrySchema } from './policy'
+import { localDailyCommand } from './execution-sql'
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex')
 const lock =
@@ -102,12 +103,14 @@ export function applyJobsSql(
     throw new Error('Manifesto inválido.')
   const ids = jobs.map((j) => ql(slug(j.definition.id))).join(',')
   return `${transaction ? begin : ''} ${registrySafe()} ${capabilitiesSafe()}
+ ALTER TABLE supremo_jobs.managed_jobs ADD COLUMN IF NOT EXISTS max_affected_rows integer CHECK(max_affected_rows BETWEEN 1 AND 1000);
  ${assertSql(`(SELECT count(*) FROM supremo_jobs.managed_jobs WHERE project_id=${ql(projectId)}::uuid AND job_id NOT IN (${ids}))+${jobs.length}<=8`, 'Limite de oito jobs por projeto.')}
  ${jobs
    .map((job) => {
      if (job.key !== jobNames(projectId, job.definition.id).key)
        throw new Error('Projeto do job divergente.')
-     const command = runtimeJobSql(projectId, job)
+     const innerCommand = runtimeJobSql(projectId, job)
+     const command = localDailyCommand(projectId, job.definition.id, job.definition.timezone, job.definition.schedule, innerCommand)
      const relation = `public.${qi(job.table.name)}`
      return `LOCK TABLE ONLY ${relation} IN ROW EXCLUSIVE MODE;
  ${assertSql(sourceSafe(job), 'Estrutura mudou durante a configuração.')}
@@ -127,9 +130,10 @@ export function applyJobsSql(
  REVOKE ALL ON FUNCTION supremo_jobs.${qi(job.wrapper)}() FROM PUBLIC;
  ${assertSql(wrapperSafe(job), 'Função de job já existe com outro conteúdo.')}
  GRANT EXECUTE ON FUNCTION supremo_jobs.${qi(job.wrapper)}() TO ${qi(job.role)};
- INSERT INTO supremo_jobs.managed_jobs(project_id,job_id,job_key,cron_id,role_name,wrapper_name,table_name,manifest_hash,source_fingerprint,command_hash)
- VALUES(${ql(projectId)}::uuid,${ql(job.definition.id)},${ql(job.key)},cron.schedule(${ql(job.key)},${ql(job.definition.schedule)},${ql(command)}),${ql(job.role)},${ql(job.wrapper)},${ql(job.table.name)},${ql(job.manifestHash)},${ql(job.table.fingerprint)},${ql(hash(command))})
- ON CONFLICT(project_id,job_id) DO UPDATE SET cron_id=excluded.cron_id,role_name=excluded.role_name,wrapper_name=excluded.wrapper_name,table_name=excluded.table_name,manifest_hash=excluded.manifest_hash,source_fingerprint=excluded.source_fingerprint,command_hash=excluded.command_hash,updated_at=now();
+ INSERT INTO supremo_jobs.managed_jobs(project_id,job_id,job_key,cron_id,role_name,wrapper_name,table_name,manifest_hash,source_fingerprint,command_hash,max_affected_rows)
+ VALUES(${ql(projectId)}::uuid,${ql(job.definition.id)},${ql(job.key)},cron.schedule(${ql(job.key)},${ql(job.definition.timezone === 'UTC' ? job.definition.schedule : '* * * * *')},${ql(command)}),${ql(job.role)},${ql(job.wrapper)},${ql(job.table.name)},${ql(job.manifestHash)},${ql(job.table.fingerprint)},${ql(hash(command))},${job.definition.action.limit})
+ ON CONFLICT(project_id,job_id) DO UPDATE SET cron_id=excluded.cron_id,role_name=excluded.role_name,wrapper_name=excluded.wrapper_name,table_name=excluded.table_name,manifest_hash=excluded.manifest_hash,source_fingerprint=excluded.source_fingerprint,command_hash=excluded.command_hash,max_affected_rows=excluded.max_affected_rows,updated_at=now();
+ DO $supremo_timezone$ BEGIN IF EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='supremo_jobs.managed_jobs'::regclass AND attname='execution_command') THEN UPDATE supremo_jobs.managed_jobs SET timezone=${ql(job.definition.timezone)},requested_schedule=${ql(job.definition.schedule)},execution_command=${ql(innerCommand)},execution_command_hash=${ql(hash(innerCommand))} WHERE project_id=${ql(projectId)}::uuid AND job_id=${ql(job.definition.id)}; END IF; END $supremo_timezone$;
  SELECT cron.alter_job(cron_id,active:=active) FROM supremo_jobs.managed_jobs WHERE project_id=${ql(projectId)}::uuid AND job_id=${ql(job.definition.id)};`
    })
    .join('\n')} ${transaction ? `COMMIT; SELECT true AS applied,${jobs.length} AS job_count;` : ''}`
@@ -147,7 +151,7 @@ export function listJobsSql(
   offset: number,
   id?: string,
 ): string {
-  return `SELECT m.job_id,m.table_name,CASE WHEN m.role_name='' THEN 'function' ELSE 'update' END AS type,m.table_name AS target,m.active,j.schedule,'UTC' AS timezone,m.created_at,m.updated_at,(j.jobid IS NOT NULL AND j.jobname=m.job_key AND j.username=CURRENT_USER AND j.database=current_database() AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.command,'UTF8')),'hex')=m.command_hash AND j.active=m.active) AS synchronized FROM supremo_jobs.managed_jobs m LEFT JOIN cron.job j ON j.jobid=m.cron_id WHERE ${whereOwn(projectId, id)} ORDER BY m.job_id ${pagination(limit, offset)}`
+  return `SELECT m.job_id,m.table_name,(to_jsonb(m)->>'max_affected_rows')::integer AS max_affected_rows,CASE WHEN m.role_name='' THEN 'function' ELSE 'update' END AS type,m.table_name AS target,m.active,COALESCE(to_jsonb(m)->>'requested_schedule',j.schedule) AS schedule,COALESCE(to_jsonb(m)->>'timezone','UTC') AS timezone,m.created_at,m.updated_at,(j.jobid IS NOT NULL AND j.jobname=m.job_key AND j.username=CURRENT_USER AND j.database=current_database() AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(j.command,'UTF8')),'hex')=m.command_hash AND j.active=m.active) AS synchronized FROM supremo_jobs.managed_jobs m LEFT JOIN cron.job j ON j.jobid=m.cron_id WHERE ${whereOwn(projectId, id)} ORDER BY m.job_id ${pagination(limit, offset)}`
 }
 export function historyJobsSql(
   projectId: string,

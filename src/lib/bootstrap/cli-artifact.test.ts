@@ -3,6 +3,7 @@ import { gunzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
 import { packCli, cliArtifact } from './cli-artifact'
 import { GET } from '@/app/api/cli/[digest]/route'
+import { GET as release } from '@/app/api/cli/release/route'
 
 describe('artefato da CLI servido pelo Supremo', () => {
   it('inclui somente manifesto e executável; checksum tar correto e bytes determinísticos', () => {
@@ -30,5 +31,11 @@ describe('artefato da CLI servido pelo Supremo', () => {
     expect(response.status).toBe(200)
     expect(createHash('sha256').update(Buffer.from(await response.arrayBuffer())).digest('hex')).toBe(artifact.digest)
     expect(response.headers.get('cache-control')).toContain('immutable')
+  })
+  it('announces the exact served artifact without credentials or stale caching', async () => {
+    const artifact = cliArtifact(), response = release()
+    expect(await response.json()).toMatchObject({ version: artifact.version, digest: artifact.digest,
+      url: `/api/cli/${artifact.digest}.tgz`, protocol: 2, queueProtocol: 2, minimumCli: '1.14.0' })
+    expect(response.headers.get('cache-control')).toBe('no-store')
   })
 })

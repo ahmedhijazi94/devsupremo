@@ -1,6 +1,7 @@
 import 'server-only'
 import { randomUUID } from 'node:crypto'
 import { boundedJson } from '../database-inspection/provider'
+import { readOnlyTransaction } from '../database-inspection/sql'
 import { FUNCTION_HOOK_SECRET_NAME, functionDeploySchema, functionSlugSchema, type FunctionDeploy } from './contract'
 import { FunctionError, hookSignature, isValidHookSecret } from './policy'
 
@@ -13,6 +14,11 @@ export interface FunctionProvider {
   secrets(): Promise<unknown>
   setSecret(name: string, value: string): Promise<void>
   probe(slug: string, secret?: string, validity?: 'valid' | 'invalid' | 'expired'): Promise<number>
+  remove?(slug: string): Promise<void>
+  dependencies?(slug: string): Promise<number>
+  disableHook?(): Promise<void>
+  artifact?(slug: string, version: number): Promise<FunctionDeploy>
+  artifactHistory?(slug: string): Promise<{ versions: Array<{ version: number; createdAt: string; hash: string }>; complete: boolean }>
 }
 export function supabaseFunctionProvider(resolve: () => Promise<{ projectRef: string; token: string }>): FunctionProvider {
   const deadline = Date.now() + 55_000
@@ -37,7 +43,7 @@ export function supabaseFunctionProvider(resolve: () => Promise<{ projectRef: st
     }
     // POST secrets documents 201 with no response schema/body. Confirmation is
     // a separate GET fingerprint read-back plus the signed handler probes.
-    if (response.status === 204 || (suffix === 'secrets' && method === 'POST' && response.status === 201)) {
+    if (response.status === 204 || (suffix === 'secrets' && method === 'POST' && response.status === 201) || (suffix.startsWith('functions/') && method === 'DELETE' && response.status === 200)) {
       await response.body?.cancel()
       return null
     }
@@ -45,6 +51,28 @@ export function supabaseFunctionProvider(resolve: () => Promise<{ projectRef: st
     catch { throw new FunctionError('Resposta do Supabase não pôde ser confirmada. Consulte o status antes de repetir.', 502) }
   }
   return {
+    async remove(slug) { await management(`functions/${functionSlugSchema.parse(slug)}`, 'DELETE') },
+    async disableHook() { await management('config/auth', 'PATCH', JSON.stringify({ hook_send_email_enabled: false }), false, true) },
+    async dependencies(slug) {
+      functionSlugSchema.parse(slug)
+      const current = await resolve()
+      const uri = `https://${current.projectRef}.supabase.co/functions/v1/${slug}`
+      const config = await management('config/auth')
+      if (!config || typeof config !== 'object' || Array.isArray(config)) throw new FunctionError('Não foi possível inspecionar dependências da função.')
+      const settings = config as Record<string, unknown>
+      let count = Object.entries(settings).filter(([key, value]) => /^hook_.*_uri$/.test(key) && value === uri && settings[key.replace(/_uri$/, '_enabled')] !== false).length
+      // Use the project's management role in a read-only transaction. The
+      // read-only API's distinct role may see no cron rows under pg_cron's RLS.
+      const query = async (sql: string): Promise<unknown> => management('database/query', 'POST', JSON.stringify({ query: readOnlyTransaction(sql) }), false, true)
+      const installed = await query("SELECT pg_catalog.to_regclass('cron.job') IS NOT NULL AS installed")
+      if (!Array.isArray(installed) || typeof (installed[0] as Record<string, unknown> | undefined)?.installed !== 'boolean') throw new FunctionError('Dependências cron indisponíveis; remoção não autorizada.')
+      if ((installed[0] as { installed: boolean }).installed) {
+        const jobs = await query(`SELECT count(*)::int AS count FROM cron.job WHERE command LIKE '%${uri}%'`)
+        if (!Array.isArray(jobs) || typeof (jobs[0] as Record<string, unknown> | undefined)?.count !== 'number') throw new FunctionError('Dependências cron não confirmadas.')
+        count += (jobs[0] as { count: number }).count
+      }
+      return count
+    },
     list: () => management('functions'),
     get: slug => management(`functions/${functionSlugSchema.parse(slug)}`, 'GET', undefined, true),
     async deploy(raw) {

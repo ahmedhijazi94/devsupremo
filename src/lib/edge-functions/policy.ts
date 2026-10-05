@@ -7,6 +7,11 @@ import { functionEnvironmentSchema, FUNCTION_HOOK_SECRET_NAME, functionSlugSchem
 export class FunctionError extends Error {
   constructor(message: string, readonly status = 409) { super(message); this.name = 'FunctionError' }
 }
+export class FunctionOperationError extends FunctionError {
+  constructor(readonly operationId: string, readonly operationState: 'uncertain' | 'failed' | 'running') {
+    super(`A operação ${operationId} ${operationState === 'failed' ? 'foi interrompida antes do envio' : 'ainda não tem efeito confirmado'}. Consulte o estado deste mesmo pedido antes de tentar outra alteração.`, 409)
+  }
+}
 export function requireFunctionTarget(record: unknown, linkedRef: string | null, options: { expectedRef: string; environment: string }): string {
   const state = describeEnvironment(record, linkedRef)
   if (!functionEnvironmentSchema.safeParse(options.environment).success || state.environment !== options.environment

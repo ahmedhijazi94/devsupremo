@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { deleteOptionsSchema, deleteTargetsSchema } from '../../../src/lib/database-delete/contract'
 import { runDatabase } from './database'
 import { readStableFile } from './stable-file'
+import { isOperationReceipt } from './operation-receipt'
 
 const fileSchema = z.string().min(1).max(4096)
 const planFileSchema = z.object({ data: z.object({ planToken: deleteOptionsSchema.options[1].shape.planToken }) })
@@ -44,7 +45,7 @@ export function registerDataDeleteCommands(program: Command): void {
       const { operation, ...fields } = deleteOptionsSchema.parse({ operation: 'data-delete-plan', environment: options.environment,
         targets: deleteTargetsSchema.parse(readJson(cwd, options.file, 256 * 1024)) })
       const result = await runDatabase(operation, cwd, fields)
-      if (options.output !== undefined) savePlan(cwd, options.output, result)
+      if (options.output !== undefined && !isOperationReceipt(result)) savePlan(cwd, options.output, result)
       console.log(JSON.stringify(result))
     })
   data.command('delete-apply').description('Aplica uma única vez o plano revisado e autorizado; não aguarda testes ou CI')

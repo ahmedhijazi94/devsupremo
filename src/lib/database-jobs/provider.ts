@@ -14,6 +14,7 @@ export class JobsError extends Error {
 }
 
 export interface JobsProvider {
+  authorizeImpact?(jobId: string, rows: number | null): Promise<void>
   functionInfo?(slug: string): Promise<{ id: string; slug: string; version: number; status: string; verifyJwt: boolean }>
   prepareFunctionSigner?(projectId: string, slug: string): Promise<void>
   /** SQL is generated exclusively by the server's typed jobs service. */

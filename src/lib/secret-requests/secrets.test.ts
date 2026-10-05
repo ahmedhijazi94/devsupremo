@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { assertSameBinding, requireSecretBinding, safeSecretError, saveSecretSchema, secretEntrySchema, secretRequestView, secretsRequestSchema, SecretRequestError, type SecretBinding, type SecretEntry, type SecretRequestRecord } from './policy'
@@ -69,6 +70,17 @@ describe('secret request policy', () => {
     expect(secretRequestView(row)).not.toHaveProperty('accountId')
     expect(safeSecretError(new Error('token=private-value'))).not.toContain('private-value')
   })
+  it.each(['google', 'github'])('accepts only public %s client metadata in a confirmed Supabase environment', provider => {
+    const configuration = { kind: 'supabase-auth-provider', provider, clientId: 'public-client.apps.example' }
+    for (const environment of ['development', 'production'])
+      expect(secretEntrySchema.safeParse({ ...entry, environment, configuration }).success).toBe(true)
+    for (const patch of [{ provider: 'unknown' }, { clientId: '' }, { clientId: 'x'.repeat(513) }, { clientId: 'a\nb' },
+      { clientId: 'one,two' }, { clientId: 'a b' }, { clientId: null }, { clientSecret: 'private-value' },
+      { secret: 'private-value' }, { external_google_secret: 'private-value' }, { enabled: false }])
+      expect(secretEntrySchema.safeParse({ ...entry, configuration: { ...configuration, ...patch } }).success).toBe(false)
+    for (const patch of [{ target: 'vercel' }, { environment: 'preview' }])
+      expect(secretEntrySchema.safeParse({ ...entry, configuration, ...patch }).success).toBe(false)
+  })
   it('migration preserves old records without guessing destinations and requires actual project ownership', () => {
     const sql = readFileSync('supabase/migrations/024_scoped_secret_requests.sql', 'utf8')
     expect(sql).toContain('target IS NULL AND environment IS NULL AND target_ref IS NULL')
@@ -84,6 +96,21 @@ describe('secret request policy', () => {
 })
 
 describe('secret request service', () => {
+  it('requires a new field before changing an OAuth client or rotating its fulfilled secret', async () => {
+    const configuration = { kind: 'supabase-auth-provider' as const, provider: 'google' as const, clientId: 'public-client' }
+    const configured = { ...row, configuration, status: 'fulfilled' as const }
+    const port = fixture([configured])
+    await expect(requestSecrets(port, [{ ...entry, configuration: { ...configuration, clientId: 'other-client' } }])).rejects.toThrow('outra configuração')
+    await expect(fulfillSecret(port, requestId, 'replacement-private-value')).rejects.toThrow('já foi concluído')
+    expect(port.deliver).not.toHaveBeenCalled()
+    vi.mocked(port.dismiss).mockImplementation(async () => { vi.mocked(port.list).mockResolvedValue([]) })
+    await dismissRequestedSecret(port, requestId)
+    expect(port.dismiss).toHaveBeenCalledWith(requestId)
+    const fresh = fixture([])
+    const result = await requestSecrets(fresh, [{ ...entry, configuration }])
+    expect(result[0]).toMatchObject({ status: 'pending', configuration })
+    expect(fresh.deliver).not.toHaveBeenCalled()
+  })
   it('rejects changed setup intent for both pending and fulfilled requests and within one batch', async () => {
     const configuration = { kind: 'supabase-smtp' as const, provider: 'resend' as const, senderEmail: 'account@example.test', senderName: 'Example' }
     const configured = { ...entry, configuration }
@@ -218,8 +245,18 @@ describe('secret request service', () => {
 })
 
 describe('secret provider transport', () => {
+  it('refuses a successful POST when the provider fingerprint does not match and rechecks authority before readback',async()=>{
+    const fetcher=vi.spyOn(globalThis,'fetch').mockResolvedValueOnce(Response.json({})).mockResolvedValueOnce(Response.json([{name:entry.name,value:'0'.repeat(64)}]))
+    await expect(deliverSecret(binding,entry.name,'private-value','oauth-token',null)).rejects.toThrow(/não confirmou/)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    fetcher.mockClear();fetcher.mockResolvedValueOnce(Response.json({}))
+    const authorize=vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('policy revoked'))
+    await expect(deliverSecret(binding,entry.name,'private-value','oauth-token',null,authorize)).rejects.toThrow(/não confirmou/)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(authorize).toHaveBeenCalledTimes(2)
+  })
   it('sends only to the pinned Supabase project with redirects disabled and returns no value', async () => {
-    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 201 }))
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{}', { status: 201 })).mockResolvedValueOnce(Response.json([{name:entry.name,value:createHash('sha256').update('private-value').digest('hex')}]))
     expect(await deliverSecret(binding, entry.name, 'private-value', 'oauth-token', null)).toBeUndefined()
     const [url, options] = fetcher.mock.calls[0]!
     expect(String(url)).toBe('https://api.supabase.com/v1/projects/projectref/secrets')

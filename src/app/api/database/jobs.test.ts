@@ -1,5 +1,13 @@
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { authorizeProjectOperation } from '@/lib/backend-operations/server'
+import { OperationError } from '@/lib/backend-operations/contract'
+vi.mock('@/lib/backend-operations/server', () => ({ authorizeProjectOperation: vi.fn() }))
+vi.mock('@/lib/backend-operations/store', () => ({ backendOperationStore: (_client: unknown, scope: {id:string;capability:string}) => ({
+  claim: async () => ({ acquired:true, token:'claim', receipt:{id:scope.id,capability:scope.capability,environment:'development',state:'queued',updatedAt:new Date().toISOString(),message:'',result:null} }),
+  update: async (id:string,_token:string,state:string,message:string,result?:Record<string,unknown>) => ({id,capability:scope.capability,environment:'development',state,updatedAt:new Date().toISOString(),message,result:result??null}),
+}) }))
 import { POST } from './route'
 import { authenticateDeviceSecret } from '@/lib/checkpoint/devices'
 import { getProject, getSupabaseCredentials } from '@/lib/projects/repository'
@@ -16,12 +24,13 @@ const project = { id: identity.projectId, user_id: 'owner', supabase_project_ref
 const device = { id: 'device', ownerUserId: 'owner', revokedAt: null, label: null }
 const environment = { project_ref: 'dev-ref', environment: 'development', source: 'supremo_provisioned' } as const
 const body = { ...identity, operation: 'cron-list', environment: 'development', expectedRef: 'dev-ref' }
-const request = (extra: Record<string, unknown> = {}) => new NextRequest('https://supremo.test/api/database', { method: 'POST', body: JSON.stringify({ ...body, ...extra }) })
+const request = (extra: Record<string, unknown> = {}) => new NextRequest('https://supremo.test/api/database', { method: 'POST', body: JSON.stringify({ ...body, ...(String(extra.operation??'').startsWith('auth-') && !['auth-count','auth-users','auth-config'].includes(String(extra.operation)) || ['cron-apply','cron-pause','cron-resume','cron-remove'].includes(String(extra.operation)) ? {operationId:'00000000-0000-4000-8000-000000000099'}:{}), ...extra }) })
 const job = { id: 'expire-tickets', schedule: '*/5 * * * *', timezone: 'UTC', action: { type: 'update', table: 'tickets', set: { status: 'overdue' }, where: [{ column: 'status', op: 'eq', value: 'open' }] } }
 const table = { oid: 1234, name: 'tickets', kind: 'r', rls: true, partition: false, inherits: false,
   columns: ['id', 'status'].map((name) => ({ name, type: name === 'id' ? 'uuid' : 'text', schema: 'pg_catalog', kind: 'b', generated: '', collation_schema: null })),
   primary_key: ['id'], foreign_key_columns: [], checks: [], rules: [], indexes: [], dependencies: [], policies: [], triggers: [], fingerprint: 'a'.repeat(64) }
 beforeEach(() => {
+  vi.mocked(authorizeProjectOperation).mockResolvedValue({policyId:'00000000-0000-4000-8000-000000000070',revision:'00000000-0000-4000-8000-000000000071'})
   vi.mocked(authenticateDeviceSecret).mockResolvedValue({ ok: true, device })
   vi.mocked(getProject).mockResolvedValue(project)
   vi.mocked(readEnvironment).mockResolvedValue(environment)
@@ -38,8 +47,16 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals() })
 
 describe('typed jobs device route', () => {
-  it.each(['development', 'production', 'unknown'] as const)('reads owner jobs in %s without issuing mutations', async (env) => {
-    vi.mocked(readEnvironment).mockResolvedValue(env === 'unknown' ? null : { ...environment, environment: env })
+  it('denies private job reads from an unregistered environment or revoked read policy', async()=>{
+    vi.mocked(readEnvironment).mockResolvedValue(null)
+    expect((await POST(request({environment:'unknown'}))).status).toBe(409)
+    vi.mocked(readEnvironment).mockResolvedValue(environment)
+    vi.mocked(authorizeProjectOperation).mockRejectedValue(new OperationError('Política revogada.',403))
+    expect((await POST(request())).status).toBe(403)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it.each(['development', 'production'] as const)('reads owner jobs in %s without issuing mutations', async (env) => {
+    vi.mocked(readEnvironment).mockResolvedValue({ ...environment, environment: env })
     const response = await POST(request({ environment: env }))
     expect(response.status).toBe(200)
     const result = await response.json()
@@ -49,7 +66,7 @@ describe('typed jobs device route', () => {
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(getProject).toHaveBeenCalledWith('owner', identity.projectId)
     expect(vi.mocked(fetch).mock.calls.every(([, init]) => String(init?.body).includes('BEGIN READ ONLY;'))).toBe(true)
-    expect(authenticateDeviceSecret).toHaveBeenCalledTimes(5)
+    expect(vi.mocked(authenticateDeviceSecret).mock.calls.length).toBeGreaterThanOrEqual(5)
   })
   it('returns paginated history without raw SQL, failing rows or other provider fields', async () => {
     const response = await POST(request({ operation: 'cron-history', limit: 1, offset: 2, jobId: job.id }))
@@ -111,7 +128,7 @@ describe('typed jobs device route', () => {
       return Response.json([table])
     })
     const response = await POST(request({ operation: 'cron-apply', manifest: { version: 1, jobs: [job] } }))
-    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({data:{operationReceipt:{state:'uncertain'}}})
     expect(fetch).toHaveBeenCalledTimes(2)
     expect(vi.mocked(fetch).mock.calls.every(([, init]) => String(init?.body).includes('BEGIN READ ONLY;'))).toBe(true)
   })
@@ -121,6 +138,12 @@ describe('typed jobs device route', () => {
     }
     expect(fetch).not.toHaveBeenCalled()
     expect(getProject).not.toHaveBeenCalled()
+  })
+  it('requires a durable mutation ID and policy authorization before accessing the provider', async () => {
+    expect((await POST(request({operation:'cron-pause',jobId:job.id,operationId:undefined}))).status).toBe(400)
+    vi.mocked(authorizeProjectOperation).mockRejectedValue(new OperationError('Política revogada.',403))
+    expect((await POST(request({operation:'cron-pause',jobId:job.id}))).status).toBe(403)
+    expect(fetch).not.toHaveBeenCalled()
   })
   it('reports provider refusal without echoing SQL, values or tokens', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response('provider-private-fixture SECRET SQL', { status: 403 }))

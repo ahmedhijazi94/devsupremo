@@ -12,6 +12,7 @@ import { controlRuntimeService, serviceStatus } from './runtime-service'
 import { ensureRuntimeDirectory } from './runtime-files'
 import { RUNTIME_UPDATE_PATHS, runtimeUpdateAuthoritySchema } from './runtime-update-contract'
 import { authorizeRuntimeUpdate } from './runtime-update-authority'
+import { assertPreviewStopped, candidateWorktree, dependencySwapSchema, prepareDependencySwap, previewWitnessSchema, readPreviewWitness, restoreDependencies, swapDependencies } from './runtime-dependencies'
 
 const TOOL_PATHS = RUNTIME_UPDATE_PATHS
 const digest = (value: string): string => crypto.createHash('sha256').update(value).digest('hex')
@@ -22,7 +23,8 @@ const planSchema = z.object({ version: z.literal(1), id: z.string().uuid(), base
   files: z.array(fileSchema), installedBefore: z.object({ manifest: z.string(), bundle: z.string() }).nullable(),
   previousDaemonRunning: z.boolean(), queueProtocolBefore: z.number().int().min(1).max(2),
   serviceWasActive: z.boolean(), serviceWasPaused: z.boolean(), createdAt: z.number(), error: z.string().optional(),
-  authority: runtimeUpdateAuthoritySchema.optional(), templateVersion: z.string().optional() }).strict()
+  authority: runtimeUpdateAuthoritySchema.optional(), templateVersion: z.string().optional(),
+  preview: previewWitnessSchema.optional(), dependencies: dependencySwapSchema.optional() }).strict()
 export type ToolUpdatePlan = z.infer<typeof planSchema>
 const fileFor = (cwd: string, id: string): string => path.join(cwd, '.supremo/runtime-update', `${z.string().uuid().parse(id)}.json`)
 
@@ -68,7 +70,8 @@ export function planToolUpdate(cwd: string, baseRef: string, targetRef: string, 
   const plan: ToolUpdatePlan = { version: 1, id: crypto.randomUUID(), base, target, status: 'planned', files,
     installedBefore, previousDaemonRunning: daemonStatus(cwd).running,
     queueProtocolBefore: inspectRuntimeVersions(cwd).active?.queueProtocol ?? 1,
-    serviceWasActive: serviceStatus(cwd).state === 'active', serviceWasPaused: serviceStatus(cwd).state === 'paused', createdAt: Date.now(), ...source }
+    serviceWasActive: serviceStatus(cwd).state === 'active', serviceWasPaused: serviceStatus(cwd).state === 'paused', createdAt: Date.now(),
+    preview: readPreviewWitness(cwd), ...source }
   save(cwd, plan)
   return plan
 }
@@ -77,11 +80,12 @@ export interface ToolUpdateDeps {
   stop: (cwd: string) => Promise<boolean>
   start: (cwd: string) => Promise<unknown>
   active: (cwd: string) => boolean
+  installDependencies?: (cwd: string, scratch: string) => Promise<void>
 }
 const defaults = (plan: ToolUpdatePlan): ToolUpdateDeps => ({
   validate: async (cwd, plan) => {
     const scratch = path.join(cwd, '.supremo/runtime-update', `candidate-${plan.id}`)
-    execFileSync('git', ['worktree', 'add', '--detach', scratch, plan.target], { cwd, stdio: 'pipe' })
+    candidateWorktree(cwd, ['add', '--detach', scratch, plan.target])
     try {
       const bundle = path.join(scratch, 'tools/supremo-cli/dist/bin.js')
       const manifest = z.object({ name: z.literal('supremo-cli'), version: z.string() }).parse(JSON.parse(local(scratch, 'tools/supremo-cli/package.json') ?? 'null'))
@@ -93,7 +97,7 @@ const defaults = (plan: ToolUpdatePlan): ToolUpdateDeps => ({
       // CLI cannot recognize hashes that had not yet been published at build time.
       const checked = await runWorkerProcess(process.execPath, [bundle, 'runtime', 'check-tools'], { cwd: scratch, env, timeoutMs: 10_000, maxOutputBytes: 64 * 1024 })
       z.object({ status: z.literal('verified') }).strict().parse(JSON.parse(checked.stdout.trim()))
-    } finally { execFileSync('git', ['worktree', 'remove', '--force', scratch], { cwd, stdio: 'pipe' }) }
+    } finally { candidateWorktree(cwd, ['remove', '--force', scratch]) }
   }, stop: async cwd => {
     if (serviceStatus(cwd).state === 'active') await controlRuntimeService(cwd, 'pause')
     return stopDaemon(cwd)
@@ -130,7 +134,25 @@ function unfinishedDurableOperations(cwd: string): boolean {
     return !entry.success || ['queued', 'running', 'uncertain', 'needs_authorization'].includes(entry.data.status)
   })
 }
-export async function applyToolUpdate(cwd: string, id: string, overrides?: ToolUpdateDeps): Promise<ToolUpdatePlan> {
+function requiresDependencyInstall(plan: ToolUpdatePlan): boolean {
+  const packageChange = plan.files.find(file => file.path === 'package.json')
+  if (packageChange) {
+    const dependencies = (content: string | null): string => {
+      const pkg = z.object({ dependencies: z.record(z.string(), z.string()).optional(), devDependencies: z.record(z.string(), z.string()).optional(),
+        optionalDependencies: z.record(z.string(), z.string()).optional(), peerDependencies: z.record(z.string(), z.string()).optional(), overrides: z.unknown().optional() }).parse(JSON.parse(content ?? '{}'))
+      return JSON.stringify([[pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies, pkg.peerDependencies].map(values => Object.entries(values ?? {}).filter(([name]) => name !== 'supremo-cli').sort(([a], [b]) => a.localeCompare(b))), pkg.overrides])
+    }
+    if (dependencies(packageChange.before) !== dependencies(packageChange.after)) return true
+  }
+  const lockChange = plan.files.find(file => file.path === 'package-lock.json')
+  if (!lockChange) return false
+  const packages = (content: string | null): string => {
+    const lock = z.object({ packages: z.record(z.string(), z.unknown()).optional() }).parse(JSON.parse(content ?? '{}'))
+    return JSON.stringify(Object.entries(lock.packages ?? {}).filter(([name]) => name !== '' && name !== 'tools/supremo-cli' && name !== 'node_modules/supremo-cli').sort(([a], [b]) => a.localeCompare(b)))
+  }
+  return packages(lockChange.before) !== packages(lockChange.after)
+}
+export async function applyToolUpdate(cwd: string, id: string, overrides?: ToolUpdateDeps, options?: { withDependencies?: boolean }): Promise<ToolUpdatePlan> {
   const plan = readToolUpdate(cwd, id)
   const deps = overrides ?? defaults(plan)
   assertPlanIntegrity(cwd, plan)
@@ -141,18 +163,21 @@ export async function applyToolUpdate(cwd: string, id: string, overrides?: ToolU
   }
   if (plan.status === 'rolled_back' || plan.status === 'conflict') throw new Error('Plano encerrado; prepare uma nova atualização com o estado atual.')
   if (plan.authority) await authorizeRuntimeUpdate(cwd, plan.authority)
-  const packageChange = plan.files.find(file => file.path === 'package.json')
-  if (packageChange?.before) {
-    const dependencies = (content: string): string => {
-      const pkg = z.object({ dependencies: z.record(z.string(), z.string()).optional(), devDependencies: z.record(z.string(), z.string()).optional() }).parse(JSON.parse(content))
-      return JSON.stringify([pkg.dependencies, pkg.devDependencies].map(values => Object.entries(values ?? {}).filter(([name]) => name !== 'supremo-cli').sort(([a], [b]) => a.localeCompare(b))))
-    }
-    if (dependencies(packageChange.before) !== dependencies(packageChange.after)) {
-      plan.error = `Plano ${plan.id} preparado, mas exige atualizar dependências do aplicativo em instalação isolada. Nenhum arquivo ou preview foi alterado.`; save(cwd, plan)
-      throw new Error(plan.error)
-    }
+  const needsDependencies = requiresDependencyInstall(plan)
+  if (needsDependencies && !options?.withDependencies && !plan.dependencies) {
+    plan.error = `Plano ${plan.id} preparado; exige instalação isolada. Pare o preview na janela autorizada e execute runtime apply-update ${plan.id} --with-dependencies. Nenhum arquivo ou preview foi alterado.`; save(cwd, plan)
+    throw new Error(plan.error)
   }
   if (plan.status === 'planned') { await deps.validate(cwd, plan); plan.status = 'validated'; save(cwd, plan) }
+  if (needsDependencies) {
+    try {
+      await assertPreviewStopped(cwd, plan.preview)
+      if (!plan.dependencies) {
+        plan.dependencies = await prepareDependencySwap(cwd, plan.id, plan.target, deps.installDependencies)
+        save(cwd, plan)
+      }
+    } catch (error) { plan.error = error instanceof Error ? error.message : 'Instalação isolada falhou.'; save(cwd, plan); throw error }
+  }
   return withTurnLock(cwd, async () => {
     const lease = readJson(path.join(cwd, '.supremo/turns/mutation-lease.json'))
     if (lease !== null) throw new Error('Ferramenta ativa; atualização aguarda um momento seguro.')
@@ -163,11 +188,14 @@ export async function applyToolUpdate(cwd: string, id: string, overrides?: ToolU
       }
     }
     if (plan.authority) await authorizeRuntimeUpdate(cwd, plan.authority)
+    if (needsDependencies) await assertPreviewStopped(cwd, plan.preview)
     if (!await deps.stop(cwd)) throw new Error('Não foi possível confirmar a parada do daemon; atualização não aplicada.')
     plan.status = 'applying'; save(cwd, plan)
     try {
+      if (needsDependencies) await assertPreviewStopped(cwd, plan.preview)
+      if (plan.dependencies) swapDependencies(cwd, plan.id, plan.dependencies, () => save(cwd, plan))
       for (const file of plan.files) writeLocal(cwd, file.path, file.after)
-      if (plan.installedBefore) {
+      if (plan.installedBefore && !plan.dependencies) {
         writeLocal(cwd, 'node_modules/supremo-cli/package.json', local(cwd, 'tools/supremo-cli/package.json'))
         writeLocal(cwd, 'node_modules/supremo-cli/dist/bin.js', local(cwd, 'tools/supremo-cli/dist/bin.js'))
       }
@@ -180,12 +208,12 @@ export async function applyToolUpdate(cwd: string, id: string, overrides?: ToolU
       const deadline = Date.now() + 5000
       while (!deps.active(cwd) && Date.now() < deadline) await new Promise<void>(resolve => setTimeout(resolve, 100))
       if (!deps.active(cwd)) throw new Error('Nova versão ainda não confirmada pelo daemon.')
-      plan.status = 'active'; save(cwd, plan); return plan
+      plan.status = 'active'; delete plan.error; save(cwd, plan); return plan
     } catch (error) {
       plan.error = error instanceof Error ? error.message : 'Ativação falhou.'
       // Stop the candidate before restoring executable bytes. The queue format is
       // unchanged in this release; incompatible future migrations must refuse this path.
-      const installedChanged = plan.installedBefore && [
+      const installedChanged = !plan.dependencies && plan.installedBefore && [
         ['node_modules/supremo-cli/package.json', plan.installedBefore.manifest, local(cwd, 'tools/supremo-cli/package.json')],
         ['node_modules/supremo-cli/dist/bin.js', plan.installedBefore.bundle, local(cwd, 'tools/supremo-cli/dist/bin.js')],
       ].some(([relative, before, after]) => { const current = local(cwd, relative!); return current !== before && current !== after })
@@ -195,8 +223,12 @@ export async function applyToolUpdate(cwd: string, id: string, overrides?: ToolU
       if (!await deps.stop(cwd) || installedChanged || plan.files.some(file => !same(local(cwd, file.path), file.before) && !same(local(cwd, file.path), file.after))) {
         plan.status = 'conflict'; save(cwd, plan); return plan
       }
+      if (plan.dependencies) {
+        try { await assertPreviewStopped(cwd, plan.preview); restoreDependencies(cwd, plan.id, plan.dependencies, () => save(cwd, plan)) }
+        catch { plan.status = 'conflict'; plan.error += ' Dependências preservadas: rollback não confirmou uma janela segura ou encontrou instalação concorrente.'; save(cwd, plan); return plan }
+      }
       for (const file of plan.files) writeLocal(cwd, file.path, file.before)
-      if (plan.installedBefore) {
+      if (plan.installedBefore && !plan.dependencies) {
         writeLocal(cwd, 'node_modules/supremo-cli/package.json', plan.installedBefore.manifest)
         writeLocal(cwd, 'node_modules/supremo-cli/dist/bin.js', plan.installedBefore.bundle)
       }

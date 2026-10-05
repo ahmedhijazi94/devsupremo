@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { authPasswordRequest, emailIntegrationRequest, requestIntegration } from './integration-request'
+import { authPasswordRequest, authProviderIntegrationRequest, emailIntegrationRequest, requestIntegration } from './integration-request'
 import { isDatabaseReadCommand, parseDatabaseOptions, type DatabaseOperation, type DatabaseOptions } from './database-request'
 import { credentialResponse, secretResponse } from './project-service-request'
 
@@ -12,6 +12,36 @@ const CREDENTIAL = '33333333-3333-4333-8333-333333333333'
 const smtpView = { id: REQUEST, ...emailIntegrationRequest(SMTP).requests[0]!, targetRef: 'owned-ref', status: 'pending' as const }
 
 describe('integration setup requests are strictly metadata-only', () => {
+  it.each(['google', 'github'])('requests a %s client secret with only public setup metadata', provider => {
+    const input = authProviderIntegrationRequest({ provider, clientId: ' public-client ', environment: 'production' })
+    expect(input.requests[0]).toMatchObject({ name: `AUTH_${provider.toUpperCase()}_CLIENT_SECRET`, target: 'supabase', environment: 'production',
+      configuration: { kind: 'supabase-auth-provider', provider, clientId: 'public-client' } })
+    expect(parseDatabaseOptions('secrets-request', input)).toEqual(input)
+  })
+  it.each([{ provider: 'other' }, { clientId: '' }, { clientId: 'client\nprivate' }, { clientId: 'x'.repeat(513) },
+    { environment: undefined }, { environment: 'preview' }, { secret: 'private-value' }, { clientSecret: 'private-value' },
+    { value: 'private-value' }, { targetRef: 'foreign' }, { enabled: false }])('rejects invalid or secret-bearing OAuth input: %j', patch => {
+    expect(() => authProviderIntegrationRequest({ provider: 'google', clientId: 'public-client', environment: 'development', ...patch })).toThrow()
+  })
+  it.each(['google', 'github'])('provides a sanitized %s configuration receipt without attesting a login', provider => {
+    const entry = authProviderIntegrationRequest({ provider, clientId: 'public-client', environment: 'development' }).requests[0]!
+    const raw = { projectId: PROJECT, requests: [{ ...entry, id: REQUEST, targetRef: 'owned-ref', status: 'fulfilled', value: 'private-value', encryptedValue: 'private-ciphertext' }] }
+    const result = secretResponse(raw, PROJECT, ISSUER, [REQUEST])
+    expect(result).toMatchObject({ valuesReceived: false, requests: [{ receipt: { kind: 'auth_provider_configured', applied: true, provider,
+      integrationVerified: false, loginVerified: false } }], nextAction: { kind: 'continue_integration', configurationOnly: true } })
+    expect(JSON.stringify(result)).not.toMatch(/private-value|private-ciphertext/)
+  })
+  it('reuses a known OAuth vault reference and refuses fulfilled fields for rotation', async () => {
+    const input = authProviderIntegrationRequest({ provider: 'github', clientId: 'public-client', environment: 'development' })
+    const view = { ...input.requests[0]!, id: REQUEST, targetRef: 'owned-ref', status: 'pending' }
+    const execute = vi.fn().mockResolvedValueOnce({ projectId: PROJECT, requests: [view] })
+      .mockResolvedValueOnce({ projectId: PROJECT, requests: [{ ...view, status: 'fulfilled' }] })
+    expect(await requestIntegration(input, CREDENTIAL, execute)).toMatchObject({ requests: [{ status: 'fulfilled' }] })
+    expect(execute.mock.calls).toEqual([['secrets-request', input], ['secrets-apply', { requestId: REQUEST, credentialId: CREDENTIAL }]])
+    execute.mockClear().mockResolvedValue({ projectId: PROJECT, requests: [{ ...view, status: 'fulfilled' }] })
+    await expect(requestIntegration(input, CREDENTIAL, execute)).rejects.toThrow('secrets dismiss')
+    expect(execute).toHaveBeenCalledTimes(1)
+  })
   it('requests direct SMTP configuration in the explicit environment with the selected sender', () => {
     expect(emailIntegrationRequest(SMTP)).toEqual({ requests: [{
       name: 'AUTH_SMTP_PASSWORD', description: 'Configurar envio de emails de autenticação com Resend no Supabase.',
@@ -165,6 +195,8 @@ describe('vault references never become credentials in the daemon or output', ()
 
 describe('secure field requests do not launch app QA or recovery', () => {
   it.each([
+    'supremo integrations auth-provider --provider google --client-id public-client.apps.googleusercontent.com --environment development',
+    `supremo integrations auth-provider --provider github --client-id public-client --environment production --credential-id ${CREDENTIAL}`,
     'supremo integrations email --provider resend --sender-email hello@example.invalid --sender-name "Meu app" --environment development',
     'node node_modules/supremo-cli/dist/bin.js integrations email --provider resend --sender-email hello@example.invalid --environment production',
     `supremo auth password --user-id ${USER} --environment development`,
@@ -180,6 +212,10 @@ describe('secure field requests do not launch app QA or recovery', () => {
   ])('recognizes metadata-only request: %s', command => expect(isDatabaseReadCommand(command)).toBe(true))
   it.each([
     'supremo integrations email --provider resend --sender-email hello@example.invalid',
+    'supremo integrations auth-provider --provider google --client-id public-client',
+    'supremo integrations auth-provider --provider github --client-id public-client --environment development --client-secret private',
+    'supremo integrations auth-provider --provider google --client-id public-client --environment development --provider github',
+    'supremo integrations auth-provider --provider google --client-id public-client --environment preview',
     'supremo integrations email --provider resend --sender-email hello@example.invalid --environment development --password secret',
     'supremo integrations email --provider resend --provider resend --sender-email hello@example.invalid --environment development',
     'supremo integrations email --provider resend --sender-email hello@example.invalid --environment',

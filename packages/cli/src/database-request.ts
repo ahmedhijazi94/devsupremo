@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { credentialApplyOptionsSchema, credentialIdSchema, jobIdSchema, secretRequestOptionsSchema, type RequestedSecret } from './project-service-request'
 import { authOptionsSchema, authOperationSchema, isAuthRead, type AuthOptions } from '../../../src/lib/database-admin/options'
-import { authPasswordRequest, emailIntegrationRequest, validateCredentialReuse } from './integration-request'
+import { authPasswordRequest, authProviderIntegrationRequest, emailIntegrationRequest, validateCredentialReuse } from './integration-request'
 import { functionOperationSchema, isFunctionRead } from '../../../src/lib/edge-functions/contract'
 import { parseFunctionOptions, type FunctionFields } from './functions-request'
 import { deleteOperationSchema, deleteOptionsSchema, type DeleteOptions } from '../../../src/lib/database-delete/contract'
@@ -28,7 +28,7 @@ export const databaseReadOptionsSchema = z.object({ ...target, ...bounded,
   table: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/).optional(),
   minutes: logging.minutes.optional(), source: logging.source.optional(), level: logging.level.optional(), search: logging.search,
 }).strict()
-type AuthFields = { config?: Extract<AuthOptions, { operation: 'auth-configure' }>['config']; user?: Extract<AuthOptions, { operation: 'auth-update' }>['user']; userId?: string; email?: string; emailConfirmed?: boolean; roles?: string[]; manifestVersion?: 1 }
+type AuthFields = { config?: Extract<AuthOptions, { operation: 'auth-configure' }>['config']; user?: Extract<AuthOptions, { operation: 'auth-update' }>['user']; userId?: string; email?: string; emailConfirmed?: boolean; redirectTo?: string | undefined; roles?: string[]; manifestVersion?: 1 }
 type DeleteFields = { targets?: Extract<DeleteOptions, { operation: 'data-delete-plan' }>['targets']; planToken?: string; authorization?: string }
 export type DatabaseOptions = Partial<z.infer<typeof databaseReadOptionsSchema>> & AuthFields & DeleteFields & Omit<FunctionFields, 'environment'> & { requests?: RequestedSecret[]; requestId?: string; credentialId?: string; jobId?: string | undefined; operationId?: string | undefined; action?: MutationAction; id?: string; options?: StorageOptions | IntegrationOptions | ConnectionProposalInput | z.infer<typeof usageReadSchema> }
 
@@ -143,9 +143,9 @@ export function isDatabaseReadCommand(command: string): boolean {
     }
     try { parseFunctionOptions(`functions-${requestedOperation}`, fields); return true } catch { return false }
   }
-  if ((family === 'integrations' && requestedOperation === 'email') || (family === 'auth' && requestedOperation === 'password')) {
+  if ((family === 'integrations' && ['email', 'auth-provider'].includes(requestedOperation ?? '')) || (family === 'auth' && requestedOperation === 'password')) {
     const fields: Record<string, string> = {}
-    const names: Record<string, string> = { '--provider': 'provider', '--sender-email': 'senderEmail', '--sender-name': 'senderName', '--environment': 'environment', '--user-id': 'userId', '--credential-id': 'credentialId' }
+    const names: Record<string, string> = { '--provider': 'provider', '--client-id': 'clientId', '--sender-email': 'senderEmail', '--sender-name': 'senderName', '--environment': 'environment', '--user-id': 'userId', '--credential-id': 'credentialId' }
     while (tokens.length) {
       const flag = tokens.shift()!, key = Object.hasOwn(names, flag) ? names[flag] : undefined
       if (!key || !tokens.length || Object.hasOwn(fields, key)) return false
@@ -154,7 +154,7 @@ export function isDatabaseReadCommand(command: string): boolean {
     try {
       if (family === 'integrations') {
         const { credentialId, ...input } = fields
-        validateCredentialReuse(emailIntegrationRequest(input), credentialId)
+        validateCredentialReuse(requestedOperation === 'auth-provider' ? authProviderIntegrationRequest(input) : emailIntegrationRequest(input), credentialId)
       }
       else authPasswordRequest(fields)
       return true

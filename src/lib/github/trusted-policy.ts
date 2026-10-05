@@ -44,6 +44,11 @@ const releasedPolicies: readonly ValidationManifest[] = [
 function policiesForKind(kind: string | null): readonly ValidationManifest[] {
   return releasedPolicies.filter(policy => policy.kind === (kind ?? 'solo'))
 }
+
+/** A known old file may be upgraded; project HEAD alone is never a template base. */
+export function isReleasedValidationFile(kind: string, file: string, hash: string): boolean {
+  return policiesForKind(kind).some(policy => policy.files[file] === hash)
+}
 function closestFailures(results: readonly string[][]): string[] {
   return [...results].sort((a, b) => a.length - b.length)[0] ?? ['Tipo de projeto sem política publicada.']
 }

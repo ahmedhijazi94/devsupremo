@@ -21,7 +21,7 @@ beforeEach(() => {
   mocks.authorize.mockResolvedValue({ revision: deviceId })
   mocks.project.mockResolvedValue({ id: projectId, name: 'Fixture', kind: 'solo', template_version: '4.0.18' })
   mocks.credentials.mockResolvedValue({ defaultBranch: 'main', branch: 'main' }); mocks.head.mockResolvedValue('b'.repeat(40))
-  mocks.tree.mockResolvedValue([{ path: 'scripts/verify.mjs', sha: 'c'.repeat(40) }])
+  mocks.tree.mockResolvedValue([{ path: 'scripts/verify.mjs', sha: 'ab5e3af6f6ea8445fa697dd992137dbe8d73bb42' }])
   mocks.plan.mockResolvedValue({ templateVersion: '4.0.18', creates: [{ path: 'app/page.tsx', content: 'application code' }],
     updates: [{ path: 'scripts/verify.mjs', content: 'verified engine' }, { path: 'tools/supremo-cli/dist/bin.js', content: 'separate tarball' }] })
 })
@@ -29,7 +29,7 @@ it('pins the repository snapshot and emits only allowed tooling with its expecte
   const response = await post()
   expect(response.status).toBe(200)
   expect(await response.json()).toMatchObject({ projectId, baseSha: 'b'.repeat(40), cliDigest: 'a'.repeat(64),
-    files: [{ path: 'scripts/verify.mjs', beforeBlob: 'c'.repeat(40), content: 'verified engine' }] })
+    files: [{ path: 'scripts/verify.mjs', beforeBlob: 'ab5e3af6f6ea8445fa697dd992137dbe8d73bb42', content: 'verified engine' }] })
   expect(mocks.plan).toHaveBeenCalledWith(expect.objectContaining({ defaultBranch: 'b'.repeat(40), branch: 'b'.repeat(40) }), expect.objectContaining({ projectId }))
   expect(mocks.authorize).toHaveBeenCalledTimes(2)
   expect(mocks.authorize).toHaveBeenCalledWith(expect.objectContaining({ ownerId, projectId, deviceId, environment: 'development' }), 'engine.update', { resource: 'engine.tools' })
@@ -54,4 +54,21 @@ it('rechecks activation authority without reading a repository and rejects calle
   expect(mocks.credentials).not.toHaveBeenCalled()
   expect((await post({ ...body, ownerId } as typeof body)).status).toBe(409)
   expect(mocks.authenticate).toHaveBeenCalledTimes(1)
+})
+it('preserves a committed personalized tool instead of treating remote HEAD as its official baseline', async () => {
+  mocks.tree.mockResolvedValue([{ path: 'scripts/setup-local.mjs', sha: 'c'.repeat(40) }])
+  mocks.plan.mockResolvedValue({ templateVersion: '4.0.18', creates: [], updates: [{ path: 'scripts/setup-local.mjs', content: 'official replacement' }] })
+  const response = await post()
+  expect(response.status).toBe(409)
+  expect(await response.json()).toEqual({ error: expect.stringContaining('scripts/setup-local.mjs') })
+  expect(mocks.authorize).toHaveBeenCalledTimes(1)
+})
+it('upgrades a known prior official tool while keeping merged personal instructions', async () => {
+  mocks.tree.mockResolvedValue([{ path: 'scripts/setup-local.mjs', sha: '44f2b3149873ce5f7f0113da9906180381057e76' }, { path: 'AGENTS.md', sha: 'd'.repeat(40) }])
+  mocks.plan.mockResolvedValue({ templateVersion: '4.0.18', creates: [], updates: [
+    { path: 'scripts/setup-local.mjs', content: 'official replacement' }, { path: 'AGENTS.md', content: 'personal instructions plus managed block' },
+  ] })
+  const response = await post()
+  expect(response.status).toBe(200)
+  expect((await response.json()).files).toHaveLength(2)
 })

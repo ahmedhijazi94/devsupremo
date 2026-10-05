@@ -13,6 +13,7 @@ export function requireAuthTarget(record: unknown, linkedRef: string | null, opt
 export interface AuthAdminProvider {
   management(path: 'config/auth' | 'database/query/read-only', method: 'GET' | 'POST' | 'PATCH', body?: object): Promise<unknown>
   user(method: 'GET' | 'POST' | 'PUT' | 'DELETE', userId: string | null, body?: object): Promise<unknown>
+  invite?(email: string, redirectTo?: string): Promise<unknown>
   roles?(userId: string, roles: string[]): Promise<unknown>
   revokeSessions?(userId: string): Promise<unknown>
 }
@@ -100,6 +101,24 @@ export async function runAuthAdmin(provider: AuthAdminProvider, raw: AuthOptions
     return { users, limit: options.limit, offset: options.offset, mayHaveMore: users.length === options.limit }
   }
   if (options.operation === 'auth-config') return configView(await provider.management('config/auth', 'GET'))
+  if (options.operation === 'auth-invite') {
+    if (!provider.invite) throw new InspectionError('Executor de convites indisponível.', 503)
+    if (options.redirectTo) {
+      const config = rawConfigSchema.parse(await provider.management('config/auth', 'GET'))
+      // Only exact, configured URLs are accepted. Wildcard patterns do not
+      // authorize an arbitrary agent-selected redirect carrying login tokens.
+      const allowed = [config.site_url, ...(config.uri_allow_list ?? '').split(',').map(value => value.trim())]
+      if (!allowed.includes(options.redirectTo)) throw new InspectionError('Cadastre a URL exata de retorno em auth configure antes de enviar o convite.', 409)
+    }
+    const invitationUser = userViewSchema.extend({ invited_at: z.string().datetime({ offset: true }) })
+    const accepted = invitationUser.parse(await provider.invite(options.email, options.redirectTo))
+    if (accepted.email?.toLowerCase() !== options.email.toLowerCase()) throw new InspectionError('O provedor retornou outro destinatário; convite não confirmado.', 502)
+    const observed = invitationUser.parse(await provider.user('GET', accepted.id))
+    if (observed.id !== accepted.id || observed.email?.toLowerCase() !== options.email.toLowerCase()
+      || observed.invited_at !== accepted.invited_at)
+      throw new InspectionError('A leitura final não confirmou o convite. Consulte o usuário antes de repetir.', 409)
+    return { user: observed, invitationAccepted: true, userObserved: true, deliveryVerified: false, verified: true }
+  }
   if (options.operation === 'auth-configure') {
     const before = configView(await provider.management('config/auth', 'GET'))
     const desired = options.config

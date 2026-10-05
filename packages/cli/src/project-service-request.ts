@@ -59,6 +59,10 @@ function configurationReceipt(request: SecretView) {
     nextSteps: ['Ajustar o template com auth configure, se necessário.', 'Conectar o fluxo do app e testar o envio autorizado.'] }
   if (request.configuration?.kind === 'supabase-user-password') return { ...common, kind: 'development_password_updated' as const,
     message: 'A senha da conta de desenvolvimento foi atualizada por API.', nextSteps: ['Informar a atualização; o login ainda precisa ser verificado.'] }
+  if (request.configuration?.kind === 'supabase-auth-provider') return { ...common, kind: 'auth_provider_configured' as const,
+    provider: request.configuration.provider, loginVerified: false as const,
+    message: 'O Supremo salvou a configuração do provedor de login no Supabase por API. O login ainda precisa ser verificado.',
+    nextSteps: ['Confirmar que o app OAuth e o callback estão configurados no provedor.', 'Conectar o fluxo de login do app e testar com autorização do usuário.'] }
   return { ...common, kind: 'environment_secret_installed' as const,
     message: 'O segredo já foi instalado no destino e ambiente indicados por API.',
     nextSteps: ['Implementar ou ajustar o uso no backend.', 'Publicar e testar a integração conforme a autorização do usuário.'] }

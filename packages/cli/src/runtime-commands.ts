@@ -18,10 +18,11 @@ export function registerRuntimeCommands(program: Command): void {
     .action(() => { verifyTrustedFiles(process.cwd()); console.log(JSON.stringify({ status: 'verified' })) })
   runtime.command('update').description('Obtém o candidato oficial na origem já autorizada e ativa com rollback')
     .option('--prepare-only', 'Prepara um plano sem substituir as ferramentas')
-    .action(async (options: { prepareOnly?: boolean }) => {
+    .option('--with-dependencies', 'Instala dependências em candidato isolado; exige preview comprovadamente parado')
+    .action(async (options: { prepareOnly?: boolean; withDependencies?: boolean }) => {
       const plan = await planOfficialUpdate(process.cwd())
       if (!plan) { console.log(JSON.stringify({ status: 'up_to_date', runtime: inspectRuntimeVersions(process.cwd()) })); return }
-      const result = options.prepareOnly ? plan : await applyToolUpdate(process.cwd(), plan.id)
+      const result = options.prepareOnly ? plan : await applyToolUpdate(process.cwd(), plan.id, undefined, options)
       console.log(JSON.stringify({ id: result.id, status: result.status, error: result.error, paths: result.files.map(file => file.path) }))
       if (!options.prepareOnly && result.status !== 'active') process.exitCode = 1
     })
@@ -30,8 +31,8 @@ export function registerRuntimeCommands(program: Command): void {
       const plan = planToolUpdate(process.cwd(), options.base, options.target)
       console.log(JSON.stringify({ id: plan.id, status: plan.status, base: plan.base, target: plan.target, paths: plan.files.map(file => file.path) }))
     })
-  runtime.command('apply-update <id>').action(async (id: string) => {
-    const result = await applyToolUpdate(process.cwd(), id)
+  runtime.command('apply-update <id>').option('--with-dependencies', 'Instala dependências em candidato isolado; exige preview comprovadamente parado').action(async (id: string, options: { withDependencies?: boolean }) => {
+    const result = await applyToolUpdate(process.cwd(), id, undefined, options)
     console.log(JSON.stringify({ id: result.id, status: result.status, error: result.error }))
     if (result.status !== 'active') process.exitCode = 1
   })

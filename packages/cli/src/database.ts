@@ -139,7 +139,7 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
       sql: extra.sql, limit: extra.limit, offset: extra.offset, table: extra.table,
       minutes: extra.minutes, source: extra.source, level: extra.level, search: extra.search,
       config: extra.config, user: extra.user, userId: extra.userId, email: extra.email,
-      emailConfirmed: extra.emailConfirmed, roles: extra.roles, manifestVersion: extra.manifestVersion,
+      emailConfirmed: extra.emailConfirmed, redirectTo: extra.redirectTo, roles: extra.roles, manifestVersion: extra.manifestVersion,
       targets: extra.targets, planToken: extra.planToken, authorization: extra.authorization, action: extra.action,
       slug: extra.slug, entrypoint: extra.entrypoint, files: extra.files, importMap: extra.importMap,
       verifyJwt: extra.verifyJwt, secretName: extra.secretName, expectedVersion: extra.expectedVersion,

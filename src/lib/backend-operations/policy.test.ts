@@ -8,6 +8,15 @@ import { capabilityLabels, operationStateLabels } from './presentation'
 const scope = { ownerId: '11111111-1111-4111-8111-111111111111', projectId: '22222222-2222-4222-8222-222222222222', environment: 'development' as const }
 const policy: OperationPolicy = { ...scope, id: '33333333-3333-4333-8333-333333333333', revision: '44444444-4444-4444-8444-444444444444', enabled: true, capabilities: ['data.update'], resources: [], deviceIds: [], maxRows: 25, maxOperationsPerHour: 60 }
 describe('project automation authority', () => {
+  it('scopes invitations to a canonical exact email without expanding other resource syntax', () => {
+    const input = { projectId: scope.projectId, environment: scope.environment, expectedRevision: null, enabled: true, capabilities: ['auth.invite'], resources: ['auth.invite:User+test@Example.com'], deviceIds: [], maxRows: 1, maxOperationsPerHour: 5 }
+    const parsed = policyInputSchema.parse(input)
+    expect(parsed.resources).toEqual(['auth.invite:user+test@example.com'])
+    const invitations: OperationPolicy = { ...policy, ...parsed }
+    expect(() => enforceOperationPolicy(invitations, scope, 'auth.invite', { rows: 1, resource: 'auth.invite:user+test@example.com' })).not.toThrow()
+    expect(() => enforceOperationPolicy(invitations, scope, 'auth.invite', { rows: 1, resource: 'auth.invite:another@example.com' })).toThrow('recurso')
+    for (const resource of ['auth.invite:invalid', 'auth.invite:user@example.com\r\nBcc:other@example.com', 'public.table+unsafe']) expect(policyInputSchema.safeParse({ ...input, resources: [resource] }).success).toBe(false)
+  })
   it('permits only the exact owner, project, environment and capability', () => {
     expect(enforceOperationPolicy(policy, scope, 'data.update', { rows: 25 })).toEqual({ policyId: policy.id, revision: policy.revision })
     for (const other of [{ ...scope, ownerId: 'other' }, { ...scope, projectId: 'other' }, { ...scope, environment: 'production' as const }]) expect(() => enforceOperationPolicy(policy, other, 'data.update')).toThrow('Autorize')

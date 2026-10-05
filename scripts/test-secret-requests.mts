@@ -112,3 +112,32 @@ assert.equal(backend(acquireClaim(503)), id(503))
 backend(`UPDATE secret_requests SET delivery_claim_expires_at=now()-interval '1 second' WHERE id='${id(202)}';`)
 assert.equal(user(1, `DELETE FROM secret_requests WHERE id='${id(202)}' RETURNING id;`), id(202))
 console.log('✓ PostgreSQL real: migration025 preserva legado e RLS; intenção de SMTP/senha aceita somente metadados; claims exclusivos bloqueiam dispensa em andamento e permitem recuperação após expiração; worker antigo não confirma nem libera claim novo; valores/chaves extras e escritas do browser rejeitados.')
+
+run(readFileSync(new URL('../supabase/migrations/041_secret_request_auth_provider.sql', import.meta.url), 'utf8'))
+backend(insert(206, 11, 1, 'development', 'AUTH_GOOGLE_CLIENT_SECRET'))
+const authProvider = { kind: 'supabase-auth-provider', provider: 'google', clientId: 'public-client.apps.googleusercontent.com' }
+const configureAuth = (value: unknown, environment = 'development', destination = 'supabase') => `UPDATE secret_requests SET target='${destination}',environment='${environment}',configuration=${sqlJson(value)} WHERE id='${id(206)}';`
+for (const provider of ['google', 'github']) for (const environment of ['development', 'production']) {
+  backend(configureAuth({ ...authProvider, provider }, environment))
+  assert.equal(user(1, `SELECT configuration->>'provider' FROM secret_requests WHERE id='${id(206)}';`), provider)
+}
+for (const malformed of [null, {}, { ...authProvider, provider: 'other' }, { ...authProvider, provider: null },
+  { ...authProvider, clientId: null }, { ...authProvider, clientId: '' }, { ...authProvider, clientId: 'x'.repeat(513) },
+  { ...authProvider, clientId: 'a\nb' }, { ...authProvider, clientId: 'a b' }, { ...authProvider, clientId: 'one,two' },
+  { ...authProvider, clientSecret: 'synthetic-private-value' }, { ...authProvider, secret: 'synthetic-private-value' },
+  { ...authProvider, external_google_secret: 'synthetic-private-value' }, { ...authProvider, enabled: true }])
+  assert.throws(() => backend(configureAuth(malformed)), /check constraint/)
+assert.throws(() => backend(configureAuth(authProvider, 'preview')), /check constraint/)
+assert.throws(() => backend(configureAuth(authProvider, 'development', 'vercel')), /check constraint/)
+for (const actor of [1, 2]) assert.throws(() => user(actor, configureAuth(authProvider)), /permission denied/)
+assert.throws(() => run(`SET ROLE anon; ${configureAuth(authProvider)}`), /permission denied/)
+assert.equal(user(2, `SELECT count(*) FROM secret_requests WHERE id='${id(206)}';`), '0')
+assert.equal(run(`SET ROLE anon; SELECT count(*) FROM secret_requests WHERE id='${id(206)}';`), '0')
+assert.equal(run("SELECT relrowsecurity FROM pg_class WHERE oid='public.secret_requests'::regclass;"), 't')
+// Existing configured requests keep their old validation after the constraint replacement.
+backend(configureAuth(smtp))
+backend(configureAuth(password))
+assert.throws(() => backend(configureAuth(password, 'production')), /check constraint/)
+backend(configureAuth(authProvider))
+assert.equal(user(1, `DELETE FROM secret_requests WHERE id='${id(206)}' RETURNING id;`), id(206))
+console.log('✓ PostgreSQL real: migration041 permite apenas Google/GitHub e client ID público; rejeita secrets e destinos/ambientes inválidos; preserva SMTP/senha, RLS e escrita exclusiva do backend.')

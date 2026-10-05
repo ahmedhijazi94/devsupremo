@@ -633,13 +633,16 @@ describe('secrets pelo formulário do projeto, sem valores no agente', () => {
   })
   it('os comandos de configuração e senha usam o formulário seguro e preservam o escopo real', () => {
     const guide = file('.supremo/DEVELOPMENT.md')
-    const commands = [...guide.matchAll(/`(node node_modules\/supremo-cli\/dist\/bin\.js (?:integrations email|auth password)[^`]+)`/g)]
+    const commands = [...guide.matchAll(/`(node node_modules\/supremo-cli\/dist\/bin\.js (?:integrations email|integrations auth-provider|auth password)[^`]+)`/g)]
       .map(match => match[1]!.replace('REMETENTE', 'hello@example.invalid').replace('UUID', '11111111-1111-4111-8111-111111111111'))
-    expect(commands).toHaveLength(2)
+    expect(commands).toHaveLength(3)
     for (const command of commands) expect(isDatabaseReadCommand(command)).toBe(true)
     for (const target of ['AGENTS.md', 'CLAUDE.md', '.supremo/DEVELOPMENT.md']) {
       const content = norm(file(target))
       expect(content).toContain('integrations email')
+      expect(content).toContain('integrations auth-provider --provider google --client-id CLIENT_ID --environment development')
+      expect(content).toContain('auth_provider_configured')
+      expect(content).toContain('loginVerified:false')
       expect(content).toContain('auth password --user-id UUID --environment development')
       expect(content).toContain('recoveryEmailMode')
       expect(content).toContain('smtp.configured')

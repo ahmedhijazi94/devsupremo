@@ -22,6 +22,7 @@ import { captureTree, captureTurnCheckpoint, gitText, readJson, TURN_DIR, withTu
 import { evidenceFor, localEvidenceSchema, localValidationMode, requestCheckpointValidation, type LocalEvidence } from './turn-validation'
 import { backgroundRecoveryAvailable, scheduleBackgroundRecovery } from './background-recovery'
 import { measureRuntime } from './runtime-metrics'
+import { recordMutationLease, reconcileMutationLease } from './mutation-lease'
 
 export const hookInputSchema = z.object({
   session_id: z.string().max(200).optional(), hook_event_name: z.string().max(100).optional(),
@@ -181,8 +182,8 @@ async function preflight(cwd: string, input: HookInput, host: string, deps: Runt
   const previous = loadTurnState(cwd)
   if (previous) settleRepair(cwd, previous)
   ensureNoConcurrentHost(previous, input)
-  if (readJson(path.join(cwd, TURN_DIR, 'mutation-lease.json')) !== null && previous?.turn.status === 'active' &&
-    previous.sessionId === (input.session_id ?? 'assisted')) throw new Error('Ferramenta ainda ativa; preflight aguardará a conclusão da mutação.')
+  if (!reconcileMutationLease(cwd, { sessionId: previous?.sessionId, turnId: previous?.turn.turnId, hostPid: previous?.hostPid }))
+    throw new Error('Ferramenta ainda ativa ou sem prova de término. Confira o processo e conclua o evento da ferramenta antes de um novo preflight; o motor não descartará sua reserva.')
   const now = deps.now()
   let remote: BackendTurnContext | null = null
   let freshness: 'fresh' | 'offline' | 'invalid' = 'fresh'
@@ -442,7 +443,7 @@ function isRuntimeLifecycleCommand(input: HookInput): boolean {
   const command = typeof raw === 'string' ? raw.trim() : ''
   // These commands acquire the same turn lock themselves. An outer tool lease
   // would deadlock activation; only exact commands receive this exemption.
-  return /^(?:node (?:[^\s$`\\;&|<>]+\/)?supremo-cli\/dist\/bin\.js|supremo) runtime (?:update(?: --prepare-only)?|apply-update [a-f0-9-]{36}|service (?:install|pause|resume|remove))$/.test(command)
+  return /^(?:node (?:[^\s$`\\;&|<>]+\/)?supremo-cli\/dist\/bin\.js|supremo) runtime (?:update(?: --prepare-only(?: --with-dependencies)?| --with-dependencies(?: --prepare-only)?)?|apply-update [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?: --with-dependencies)?|service (?:install|pause|resume|remove))$/.test(command)
 }
 function isLifecycleCommand(input: HookInput): boolean {
   const raw = input.tool_input?.command ?? input.tool_input?.cmd
@@ -554,7 +555,7 @@ export async function runTurnEvent(event: string, cwd: string, raw: unknown = {}
         const file = path.join(cwd, TURN_DIR, 'mutation-lease.json')
         const lease = readJson(file) as { toolUseId: string } | null
         if (lease && lease.toolUseId !== input.tool_use_id) return result(false, state, 'Outra ferramenta pode estar alterando o workspace; aguarde sua conclusão.')
-        writeJson(file, { toolUseId: input.tool_use_id, sessionId: state.sessionId })
+        recordMutationLease(cwd, { sessionId: state.sessionId, turnId: state.turn.turnId, hostPid: state.hostPid }, input.tool_use_id, input.tool_name ?? '')
       }
       return { ...result(true, state), ...recoveryContinuation(state, cwd) }
     }

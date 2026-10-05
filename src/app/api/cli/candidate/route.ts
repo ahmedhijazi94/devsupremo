@@ -12,6 +12,7 @@ import { stackForVersion } from '@/lib/templates/stacks'
 import { cliArtifact } from '@/lib/bootstrap/cli-artifact'
 import { RUNTIME_UPDATE_PATHS, runtimeCandidateSchema } from '../../../../../packages/cli/src/runtime-update-contract'
 import { mergeClaudeSettings, mergeCodexSettings } from '../../../../../packages/cli/src/host-adapters'
+import { hasOfficialRuntimeBase } from '@/lib/templates/runtime-baselines'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,6 +36,8 @@ export async function POST(request: Request): Promise<Response> {
     const allowed: ReadonlySet<string> = new Set(RUNTIME_UPDATE_PATHS), hashes = new Map(tree.map(entry => [entry.path, entry.sha]))
     const files = [...plan.creates, ...plan.updates].filter(file => allowed.has(file.path) && !file.path.startsWith('tools/supremo-cli/'))
       .map(file => ({ path: file.path, content: file.content, beforeBlob: hashes.get(file.path) ?? null }))
+    const conflicts = files.filter(file => !hasOfficialRuntimeBase(file.path, file.beforeBlob, project.kind ?? 'solo'))
+    if (conflicts.length) throw new OperationError(`Personalização ou base oficial desconhecida em ${conflicts.map(file => file.path).join(', ')}. Arquivos preservados; combine as alterações antes de preparar novamente.`, 409)
     for (const [file, merge] of [['.claude/settings.json', mergeClaudeSettings], ['.codex/hooks.json', mergeCodexSettings]] as const) {
       if (!hashes.has(file)) continue
       const existing = await readFile(pinned, file, baseSha)

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const authOperationSchema = z.enum(['auth-count', 'auth-users', 'auth-config', 'auth-configure', 'auth-create', 'auth-update', 'auth-delete', 'auth-role-set', 'auth-sessions-revoke'])
+export const authOperationSchema = z.enum(['auth-count', 'auth-users', 'auth-config', 'auth-configure', 'auth-create', 'auth-invite', 'auth-update', 'auth-delete', 'auth-role-set', 'auth-sessions-revoke'])
 export type AuthOperation = z.infer<typeof authOperationSchema>
 export const isAuthRead = (operation: string): boolean => ['auth-count', 'auth-users', 'auth-config'].includes(operation)
 const environment = z.enum(['development', 'production', 'unknown'])
@@ -32,6 +32,7 @@ export const authOptionsSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('auth-configure'), ...mutationTarget, config: authConfigPatchSchema }).strict(),
   // Creation never sends email and accepts no password or credential through the agent queue.
   z.object({ operation: z.literal('auth-create'), ...mutationTarget, email: z.email().max(320), emailConfirmed: z.boolean().default(false) }).strict(),
+  z.object({ operation: z.literal('auth-invite'), ...mutationTarget, email: z.email().max(320), redirectTo: authUrl.optional() }).strict(),
   z.object({ operation: z.literal('auth-update'), ...mutationTarget, userId: z.string().uuid(), user: authUserPatchSchema }).strict(),
   z.object({ operation: z.literal('auth-delete'), ...mutationTarget, userId: z.string().uuid() }).strict(),
   z.object({ operation: z.literal('auth-role-set'), environment: z.literal('development'), userId: z.string().uuid(), roles: applicationRolesSchema, manifestVersion: z.literal(1) }).strict(),

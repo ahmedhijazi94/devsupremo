@@ -2,6 +2,10 @@ import { z } from 'zod'
 
 export const secretTargetSchema = z.enum(['supabase', 'vercel'])
 export const secretEnvironmentSchema = z.enum(['development', 'preview', 'production'])
+export const authProviderConfigurationSchema = z.object({
+  kind: z.literal('supabase-auth-provider'), provider: z.enum(['google', 'github']),
+  clientId: z.string().trim().min(1).max(512).regex(/^[A-Za-z0-9._-]+$/, 'Client ID inválido.'),
+}).strict()
 /** Setup intent is metadata only. Credentials arrive exclusively through the owner form. */
 export const secretConfigurationSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -10,6 +14,7 @@ export const secretConfigurationSchema = z.discriminatedUnion('kind', [
     senderName: z.string().trim().min(1).max(100).refine((value) => !/[\r\n\0]/.test(value), 'Nome do remetente inválido.'),
   }).strict(),
   z.object({ kind: z.literal('supabase-user-password'), userId: z.string().uuid() }).strict(),
+  authProviderConfigurationSchema,
 ])
 export const secretNameSchema = z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/)
   .refine((name) => !/^(NEXT_PUBLIC_|PUBLIC_|VITE_|REACT_APP_|NUXT_PUBLIC_)/.test(name), 'Secrets não podem ser públicos.')

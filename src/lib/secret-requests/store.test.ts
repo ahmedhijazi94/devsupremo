@@ -81,8 +81,9 @@ describe('owner scoped secret request store', () => {
     await expect(port.resolve({target:'supabase',environment:'development'})).rejects.toThrow(/device revoked/)
     expect(fixture.calls).toHaveLength(0)
   })
-  it.each(['generic', 'smtp'] as const)('stops %s dispatch if its vault credential is removed during provider credential lookup', async (kind) => {
-    const configuration = kind === 'smtp' ? { kind: 'supabase-smtp' as const, provider: 'resend' as const, senderEmail: 'account@example.test', senderName: 'Example' } : null
+  it.each(['generic', 'smtp', 'auth-provider'] as const)('stops %s dispatch if its vault credential is removed during provider credential lookup', async (kind) => {
+    const configuration = kind === 'smtp' ? { kind: 'supabase-smtp' as const, provider: 'resend' as const, senderEmail: 'account@example.test', senderName: 'Example' }
+      : kind === 'auth-provider' ? { kind: 'supabase-auth-provider' as const, provider: 'google' as const, clientId: 'public-client' } : null
     const fixture = configuredFixture(configuration)
     let available = true
     const verifyCredential = vi.fn(async () => { if (!available) throw new SecretRequestError('A credencial foi removida do cofre. Solicite um novo campo seguro.') })
@@ -239,6 +240,44 @@ describe('owner scoped secret request store', () => {
     expect(mocks.credentials).toHaveBeenCalledTimes(3)
     expect(JSON.stringify(fixture.calls)).not.toMatch(/private-value|server-admin-key|oauth-token/)
     expect(mocks.deliver).not.toHaveBeenCalled()
+  })
+  it.each(['google', 'github'] as const)('configures %s through owner-scoped management requests without persisting its secret', async provider => {
+    const configuration = { kind: 'supabase-auth-provider' as const, provider, clientId: 'public-client' }
+    const fixture = configuredFixture(configuration)
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json({ [`external_${provider}_secret`]: 'private-value' }))
+      .mockResolvedValueOnce(Response.json({ [`external_${provider}_enabled`]: true, [`external_${provider}_client_id`]: configuration.clientId, [`external_${provider}_secret`]: 'private-value' }))
+    const port = secretRequestStore(fixture.client, 'owner', projectId)
+    const result = await fulfillSecret(port, requestId, 'private-value')
+    expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['https://api.supabase.com/v1/projects/projectref/config/auth', 'PATCH'], ['https://api.supabase.com/v1/projects/projectref/config/auth', 'GET'],
+    ])
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error', cache: 'no-store', body: JSON.stringify({
+      [`external_${provider}_enabled`]: true, [`external_${provider}_client_id`]: configuration.clientId, [`external_${provider}_secret`]: 'private-value',
+    }) })
+    expect(mocks.credentials).toHaveBeenCalledTimes(2)
+    expect(fixture.state.row).toMatchObject({ status: 'fulfilled', configuration, delivery_claim_id: null })
+    expect(JSON.stringify({ result, persistence: fixture.calls })).not.toMatch(/private-value|oauth-token|external_(google|github)_secret/)
+    expect(mocks.deliver).not.toHaveBeenCalled()
+  })
+  it.each(['owner', 'account', 'ref', 'environment', 'vault', 'intent', 'device'] as const)('leaves OAuth pending if %s changes after PATCH', async change => {
+    const configuration = { kind: 'supabase-auth-provider' as const, provider: 'google' as const, clientId: 'public-client' }
+    const fixture = configuredFixture(configuration)
+    let dispatched = false
+    const verifyCredential = async () => { if (dispatched && change === 'vault') throw new SecretRequestError('Credencial removida.') }
+    const verifyAuthority = async () => { if (dispatched && (change === 'owner' || change === 'device')) throw new SecretRequestError('Acesso revogado.') }
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      dispatched = true
+      if (change === 'account') mocks.project.mockResolvedValue({ ...project, supabase_account_id: 'foreign' })
+      if (change === 'ref') mocks.project.mockResolvedValue({ ...project, supabase_project_ref: 'foreign' })
+      if (change === 'environment') mocks.environment.mockResolvedValue({ project_ref: 'projectref', environment: 'production', source: 'supremo_provisioned' })
+      if (change === 'intent') fixture.state.row!.configuration = { ...configuration, clientId: 'changed-client' }
+      return Response.json({})
+    })
+    const port = secretRequestStore(fixture.client, 'owner', projectId, verifyCredential, verifyAuthority)
+    await expect(fulfillSecret(port, requestId, 'private-value')).rejects.toThrow()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fixture.state.row).toMatchObject({ status: 'pending', delivery_claim_id: null })
+    expect(fixture.calls.some(call => call.method === 'update' && JSON.stringify(call.payload).includes('fulfilled'))).toBe(false)
   })
   it.each(['account', 'environment', 'owner'])('refuses a %s change between SMTP update and readback and leaves the request pending', async (change) => {
     const configuration = { kind: 'supabase-smtp' as const, provider: 'resend' as const, senderEmail: 'account@example.test', senderName: 'Example' }

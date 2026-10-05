@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { credentialIdSchema, secretRequestOptionsSchema, secretResponseSchema, selectRequestedSecrets } from './project-service-request'
 import type { DatabaseOperation, DatabaseOptions } from './database-request'
 import { isOperationReceipt } from './operation-receipt'
+import { authProviderConfigurationSchema } from '../../../src/lib/secret-requests/contract'
 
 /** Only public setup metadata is accepted here. The value is supplied directly
  * to the authenticated Supremo form, never through argv or the daemon queue. */
@@ -16,6 +17,20 @@ export const authPasswordOptionsSchema = z.object({
   userId: z.string().uuid(),
   environment: z.literal('development'),
 }).strict()
+
+export const authProviderIntegrationOptionsSchema = authProviderConfigurationSchema.omit({ kind: true }).extend({
+  environment: z.enum(['development', 'production']),
+}).strict()
+
+export function authProviderIntegrationRequest(options: unknown): z.infer<typeof secretRequestOptionsSchema> {
+  const input = authProviderIntegrationOptionsSchema.parse(options)
+  return secretRequestOptionsSchema.parse({ requests: [{
+    name: `AUTH_${input.provider.toUpperCase()}_CLIENT_SECRET`,
+    description: `Configurar login com ${input.provider === 'google' ? 'Google' : 'GitHub'} no Supabase pelo formulário seguro.`,
+    target: 'supabase', environment: input.environment,
+    configuration: { kind: 'supabase-auth-provider', provider: input.provider, clientId: input.clientId },
+  }] })
+}
 
 export function emailIntegrationRequest(options: unknown): z.infer<typeof secretRequestOptionsSchema> {
   const input = emailIntegrationOptionsSchema.parse(options)

@@ -360,6 +360,19 @@ credentialCommands(program
   .command('integrations')
   .description('Configura integrações por API usando o cofre ou o formulário seguro do Supremo'))
   .addCommand(secretRequestCommand())
+  .addCommand(new Command('auth-provider')
+    .description('Configura login Google ou GitHub no Supabase usando o formulário seguro ou o cofre')
+    .requiredOption('--provider <provider>', 'Provedor de login: google ou github')
+    .requiredOption('--client-id <id>', 'Client ID público do app OAuth')
+    .requiredOption('--environment <environment>', 'Ambiente confirmado: development ou production')
+    .option('--credential-id <uuid>', 'Referência do client secret no cofre deste ambiente')
+    .action(async (options: Record<string, unknown>) => {
+      const { authProviderIntegrationRequest, requestIntegration } = await import('./integration-request')
+      const { runDatabase } = await import('./database')
+      const { credentialId, ...fields } = options
+      console.log(JSON.stringify(await requestIntegration(authProviderIntegrationRequest(fields), credentialId,
+        (operation, input) => runDatabase(operation, process.cwd(), input))))
+    }))
   .addCommand(new Command('email')
     .description('Solicita a chave para configurar o SMTP do Supabase; dispensa Vercel')
     .requiredOption('--provider <provider>', 'Provedor de email: resend')
@@ -447,12 +460,13 @@ program
 
 program
   .command('auth <operation>')
-  .description('Administração do Supabase: count, users, config, configure, create, update, delete, password')
+  .description('Administração do Supabase: count, users, config, configure, create, invite, update, delete, password')
   .option('--environment <environment>', 'Ambiente esperado; obrigatório para alterações: development ou production')
   .option('--limit <number>', 'Quantidade de usuários por página (1–200)')
   .option('--offset <number>', 'Deslocamento da página (0–10000)')
   .option('--user-id <uuid>', 'Usuário específico a alterar ou excluir')
-  .option('--email <email>', 'Email do usuário a criar')
+  .option('--email <email>', 'Email do usuário a criar ou convidar')
+  .option('--redirect-to <url>', 'URL exata de retorno do convite, já cadastrada na configuração Auth')
   .option('--email-confirmed', 'Criar usuário com email confirmado, somente quando solicitado')
   .option('--config <json>', 'Ajuste de login: emailConfirmation, signupsEnabled, anonymousSignIns, siteUrl, recoveryEmailMode (code ou link)')
   .option('--user <json>', 'Ajuste do usuário: email, emailConfirmed:true, banHours (0 desbloqueia)')

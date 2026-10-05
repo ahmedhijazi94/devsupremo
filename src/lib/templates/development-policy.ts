@@ -151,6 +151,12 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   transacional sem reiniciar o preview. Personalizações conflitantes ficam preservadas
   e a atualização não é anunciada como concluída antes da confirmação do novo daemon.
   Atualizar uma CLI global não atualiza automaticamente este projeto.
+  Se o candidato exigir substituir dependências, prepare com \`runtime update --prepare-only\`
+  enquanto o preview supervisionado está identificado. Em uma janela autorizada, pare
+  esse preview e execute \`runtime apply-update ID --with-dependencies\`. O motor exige
+  prova de PID encerrado e porta fechada, instala em cópia isolada e troca a instalação
+  com journal recuperável. Sem essa prova, preserva a instalação atual. Retome o preview
+  após confirmar a versão e a atualização; não pare previews para uma atualização comum.
   \`runtime service install\` configura retomada local na sessão do usuário em macOS;
   \`pause\`, \`resume\` e \`remove\` respeitam a decisão do dono. Só instale esse serviço
   quando a autorização já cobrir execução local persistente. Serviço pausado permanece
@@ -160,6 +166,11 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   ou \`auth config\`. Ela consulta o Supabase autorizado sem expor credenciais.
   Pedidos de alteração usam \`auth configure --environment development --config '{"emailConfirmation":false}'\`
   (exemplo: desativar confirmação de email), ou \`auth create/update/delete\`.
+  Convites usam \`auth invite --email pessoa@exemplo.com --environment development\`
+  e, se necessário, \`--redirect-to URL\` já cadastrada no Auth. Exigem a permissão
+  separada \`auth.invite\`; o recurso \`auth.invite:email\` limita o destinatário.
+  Convite aceito pelo provedor não comprova entrega do email. Reutilize o mesmo ID
+  e consulte o recibo após interrupção; nunca reenvie automaticamente um convite incerto.
   Execute somente a operação pedida, no ambiente indicado pelo usuário e confirmado
   por \`db status\`; produção exige \`--environment production\` explícito. Consulte
   \`auth --help\` para os campos aceitos. Nunca busque chaves administrativas no app.
@@ -185,7 +196,7 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   a lista contém apenas referências do cofre deste projeto e o ambiente. Reutilize uma
   referência com \`--credential-id UUID\` somente se souber que é a credencial adequada
   ao provedor/finalidade e ao mesmo ambiente; nunca escolha por semelhança de nome.
-  \`integrations request\` e \`integrations email\` com essa opção aplicam a configuração
+  \`integrations request\`, \`integrations email\` e \`integrations auth-provider\` com essa opção aplicam a configuração
   por API sem abrir navegador. Também existe \`integrations apply PEDIDO --credential-id UUID\`.
   Sem referência adequada, confira o pedido anterior com \`secrets status\`: uma chave
   já instalada no destino correto continua utilizável mesmo sem referência no cofre.
@@ -211,6 +222,15 @@ do usuário continuam tendo precedência; preserve as regras de arquitetura e se
   \`integrations revoke-credential UUID\` remove somente a referência do cofre e exige
   pedido do usuário; não revoga a chave no provedor nem desfaz configurações aplicadas.
   Se houver etapa externa sem suporte, explique essa etapa concreta e conclua as demais.
+- Para login com Google/GitHub, use
+  \`integrations auth-provider --provider google --client-id CLIENT_ID --environment development\`
+  (\`--provider github\` para GitHub). Client ID é público; client secret entra somente
+  pelo formulário do dono ou por referência adequada do cofre com \`--credential-id UUID\`.
+  O motor configura o Supabase e confere os metadados, sem retornar o segredo. O recibo
+  \`auth_provider_configured\` tem \`loginVerified:false\`: o app OAuth e seu callback
+  devem estar configurados no provedor, e o login ainda precisa de teste autorizado.
+  Não invente credenciais nem repita a configuração no painel Supabase. Para rotacionar,
+  dispense o pedido anterior e prepare um novo campo seguro.
 - Para email de autenticação com Resend, use
   \`integrations email --provider resend --sender-email REMETENTE --sender-name "Nome do app" --environment development\`.
   Use um remetente autorizado pelo usuário/provedor. Ao salvar a chave no formulário,

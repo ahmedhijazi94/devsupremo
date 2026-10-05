@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
-import { freshSupabaseToken } from '@/lib/supabase-token'
+import { getAccountToken } from '@/lib/account-tokens/server'
 import { assertSafeDataChange } from '@/lib/database/sql-guard'
 import {
   listTables,
@@ -34,7 +34,7 @@ async function resolveSupabase(
 ): Promise<
   { ok: true; token: string; ref: string } | { ok: false; error: string }
 > {
-  const { user, supabase, project } = await requireProjectOwner(
+  const { user, project } = await requireProjectOwner(
     projectId,
     PROJECT_COLUMNS,
   )
@@ -45,23 +45,7 @@ async function resolveSupabase(
     return { ok: false, error: 'Projeto sem banco Supabase vinculado.' }
   }
 
-  const { data: account } = await supabase
-    .from('supabase_accounts')
-    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
-    .eq('id', accountId)
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  if (!account) return { ok: false, error: 'Conta Supabase não encontrada.' }
-
-  // Renova o token de ~1h se expirou. Sem isto a aba Banco morre com o tempo.
-  const token = await freshSupabaseToken(account, (update) =>
-    supabase
-      .from('supabase_accounts')
-      .update(update)
-      .eq('id', accountId)
-      .eq('user_id', user.id),
-  )
+  const token = await getAccountToken({ provider: 'supabase', accountId, userId: user.id })
 
   return { ok: true, token, ref }
 }

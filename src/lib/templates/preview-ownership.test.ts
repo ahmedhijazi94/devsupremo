@@ -75,6 +75,14 @@ async function pickFreeTestPort(): Promise<number> {
   return reservation.basePort
 }
 
+/** Reserva TCP sem servir HTTP até o fim do teste: nenhum outro teste pode
+ * ocupar a porta e transformar um probe que deveria falhar em saudável. */
+function reserveUnhealthyTestPort(): Promise<{ basePort: number; servers: net.Server[] }> {
+  return reservePortBlock(
+    1, () => net.createServer((socket) => socket.destroy()), HAS_IPV6 ? '::' : '127.0.0.1',
+  )
+}
+
 function writeFixtureProject(dir: string): void {
   mkdirSync(join(dir, 'scripts'), { recursive: true })
   writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
@@ -533,7 +541,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
   // família responde de verdade — a correção do v3-16 nunca "inventa" saúde,
   // só deixa de ignorar uma família que responde de verdade.
   it(
-    'processo vivo mas NADA escuta na porta rastreada (nenhuma família) → status continua reportando não-saudável (fail-closed preservado)',
+    'processo vivo mas nenhum HTTP responde na porta rastreada (nenhuma família) → status continua reportando não-saudável (fail-closed preservado)',
     async () => {
       const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-genuinely-down-'))
       // NÃO entra em tempDirs de propósito: o afterAll ali chama `preview.mjs
@@ -544,7 +552,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
 
-      const port = await pickFreeTestPort()
+      const { basePort: port, servers } = await reserveUnhealthyTestPort()
       // Processo REAL e vivo, mas que não escuta porta nenhuma — running=true
       // vem de process.kill(pid,0); a prova real de saúde precisa vir do
       // healthcheck (as DUAS famílias tentadas, nenhuma responde), não do
@@ -570,6 +578,7 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
         } catch {
           /* já morto */
         }
+        await closeServers(servers)
         rmSync(dir, { recursive: true, force: true })
       }
     },
@@ -597,8 +606,8 @@ describe('preview supervisor — colisão de porta + ownership (E2E real: outro 
  *
  * Os testes abaixo reproduzem a corrida de forma DETERMINÍSTICA — sem
  * depender de nenhuma config específica de sandbox — craftando o estado
- * exato do sintoma: um probe HTTP direto que genuinamente falha (porta sem
- * nada escutando, o mesmo efeito observável de "este comando está isolado
+ * exato do sintoma: um probe HTTP direto que genuinamente falha (porta TCP
+ * reservada sem servir HTTP, o mesmo efeito de "este comando está isolado
  * da porta real") ao lado de um heartbeat FRESCO escrito por quem tinha
  * acesso real ao servidor.
  */
@@ -683,14 +692,14 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
   )
 
   it(
-    'probe HTTP direto falha (nada escuta na porta rastreada) mas heartbeat fresco diz saudável → status() AINDA reporta healthy:true',
+    'probe HTTP direto falha (nenhum HTTP responde na porta rastreada) mas heartbeat fresco diz saudável → status() AINDA reporta healthy:true',
     async () => {
       const dir = mkdtempSync(join(tmpdir(), 'supremo-preview-heartbeat-rescue-'))
       tempDirs.push(dir)
       mkdirSync(join(dir, '.supremo'), { recursive: true })
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
-      const port = await pickFreeTestPort()
+      const { basePort: port, servers } = await reserveUnhealthyTestPort()
       const idle = spawnIdleProcess()
 
       try {
@@ -711,6 +720,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
         } catch {
           /* já morto */
         }
+        await closeServers(servers)
       }
     },
     15_000,
@@ -724,7 +734,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       mkdirSync(join(dir, '.supremo'), { recursive: true })
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
-      const port = await pickFreeTestPort()
+      const { basePort: port, servers } = await reserveUnhealthyTestPort()
       const idle = spawnIdleProcess()
 
       try {
@@ -745,6 +755,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
         } catch {
           /* já morto */
         }
+        await closeServers(servers)
       }
     },
     15_000,
@@ -764,7 +775,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       mkdirSync(join(dir, '.supremo'), { recursive: true })
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
-      const port = await pickFreeTestPort()
+      const { basePort: port, servers } = await reserveUnhealthyTestPort()
       const idle = spawnIdleProcess()
 
       try {
@@ -787,6 +798,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
         } catch {
           /* já morto */
         }
+        await closeServers(servers)
       }
     },
     15_000,
@@ -800,7 +812,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       mkdirSync(join(dir, '.supremo'), { recursive: true })
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
-      const port = await pickFreeTestPort()
+      const { basePort: port, servers } = await reserveUnhealthyTestPort()
       const idle = spawnIdleProcess()
 
       try {
@@ -818,6 +830,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
         } catch {
           /* já morto */
         }
+        await closeServers(servers)
       }
     },
     15_000,
@@ -831,7 +844,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       mkdirSync(join(dir, '.supremo'), { recursive: true })
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
-      const port = await pickFreeTestPort()
+      const { basePort: port, servers } = await reserveUnhealthyTestPort()
       const idle = spawnIdleProcess()
 
       try {
@@ -856,6 +869,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
         } catch {
           /* já morto */
         }
+        await closeServers(servers)
       }
     },
     15_000,
@@ -869,7 +883,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       mkdirSync(join(dir, '.supremo'), { recursive: true })
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
-      const port = await pickFreeTestPort()
+      const { basePort: port, servers } = await reserveUnhealthyTestPort()
       const idle = spawnIdleProcess()
 
       try {
@@ -893,6 +907,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
         } catch {
           /* já morto */
         }
+        await closeServers(servers)
       }
     },
     15_000,
@@ -906,7 +921,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
       mkdirSync(join(dir, '.supremo'), { recursive: true })
       mkdirSync(join(dir, 'scripts'), { recursive: true })
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
-      const port = await pickFreeTestPort()
+      const { basePort: port, servers } = await reserveUnhealthyTestPort()
       const idle = spawnIdleProcess()
 
       try {
@@ -927,6 +942,7 @@ describe('preview supervisor — heartbeat co-localizado (E2E real: probe isolad
         } catch {
           /* já morto */
         }
+        await closeServers(servers)
       }
     },
     15_000,

@@ -4,7 +4,8 @@ import { readEnvironment, registerDevelopment } from '@/lib/database-environment
 import { requireDevelopment } from '@/lib/database-environment/policy'
 import { randomInt } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { decryptToken, encryptToken } from '@/lib/crypto'
+import { encryptToken } from '@/lib/crypto'
+import { getAccountToken } from '@/lib/account-tokens/server'
 import {
   buildProjectFiles,
   buildProjectMigrations,
@@ -90,7 +91,7 @@ export async function provisionProject(params: {
 
   const { data: project } = await supabase
     .from('projects')
-    .select('*, github_accounts (*), supabase_accounts (*)')
+    .select('*')
     .eq('id', projectId)
     .eq('user_id', userId)
     .maybeSingle()
@@ -101,9 +102,18 @@ export async function provisionProject(params: {
   if (project.provisioning_state === 'ready' && project.github_repo_full_name) {
     return { error: 'Projeto já provisionado.' }
   }
-  if (!project.github_accounts) {
+  const githubAccountId = project.github_account_id as string | null
+  if (!githubAccountId) {
     return { error: 'Conecte uma conta GitHub antes de provisionar.' }
   }
+
+  const { data: githubAccount } = await supabase
+    .from('github_accounts')
+    .select('login')
+    .eq('id', githubAccountId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (!githubAccount) return { error: 'Conta GitHub não encontrada para este usuário.' }
 
   const template = provisioningTemplate(project.template_version)
   const name = project.name as string
@@ -113,11 +123,7 @@ export async function provisionProject(params: {
   const kind = ((project.kind as string | null) ?? 'solo') as ProjectKind
   const capabilities = capabilitiesForKind(kind)
   const securityProfile = inferSecurityProfile(capabilities, { kind })
-  // Token do usuário (OAuth) — usado no fluxo PESSOAL, preservado.
-  let githubToken = decryptToken(
-    (project.github_accounts as { access_token_encrypted: string })
-      .access_token_encrypted,
-  )
+  let githubToken: string
 
   // v3: owner do repo. Coluna nova (migration 015) — projeto antigo/sem ela cai em
   // PESSOAL (fluxo OAuth atual, intacto). Para ORGANIZAÇÃO, toda a automação usa o
@@ -127,7 +133,7 @@ export async function provisionProject(params: {
     | 'organization'
   const ownerLogin =
     (project.github_owner_login as string | null) ??
-    (project.github_accounts as { login: string }).login
+    githubAccount.login as string
   let repoCreatePath = '/user/repos'
   if (ownerType === 'organization') {
     const inst = await findInstallationForAccount(ownerLogin)
@@ -139,6 +145,8 @@ export async function provisionProject(params: {
     // Installation token da ORG substitui o OAuth em TODA a automação do repo.
     githubToken = await appInstallationToken(inst.id)
     repoCreatePath = `/orgs/${ownerLogin}/repos`
+  } else {
+    githubToken = await getAccountToken({ provider: 'github', accountId: githubAccountId, userId })
   }
 
   const supabaseAccountId = project.supabase_account_id as string | null
@@ -573,14 +581,14 @@ export async function provisionSupabase(
 
   const { data: account } = await supabase
     .from('supabase_accounts')
-    .select('access_token_encrypted, org_slug')
+    .select('org_slug')
     .eq('id', supabaseAccountId)
     .eq('user_id', userId)
     .maybeSingle()
 
   if (!account) throw new Error('Conta Supabase não encontrada para este usuário.')
 
-  const token = decryptToken(account.access_token_encrypted as string)
+  const token = await getAccountToken({ provider: 'supabase', accountId: supabaseAccountId, userId })
 
   // Reuso idempotente: se já existe um ref (retry), NÃO cria outro projeto.
   let ref = opts.existingRef ?? null

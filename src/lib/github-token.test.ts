@@ -8,18 +8,13 @@ vi.mock('./crypto', () => ({
 
 import {
   ensureFreshGithubToken,
-  freshGithubToken,
   expiryFromNow,
 } from './github-token'
 
 const HOUR = 3600_000
 
 function fetchReturning(body: unknown, ok = true) {
-  return vi.fn().mockResolvedValue({
-    ok,
-    status: ok ? 200 : 401,
-    json: async () => body,
-  })
+  return vi.fn().mockImplementation(async () => new Response(JSON.stringify(body), { status: ok ? 200 : 401, headers: { 'Content-Type': 'application/json' } }))
 }
 
 describe('ensureFreshGithubToken', () => {
@@ -125,66 +120,6 @@ describe('ensureFreshGithubToken', () => {
         token_expires_at: new Date(Date.now() - HOUR).toISOString(),
       }),
     ).rejects.toThrow(/Reconecte o GitHub/)
-  })
-})
-
-describe('freshGithubToken (grava o token renovado, best-effort)', () => {
-  beforeEach(() => {
-    process.env.GITHUB_CLIENT_ID = 'id'
-    process.env.GITHUB_CLIENT_SECRET = 'secret'
-  })
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('token válido: não grava nada', async () => {
-    vi.stubGlobal('fetch', fetchReturning({}))
-    const persist = vi.fn()
-    const token = await freshGithubToken(
-      {
-        access_token_encrypted: 'enc:ok',
-        refresh_token_encrypted: 'enc:r',
-        token_expires_at: new Date(Date.now() + 2 * HOUR).toISOString(),
-      },
-      persist,
-    )
-    expect(token).toBe('ok')
-    expect(persist).not.toHaveBeenCalled()
-  })
-
-  it('renovou: persiste o update e devolve o novo token', async () => {
-    vi.stubGlobal(
-      'fetch',
-      fetchReturning({ access_token: 'novo', refresh_token: 'r2', expires_in: 28800 }),
-    )
-    const persist = vi.fn().mockResolvedValue(undefined)
-    const token = await freshGithubToken(
-      {
-        access_token_encrypted: 'enc:velho',
-        refresh_token_encrypted: 'enc:r1',
-        token_expires_at: new Date(Date.now() - HOUR).toISOString(),
-      },
-      persist,
-    )
-    expect(token).toBe('novo')
-    expect(persist).toHaveBeenCalledWith(
-      expect.objectContaining({ access_token_encrypted: 'enc:novo' }),
-    )
-  })
-
-  it('gravação falha: ainda devolve o token (não quebra a requisição)', async () => {
-    vi.stubGlobal(
-      'fetch',
-      fetchReturning({ access_token: 'novo', expires_in: 28800 }),
-    )
-    const persist = vi.fn().mockRejectedValue(new Error('db down'))
-    const token = await freshGithubToken(
-      {
-        access_token_encrypted: 'enc:velho',
-        refresh_token_encrypted: 'enc:r1',
-        token_expires_at: new Date(Date.now() - HOUR).toISOString(),
-      },
-      persist,
-    )
-    expect(token).toBe('novo')
   })
 })
 

@@ -144,6 +144,10 @@ export async function addSupabaseAccount(
         org_name: org.name,
         org_slug: org.slug,
         access_token_encrypted: encryptedToken,
+        refresh_token_encrypted: null,
+        token_expires_at: null,
+        token_refresh_claim: null,
+        token_refresh_started_at: null,
       },
       {
         onConflict: 'user_id,org_slug',

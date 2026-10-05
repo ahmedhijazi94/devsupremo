@@ -379,12 +379,14 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
       })
       const previewPidBefore = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
       const daemonPidBefore = daemonState(dir).pid
+      const previewPortBefore = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
 
       const result = runResume(env)
 
       expect(result.preview.healthy).toBe(true)
       expect(result.daemon.healthy).toBe(true)
-      expect(result.preview.url).toBe(`http://localhost:${port}`)
+      expect(result.preview.url).toBe(`http://localhost:${previewPortBefore}`)
+      expect(Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())).toBe(previewPortBefore)
 
       const previewPidAfter = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
       const daemonPidAfter = daemonState(dir).pid
@@ -429,6 +431,8 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
       expect(result.preview.healthy).toBe(true)
       expect(result.daemon.healthy).toBe(true)
 
+      const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(result.preview.url).toBe(`http://localhost:${finalPort}`)
       const previewPidAfter = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
       const daemonPidAfter = daemonState(dir).pid
       expect(previewPidAfter).not.toBe(previewPidBefore) // processo NOVO, religado
@@ -447,7 +451,7 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
   it(
     'preview saudável numa porta alternativa persistida (não 3000) → resume reutiliza EXATAMENTE aquela porta — item 3',
     () => {
-      const altPort = 27777 // bem longe de 3000, prova que não é coincidência
+      const altPort = 27777 // candidata distante de 3000; o supervisor pode relocalizá-la
       const { env } = setup(altPort)
       execFileSync(process.execPath, [join(dir, 'scripts/preview.mjs'), 'ensure'], {
         cwd: dir,
@@ -461,11 +465,17 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
         stdio: 'ignore',
       })
       const persistedPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
-      expect(persistedPort).toBe(altPort)
+      const previewPidBefore = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      expect(persistedPort).toBeGreaterThan(0)
+      expect(persistedPort).not.toBe(3000)
 
-      const result = runResume(env)
+      // O preview já ocupa sua porta real. Mudar a preferência prova que
+      // resume respeita esse estado em vez de escolher a configurada.
+      const result = runResume({ ...env, PORT: '3000' })
 
-      expect(result.preview.url).toBe(`http://localhost:${altPort}`)
+      expect(result.preview.url).toBe(`http://localhost:${persistedPort}`)
+      expect(Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())).toBe(persistedPort)
+      expect(Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())).toBe(previewPidBefore)
       expect(result.preview.healthy).toBe(true)
     },
     30_000,
@@ -498,6 +508,8 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
       // resume então religa de verdade.
       const result = runResume(env)
       expect(result.preview.healthy).toBe(true)
+      const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(result.preview.url).toBe(`http://localhost:${finalPort}`)
     },
     30_000,
   )
@@ -513,6 +525,8 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
 
       expect(result.preview.healthy).toBe(true)
       expect(result.daemon.healthy).toBe(true)
+      const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(result.preview.url).toBe(`http://localhost:${finalPort}`)
       for (const call of callLog(dir)) {
         expect(call).not.toContain('bootstrap')
       }
@@ -537,6 +551,9 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
         stdio: 'ignore',
       })
 
+      const previewPortBefore = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      const previewPidBefore = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
+      const daemonPidBefore = daemonState(dir).pid
       const start = Date.now()
       const result = runResume(env)
       const elapsedMs = Date.now() - start
@@ -546,6 +563,10 @@ describe('supremo:resume (supremo-status.mjs --ensure) — retomada automática 
       // Nada de build/suíte/install: já saudável, resume é só 2 checagens
       // rápidas — nunca deveria chegar perto de segundos de verdade.
       expect(elapsedMs).toBeLessThan(5_000)
+      expect(result.preview.url).toBe(`http://localhost:${previewPortBefore}`)
+      expect(Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())).toBe(previewPortBefore)
+      expect(Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())).toBe(previewPidBefore)
+      expect(daemonState(dir).pid).toBe(daemonPidBefore)
     },
     30_000,
   )
@@ -995,6 +1016,8 @@ server.listen(0, '127.0.0.1', () => {
       expect(status, JSON.stringify(result)).toBe(0)
       expect(result?.preview.healthy).toBe(true)
       expect(result?.daemon.healthy).toBe(true)
+      const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(result?.preview.url).toBe(`http://localhost:${finalPort}`)
       const observations = statusLog()
       const running = observations.filter((entry) => entry.running)
       // A single early read would fail: the real HTTP probe first gets 503,
@@ -1020,12 +1043,17 @@ server.listen(0, '127.0.0.1', () => {
         env,
         stdio: 'ignore',
       })
+      const previewPortBefore = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      const previewPidBefore = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim())
 
       const { status, result } = runResume(env)
 
       expect(status, JSON.stringify(result)).toBe(0)
       expect(result?.preview.healthy).toBe(true)
       const pid = Number(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8'))
+      expect(pid).toBe(previewPidBefore)
+      expect(result?.preview.url).toBe(`http://localhost:${previewPortBefore}`)
+      expect(Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())).toBe(previewPortBefore)
       expect(statusLog()).toEqual([{ pid, running: true, healthy: true }])
       expect(readFileSync(callLogFile, 'utf8').trim()).toBe('1')
     },
@@ -1582,7 +1610,8 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
       expect(status).toBe(0)
       expect(result?.daemon.healthy).toBe(true)
       expect(result?.preview.healthy).toBe(true)
-      expect(result?.preview.url).toBe(`http://localhost:${port}`)
+      const finalPort = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
+      expect(result?.preview.url).toBe(`http://localhost:${finalPort}`)
     },
     30_000,
   )
@@ -1684,8 +1713,13 @@ describe('supremo:resume — falso negativo do health-check corrigido (v3.4.5, t
  */
 describe('supremo:resume — segunda mensagem com preview estável não pode falsear healthy=false (v3.4.6, teste-v3-17)', () => {
   let dir: string
+  let probeBlocker: net.Server | undefined
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (probeBlocker?.listening) {
+      await new Promise<void>((resolve) => probeBlocker!.close(() => resolve()))
+    }
+    probeBlocker = undefined
     const daemonPid = daemonState(dir).pid
     if (daemonPid) {
       try {
@@ -1705,11 +1739,21 @@ describe('supremo:resume — segunda mensagem com preview estável não pode fal
 
   it(
     'preview registrado com heartbeat fresco, mas cujo probe HTTP direto desta invocação falha → supremo:resume AINDA ASSIM libera o trabalho',
-    () => {
-      const port = 21000 + Math.floor(Math.random() * 4000)
+    async () => {
       dir = mkdtempSync(join(tmpdir(), 'supremo-resume-secondmsg-'))
       mkdirSync(join(dir, '.supremo'), { recursive: true })
       mkdirSync(join(dir, 'scripts'), { recursive: true })
+      // Reserva mantida: nenhuma resposta HTTP alheia pode mascarar um
+      // heartbeat rejeitado enquanto o preflight real roda no subprocesso.
+      const server = net.createServer((socket) => socket.destroy())
+      probeBlocker = server
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(0, HAS_IPV6 ? '::' : '127.0.0.1', () => resolve())
+      })
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('Reserva TCP sem porta numérica.')
+      const port = address.port
 
       writeFileSync(join(dir, 'scripts/preview.mjs'), previewSupervisorScript(), 'utf8')
       writeFileSync(join(dir, 'scripts/supremo-status.mjs'), supremoStatusScript(), 'utf8')
@@ -1727,7 +1771,7 @@ describe('supremo:resume — segunda mensagem com preview estável não pode fal
       // Daemon já saudável (pré-aquecido) — isola o teste no preview.
       execFileSync(join(dir, LOCAL_SUPREMO_CLI_BIN_REL), ['daemon', '--ensure'], { cwd: dir, env, stdio: 'ignore' })
 
-      // Preview REGISTRADO: pid vivo de verdade, mas NADA escuta na porta
+      // Preview REGISTRADO: pid vivo de verdade, mas NADA serve HTTP na porta
       // rastreada — o probe HTTP direto desta invocação genuinamente falha,
       // reproduzindo o sintoma exato do sandbox isolado. Um heartbeat
       // FRESCO, escrito por quem tinha acesso real ao servidor, é a única
@@ -1752,6 +1796,7 @@ describe('supremo:resume — segunda mensagem com preview estável não pode fal
           instanceId: 'resume-secondmsg-instance',
         }),
       )
+      const previewPortBefore = Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())
 
       const out = execFileSync(process.execPath, [join(dir, 'scripts/supremo-status.mjs'), '--ensure'], {
         cwd: dir,
@@ -1763,7 +1808,8 @@ describe('supremo:resume — segunda mensagem com preview estável não pode fal
 
       expect(result.daemon.healthy).toBe(true)
       expect(result.preview.healthy).toBe(true)
-      expect(result.preview.url).toBe(`http://localhost:${port}`)
+      expect(result.preview.url).toBe(`http://localhost:${previewPortBefore}`)
+      expect(Number(readFileSync(join(dir, '.supremo/preview.port'), 'utf8').trim())).toBe(previewPortBefore)
       // Nunca precisou religar nada — o pid rastreado original segue de pé,
       // intocado (nunca foi julgado morto/inalcançável e substituído).
       expect(readFileSync(join(dir, '.supremo/preview.pid'), 'utf8').trim()).toBe(String(idle.pid))

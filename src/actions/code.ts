@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { requireProjectOwner, toActionError } from '@/lib/auth'
-import { freshGithubToken } from '@/lib/github-token'
+import { getAccountToken } from '@/lib/account-tokens/server'
 import {
   commitFiles,
   ensureBranch,
@@ -32,7 +32,7 @@ async function resolveGithub(projectId: string): Promise<
   | { ok: true; creds: GithubCredentials }
   | { ok: false; error: string }
 > {
-  const { user, supabase, project } = await requireProjectOwner(
+  const { user, project } = await requireProjectOwner(
     projectId,
     PROJECT_COLUMNS,
   )
@@ -43,26 +43,10 @@ async function resolveGithub(projectId: string): Promise<
     return { ok: false, error: 'Projeto ainda não provisionado no GitHub.' }
   }
 
-  const { data: account } = await supabase
-    .from('github_accounts')
-    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
-    .eq('id', accountId)
-    .eq('user_id', user.id)
-    .maybeSingle()
-  if (!account) return { ok: false, error: 'Conta GitHub não encontrada.' }
-
   const [owner, repo] = repoFullName.split('/')
   if (!owner || !repo) return { ok: false, error: 'Repositório inválido.' }
 
-  // Renova o token de 8h pelo refresh, se expirou. Sem isto, tudo que fala com
-  // o GitHub morre com "Bad credentials" depois do prazo.
-  const token = await freshGithubToken(account, (update) =>
-    supabase
-      .from('github_accounts')
-      .update(update)
-      .eq('id', accountId)
-      .eq('user_id', user.id),
-  )
+  const token = await getAccountToken({ provider: 'github', accountId, userId: user.id })
 
   const defaultBranch = (project.default_branch as string | null) ?? 'main'
   return {

@@ -1,9 +1,10 @@
 import { createClient } from '@supabase/supabase-js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ client: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: vi.fn(), token: vi.fn() }))
 vi.mock('@/lib/supabase/admin', () => ({ createServiceClient: mocks.client }))
-import { readIntegrationMeta, writeIntegrationMeta } from './repository'
+vi.mock('@/lib/account-tokens/server', () => ({ getAccountToken: mocks.token }))
+import { getGithubCredentials, getSupabaseCredentials, readIntegrationMeta, writeIntegrationMeta, type ProjectRecord } from './repository'
 
 const projectId = '11111111-1111-4111-8111-111111111111'
 
@@ -33,6 +34,39 @@ function database(initialState: string | null, readResult: 'ok' | 'missing' | 'e
 }
 
 beforeEach(() => vi.resetAllMocks())
+
+describe('project credential ownership and centralized renewal', () => {
+  const project: ProjectRecord = {
+    id: projectId, user_id: 'owner', name: 'app', description: null,
+    github_account_id: 'github-account', supabase_account_id: 'supabase-account',
+    github_repo_full_name: 'owner/app', supabase_project_ref: 'app-ref',
+    active_branch: 'feature', default_branch: 'main', preview_url: null,
+    preview_project_name: null, status: 'active', is_active: true,
+    updated_at: '2026-10-01T00:00:00Z', kind: 'solo', template_version: null,
+  }
+
+  it.each([
+    { provider: 'github', resolve: getGithubCredentials },
+    { provider: 'supabase', resolve: getSupabaseCredentials },
+  ] as const)('$provider delegates expired-token resolution using owner and account IDs', async ({ provider, resolve }) => {
+    mocks.token.mockResolvedValue('renewed-token')
+    expect(await resolve('owner', project)).toMatchObject({ token: 'renewed-token' })
+    expect(mocks.token).toHaveBeenCalledExactlyOnceWith({ provider, accountId: `${provider}-account`, userId: 'owner' })
+    expect(mocks.client).not.toHaveBeenCalled()
+  })
+
+  it.each([getGithubCredentials, getSupabaseCredentials])('rejects another owner before reading credentials', async (resolve) => {
+    await expect(resolve('another-owner', project)).rejects.toThrow('Projeto não encontrado.')
+    expect(mocks.token).not.toHaveBeenCalled()
+    expect(mocks.client).not.toHaveBeenCalled()
+  })
+
+  it.each([getGithubCredentials, getSupabaseCredentials])('propagates renewal failure without reusing an old token', async (resolve) => {
+    mocks.token.mockRejectedValue(new Error('Reconecte sua conta.'))
+    await expect(resolve('owner', project)).rejects.toThrow('Reconecte sua conta.')
+    expect(mocks.client).not.toHaveBeenCalled()
+  })
+})
 
 describe('integration metadata conditional update', () => {
   it.each(['missing', 'error'] as const)('rejects %s configuration in strict mode instead of selecting a fallback', async (result) => {

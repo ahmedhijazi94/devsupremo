@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { freshGithubToken } from '@/lib/github-token'
-import { freshSupabaseToken } from '@/lib/supabase-token'
+import { getAccountToken } from '@/lib/account-tokens/server'
 import { decryptToken } from '@/lib/crypto'
 import { createServiceClient } from '@/lib/supabase/admin'
 import type { Json } from '@/types/database'
@@ -186,6 +185,7 @@ export async function getGithubCredentials(
   userId: string,
   project: ProjectRecord,
 ): Promise<GithubCredentials> {
+  if (project.user_id !== userId) throw new NotFoundError('Projeto não encontrado.')
   if (!project.github_account_id) {
     throw new NotConfiguredError(
       'Projeto sem conta GitHub vinculada. Conecte uma em /accounts.',
@@ -198,27 +198,12 @@ export async function getGithubCredentials(
   }
 
   const accountId = project.github_account_id
-  const { data, error } = await db()
-    .from('github_accounts')
-    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
-    .eq('id', accountId)
-    .eq('user_id', userId)
-    .maybeSingle()
-
-  if (error) throw new Error(`Falha ao ler conta GitHub: ${error.message}`)
-  if (!data) throw new NotFoundError('Conta GitHub não encontrada.')
-
   const [owner, repo] = project.github_repo_full_name.split('/')
   if (!owner || !repo) {
     throw new Error(`Repositório inválido: ${project.github_repo_full_name}`)
   }
 
-  // Renova o token de 8h pelo refresh quando expira. Sem isto, o agente
-  // conectado de outra máquina falha com "Bad credentials" depois do prazo —
-  // e "continuar de onde parou" morre junto.
-  const token = await freshGithubToken(data, (update) =>
-    db().from('github_accounts').update(update).eq('id', accountId).eq('user_id', userId),
-  )
+  const token = await getAccountToken({ provider: 'github', accountId, userId })
 
   return {
     token,
@@ -239,6 +224,7 @@ export async function getSupabaseCredentials(
   userId: string,
   project: ProjectRecord,
 ): Promise<SupabaseCredentials> {
+  if (project.user_id !== userId) throw new NotFoundError('Projeto não encontrado.')
   if (!project.supabase_account_id || !project.supabase_project_ref) {
     throw new NotConfiguredError(
       'Projeto sem banco Supabase vinculado. Conecte uma conta em /accounts.',
@@ -246,20 +232,7 @@ export async function getSupabaseCredentials(
   }
 
   const accountId = project.supabase_account_id
-  const { data, error } = await db()
-    .from('supabase_accounts')
-    .select('access_token_encrypted, refresh_token_encrypted, token_expires_at')
-    .eq('id', accountId)
-    .eq('user_id', userId)
-    .maybeSingle()
-
-  if (error) throw new Error(`Falha ao ler conta Supabase: ${error.message}`)
-  if (!data) throw new NotFoundError('Conta Supabase não encontrada.')
-
-  // Renova o token de ~1h se expirou — senão migration/dado do MCP falham.
-  const token = await freshSupabaseToken(data, (update) =>
-    db().from('supabase_accounts').update(update).eq('id', accountId).eq('user_id', userId),
-  )
+  const token = await getAccountToken({ provider: 'supabase', accountId, userId })
 
   return { token, projectRef: project.supabase_project_ref }
 }

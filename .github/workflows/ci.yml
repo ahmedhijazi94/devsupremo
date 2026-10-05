@@ -110,13 +110,13 @@ jobs:
       - run: |
           npx tsx scripts/test-template-rls.mts
           npx tsx scripts/test-template-rls.mts tanstack-start-vite
-          npx tsx scripts/test-provisioning-migrations.mts
+          node --conditions=react-server --import tsx scripts/test-provisioning-migrations.mts
           npx tsx scripts/test-restore-recovery.mts
           npx tsx scripts/test-secret-requests.mts
           node --conditions=react-server --import tsx scripts/test-project-credentials.mts
           npx tsx scripts/test-database-inspection.mts
-          npx tsx scripts/test-trigger-migrations.mts
-          npx tsx scripts/test-migration-repairs.mts
+          node --conditions=react-server --import tsx scripts/test-trigger-migrations.mts
+          node --conditions=react-server --import tsx scripts/test-migration-repairs.mts
           node --import tsx scripts/test-function-jobs.mts
           node --conditions=react-server --import tsx scripts/test-function-leases.mts
         env:
@@ -144,6 +144,7 @@ jobs:
           src/lib/provider-connections/oauth-postgres.test.ts
           src/lib/provider-connections/persistence.postgres.test.ts
           src/lib/sql-artifacts/postgres.test.ts
+          src/lib/account-tokens/store.postgres.test.ts
         env:
           SUPREMO_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 

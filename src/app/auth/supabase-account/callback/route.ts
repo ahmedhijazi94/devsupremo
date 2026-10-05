@@ -52,7 +52,7 @@ export async function GET(request: Request) {
   const tokenData = await tokenRes.json()
 
   if (!tokenRes.ok || !tokenData.access_token) {
-    console.error('Supabase token error:', tokenData)
+    console.error('Supabase OAuth token exchange failed')
     redirect('/projects?error=auth_failed')
   }
 
@@ -91,6 +91,8 @@ export async function GET(request: Request) {
         access_token_encrypted: encryptedToken,
         refresh_token_encrypted: encryptedRefresh,
         token_expires_at: expiryFromNow(tokenData.expires_in),
+        token_refresh_claim: null,
+        token_refresh_started_at: null,
       },
       {
         onConflict: 'user_id,org_slug',

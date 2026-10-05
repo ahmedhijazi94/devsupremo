@@ -21,14 +21,15 @@ O catálogo `/api/backend-operations` informa o protocolo 2 e a CLI mínima 1.14
 
 ## Provas realizadas
 
-- Motor: 2.876 testes aprovados; 187 arquivos de teste aprovados. Cobertura de decisões: 99,46% das linhas, 93,36% das ramificações e 91,79% das funções nesta rodada.
-- CLI: 1.284 testes aprovados em 69 arquivos, incluindo recibos incertos, gravação concorrente, limites de transporte e identidade do destino.
+- Motor: 2.876 testes aprovados; 187 arquivos de teste aprovados. Cobertura de decisões: 99,46% das linhas, 93,35% das ramificações e 91,79% das funções nesta rodada.
+- CLI: 1.295 testes aprovados em 70 arquivos, incluindo recibos incertos, gravação concorrente, limites de transporte e identidade do destino. A leitura de respostas de banco é interrompida ao exceder 2 MiB ou o prazo, sem repetir uma mutação cujo resultado seja incerto.
 - PostgreSQL descartável: 36 testes reais de políticas, isolamento entre donos, concorrência, consumo único de aprovações, mutações, OAuth, jobs e materialização SQL. São executados também na CI; os testes opt-in não são contados como aprovação quando seu banco não está disponível.
 - TypeScript e lint aprovados. Auditoria estrita sem achados HIGH/CRITICAL; 18 avisos heurísticos MEDIUM, relacionados a adaptadores com autorização no servidor, permanecem visíveis.
 - Build de produção aprovado com Webpack. O caminho Turbopack deste ambiente falhou ao abrir uma porta interna; o build alternativo manteve as verificações de produção.
 - Histórico Git e bundle distribuído verificados com Gitleaks 8.21.2, sem segredos encontrados.
 - Console renderizado no Chromium com dados sintéticos em desktop e celular. As dez abas e os estados de erro/permissão foram conferidos; nomes longos permanecem dentro da página em 390 px e 1.440 px. Os 19 testes de componentes também passaram. Esse ensaio não simula uma conta externa autenticada.
 - A falha de comunicação do executor de testes foi reproduzida: 65 casos síncronos passavam, mas impediam respostas ao RPC por mais de 60 segundos. Liberar o event loop entre os casos corrigiu a mesma reprodução sem aumentar prazos ou reduzir verificações; os 133 testes reais de política do subconjunto também passaram.
+- CodeQL: os alertas de produção foram corrigidos. Três alertas em testes foram revisados individualmente e classificados no GitHub como falsos positivos (#87, #94 e #95): o hash usa um nonce OAuth aleatório de 256 bits, não uma senha; as duas leituras de arquivo são asserções em diretórios privados que simulam substituição concorrente. Nenhuma regra, verificação ou teste foi desativado.
 - [Aceitação de atualização e runtime](./engine-runtime-acceptance-2026-10-05.md): projetos sintéticos novo/antigo, processos reais, interrupção durante troca de CLI, retomada pelo mesmo ID e preservação de preview, porta, arquivos e fila. Captura Git aquecida com p95 de 130,05 ms em 60 amostras locais; não inclui modelo, Internet ou testes.
 
 ## Distribuição

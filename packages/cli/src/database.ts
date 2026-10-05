@@ -25,6 +25,54 @@ export interface DatabaseStatus {
 // Network/body/JSON failures leave a sent mutation's outcome unknown.
 class DatabaseServerError extends Error { readonly definitive = true }
 
+function readDatabaseResponse(response: Response, signal: AbortSignal): Promise<string> {
+  if (!response.body) return Promise.reject(new Error('Resposta de banco sem corpo.'))
+  const reader = response.body.getReader()
+  return new Promise<string>((resolve, reject) => {
+    let settled = false
+    const cleanup = () => {
+      signal.removeEventListener('abort', abort)
+      reader.releaseLock()
+    }
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      reject(error)
+      // Do not wait for a provider's cancellation to finish. Its failure goes
+      // to the already rejected result, preserving the original body error.
+      void reader.cancel(error).catch(reject)
+      cleanup()
+    }
+    const abort = () => fail(signal.reason)
+    const read = async () => {
+      const chunks: Buffer[] = []
+      let bytes = 0
+      try {
+        while (!settled) {
+          const { done, value } = await reader.read()
+          if (settled) return
+          if (done) {
+            const text = Buffer.concat(chunks, bytes).toString('utf8')
+            settled = true
+            cleanup()
+            resolve(text)
+            return
+          }
+          bytes += value.byteLength
+          if (bytes > 2 * 1024 * 1024) {
+            fail(new Error('Resposta de banco excede o limite; reduza paginação ou intervalo.'))
+            return
+          }
+          chunks.push(Buffer.from(value))
+        }
+      } catch (error) { fail(error) }
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+    else void read()
+  })
+}
+
 const migrationSchema = z.object({
   path: z.string().regex(/^supabase\/migrations\/\d{14}_[a-zA-Z0-9_-]+\.sql$/),
   content: z.string().min(1).max(250_000),
@@ -78,7 +126,7 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
   if (url.protocol !== 'https:' && !(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:')) {
     throw new Error('O endpoint do Supremo deve usar HTTPS.')
   }
-  const transport = async (op: string, extra: Record<string, unknown> = {}) => {
+  const transport = async (op: string, extra: Record<string, unknown> = {}, signal = AbortSignal.timeout(op === 'status' ? 15_000 : 60_000)) => {
     const endpoint = op === 'status' && operation.startsWith('functions-') ? new URL(`${issuer}/api/database`) : url
     // Intentional uploads to the issuer bound in the keychain. Project only
     // declared command fields; file-derived objects never supply identity,
@@ -101,10 +149,9 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     const res = await fetch(endpoint, {
       method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
       body,
-      signal: AbortSignal.timeout(op === 'status' ? 15_000 : 60_000),
+      signal,
     })
-    const text = await res.text()
-    if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error('Resposta de banco excede o limite; reduza paginação ou intervalo.')
+    const text = await readDatabaseResponse(res, signal)
     const data = JSON.parse(text) as { error?: string; code?: string; operationId?: string }
     if (!res.ok && data.code === 'operation_approval_required' && z.string().uuid().safeParse(data.operationId).success) {
       throw Object.assign(new Error(sanitizeDiagnostic(data.error ?? 'Autorize a operação preparada no Supremo.')), { code: 'operation_approval_required', operationId: data.operationId })
@@ -117,13 +164,18 @@ export async function runDatabaseDirect(operation: DatabaseOperation, cwd: strin
     if (!operation.startsWith('data-delete-')) return transport(op, extra)
     // Even an HTTP adapter that ignores AbortSignal must release the worker.
     // This deadline covers response-body reads as well and never retries writes.
+    const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(op === 'data-delete-apply'
-        ? 'A confirmação da exclusão excedeu o prazo. Não repita delete-apply; consulte os registros com db query antes de gerar outro plano.'
-        : 'A inspeção de exclusão excedeu o prazo; nenhum pedido de exclusão foi enviado.')), op === 'status' ? 15_000 : 60_000)
+      timer = setTimeout(() => {
+        const error = new Error(op === 'data-delete-apply'
+          ? 'A confirmação da exclusão excedeu o prazo. Não repita delete-apply; consulte os registros com db query antes de gerar outro plano.'
+          : 'A inspeção de exclusão excedeu o prazo; nenhum pedido de exclusão foi enviado.')
+        controller.abort(error)
+        reject(error)
+      }, op === 'status' ? 15_000 : 60_000)
     })
-    try { return await Promise.race([transport(op, extra), deadline]) }
+    try { return await Promise.race([transport(op, extra, controller.signal), deadline]) }
     catch (error) {
       if (op === 'data-delete-apply' && !(error instanceof DatabaseServerError) && !(error instanceof Error && 'code' in error && error.code === 'operation_approval_required')) {
         throw new Error('Resultado da exclusão não confirmado; o pedido pode ter sido executado. Não repita delete-apply. Consulte os registros com db query antes de gerar outro plano.')

@@ -224613,6 +224613,58 @@ __export(database_exports, {
   runDatabaseDirect: () => runDatabaseDirect,
   validateLocalTarget: () => validateLocalTarget
 });
+function readDatabaseResponse(response, signal) {
+  if (!response.body)
+    return Promise.reject(new Error("Resposta de banco sem corpo."));
+  const reader = response.body.getReader();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      signal.removeEventListener("abort", abort);
+      reader.releaseLock();
+    };
+    const fail = (error61) => {
+      if (settled)
+        return;
+      settled = true;
+      reject(error61);
+      void reader.cancel(error61).catch(reject);
+      cleanup();
+    };
+    const abort = () => fail(signal.reason);
+    const read = async () => {
+      const chunks = [];
+      let bytes = 0;
+      try {
+        while (!settled) {
+          const { done, value } = await reader.read();
+          if (settled)
+            return;
+          if (done) {
+            const text = Buffer.concat(chunks, bytes).toString("utf8");
+            settled = true;
+            cleanup();
+            resolve(text);
+            return;
+          }
+          bytes += value.byteLength;
+          if (bytes > 2 * 1024 * 1024) {
+            fail(new Error("Resposta de banco excede o limite; reduza pagina\xE7\xE3o ou intervalo."));
+            return;
+          }
+          chunks.push(Buffer.from(value));
+        }
+      } catch (error61) {
+        fail(error61);
+      }
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted)
+      abort();
+    else
+      void read();
+  });
+}
 function readMigrations(cwd) {
   const directory3 = import_node_path28.default.join(cwd, "supabase/migrations");
   const names = import_node_fs25.default.readdirSync(directory3).filter((name) => name.endsWith(".sql")).sort();
@@ -224660,7 +224712,7 @@ async function runDatabaseDirect(operation, cwd, options = {}) {
   if (url2.protocol !== "https:" && !(["localhost", "127.0.0.1", "[::1]"].includes(url2.hostname) && url2.protocol === "http:")) {
     throw new Error("O endpoint do Supremo deve usar HTTPS.");
   }
-  const transport = async (op, extra = {}) => {
+  const transport = async (op, extra = {}, signal = AbortSignal.timeout(op === "status" ? 15e3 : 6e4)) => {
     const endpoint2 = op === "status" && operation.startsWith("functions-") ? new URL("".concat(issuer, "/api/database")) : url2;
     const body = JSON.stringify({
       deviceSecret: secret,
@@ -224713,11 +224765,9 @@ async function runDatabaseDirect(operation, cwd, options = {}) {
       redirect: "error",
       headers: { "Content-Type": "application/json" },
       body,
-      signal: AbortSignal.timeout(op === "status" ? 15e3 : 6e4)
+      signal
     });
-    const text = await res.text();
-    if (Buffer.byteLength(text) > 2 * 1024 * 1024)
-      throw new Error("Resposta de banco excede o limite; reduza pagina\xE7\xE3o ou intervalo.");
+    const text = await readDatabaseResponse(res, signal);
     const data = JSON.parse(text);
     if (!res.ok && data.code === "operation_approval_required" && external_exports.string().uuid().safeParse(data.operationId).success) {
       throw Object.assign(new Error(sanitizeDiagnostic(data.error ?? "Autorize a opera\xE7\xE3o preparada no Supremo.")), { code: "operation_approval_required", operationId: data.operationId });
@@ -224731,12 +224781,17 @@ async function runDatabaseDirect(operation, cwd, options = {}) {
   const request2 = async (op, extra = {}) => {
     if (!operation.startsWith("data-delete-"))
       return transport(op, extra);
+    const controller = new AbortController();
     let timer;
     const deadline = new Promise((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(op === "data-delete-apply" ? "A confirma\xE7\xE3o da exclus\xE3o excedeu o prazo. N\xE3o repita delete-apply; consulte os registros com db query antes de gerar outro plano." : "A inspe\xE7\xE3o de exclus\xE3o excedeu o prazo; nenhum pedido de exclus\xE3o foi enviado.")), op === "status" ? 15e3 : 6e4);
+      timer = setTimeout(() => {
+        const error61 = new Error(op === "data-delete-apply" ? "A confirma\xE7\xE3o da exclus\xE3o excedeu o prazo. N\xE3o repita delete-apply; consulte os registros com db query antes de gerar outro plano." : "A inspe\xE7\xE3o de exclus\xE3o excedeu o prazo; nenhum pedido de exclus\xE3o foi enviado.");
+        controller.abort(error61);
+        reject(error61);
+      }, op === "status" ? 15e3 : 6e4);
     });
     try {
-      return await Promise.race([transport(op, extra), deadline]);
+      return await Promise.race([transport(op, extra, controller.signal), deadline]);
     } catch (error61) {
       if (op === "data-delete-apply" && !(error61 instanceof DatabaseServerError) && !(error61 instanceof Error && "code" in error61 && error61.code === "operation_approval_required")) {
         throw new Error("Resultado da exclus\xE3o n\xE3o confirmado; o pedido pode ter sido executado. N\xE3o repita delete-apply. Consulte os registros com db query antes de gerar outro plano.");
